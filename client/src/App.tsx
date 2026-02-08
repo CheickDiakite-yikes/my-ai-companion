@@ -222,20 +222,19 @@ const VoiceView = ({ isActive, onTextMode, onEndCall, onProfile }: {
         )}
 
         {/* Sketch-accurate Bottom Bar */}
-        <div className="flex items-center gap-3 w-full">
-           <Button variant="ghost" size="icon" className="text-muted-foreground hover:bg-muted/50 rounded-xl">
-              <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-paperclip"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+        <div className="flex items-center w-full bg-white border border-border/60 shadow-sm rounded-2xl p-2 gap-1 transition-all hover:bg-white/90 group cursor-pointer" onClick={onTextMode}>
+           <Button variant="ghost" size="icon" className="text-muted-foreground hover:bg-muted/50 rounded-xl w-10 h-10 shrink-0" onClick={(e) => { e.stopPropagation(); /* Add attachment logic */ }}>
+              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-paperclip"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
            </Button>
-           <Button variant="ghost" size="icon" className="text-muted-foreground hover:bg-muted/50 rounded-xl">
-              <Video className="w-6 h-6" />
+           <Button variant="ghost" size="icon" className="text-muted-foreground hover:bg-muted/50 rounded-xl w-10 h-10 shrink-0" onClick={(e) => { e.stopPropagation(); /* Add camera logic */ }}>
+              <Video className="w-5 h-5" />
            </Button>
            
-           <button 
-            onClick={onTextMode}
-            className="flex-1 bg-white border border-border/60 shadow-sm rounded-xl h-14 px-4 flex items-center justify-center gap-2 hover:bg-white/80 active:scale-[0.98] transition-all"
-          >
-            <span className="font-medium text-foreground/80">Let's text instead...</span>
-          </button>
+           <div className="h-6 w-px bg-border/50 mx-1" />
+
+           <div className="flex-1 px-2 font-medium text-foreground/80 text-center">
+            Let's text instead...
+           </div>
         </div>
       </div>
     </div>
