@@ -272,7 +272,7 @@ const VoiceView = ({ isActive, onEndCall, onProfile, persona, setPersona }: {
       </div>
 
       {/* Controls & Bottom Handle */}
-      <div className="px-6 space-y-6">
+      <div className="px-6 space-y-6 pb-24">
         {/* Call Controls (Only visible when active) */}
         {isActive && (
           <div className="flex items-center justify-center gap-8 mb-4">
@@ -423,10 +423,12 @@ function App() {
                setMode("voice");
              }
           }}
-          className="absolute inset-0 z-10 bg-background shadow-2xl rounded-b-[2.5rem] flex flex-col"
+          className="absolute inset-0 z-10 bg-background shadow-2xl rounded-b-[2.5rem] flex flex-col pointer-events-auto"
         >
           {/* Drag Handle Indicator */}
-          <div className="absolute bottom-3 left-1/2 -translate-x-1/2 w-12 h-1.5 bg-muted-foreground/20 rounded-full z-20" />
+          <div className="absolute bottom-28 left-1/2 -translate-x-1/2 w-full flex justify-center z-20 pointer-events-none">
+             {/* This is handled inside VoiceView now, removing duplicate handle here if present or moving it */}
+          </div>
           
           <VoiceView 
             isActive={isCalling} 
