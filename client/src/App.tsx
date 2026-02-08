@@ -108,26 +108,21 @@ const ProfileView = ({ onClose }: { onClose: () => void }) => {
   );
 };
 
-const VoiceView = ({ isActive, onTextMode, onEndCall, onProfile, persona, setPersona }: { 
-  isActive: boolean; 
-  onTextMode: () => void; 
-  onEndCall: () => void;
-  onProfile: () => void;
-  persona: Persona;
-  setPersona: (p: Persona) => void;
+const SharedHeader = ({ 
+  persona, 
+  setPersona, 
+  onProfile, 
+  isActive, 
+  duration,
+  mode 
+}: { 
+  persona: Persona, 
+  setPersona: (p: Persona) => void, 
+  onProfile: () => void, 
+  isActive: boolean,
+  duration: number,
+  mode: Mode
 }) => {
-  const [duration, setDuration] = useState(0);
-
-  useEffect(() => {
-    let interval: NodeJS.Timeout;
-    if (isActive) {
-      interval = setInterval(() => setDuration(d => d + 1), 1000);
-    } else {
-      setDuration(0);
-    }
-    return () => clearInterval(interval);
-  }, [isActive]);
-
   const formatTime = (secs: number) => {
     const m = Math.floor(secs / 60);
     const s = secs % 60;
@@ -135,9 +130,8 @@ const VoiceView = ({ isActive, onTextMode, onEndCall, onProfile, persona, setPer
   };
 
   return (
-    <div className="h-full flex flex-col relative bg-background">
-      {/* Header */}
-      <div className="flex items-center justify-between p-6 pt-8">
+    <div className="absolute top-0 left-0 right-0 z-50 flex items-center justify-between p-6 pt-8 pointer-events-none">
+      <div className="pointer-events-auto">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button className="flex items-center gap-2 bg-white/50 backdrop-blur-md px-4 py-2 rounded-2xl border border-border shadow-sm hover:bg-white/80 transition-colors focus:outline-none">
@@ -163,23 +157,50 @@ const VoiceView = ({ isActive, onTextMode, onEndCall, onProfile, persona, setPer
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
-        
-        {isActive && (
-          <div className="absolute left-1/2 -translate-x-1/2 font-mono text-sm font-medium text-muted-foreground bg-muted/30 px-3 py-1 rounded-full">
+      </div>
+      
+      {/* Timer only visible in Voice Mode when active */}
+      <AnimatePresence>
+        {mode === "voice" && isActive && (
+          <motion.div 
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+            className="absolute left-1/2 -translate-x-1/2 font-mono text-sm font-medium text-muted-foreground bg-muted/30 px-3 py-1 rounded-full backdrop-blur-sm"
+          >
             {formatTime(duration)}
-          </div>
+          </motion.div>
         )}
+      </AnimatePresence>
 
+      <div className="pointer-events-auto">
         <Button variant="ghost" size="icon" className="rounded-full w-12 h-12" onClick={onProfile}>
           <div className="w-full h-full rounded-full border border-border bg-muted/20 overflow-hidden p-0.5">
-             <Avatar className="w-full h-full">
-               <AvatarImage src={mayaAvatar} className="object-cover" />
-               <AvatarFallback>M</AvatarFallback>
-             </Avatar>
+              <Avatar className="w-full h-full">
+                <AvatarImage src={mayaAvatar} className="object-cover" />
+                <AvatarFallback>M</AvatarFallback>
+              </Avatar>
           </div>
         </Button>
       </div>
+    </div>
+  );
+};
 
+const VoiceView = ({ isActive, onTextMode, onEndCall, onProfile, persona, setPersona }: { 
+  isActive: boolean; 
+  onTextMode: () => void; 
+  onEndCall: () => void;
+  onProfile: () => void;
+  persona: Persona;
+  setPersona: (p: Persona) => void;
+}) => {
+  // Timer logic moved to parent or kept here but UI is in SharedHeader
+  // We keep the timer state here to pass up if needed, but actually App holds state now?
+  // Let's rely on props passed down if needed, but for now we just render content.
+  
+  return (
+    <div className="h-full flex flex-col relative bg-background pt-24">
       {/* Main Content */}
       <div className="flex-1 flex flex-col items-center justify-center relative">
         {isActive ? (
@@ -263,8 +284,8 @@ const VoiceView = ({ isActive, onTextMode, onEndCall, onProfile, persona, setPer
            
            <div className="h-6 w-px bg-border/50 mx-1" />
 
-           <div className="flex-1 px-2 font-medium text-foreground/80 text-center">
-            Let's text instead...
+           <div className="flex-1 px-2 font-medium text-foreground/80 text-center select-none">
+            Swipe up to chat...
            </div>
         </div>
       </div>
@@ -274,24 +295,7 @@ const VoiceView = ({ isActive, onTextMode, onEndCall, onProfile, persona, setPer
 
 const TextView = ({ onVoiceMode, onProfile, persona }: { onVoiceMode: () => void; onProfile: () => void; persona: Persona }) => {
   return (
-    <div className="h-full flex flex-col bg-background/50">
-      {/* Header */}
-      <div className="p-4 border-b bg-background/80 backdrop-blur-md sticky top-0 z-10 flex items-center justify-between">
-         <div className="flex items-center gap-3">
-          <Avatar className="w-10 h-10 border-2 border-accent">
-             <AvatarImage src={mayaAvatar} />
-             <AvatarFallback>M</AvatarFallback>
-           </Avatar>
-           <div>
-             <h3 className="font-bold text-foreground leading-none">{persona}</h3>
-             <span className="text-xs text-green-600 font-medium">Online</span>
-           </div>
-         </div>
-         <Button variant="ghost" size="icon" onClick={onProfile}>
-           <Settings className="w-6 h-6 text-muted-foreground" />
-         </Button>
-      </div>
-
+    <div className="h-full flex flex-col bg-background/50 pt-24">
       {/* Messages */}
       <ScrollArea className="flex-1 p-4">
         <div className="space-y-4 pb-4">
@@ -367,19 +371,34 @@ function App() {
   const [isCalling, setIsCalling] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
   const [persona, setPersona] = useState<Persona>("Maya");
+  const [duration, setDuration] = useState(0);
 
-  // The "Drapes" Concept:
-  // Voice Mode is the "Curtain" that slides up/down over Text Mode.
-  // When mode is 'text', curtain is UP (hidden/partially visible handle?). 
-  // Wait, sketch says "Transition from voice to text. Sliding drapes motion".
-  // This implies Voice covers Text.
-  
+  useEffect(() => {
+    let interval: NodeJS.Timeout;
+    if (isCalling) {
+      interval = setInterval(() => setDuration(d => d + 1), 1000);
+    } else {
+      setDuration(0);
+    }
+    return () => clearInterval(interval);
+  }, [isCalling]);
+
   return (
     <div className="w-full h-screen bg-neutral-100 flex items-center justify-center overflow-hidden">
       {/* Mobile Frame */}
       <div className="w-full h-full md:max-w-[400px] md:h-[850px] bg-background md:rounded-[2.5rem] shadow-2xl overflow-hidden relative border-4 border-neutral-800/5">
         
-        {/* Base Layer: Text View */}
+        {/* Shared Header (Always Visible) */}
+        <SharedHeader 
+          persona={persona}
+          setPersona={setPersona}
+          onProfile={() => setShowProfile(true)}
+          isActive={isCalling}
+          duration={duration}
+          mode={mode}
+        />
+
+        {/* Base Layer: Text View (Transcript) */}
         <div className="absolute inset-0 z-0">
           <TextView 
             onVoiceMode={() => setMode("voice")} 
@@ -389,34 +408,39 @@ function App() {
         </div>
 
         {/* Curtain Layer: Voice View */}
-        <AnimatePresence>
-          {mode === "voice" && (
-            <motion.div
-              initial={{ y: "-100%" }}
-              animate={{ y: "0%" }}
-              exit={{ y: "-100%" }}
-              transition={{ 
-                type: "spring", 
-                stiffness: 100, 
-                damping: 20, 
-                mass: 1.2 
-              }}
-              className="absolute inset-0 z-10 bg-background shadow-2xl rounded-b-[2rem]"
-            >
-              {/* Drag Handle Indicator (Visual cue for the drape) */}
-              <div className="absolute bottom-3 left-1/2 -translate-x-1/2 w-12 h-1.5 bg-muted-foreground/20 rounded-full" />
-              
-              <VoiceView 
-                isActive={isCalling} 
-                onTextMode={() => setMode("text")}
-                onEndCall={() => setIsCalling(!isCalling)}
-                onProfile={() => setShowProfile(true)}
-                persona={persona}
-                setPersona={setPersona}
-              />
-            </motion.div>
-          )}
-        </AnimatePresence>
+        <motion.div
+          initial={{ y: 0 }}
+          animate={{ y: mode === "voice" ? "0%" : "-85%" }}
+          transition={{ 
+            type: "spring", 
+            stiffness: 120, 
+            damping: 20, 
+            mass: 1 
+          }}
+          drag="y"
+          dragConstraints={{ top: -700, bottom: 0 }}
+          dragElastic={0.1}
+          onDragEnd={(_, info) => {
+             if (info.offset.y < -150) {
+               setMode("text");
+             } else if (info.offset.y > 150) {
+               setMode("voice");
+             }
+          }}
+          className="absolute inset-0 z-10 bg-background shadow-2xl rounded-b-[2.5rem] flex flex-col"
+        >
+          {/* Drag Handle Indicator */}
+          <div className="absolute bottom-3 left-1/2 -translate-x-1/2 w-12 h-1.5 bg-muted-foreground/20 rounded-full z-20" />
+          
+          <VoiceView 
+            isActive={isCalling} 
+            onTextMode={() => setMode("text")}
+            onEndCall={() => setIsCalling(!isCalling)}
+            onProfile={() => setShowProfile(true)}
+            persona={persona}
+            setPersona={setPersona}
+          />
+        </motion.div>
 
         {/* Profile Overlay */}
         <AnimatePresence>
