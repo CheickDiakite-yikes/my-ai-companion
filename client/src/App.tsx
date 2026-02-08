@@ -452,8 +452,10 @@ const TextView = () => {
 
 const OnboardingView = ({ onComplete }: { onComplete: () => void }) => {
   const [step, setStep] = useState(0);
+  const [direction, setDirection] = useState(0);
 
   const handleNext = () => {
+    setDirection(1);
     if (step < ONBOARDING_STEPS.length - 1) {
       setStep(step + 1);
     } else {
@@ -463,82 +465,110 @@ const OnboardingView = ({ onComplete }: { onComplete: () => void }) => {
 
   const currentStep = ONBOARDING_STEPS[step];
 
+  const variants = {
+    enter: (direction: number) => ({
+      x: direction > 0 ? "100%" : "-100%",
+      opacity: 0,
+    }),
+    center: {
+      x: 0,
+      opacity: 1,
+    },
+    exit: (direction: number) => ({
+      x: direction < 0 ? "100%" : "-100%",
+      opacity: 0,
+    }),
+  };
+
+  const bgColors = {
+    1: "#10383A",
+    2: "#809276",
+    3: "#DAA112"
+  };
+
   return (
     <motion.div 
       initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
+      animate={{ opacity: 1, backgroundColor: bgColors[currentStep.id as 1|2|3] }}
       exit={{ opacity: 0 }}
-      className={`absolute inset-0 z-[100] flex flex-col items-center justify-between p-8 transition-colors duration-700 ease-in-out ${currentStep.color}`}
+      transition={{ duration: 0.5, ease: "easeInOut" }}
+      className="absolute inset-0 z-[100] flex flex-col items-center justify-between overflow-hidden"
     >
-      {/* Illustration Area */}
-      <div className="flex-1 flex items-center justify-center w-full relative">
-        <div className="relative w-64 h-64 rounded-full bg-white/30 backdrop-blur-sm flex items-center justify-center mb-8">
-           <AnimatePresence mode="wait">
-             <motion.img 
-               key={currentStep.id}
-               src={currentStep.image} 
-               alt={currentStep.title}
-               initial={{ opacity: 0, scale: 0.8, x: 20 }}
-               animate={{ opacity: 1, scale: 1, x: 0 }}
-               exit={{ opacity: 0, scale: 0.8, x: -20 }}
-               transition={{ type: "spring", stiffness: 200, damping: 20 }}
-               className="w-56 h-56 object-contain drop-shadow-lg"
-             />
-           </AnimatePresence>
-        </div>
+      <div className="absolute inset-0 w-full h-full">
+         <AnimatePresence initial={false} custom={direction}>
+            <motion.div
+              key={step}
+              custom={direction}
+              variants={variants}
+              initial="enter"
+              animate="center"
+              exit="exit"
+              transition={{
+                x: { type: "spring", stiffness: 300, damping: 30 },
+                opacity: { duration: 0.2 }
+              }}
+              className="absolute inset-0 flex flex-col items-center justify-between p-8 pt-16"
+            >
+               {/* Illustration Area */}
+               <div className="flex-1 flex items-center justify-center w-full relative mb-8">
+                  <div className="relative w-72 h-72 rounded-full bg-white/10 backdrop-blur-sm flex items-center justify-center shadow-2xl ring-1 ring-white/20">
+                     <img 
+                       src={currentStep.image} 
+                       alt={currentStep.title}
+                       className="w-64 h-64 object-contain drop-shadow-xl"
+                     />
+                  </div>
+               </div>
+
+               {/* Text Content */}
+               <div className="w-full space-y-8 mb-8">
+                  <div className="text-center space-y-4">
+                    <h1 className={`text-4xl font-serif font-bold tracking-tight ${currentStep.textColor}`}>
+                      {currentStep.title}
+                    </h1>
+                    <p className={`text-lg leading-relaxed font-medium max-w-xs mx-auto ${step === 0 ? "text-white/80" : "text-black/60"}`}>
+                      {currentStep.description}
+                    </p>
+                  </div>
+               </div>
+            </motion.div>
+         </AnimatePresence>
       </div>
 
-      {/* Text Content */}
-      <div className="w-full space-y-8 mb-8">
-        <div className="text-center space-y-4">
-          <AnimatePresence mode="wait">
-            <motion.div
-              key={currentStep.id}
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-              transition={{ duration: 0.3 }}
+      {/* Controls Container - Fixed at bottom */}
+      <div className="w-full p-8 z-10 flex flex-col gap-6">
+         {/* Pagination Dots */}
+         <div className="flex justify-center gap-3">
+            {ONBOARDING_STEPS.map((_, idx) => (
+              <motion.div 
+                key={idx} 
+                animate={{ 
+                  width: idx === step ? 32 : 8,
+                  backgroundColor: idx === step 
+                    ? (step === 0 ? "#ffffff" : "#10383A") 
+                    : (step === 0 ? "rgba(255,255,255,0.3)" : "rgba(0,0,0,0.1)")
+                }}
+                className="h-2 rounded-full"
+              />
+            ))}
+         </div>
+
+         {/* Buttons */}
+         <div className="flex items-center gap-4">
+            <Button 
+              variant="outline" 
+              className={`h-14 rounded-2xl text-lg font-medium flex-1 border-white/20 bg-transparent hover:bg-white/10 ${step === 0 ? "text-white/70" : "text-black/70 border-black/10 hover:bg-black/5"}`}
+              onClick={onComplete}
             >
-              <h1 className={`text-3xl font-serif font-bold mb-3 ${currentStep.textColor}`}>
-                {currentStep.title}
-              </h1>
-              <p className={`leading-relaxed font-medium ${step === 0 ? "text-white/80" : "text-black/60"}`}>
-                {currentStep.description}
-              </p>
-            </motion.div>
-          </AnimatePresence>
-        </div>
-
-        {/* Pagination Dots */}
-        <div className="flex justify-center gap-2">
-          {ONBOARDING_STEPS.map((_, idx) => (
-            <div 
-              key={idx} 
-              className={`h-2 rounded-full transition-all duration-300 ${
-                idx === step 
-                  ? `w-8 ${step === 0 ? "bg-white" : "bg-[#10383A]"}` 
-                  : `w-2 ${step === 0 ? "bg-white/30" : "bg-black/10"}`
-              }`} 
-            />
-          ))}
-        </div>
-
-        {/* Buttons */}
-        <div className="flex items-center gap-4 pt-4">
-          <Button 
-            variant="outline" 
-            className={`flex-1 border-white/20 bg-transparent hover:bg-white/10 ${step === 0 ? "text-white/70" : "text-black/70 border-black/10 hover:bg-black/5"}`}
-            onClick={onComplete}
-          >
-            Skip
-          </Button>
-          <Button 
-            className={`flex-1 ${step === 0 ? "bg-white text-[#10383A] hover:bg-white/90" : "bg-[#10383A] text-white hover:bg-[#10383A]/90"}`}
-            onClick={handleNext}
-          >
-            {step === ONBOARDING_STEPS.length - 1 ? "Let's Start" : "Next"}
-          </Button>
-        </div>
+              Skip
+            </Button>
+            <Button 
+              className={`h-14 rounded-2xl text-lg font-bold flex-1 shadow-lg hover:scale-[1.02] transition-transform active:scale-[0.98] ${step === 0 ? "bg-white text-[#10383A] hover:bg-white/90" : "bg-[#10383A] text-white hover:bg-[#10383A]/90"}`}
+              onClick={handleNext}
+            >
+              {step === ONBOARDING_STEPS.length - 1 ? "Let's Start" : "Next"}
+            </Button>
+         </div>
       </div>
     </motion.div>
   );
