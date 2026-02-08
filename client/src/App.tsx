@@ -127,11 +127,11 @@ const VoiceView = ({ isActive, onTextMode, onEndCall, onProfile }: {
   return (
     <div className="h-full flex flex-col relative bg-background">
       {/* Header */}
-      <div className="flex items-center justify-between p-6">
-        <div className="flex items-center gap-2 bg-white/50 backdrop-blur-md px-3 py-1.5 rounded-full border border-white/60 shadow-sm">
-          <span className="font-semibold text-foreground">Maya</span>
-          <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
-        </div>
+      <div className="flex items-center justify-between p-6 pt-8">
+        <button className="flex items-center gap-2 bg-white/50 backdrop-blur-md px-4 py-2 rounded-2xl border border-border shadow-sm hover:bg-white/80 transition-colors">
+          <span className="font-bold text-lg text-foreground">Maya</span>
+          <ChevronRight className="w-4 h-4 rotate-90 text-muted-foreground" />
+        </button>
         
         {isActive && (
           <div className="absolute left-1/2 -translate-x-1/2 font-mono text-sm font-medium text-muted-foreground bg-muted/30 px-3 py-1 rounded-full">
@@ -139,10 +139,10 @@ const VoiceView = ({ isActive, onTextMode, onEndCall, onProfile }: {
           </div>
         )}
 
-        <Button variant="ghost" size="icon" className="rounded-full" onClick={onProfile}>
-          <div className="w-10 h-10 rounded-full bg-accent/20 flex items-center justify-center">
-             <Avatar className="w-9 h-9">
-               <AvatarImage src={mayaAvatar} />
+        <Button variant="ghost" size="icon" className="rounded-full w-12 h-12" onClick={onProfile}>
+          <div className="w-full h-full rounded-full border border-border bg-muted/20 overflow-hidden p-0.5">
+             <Avatar className="w-full h-full">
+               <AvatarImage src={mayaAvatar} className="object-cover" />
                <AvatarFallback>M</AvatarFallback>
              </Avatar>
           </div>
@@ -155,16 +155,16 @@ const VoiceView = ({ isActive, onTextMode, onEndCall, onProfile }: {
           /* Active Call State */
           <div className="w-full h-full flex items-center justify-center px-8">
             <div className="flex items-center justify-center gap-1.5 h-32 w-full">
-              {[...Array(12)].map((_, i) => (
+              {[...Array(8)].map((_, i) => (
                 <motion.div
                   key={i}
-                  className="w-3 bg-primary/20 rounded-full"
+                  className="w-4 bg-primary rounded-full opacity-80"
                   animate={{
-                    height: ["20%", "100%", "20%"],
+                    height: ["20%", "80%", "20%"],
                     backgroundColor: ["hsl(175 45% 25%)", "hsl(45 80% 60%)", "hsl(175 45% 25%)"]
                   }}
                   transition={{
-                    duration: 1.2,
+                    duration: 1 + Math.random() * 0.5,
                     repeat: Infinity,
                     delay: i * 0.1,
                     ease: "easeInOut"
@@ -175,27 +175,38 @@ const VoiceView = ({ isActive, onTextMode, onEndCall, onProfile }: {
           </div>
         ) : (
           /* Idle State */
-          <div className="text-center space-y-6">
-            <div className="relative">
-              <div className="absolute inset-0 bg-accent/20 blur-3xl rounded-full scale-150 opacity-50" />
-              <div className="w-48 h-48 bg-gradient-to-tr from-accent/30 to-secondary/30 rounded-full flex items-center justify-center backdrop-blur-sm border border-white/20 shadow-2xl relative z-10">
-                <Mic className="w-16 h-16 text-primary opacity-80" />
-              </div>
-            </div>
-            <h2 className="text-2xl font-medium text-foreground/80">Tap to talk</h2>
+          <div className="flex flex-col items-center gap-8">
+             <div className="relative group cursor-pointer" onClick={onEndCall}>
+               {/* Pulse Rings */}
+               <div className="absolute inset-0 bg-accent/20 rounded-full animate-ping opacity-20 duration-3000" />
+               <div className="absolute -inset-4 bg-secondary/20 rounded-full animate-pulse opacity-30" />
+               
+               {/* Main Button */}
+               <div className="w-24 h-24 bg-gradient-to-tr from-accent to-accent/80 rounded-full flex items-center justify-center shadow-xl transform transition-transform group-hover:scale-105 active:scale-95">
+                  <Mic className="w-10 h-10 text-accent-foreground" />
+               </div>
+             </div>
+             <p className="text-muted-foreground font-medium">Tap to speak</p>
           </div>
         )}
       </div>
 
-      {/* Controls */}
-      <div className="p-8 pb-12 space-y-6">
-        <div className="flex items-center justify-center gap-6">
-          {isActive ? (
-            <>
+      {/* Controls & Bottom Bar */}
+      <div className="p-6 pb-8 space-y-6 bg-gradient-to-t from-background via-background/80 to-transparent">
+        {/* Call Controls (Only visible when active) */}
+        {isActive && (
+          <div className="flex items-center justify-center gap-8 mb-4">
+              <Button 
+                variant="outline" 
+                size="icon" 
+                className="w-14 h-14 rounded-full border-2 border-border bg-background hover:bg-muted transition-colors"
+              >
+                <Video className="w-6 h-6 text-foreground" />
+              </Button>
               <Button 
                 variant="destructive" 
                 size="icon" 
-                className="w-16 h-16 rounded-full shadow-lg hover:scale-105 transition-transform"
+                className="w-20 h-20 rounded-full shadow-2xl hover:scale-105 transition-transform bg-red-500 hover:bg-red-600 text-white border-4 border-background"
                 onClick={onEndCall}
               >
                 <PhoneOff className="w-8 h-8" />
@@ -203,33 +214,29 @@ const VoiceView = ({ isActive, onTextMode, onEndCall, onProfile }: {
               <Button 
                 variant="outline" 
                 size="icon" 
-                className="w-14 h-14 rounded-full border-2 border-border bg-background/50 backdrop-blur"
+                className="w-14 h-14 rounded-full border-2 border-border bg-background hover:bg-muted transition-colors"
               >
-                <Video className="w-6 h-6 text-muted-foreground" />
+                <Mic className="w-6 h-6 text-foreground" />
               </Button>
-            </>
-          ) : (
-            <Button 
-              className="px-8 py-6 rounded-full text-lg shadow-lg hover:shadow-xl hover:scale-105 transition-all bg-primary text-primary-foreground font-medium"
-              onClick={onEndCall} // Reusing this prop to toggle state for demo
-            >
-              <Mic className="mr-2 w-5 h-5" />
-              Call Bestie
-            </Button>
-          )}
-        </div>
-
-        <button 
-          onClick={onTextMode}
-          className="w-full bg-white/60 backdrop-blur-xl border border-white/50 rounded-2xl p-4 flex items-center justify-between shadow-sm group active:scale-[0.98] transition-all"
-        >
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-accent/20 rounded-full flex items-center justify-center text-primary group-hover:bg-accent/30 transition-colors">
-              <MessageSquare className="w-5 h-5" />
-            </div>
-            <span className="font-medium text-foreground/80">Let's text instead...</span>
           </div>
-        </button>
+        )}
+
+        {/* Sketch-accurate Bottom Bar */}
+        <div className="flex items-center gap-3 w-full">
+           <Button variant="ghost" size="icon" className="text-muted-foreground hover:bg-muted/50 rounded-xl">
+              <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-paperclip"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+           </Button>
+           <Button variant="ghost" size="icon" className="text-muted-foreground hover:bg-muted/50 rounded-xl">
+              <Video className="w-6 h-6" />
+           </Button>
+           
+           <button 
+            onClick={onTextMode}
+            className="flex-1 bg-white border border-border/60 shadow-sm rounded-xl h-14 px-4 flex items-center justify-center gap-2 hover:bg-white/80 active:scale-[0.98] transition-all"
+          >
+            <span className="font-medium text-foreground/80">Let's text instead...</span>
+          </button>
+        </div>
       </div>
     </div>
   );
