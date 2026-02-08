@@ -34,6 +34,39 @@ const INITIAL_MESSAGES = [
 
 // --- Components ---
 
+const SharedFooter = ({ 
+  persona, 
+  onVoiceMode 
+}: { 
+  persona: Persona, 
+  onVoiceMode: () => void 
+}) => {
+  return (
+    <div className="absolute bottom-0 left-0 right-0 z-50 p-4 bg-background/80 backdrop-blur-md border-t">
+      <div className="flex items-center gap-2">
+         <Button 
+          variant="ghost" 
+          size="icon" 
+          className="text-muted-foreground hover:bg-accent/20 hover:text-accent-foreground transition-colors"
+          onClick={onVoiceMode}
+        >
+           <Mic className="w-6 h-6" />
+         </Button>
+         <div className="flex-1 bg-muted/50 rounded-full px-4 py-2.5 border border-transparent focus-within:border-primary/20 focus-within:bg-background transition-all">
+           <input 
+            type="text" 
+            placeholder={`Message ${persona}...`} 
+            className="w-full bg-transparent border-none outline-none text-sm placeholder:text-muted-foreground"
+          />
+         </div>
+         <Button size="icon" className="rounded-full bg-primary text-white shadow-md hover:bg-primary/90">
+           <ChevronRight className="w-5 h-5" />
+         </Button>
+      </div>
+    </div>
+  );
+};
+
 const ProfileView = ({ onClose }: { onClose: () => void }) => {
   return (
     <motion.div
@@ -187,20 +220,15 @@ const SharedHeader = ({
   );
 };
 
-const VoiceView = ({ isActive, onTextMode, onEndCall, onProfile, persona, setPersona }: { 
+const VoiceView = ({ isActive, onEndCall, onProfile, persona, setPersona }: { 
   isActive: boolean; 
-  onTextMode: () => void; 
   onEndCall: () => void;
   onProfile: () => void;
   persona: Persona;
   setPersona: (p: Persona) => void;
 }) => {
-  // Timer logic moved to parent or kept here but UI is in SharedHeader
-  // We keep the timer state here to pass up if needed, but actually App holds state now?
-  // Let's rely on props passed down if needed, but for now we just render content.
-  
   return (
-    <div className="h-full flex flex-col relative bg-background pt-24">
+    <div className="h-full flex flex-col relative pt-24 pb-4">
       {/* Main Content */}
       <div className="flex-1 flex flex-col items-center justify-center relative">
         {isActive ? (
@@ -243,8 +271,8 @@ const VoiceView = ({ isActive, onTextMode, onEndCall, onProfile, persona, setPer
         )}
       </div>
 
-      {/* Controls & Bottom Bar */}
-      <div className="p-6 pb-8 space-y-6 bg-gradient-to-t from-background via-background/80 to-transparent">
+      {/* Controls & Bottom Handle */}
+      <div className="px-6 space-y-6">
         {/* Call Controls (Only visible when active) */}
         {isActive && (
           <div className="flex items-center justify-center gap-8 mb-4">
@@ -273,29 +301,19 @@ const VoiceView = ({ isActive, onTextMode, onEndCall, onProfile, persona, setPer
           </div>
         )}
 
-        {/* Sketch-accurate Bottom Bar */}
-        <div className="flex items-center w-full bg-white border border-border/60 shadow-sm rounded-2xl p-2 gap-1 transition-all hover:bg-white/90 group cursor-pointer" onClick={onTextMode}>
-           <Button variant="ghost" size="icon" className="text-muted-foreground hover:bg-muted/50 rounded-xl w-10 h-10 shrink-0" onClick={(e) => { e.stopPropagation(); /* Add attachment logic */ }}>
-              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-paperclip"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
-           </Button>
-           <Button variant="ghost" size="icon" className="text-muted-foreground hover:bg-muted/50 rounded-xl w-10 h-10 shrink-0" onClick={(e) => { e.stopPropagation(); /* Add camera logic */ }}>
-              <Video className="w-5 h-5" />
-           </Button>
-           
-           <div className="h-6 w-px bg-border/50 mx-1" />
-
-           <div className="flex-1 px-2 font-medium text-foreground/80 text-center select-none">
-            Swipe up to chat...
-           </div>
+        {/* Swipe Handle */}
+        <div className="flex flex-col items-center justify-center gap-2 py-2 text-muted-foreground/50">
+           <div className="w-12 h-1.5 bg-muted-foreground/20 rounded-full" />
+           <span className="text-xs font-medium uppercase tracking-wider">Swipe up to chat</span>
         </div>
       </div>
     </div>
   );
 };
 
-const TextView = ({ onVoiceMode, onProfile, persona }: { onVoiceMode: () => void; onProfile: () => void; persona: Persona }) => {
+const TextView = () => {
   return (
-    <div className="h-full flex flex-col bg-background/50 pt-24">
+    <div className="h-full flex flex-col bg-background/50 pt-24 pb-20">
       {/* Messages */}
       <ScrollArea className="flex-1 p-4">
         <div className="space-y-4 pb-4">
@@ -336,30 +354,6 @@ const TextView = ({ onVoiceMode, onProfile, persona }: { onVoiceMode: () => void
           ))}
         </div>
       </ScrollArea>
-
-      {/* Input Area */}
-      <div className="p-4 bg-background/80 backdrop-blur-md border-t">
-        <div className="flex items-center gap-2">
-           <Button 
-            variant="ghost" 
-            size="icon" 
-            className="text-muted-foreground hover:bg-accent/20 hover:text-accent-foreground transition-colors"
-            onClick={onVoiceMode}
-          >
-             <Mic className="w-6 h-6" />
-           </Button>
-           <div className="flex-1 bg-muted/50 rounded-full px-4 py-2.5 border border-transparent focus-within:border-primary/20 focus-within:bg-background transition-all">
-             <input 
-              type="text" 
-              placeholder={`Message ${persona}...`} 
-              className="w-full bg-transparent border-none outline-none text-sm placeholder:text-muted-foreground"
-            />
-           </div>
-           <Button size="icon" className="rounded-full bg-primary text-white shadow-md hover:bg-primary/90">
-             <ChevronRight className="w-5 h-5" />
-           </Button>
-        </div>
-      </div>
     </div>
   );
 };
@@ -388,6 +382,12 @@ function App() {
       {/* Mobile Frame */}
       <div className="w-full h-full md:max-w-[400px] md:h-[850px] bg-background md:rounded-[2.5rem] shadow-2xl overflow-hidden relative border-4 border-neutral-800/5">
         
+        {/* Shared Footer (Always Visible) */}
+        <SharedFooter 
+          persona={persona}
+          onVoiceMode={() => setMode(mode === "voice" ? "text" : "voice")}
+        />
+
         {/* Shared Header (Always Visible) */}
         <SharedHeader 
           persona={persona}
@@ -400,11 +400,7 @@ function App() {
 
         {/* Base Layer: Text View (Transcript) */}
         <div className="absolute inset-0 z-0">
-          <TextView 
-            onVoiceMode={() => setMode("voice")} 
-            onProfile={() => setShowProfile(true)}
-            persona={persona}
-          />
+          <TextView />
         </div>
 
         {/* Curtain Layer: Voice View */}
