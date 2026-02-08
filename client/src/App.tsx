@@ -461,86 +461,96 @@ const OnboardingView = ({ onComplete }: { onComplete: () => void }) => {
     }
   };
 
-  const currentStep = ONBOARDING_STEPS[step];
-
   return (
-    <motion.div 
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      className={`absolute inset-0 z-[100] flex flex-col items-center justify-between p-8 transition-colors duration-700 ease-in-out ${currentStep.color}`}
-    >
-      {/* Illustration Area */}
-      <div className="flex-1 flex items-center justify-center w-full relative">
-        <div className="relative w-64 h-64 rounded-full bg-white/30 backdrop-blur-sm flex items-center justify-center mb-8">
-           <AnimatePresence mode="wait">
-             <motion.img 
-               key={currentStep.id}
-               src={currentStep.image} 
-               alt={currentStep.title}
-               initial={{ opacity: 0, scale: 0.8, x: 20 }}
-               animate={{ opacity: 1, scale: 1, x: 0 }}
-               exit={{ opacity: 0, scale: 0.8, x: -20 }}
-               transition={{ type: "spring", stiffness: 200, damping: 20 }}
-               className="w-56 h-56 object-contain drop-shadow-lg"
-             />
-           </AnimatePresence>
-        </div>
-      </div>
-
-      {/* Text Content */}
-      <div className="w-full space-y-8 mb-8">
-        <div className="text-center space-y-4">
-          <AnimatePresence mode="wait">
+    <div className="absolute inset-0 z-[100] overflow-hidden bg-background">
+      <AnimatePresence mode="popLayout" initial={false}>
+        {ONBOARDING_STEPS.map((slide, idx) => (
+          idx === step && (
             <motion.div
-              key={currentStep.id}
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-              transition={{ duration: 0.3 }}
+              key={slide.id}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0, zIndex: -1 }}
+              transition={{ duration: 0.6, ease: "easeInOut" }}
+              className={`absolute inset-0 flex flex-col items-center justify-between p-8 ${slide.color}`}
+              drag="x"
+              dragConstraints={{ left: 0, right: 0 }}
+              dragElastic={0.2}
+              onDragEnd={(_, info) => {
+                if (info.offset.x < -50 && step < ONBOARDING_STEPS.length - 1) {
+                  setStep(s => s + 1);
+                } else if (info.offset.x > 50 && step > 0) {
+                  setStep(s => s - 1);
+                }
+              }}
             >
-              <h1 className={`text-3xl font-serif font-bold mb-3 ${currentStep.textColor}`}>
-                {currentStep.title}
-              </h1>
-              <p className={`leading-relaxed font-medium ${step === 0 ? "text-white/80" : "text-black/60"}`}>
-                {currentStep.description}
-              </p>
+              {/* Illustration Area */}
+              <div className="flex-1 flex items-center justify-center w-full relative">
+                <div className="relative w-72 h-72 rounded-full bg-white/20 backdrop-blur-md flex items-center justify-center mb-8 shadow-inner border border-white/10">
+                   <motion.img 
+                     src={slide.image} 
+                     alt={slide.title}
+                     initial={{ opacity: 0, scale: 0.8, y: 20 }}
+                     animate={{ opacity: 1, scale: 1, y: 0 }}
+                     transition={{ delay: 0.2, type: "spring", stiffness: 200, damping: 20 }}
+                     className="w-64 h-64 object-contain drop-shadow-xl"
+                   />
+                </div>
+              </div>
+
+              {/* Text Content */}
+              <div className="w-full space-y-10 mb-8 z-10">
+                <div className="text-center space-y-4">
+                  <motion.div
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: 0.3, duration: 0.5 }}
+                  >
+                    <h1 className={`text-4xl font-serif font-bold mb-4 ${slide.textColor} tracking-tight`}>
+                      {slide.title}
+                    </h1>
+                    <p className={`text-lg leading-relaxed font-medium ${step === 0 ? "text-white/90" : "text-black/70"}`}>
+                      {slide.description}
+                    </p>
+                  </motion.div>
+                </div>
+
+                {/* Pagination Dots */}
+                <div className="flex justify-center gap-3">
+                  {ONBOARDING_STEPS.map((_, dotIdx) => (
+                    <div 
+                      key={dotIdx} 
+                      className={`h-2.5 rounded-full transition-all duration-500 ease-out ${
+                        dotIdx === step 
+                          ? `w-10 ${step === 0 ? "bg-white" : "bg-[#10383A]"}` 
+                          : `w-2.5 ${step === 0 ? "bg-white/30" : "bg-black/10"}`
+                      }`} 
+                    />
+                  ))}
+                </div>
+
+                {/* Buttons */}
+                <div className="flex items-center gap-4 pt-2">
+                  <Button 
+                    variant="ghost" 
+                    className={`flex-1 h-14 text-base font-medium transition-colors ${step === 0 ? "text-white/70 hover:text-white hover:bg-white/10" : "text-black/60 hover:text-black hover:bg-black/5"}`}
+                    onClick={onComplete}
+                  >
+                    Skip
+                  </Button>
+                  <Button 
+                    className={`flex-[2] h-14 text-lg rounded-2xl shadow-xl transition-transform active:scale-95 ${step === 0 ? "bg-white text-[#10383A] hover:bg-white/90" : "bg-[#10383A] text-white hover:bg-[#10383A]/90"}`}
+                    onClick={handleNext}
+                  >
+                    {step === ONBOARDING_STEPS.length - 1 ? "Get Started" : "Next"}
+                  </Button>
+                </div>
+              </div>
             </motion.div>
-          </AnimatePresence>
-        </div>
-
-        {/* Pagination Dots */}
-        <div className="flex justify-center gap-2">
-          {ONBOARDING_STEPS.map((_, idx) => (
-            <div 
-              key={idx} 
-              className={`h-2 rounded-full transition-all duration-300 ${
-                idx === step 
-                  ? `w-8 ${step === 0 ? "bg-white" : "bg-[#10383A]"}` 
-                  : `w-2 ${step === 0 ? "bg-white/30" : "bg-black/10"}`
-              }`} 
-            />
-          ))}
-        </div>
-
-        {/* Buttons */}
-        <div className="flex items-center gap-4 pt-4">
-          <Button 
-            variant="outline" 
-            className={`flex-1 border-white/20 bg-transparent hover:bg-white/10 ${step === 0 ? "text-white/70" : "text-black/70 border-black/10 hover:bg-black/5"}`}
-            onClick={onComplete}
-          >
-            Skip
-          </Button>
-          <Button 
-            className={`flex-1 ${step === 0 ? "bg-white text-[#10383A] hover:bg-white/90" : "bg-[#10383A] text-white hover:bg-[#10383A]/90"}`}
-            onClick={handleNext}
-          >
-            {step === ONBOARDING_STEPS.length - 1 ? "Let's Start" : "Next"}
-          </Button>
-        </div>
-      </div>
-    </motion.div>
+          )
+        ))}
+      </AnimatePresence>
+    </div>
   );
 };
 
