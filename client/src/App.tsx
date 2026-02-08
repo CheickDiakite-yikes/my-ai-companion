@@ -9,8 +9,16 @@ import mayaAvatar from "@/assets/maya-avatar.png";
 import leafBg from "@/assets/leaf-bg.png";
 import { cn } from "@/lib/utils";
 
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+
 // --- Types ---
 type Mode = "voice" | "text" | "profile";
+type Persona = "Maya" | "Zarra" | "Ore";
 
 // --- Mock Data ---
 const INITIAL_MESSAGES = [
@@ -100,11 +108,13 @@ const ProfileView = ({ onClose }: { onClose: () => void }) => {
   );
 };
 
-const VoiceView = ({ isActive, onTextMode, onEndCall, onProfile }: { 
+const VoiceView = ({ isActive, onTextMode, onEndCall, onProfile, persona, setPersona }: { 
   isActive: boolean; 
   onTextMode: () => void; 
   onEndCall: () => void;
   onProfile: () => void;
+  persona: Persona;
+  setPersona: (p: Persona) => void;
 }) => {
   const [duration, setDuration] = useState(0);
 
@@ -128,10 +138,31 @@ const VoiceView = ({ isActive, onTextMode, onEndCall, onProfile }: {
     <div className="h-full flex flex-col relative bg-background">
       {/* Header */}
       <div className="flex items-center justify-between p-6 pt-8">
-        <button className="flex items-center gap-2 bg-white/50 backdrop-blur-md px-4 py-2 rounded-2xl border border-border shadow-sm hover:bg-white/80 transition-colors">
-          <span className="font-bold text-lg text-foreground">Maya</span>
-          <ChevronRight className="w-4 h-4 rotate-90 text-muted-foreground" />
-        </button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button className="flex items-center gap-2 bg-white/50 backdrop-blur-md px-4 py-2 rounded-2xl border border-border shadow-sm hover:bg-white/80 transition-colors focus:outline-none">
+              <span className="font-bold text-lg text-foreground">{persona}</span>
+              <ChevronRight className="w-4 h-4 rotate-90 text-muted-foreground" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="w-48 rounded-xl">
+            <DropdownMenuItem onClick={() => setPersona("Maya")} className="gap-2 p-3 font-medium cursor-pointer">
+              <Avatar className="w-6 h-6">
+                <AvatarImage src={mayaAvatar} />
+                <AvatarFallback>M</AvatarFallback>
+              </Avatar>
+              Maya
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => setPersona("Zarra")} className="gap-2 p-3 font-medium cursor-pointer">
+              <div className="w-6 h-6 rounded-full bg-purple-500 flex items-center justify-center text-[10px] text-white font-bold">Z</div>
+              Zarra
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => setPersona("Ore")} className="gap-2 p-3 font-medium cursor-pointer">
+              <div className="w-6 h-6 rounded-full bg-orange-500 flex items-center justify-center text-[10px] text-white font-bold">O</div>
+              Ore
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
         
         {isActive && (
           <div className="absolute left-1/2 -translate-x-1/2 font-mono text-sm font-medium text-muted-foreground bg-muted/30 px-3 py-1 rounded-full">
@@ -186,7 +217,7 @@ const VoiceView = ({ isActive, onTextMode, onEndCall, onProfile }: {
                   <Mic className="w-10 h-10 text-accent-foreground" />
                </div>
              </div>
-             <p className="text-muted-foreground font-medium">Tap to speak</p>
+             <p className="text-muted-foreground font-medium">Tap to speak to {persona}</p>
           </div>
         )}
       </div>
@@ -241,7 +272,7 @@ const VoiceView = ({ isActive, onTextMode, onEndCall, onProfile }: {
   );
 };
 
-const TextView = ({ onVoiceMode, onProfile }: { onVoiceMode: () => void; onProfile: () => void }) => {
+const TextView = ({ onVoiceMode, onProfile, persona }: { onVoiceMode: () => void; onProfile: () => void; persona: Persona }) => {
   return (
     <div className="h-full flex flex-col bg-background/50">
       {/* Header */}
@@ -252,7 +283,7 @@ const TextView = ({ onVoiceMode, onProfile }: { onVoiceMode: () => void; onProfi
              <AvatarFallback>M</AvatarFallback>
            </Avatar>
            <div>
-             <h3 className="font-bold text-foreground leading-none">Maya</h3>
+             <h3 className="font-bold text-foreground leading-none">{persona}</h3>
              <span className="text-xs text-green-600 font-medium">Online</span>
            </div>
          </div>
@@ -316,7 +347,7 @@ const TextView = ({ onVoiceMode, onProfile }: { onVoiceMode: () => void; onProfi
            <div className="flex-1 bg-muted/50 rounded-full px-4 py-2.5 border border-transparent focus-within:border-primary/20 focus-within:bg-background transition-all">
              <input 
               type="text" 
-              placeholder="Message Maya..." 
+              placeholder={`Message ${persona}...`} 
               className="w-full bg-transparent border-none outline-none text-sm placeholder:text-muted-foreground"
             />
            </div>
@@ -335,6 +366,7 @@ function App() {
   const [mode, setMode] = useState<Mode>("voice");
   const [isCalling, setIsCalling] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
+  const [persona, setPersona] = useState<Persona>("Maya");
 
   // The "Drapes" Concept:
   // Voice Mode is the "Curtain" that slides up/down over Text Mode.
@@ -352,6 +384,7 @@ function App() {
           <TextView 
             onVoiceMode={() => setMode("voice")} 
             onProfile={() => setShowProfile(true)}
+            persona={persona}
           />
         </div>
 
@@ -378,6 +411,8 @@ function App() {
                 onTextMode={() => setMode("text")}
                 onEndCall={() => setIsCalling(!isCalling)}
                 onProfile={() => setShowProfile(true)}
+                persona={persona}
+                setPersona={setPersona}
               />
             </motion.div>
           )}
