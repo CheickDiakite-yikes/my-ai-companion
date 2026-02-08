@@ -64,6 +64,101 @@ const ONBOARDING_STEPS = [
 
 // --- Components ---
 
+const PROFESSION_OPTIONS = [
+  "Software Engineer",
+  "Designer",
+  "Product Manager",
+  "Data Scientist",
+  "Teacher / Educator",
+  "Healthcare Professional",
+  "Marketing / PR",
+  "Student",
+  "Entrepreneur",
+  "Writer / Content Creator",
+  "Artist / Creative",
+  "Consultant",
+  "Sales Professional",
+  "Researcher / Scientist",
+  "Coach / Therapist",
+  "Finance / Accounting",
+  "Legal Professional",
+  "Real Estate",
+  "Homemaker",
+  "Other",
+];
+
+const SearchableDropdown = ({ value, onChange, options, placeholder, testId }: {
+  value: string;
+  onChange: (val: string) => void;
+  options: string[];
+  placeholder: string;
+  testId: string;
+}) => {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+
+  const filtered = options.filter((o) =>
+    o.toLowerCase().includes(search.toLowerCase())
+  );
+
+  const handleSelect = (option: string) => {
+    onChange(option);
+    setSearch("");
+    setOpen(false);
+  };
+
+  return (
+    <div className="relative">
+      <input
+        type="text"
+        value={open ? search : value}
+        onChange={(e) => {
+          setSearch(e.target.value);
+          if (!open) setOpen(true);
+        }}
+        onFocus={() => {
+          setOpen(true);
+          setSearch(value);
+        }}
+        onBlur={() => setTimeout(() => setOpen(false), 200)}
+        placeholder={placeholder}
+        className="w-full h-12 px-4 rounded-xl bg-white/10 border border-white/20 text-white placeholder:text-white/40 focus:outline-none focus:border-[#DAA112] focus:ring-1 focus:ring-[#DAA112] transition-colors"
+        data-testid={testId}
+      />
+      <AnimatePresence>
+        {open && filtered.length > 0 && (
+          <motion.div
+            initial={{ opacity: 0, y: -4, scaleY: 0.95 }}
+            animate={{ opacity: 1, y: 0, scaleY: 1 }}
+            exit={{ opacity: 0, y: -4, scaleY: 0.95 }}
+            transition={{ duration: 0.15 }}
+            className="absolute z-50 left-0 right-0 mt-1.5 max-h-48 overflow-y-auto rounded-xl bg-[#1a4a4d] border border-white/15 shadow-2xl backdrop-blur-lg origin-top"
+            style={{ scrollbarWidth: "thin", scrollbarColor: "rgba(255,255,255,0.15) transparent" }}
+          >
+            {filtered.map((option) => (
+              <button
+                key={option}
+                type="button"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => handleSelect(option)}
+                className={cn(
+                  "w-full text-left px-4 py-2.5 text-sm transition-colors",
+                  value === option
+                    ? "bg-[#DAA112]/20 text-[#DAA112] font-medium"
+                    : "text-white/80 hover:bg-white/10 hover:text-white"
+                )}
+                data-testid={`option-${testId}-${option.toLowerCase().replace(/[\s\/]+/g, "-")}`}
+              >
+                {option}
+              </button>
+            ))}
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+};
+
 const REFERRAL_OPTIONS = [
   "Social Media",
   "Friend or Family",
@@ -382,13 +477,12 @@ const AuthPage = ({ onLogin, onRegister, loginError, registerError, isLoggingIn,
 
             <div>
               <label className="text-sm text-white/60 mb-1.5 block">Profession</label>
-              <input
-                type="text"
+              <SearchableDropdown
                 value={formData.profession}
-                onChange={(e) => setFormData(f => ({ ...f, profession: e.target.value }))}
-                className={inputClass}
-                placeholder="e.g. Designer, Student, Coach..."
-                data-testid="input-register-profession"
+                onChange={(val) => setFormData(f => ({ ...f, profession: val }))}
+                options={PROFESSION_OPTIONS}
+                placeholder="Search or select your profession..."
+                testId="input-register-profession"
               />
             </div>
 
