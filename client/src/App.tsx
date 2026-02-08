@@ -72,30 +72,30 @@ const SharedFooter = ({
   onVoiceMode: () => void 
 }) => {
   return (
-    <div className="absolute bottom-0 left-0 right-0 z-50 p-4 bg-background/80 backdrop-blur-md border-t">
+    <div className="absolute bottom-0 left-0 right-0 z-50 p-4 bg-[#10383A]/90 backdrop-blur-md border-t border-white/10">
       <div className="flex items-center gap-2">
          <Button 
           variant="ghost" 
           size="icon" 
-          className="text-muted-foreground hover:bg-accent/20 hover:text-accent-foreground transition-colors"
+          className="text-white/70 hover:bg-white/10 hover:text-white transition-colors"
         >
            <Camera className="w-6 h-6" />
          </Button>
          <Button 
           variant="ghost" 
           size="icon" 
-          className="text-muted-foreground hover:bg-accent/20 hover:text-accent-foreground transition-colors"
+          className="text-white/70 hover:bg-white/10 hover:text-white transition-colors"
         >
            <Paperclip className="w-6 h-6" />
          </Button>
-         <div className="flex-1 bg-muted/50 rounded-full px-4 py-2.5 border border-transparent focus-within:border-primary/20 focus-within:bg-background transition-all">
+         <div className="flex-1 bg-black/20 rounded-full px-4 py-2.5 border border-white/5 focus-within:border-white/20 focus-within:bg-black/30 transition-all">
            <input 
             type="text" 
             placeholder={`Message ${persona}...`} 
-            className="w-full bg-transparent border-none outline-none text-sm placeholder:text-muted-foreground"
+            className="w-full bg-transparent border-none outline-none text-sm text-white placeholder:text-white/40"
           />
          </div>
-         <Button size="icon" className="rounded-full bg-primary text-white shadow-md hover:bg-primary/90">
+         <Button size="icon" className="rounded-full bg-[#DAA112] text-[#10383A] shadow-md hover:bg-[#DAA112]/90">
            <ChevronRight className="w-5 h-5" />
          </Button>
       </div>
@@ -203,24 +203,24 @@ const SharedHeader = ({
       <div className="pointer-events-auto">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <button className="flex items-center gap-2 bg-white/50 backdrop-blur-md px-4 py-2 rounded-2xl border border-border shadow-sm hover:bg-white/80 transition-colors focus:outline-none">
-              <span className="font-bold text-lg text-foreground">{persona}</span>
-              <ChevronRight className="w-4 h-4 rotate-90 text-muted-foreground" />
+            <button className="flex items-center gap-2 bg-[#10383A] border border-white/10 px-4 py-2 rounded-2xl shadow-sm hover:bg-[#10383A]/80 transition-colors focus:outline-none">
+              <span className="font-bold text-lg text-white">{persona}</span>
+              <ChevronRight className="w-4 h-4 rotate-90 text-white/70" />
             </button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="w-48 rounded-xl">
-            <DropdownMenuItem onClick={() => setPersona("Maya")} className="gap-2 p-3 font-medium cursor-pointer">
+          <DropdownMenuContent align="start" className="w-48 rounded-xl bg-[#10383A] border-white/10 text-white">
+            <DropdownMenuItem onClick={() => setPersona("Maya")} className="gap-2 p-3 font-medium cursor-pointer focus:bg-white/10 focus:text-white">
               <Avatar className="w-6 h-6">
                 <AvatarImage src={mayaAvatar} />
                 <AvatarFallback>M</AvatarFallback>
               </Avatar>
               Maya
             </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => setPersona("Zarra")} className="gap-2 p-3 font-medium cursor-pointer">
+            <DropdownMenuItem onClick={() => setPersona("Zarra")} className="gap-2 p-3 font-medium cursor-pointer focus:bg-white/10 focus:text-white">
               <div className="w-6 h-6 rounded-full bg-purple-500 flex items-center justify-center text-[10px] text-white font-bold">Z</div>
               Zarra
             </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => setPersona("Ore")} className="gap-2 p-3 font-medium cursor-pointer">
+            <DropdownMenuItem onClick={() => setPersona("Ore")} className="gap-2 p-3 font-medium cursor-pointer focus:bg-white/10 focus:text-white">
               <div className="w-6 h-6 rounded-full bg-orange-500 flex items-center justify-center text-[10px] text-white font-bold">O</div>
               Ore
             </DropdownMenuItem>
@@ -235,7 +235,7 @@ const SharedHeader = ({
             initial={{ opacity: 0, y: -10 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -10 }}
-            className="absolute left-1/2 -translate-x-1/2 font-mono text-sm font-medium text-muted-foreground bg-muted/30 px-3 py-1 rounded-full backdrop-blur-sm"
+            className="absolute left-1/2 -translate-x-1/2 font-mono text-sm font-medium text-white/70 bg-black/20 px-3 py-1 rounded-full backdrop-blur-sm"
           >
             {formatTime(duration)}
           </motion.div>
@@ -244,7 +244,7 @@ const SharedHeader = ({
 
       <div className="pointer-events-auto">
         <Button variant="ghost" size="icon" className="rounded-full w-12 h-12" onClick={onProfile}>
-          <div className="w-full h-full rounded-full border border-border bg-muted/20 overflow-hidden p-0.5">
+          <div className="w-full h-full rounded-full border border-white/20 bg-white/10 overflow-hidden p-0.5">
               <Avatar className="w-full h-full">
                 <AvatarImage src={mayaAvatar} className="object-cover" />
                 <AvatarFallback>M</AvatarFallback>
@@ -268,7 +268,7 @@ const VoiceView = ({ isActive, onEndCall, onProfile, persona, setPersona, mode, 
 }) => {
   return (
     <motion.div 
-      className="absolute top-0 left-0 right-0 z-40 bg-background rounded-b-[2.5rem] shadow-lg overflow-hidden"
+      className="absolute top-0 left-0 right-0 z-40 bg-[#10383A] rounded-b-[2.5rem] shadow-2xl overflow-hidden"
       initial={false}
       animate={{ height: mode === "voice" ? "100%" : "110px" }}
       transition={{ type: "spring", stiffness: 200, damping: 25 }}
@@ -313,10 +313,10 @@ const VoiceView = ({ isActive, onEndCall, onProfile, persona, setPersona, mode, 
                   {[...Array(8)].map((_, i) => (
                     <motion.div
                       key={i}
-                      className="w-4 bg-primary rounded-full opacity-80"
+                      className="w-4 bg-[#DAA112] rounded-full opacity-80"
                       animate={{
                         height: ["20%", "80%", "20%"],
-                        backgroundColor: ["hsl(175 45% 25%)", "hsl(45 80% 60%)", "hsl(175 45% 25%)"]
+                        backgroundColor: ["#DAA112", "#FFF", "#DAA112"]
                       }}
                       transition={{
                         duration: 1 + Math.random() * 0.5,
@@ -333,15 +333,15 @@ const VoiceView = ({ isActive, onEndCall, onProfile, persona, setPersona, mode, 
               <div className="flex flex-col items-center gap-8">
                  <div className="relative group cursor-pointer" onClick={onEndCall}>
                    {/* Pulse Rings */}
-                   <div className="absolute inset-0 bg-accent/20 rounded-full animate-ping opacity-20 duration-3000" />
-                   <div className="absolute -inset-4 bg-secondary/20 rounded-full animate-pulse opacity-30" />
+                   <div className="absolute inset-0 bg-[#DAA112]/20 rounded-full animate-ping opacity-20 duration-3000" />
+                   <div className="absolute -inset-4 bg-[#DAA112]/10 rounded-full animate-pulse opacity-30" />
                    
                    {/* Main Button */}
-                   <div className="w-24 h-24 bg-gradient-to-tr from-accent to-accent/80 rounded-full flex items-center justify-center shadow-xl transform transition-transform group-hover:scale-105 active:scale-95">
-                      <Mic className="w-10 h-10 text-accent-foreground" />
+                   <div className="w-32 h-32 bg-[#DAA112] rounded-full flex items-center justify-center shadow-[0_0_40px_rgba(218,161,18,0.3)] transform transition-transform group-hover:scale-105 active:scale-95">
+                      <Mic className="w-12 h-12 text-[#10383A]" />
                    </div>
                  </div>
-                 <p className="text-muted-foreground font-medium">Tap to speak to {persona}</p>
+                 <p className="text-white/60 font-medium tracking-wide">Tap to speak to {persona}</p>
               </div>
             )}
           </div>
@@ -354,14 +354,14 @@ const VoiceView = ({ isActive, onEndCall, onProfile, persona, setPersona, mode, 
                   <Button 
                     variant="outline" 
                     size="icon" 
-                    className="w-14 h-14 rounded-full border-2 border-border bg-background hover:bg-muted transition-colors"
+                    className="w-14 h-14 rounded-full border-2 border-white/10 bg-white/5 hover:bg-white/10 transition-colors text-white"
                   >
-                    <Video className="w-6 h-6 text-foreground" />
+                    <Video className="w-6 h-6" />
                   </Button>
                   <Button 
                     variant="destructive" 
                     size="icon" 
-                    className="w-20 h-20 rounded-full shadow-2xl hover:scale-105 transition-transform bg-red-500 hover:bg-red-600 text-white border-4 border-background"
+                    className="w-20 h-20 rounded-full shadow-2xl hover:scale-105 transition-transform bg-red-500 hover:bg-red-600 text-white border-4 border-[#10383A]"
                     onClick={onEndCall}
                   >
                     <PhoneOff className="w-8 h-8" />
@@ -369,16 +369,16 @@ const VoiceView = ({ isActive, onEndCall, onProfile, persona, setPersona, mode, 
                   <Button 
                     variant="outline" 
                     size="icon" 
-                    className="w-14 h-14 rounded-full border-2 border-border bg-background hover:bg-muted transition-colors"
+                    className="w-14 h-14 rounded-full border-2 border-white/10 bg-white/5 hover:bg-white/10 transition-colors text-white"
                   >
-                    <Mic className="w-6 h-6 text-foreground" />
+                    <Mic className="w-6 h-6" />
                   </Button>
               </div>
             )}
 
             {/* Swipe Up Handle */}
-            <div className="flex flex-col items-center justify-center gap-2 py-2 text-muted-foreground/50 cursor-grab active:cursor-grabbing">
-               <div className="w-12 h-1.5 bg-muted-foreground/20 rounded-full" />
+            <div className="flex flex-col items-center justify-center gap-2 py-2 text-white/30 cursor-grab active:cursor-grabbing">
+               <div className="w-12 h-1.5 bg-white/20 rounded-full" />
                <span className="text-xs font-medium uppercase tracking-wider">Swipe up to chat</span>
             </div>
           </div>
@@ -393,7 +393,7 @@ const VoiceView = ({ isActive, onEndCall, onProfile, persona, setPersona, mode, 
               exit={{ opacity: 0 }}
               className="absolute bottom-2 left-0 right-0 flex justify-center pb-2 pointer-events-none"
             >
-               <div className="w-12 h-1.5 bg-muted-foreground/20 rounded-full" />
+               <div className="w-12 h-1.5 bg-white/20 rounded-full" />
             </motion.div>
           )}
         </AnimatePresence>
@@ -405,7 +405,7 @@ const VoiceView = ({ isActive, onEndCall, onProfile, persona, setPersona, mode, 
 
 const TextView = () => {
   return (
-    <div className="h-full flex flex-col bg-background/50 pt-40 pb-20">
+    <div className="h-full flex flex-col bg-[#0D2E30] pt-40 pb-20">
       {/* Messages */}
       <ScrollArea className="flex-1 p-4">
         <div className="space-y-4 pb-4">
@@ -421,23 +421,23 @@ const TextView = () => {
             >
               <div className="flex items-end gap-2 max-w-[80%]">
                 {msg.sender === "maya" && (
-                  <Avatar className="w-6 h-6 mb-1 shrink-0">
+                  <Avatar className="w-8 h-8 mb-1 shrink-0 ring-2 ring-white/10">
                     <AvatarImage src={mayaAvatar} />
                     <AvatarFallback>M</AvatarFallback>
                   </Avatar>
                 )}
                 <div
                   className={cn(
-                    "px-4 py-2.5 rounded-2xl text-sm leading-relaxed shadow-sm",
+                    "px-5 py-3 rounded-2xl text-sm leading-relaxed shadow-sm",
                     msg.sender === "user" 
-                      ? "bg-accent text-accent-foreground rounded-br-none" 
-                      : "bg-white border text-foreground rounded-bl-none"
+                      ? "bg-[#DAA112] text-[#10383A] font-medium rounded-br-none" 
+                      : "bg-white text-[#10383A] rounded-bl-none"
                   )}
                 >
                   {msg.text}
                 </div>
                  {msg.sender === "user" && (
-                  <div className="w-6 h-6 rounded-full bg-primary/10 flex items-center justify-center mb-1 text-xs font-bold text-primary">
+                  <div className="w-8 h-8 rounded-full bg-[#DAA112]/20 border border-[#DAA112]/30 flex items-center justify-center mb-1 text-xs font-bold text-[#DAA112]">
                     U
                   </div>
                 )}
