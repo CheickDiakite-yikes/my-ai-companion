@@ -375,7 +375,7 @@ const VoiceView = ({ isActive, onEndCall, onProfile, persona, setPersona, mode, 
 
 const TextView = () => {
   return (
-    <div className="h-full flex flex-col bg-background/50 pt-24 pb-20">
+    <div className="h-full flex flex-col bg-background/50 pt-40 pb-20">
       {/* Messages */}
       <ScrollArea className="flex-1 p-4">
         <div className="space-y-4 pb-4">
