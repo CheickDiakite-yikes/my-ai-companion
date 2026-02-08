@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Mic, Video, PhoneOff, MessageSquare, Menu, Settings, ChevronRight, X, ArrowLeft, Camera, Paperclip, LogOut, Eye, EyeOff } from "lucide-react";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
@@ -14,6 +14,7 @@ import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/use-auth";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
+import { GeminiLiveVoiceSession } from "@/lib/gemini-live";
 
 import {
   DropdownMenu,
@@ -171,7 +172,7 @@ const REFERRAL_OPTIONS = [
 
 const AuthPage = ({ onLogin, onRegister, loginError, registerError, isLoggingIn, isRegistering }: {
   onLogin: (data: { email: string; password: string }) => Promise<any>;
-  onRegister: (data: { email: string; password: string; firstName: string; lastName: string; profession?: string; referralSource?: string }) => Promise<any>;
+  onRegister: (data: { email: string; password: string; confirmPassword?: string; firstName: string; lastName: string; profession?: string; referralSource?: string }) => Promise<any>;
   loginError: Error | null;
   registerError: Error | null;
   isLoggingIn: boolean;
@@ -1054,9 +1055,12 @@ function App() {
 
   const [mode, setMode] = useState<Mode>("voice");
   const [isCalling, setIsCalling] = useState(false);
+  const [isLiveConnecting, setIsLiveConnecting] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
   const [duration, setDuration] = useState(0);
   const [callStartTime, setCallStartTime] = useState<number | null>(null);
+  const [liveError, setLiveError] = useState<string | null>(null);
+  const liveSessionRef = useRef<GeminiLiveVoiceSession | null>(null);
 
   const { data: preferences, isLoading: prefsLoading } = useQuery<{ selectedPersona?: string; onboardingCompleted?: boolean }>({
     queryKey: ["/api/preferences"],
@@ -1129,14 +1133,22 @@ function App() {
 
   const sendMessageMutation = useMutation({
     mutationFn: async (text: string) => {
-      if (!activeConversationId) return;
-      const res = await apiRequest("POST", `/api/conversations/${activeConversationId}/messages`, {
-        sender: "user",
+      if (!activeConversationId) {
+        throw new Error("No active conversation selected");
+      }
+      const res = await apiRequest("POST", "/api/chat/respond", {
+        conversationId: activeConversationId,
         text,
+        persona,
       });
       return res.json();
     },
     onSuccess: () => {
+      if (activeConversationId) {
+        queryClient.invalidateQueries({ queryKey: [`/api/conversations/${activeConversationId}/messages`] });
+      }
+    },
+    onError: () => {
       if (activeConversationId) {
         queryClient.invalidateQueries({ queryKey: [`/api/conversations/${activeConversationId}/messages`] });
       }
@@ -1154,16 +1166,133 @@ function App() {
     },
   });
 
-  const handleEndCall = () => {
-    if (isCalling) {
-      saveVoiceSessionMutation.mutate({ persona, duration });
-      setIsCalling(false);
-      setCallStartTime(null);
-    } else {
+  const createLiveTokenMutation = useMutation({
+    mutationFn: async (data: { persona: Persona }) => {
+      const res = await apiRequest("POST", "/api/live/token", {
+        persona: data.persona,
+        responseModality: "AUDIO",
+      });
+      return res.json() as Promise<{
+        ephemeralToken: string;
+        model: string;
+        traceId?: string;
+      }>;
+    },
+  });
+
+  const persistVoiceTranscriptMutation = useMutation({
+    mutationFn: async (data: {
+      conversationId: string;
+      sender: "user" | "assistant";
+      text: string;
+    }) => {
+      const res = await apiRequest(
+        "POST",
+        `/api/conversations/${data.conversationId}/voice-transcript`,
+        {
+          sender: data.sender,
+          text: data.text,
+        },
+      );
+      return res.json();
+    },
+    onSuccess: (_, vars) => {
+      queryClient.invalidateQueries({
+        queryKey: [`/api/conversations/${vars.conversationId}/messages`],
+      });
+    },
+  });
+
+  const stopLiveSession = async () => {
+    if (liveSessionRef.current) {
+      await liveSessionRef.current.stop();
+      liveSessionRef.current = null;
+    }
+    setIsCalling(false);
+    setIsLiveConnecting(false);
+    setCallStartTime(null);
+  };
+
+  const startLiveSession = async () => {
+    if (!activeConversationId) {
+      setLiveError("No active conversation. Please try again in a moment.");
+      return;
+    }
+
+    setLiveError(null);
+    setIsLiveConnecting(true);
+    const conversationId = activeConversationId;
+
+    try {
+      const tokenPayload = await createLiveTokenMutation.mutateAsync({ persona });
+      const liveSession = new GeminiLiveVoiceSession({
+        onTranscript: ({ sender, text }) => {
+          persistVoiceTranscriptMutation.mutate({
+            conversationId,
+            sender,
+            text,
+          });
+        },
+        onError: (error) => {
+          console.error("Gemini Live session error:", error);
+          setLiveError(error.message);
+        },
+        onDebug: (message, metadata) => {
+          console.log("[GeminiLive]", message, metadata ?? {});
+        },
+      });
+
+      liveSessionRef.current = liveSession;
+      await liveSession.start({
+        ephemeralToken: tokenPayload.ephemeralToken,
+        model: tokenPayload.model,
+      });
+
       setIsCalling(true);
       setCallStartTime(Date.now());
+    } catch (error: any) {
+      console.error("Failed to start Gemini Live session:", error);
+      setLiveError(
+        error?.message ??
+          "We could not start the live voice session. Please try again.",
+      );
+
+      if (liveSessionRef.current) {
+        await liveSessionRef.current.stop().catch(() => {});
+        liveSessionRef.current = null;
+      }
+      setIsCalling(false);
+      setCallStartTime(null);
+    } finally {
+      setIsLiveConnecting(false);
     }
   };
+
+  const handleEndCall = () => {
+    if (isCalling || isLiveConnecting) {
+      if (isCalling) {
+        saveVoiceSessionMutation.mutate({ persona, duration });
+      }
+      void stopLiveSession();
+    } else {
+      void startLiveSession();
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      if (liveSessionRef.current) {
+        void liveSessionRef.current.stop();
+        liveSessionRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isAuthenticated && (isCalling || isLiveConnecting || liveSessionRef.current)) {
+      void stopLiveSession();
+    }
+  }, [isAuthenticated, isCalling, isLiveConnecting]);
 
   useEffect(() => {
     let interval: NodeJS.Timeout;
@@ -1237,6 +1366,17 @@ function App() {
             <ProfileView onClose={() => setShowProfile(false)} user={user} onLogout={logout} />
           )}
         </AnimatePresence>
+
+        {liveError && (
+          <div className="absolute bottom-24 left-1/2 -translate-x-1/2 z-[90] max-w-[85%] rounded-xl border border-red-400/30 bg-red-500/15 px-3 py-2 text-xs text-red-100 backdrop-blur-sm">
+            {liveError}
+          </div>
+        )}
+        {!liveError && isLiveConnecting && (
+          <div className="absolute bottom-24 left-1/2 -translate-x-1/2 z-[90] max-w-[85%] rounded-xl border border-white/20 bg-black/30 px-3 py-2 text-xs text-white/90 backdrop-blur-sm">
+            Connecting voice session...
+          </div>
+        )}
 
       </div>
     </div>

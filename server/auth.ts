@@ -14,6 +14,14 @@ declare module "express-session" {
 
 export function setupAuth(app: Express) {
   app.set("trust proxy", 1);
+  const sessionSecret =
+    process.env.SESSION_SECRET ?? "dev-only-session-secret-change-me";
+
+  if (!process.env.SESSION_SECRET && process.env.NODE_ENV !== "production") {
+    console.warn(
+      "[auth] SESSION_SECRET is not set; using development fallback secret.",
+    );
+  }
 
   const sessionTtl = 7 * 24 * 60 * 60 * 1000;
   const pgStore = connectPg(session);
@@ -26,7 +34,7 @@ export function setupAuth(app: Express) {
 
   app.use(
     session({
-      secret: process.env.SESSION_SECRET!,
+      secret: sessionSecret,
       store: sessionStore,
       resave: false,
       saveUninitialized: false,
