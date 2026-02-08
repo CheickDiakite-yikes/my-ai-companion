@@ -5,7 +5,7 @@ A companion AI chat/voice app with personalized personas (Maya, Zarra, Ore). Use
 
 ## Recent Changes
 - 2026-02-08: Converted from visual prototype to full-stack app
-- 2026-02-08: Added Replit Auth for user authentication
+- 2026-02-08: Replaced Replit Auth with custom email/password authentication (register, login, logout with bcrypt hashing)
 - 2026-02-08: Added PostgreSQL database for conversations, messages, preferences, voice sessions
 - 2026-02-08: Updated branding to Deep Teal (#10383A), Sage Green (#809276/#666E51), Mustard Yellow (#DAA112), Gray (#768886)
 
@@ -17,7 +17,7 @@ A companion AI chat/voice app with personalized personas (Maya, Zarra, Ore). Use
 ## Project Architecture
 - **Frontend**: React + Vite + TailwindCSS + Framer Motion + shadcn/ui
 - **Backend**: Express.js + Drizzle ORM + PostgreSQL
-- **Auth**: Replit Auth (OpenID Connect)
+- **Auth**: Custom email/password auth with bcrypt + express-session (server/auth.ts)
 - **State**: TanStack React Query for server state
 
 ### Key Files

@@ -1,7 +1,7 @@
 import type { Express } from "express";
 import { type Server } from "http";
 import { storage } from "./storage";
-import { setupAuth, registerAuthRoutes, isAuthenticated } from "./replit_integrations/auth";
+import { setupAuth, registerAuthRoutes, isAuthenticated } from "./auth";
 import {
   insertConversationSchema,
   insertMessageSchema,
@@ -13,12 +13,12 @@ export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
-  await setupAuth(app);
+  setupAuth(app);
   registerAuthRoutes(app);
 
   app.get("/api/conversations", isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = req.session.userId;
       const convos = await storage.getConversations(userId);
       res.json(convos);
     } catch (error) {
@@ -28,7 +28,7 @@ export async function registerRoutes(
 
   app.post("/api/conversations", isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = req.session.userId;
       const data = insertConversationSchema.parse({ ...req.body, userId });
       const conv = await storage.createConversation(data);
       res.status(201).json(conv);
@@ -61,7 +61,7 @@ export async function registerRoutes(
 
   app.get("/api/preferences", isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = req.session.userId;
       const prefs = await storage.getUserPreferences(userId);
       res.json(prefs || { selectedPersona: "Maya", onboardingCompleted: false });
     } catch (error) {
@@ -71,7 +71,7 @@ export async function registerRoutes(
 
   app.put("/api/preferences", isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = req.session.userId;
       const data = insertUserPreferencesSchema.parse({ ...req.body, userId });
       const prefs = await storage.upsertUserPreferences(data);
       res.json(prefs);
@@ -82,7 +82,7 @@ export async function registerRoutes(
 
   app.post("/api/voice-sessions", isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = req.session.userId;
       const data = insertVoiceSessionSchema.parse({ ...req.body, userId });
       const session = await storage.createVoiceSession(data);
       res.status(201).json(session);
@@ -93,7 +93,7 @@ export async function registerRoutes(
 
   app.get("/api/voice-sessions", isAuthenticated, async (req: any, res) => {
     try {
-      const userId = req.user.claims.sub;
+      const userId = req.session.userId;
       const sessions = await storage.getVoiceSessions(userId);
       res.json(sessions);
     } catch (error) {

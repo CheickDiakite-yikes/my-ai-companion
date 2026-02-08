@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Mic, Video, PhoneOff, MessageSquare, Menu, Settings, ChevronRight, X, ArrowLeft, Camera, Paperclip, LogOut } from "lucide-react";
+import { Mic, Video, PhoneOff, MessageSquare, Menu, Settings, ChevronRight, X, ArrowLeft, Camera, Paperclip, LogOut, Eye, EyeOff } from "lucide-react";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -64,46 +64,364 @@ const ONBOARDING_STEPS = [
 
 // --- Components ---
 
-const LandingPage = () => {
-  return (
-    <div className="w-full h-screen bg-[#10383A] flex items-center justify-center overflow-hidden" data-testid="landing-page">
-      <div className="w-full h-full md:max-w-[400px] md:h-[850px] md:rounded-[2.5rem] shadow-2xl overflow-hidden relative flex flex-col items-center justify-between p-8 bg-[#10383A]">
-        <div className="flex-1 flex flex-col items-center justify-center w-full">
-          <motion.img
-            src={onboarding1}
-            alt="Welcome"
-            initial={{ opacity: 0, scale: 0.9, y: 20 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            transition={{ delay: 0.2, type: "spring", stiffness: 200, damping: 20 }}
-            className="w-full max-w-[280px] object-contain drop-shadow-2xl mb-8"
-          />
+const REFERRAL_OPTIONS = [
+  "Social Media",
+  "Friend or Family",
+  "App Store",
+  "Blog / Article",
+  "Podcast",
+  "Search Engine",
+  "Other",
+];
+
+const AuthPage = ({ onLogin, onRegister, loginError, registerError, isLoggingIn, isRegistering }: {
+  onLogin: (data: { email: string; password: string }) => Promise<any>;
+  onRegister: (data: { email: string; password: string; firstName: string; lastName: string; profession?: string; referralSource?: string }) => Promise<any>;
+  loginError: Error | null;
+  registerError: Error | null;
+  isLoggingIn: boolean;
+  isRegistering: boolean;
+}) => {
+  const [authMode, setAuthMode] = useState<"welcome" | "login" | "register">("welcome");
+  const [showPassword, setShowPassword] = useState(false);
+  const [formData, setFormData] = useState({
+    email: "",
+    password: "",
+    firstName: "",
+    lastName: "",
+    profession: "",
+    referralSource: "",
+  });
+  const [localError, setLocalError] = useState("");
+
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLocalError("");
+    try {
+      await onLogin({ email: formData.email, password: formData.password });
+    } catch (err: any) {
+      setLocalError(err.message?.includes(":") ? err.message.split(": ").slice(1).join(": ") : "Invalid email or password");
+    }
+  };
+
+  const handleRegister = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLocalError("");
+    if (formData.password.length < 8) {
+      setLocalError("Password must be at least 8 characters");
+      return;
+    }
+    try {
+      await onRegister({
+        email: formData.email,
+        password: formData.password,
+        firstName: formData.firstName,
+        lastName: formData.lastName,
+        profession: formData.profession || undefined,
+        referralSource: formData.referralSource || undefined,
+      });
+    } catch (err: any) {
+      setLocalError(err.message?.includes(":") ? err.message.split(": ").slice(1).join(": ") : "Something went wrong");
+    }
+  };
+
+  const inputClass = "w-full h-12 px-4 rounded-xl bg-white/10 border border-white/20 text-white placeholder:text-white/40 focus:outline-none focus:border-[#DAA112] focus:ring-1 focus:ring-[#DAA112] transition-colors";
+
+  if (authMode === "welcome") {
+    return (
+      <div className="w-full h-screen bg-[#10383A] flex items-center justify-center overflow-hidden" data-testid="landing-page">
+        <div className="w-full h-full md:max-w-[400px] md:h-[850px] md:rounded-[2.5rem] shadow-2xl overflow-hidden relative flex flex-col items-center justify-between p-8 bg-[#10383A]">
+          <div className="flex-1 flex flex-col items-center justify-center w-full">
+            <motion.img
+              src={onboarding1}
+              alt="Welcome"
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              transition={{ delay: 0.2, type: "spring", stiffness: 200, damping: 20 }}
+              className="w-full max-w-[280px] object-contain drop-shadow-2xl mb-8"
+            />
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.4, duration: 0.5 }}
+              className="text-center space-y-4"
+            >
+              <h1 className="text-4xl font-serif font-bold text-[#E8E8E8] tracking-tight">
+                Welcome
+              </h1>
+              <p className="text-lg leading-relaxed font-medium text-white/70">
+                Your personal AI companion for mindfulness and balance.
+              </p>
+            </motion.div>
+          </div>
+
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.4, duration: 0.5 }}
-            className="text-center space-y-4"
+            transition={{ delay: 0.6, duration: 0.5 }}
+            className="w-full space-y-3 mb-8"
           >
-            <h1 className="text-4xl font-serif font-bold text-[#E8E8E8] tracking-tight">
-              Welcome
-            </h1>
-            <p className="text-lg leading-relaxed font-medium text-white/70">
-              Your personal AI companion for mindfulness and balance.
-            </p>
-          </motion.div>
-        </div>
-
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.6, duration: 0.5 }}
-          className="w-full mb-8"
-        >
-          <a href="/api/login" className="block w-full" data-testid="link-login">
-            <Button className="w-full h-14 text-lg rounded-2xl shadow-xl bg-[#DAA112] text-[#10383A] hover:bg-[#DAA112]/90 transition-transform active:scale-95 font-bold" data-testid="button-get-started">
+            <Button 
+              className="w-full h-14 text-lg rounded-2xl shadow-xl bg-[#DAA112] text-[#10383A] hover:bg-[#DAA112]/90 transition-transform active:scale-95 font-bold" 
+              onClick={() => setAuthMode("register")}
+              data-testid="button-get-started"
+            >
               Get Started
             </Button>
-          </a>
-        </motion.div>
+            <Button 
+              variant="ghost"
+              className="w-full h-12 text-base text-white/70 hover:text-white hover:bg-white/10 rounded-2xl"
+              onClick={() => setAuthMode("login")}
+              data-testid="button-sign-in"
+            >
+              Already have an account? Sign in
+            </Button>
+          </motion.div>
+        </div>
+      </div>
+    );
+  }
+
+  if (authMode === "login") {
+    return (
+      <div className="w-full h-screen bg-[#10383A] flex items-center justify-center overflow-hidden" data-testid="login-page">
+        <div className="w-full h-full md:max-w-[400px] md:h-[850px] md:rounded-[2.5rem] shadow-2xl overflow-hidden relative flex flex-col bg-[#10383A]">
+          <div className="p-6">
+            <button onClick={() => setAuthMode("welcome")} className="text-white/70 hover:text-white transition-colors" data-testid="button-back-to-welcome">
+              <ArrowLeft className="w-6 h-6" />
+            </button>
+          </div>
+
+          <div className="flex-1 flex flex-col px-8 pb-8">
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="mb-8"
+            >
+              <h1 className="text-3xl font-serif font-bold text-[#E8E8E8] mb-2">Welcome Back</h1>
+              <p className="text-white/60">Sign in to continue your journey</p>
+            </motion.div>
+
+            <form onSubmit={handleLogin} className="space-y-4 flex-1 flex flex-col">
+              <div>
+                <label className="text-sm text-white/60 mb-1.5 block">Email</label>
+                <input
+                  type="email"
+                  value={formData.email}
+                  onChange={(e) => setFormData(f => ({ ...f, email: e.target.value }))}
+                  className={inputClass}
+                  placeholder="you@example.com"
+                  required
+                  data-testid="input-login-email"
+                />
+              </div>
+
+              <div>
+                <label className="text-sm text-white/60 mb-1.5 block">Password</label>
+                <div className="relative">
+                  <input
+                    type={showPassword ? "text" : "password"}
+                    value={formData.password}
+                    onChange={(e) => setFormData(f => ({ ...f, password: e.target.value }))}
+                    className={inputClass}
+                    placeholder="Enter your password"
+                    required
+                    data-testid="input-login-password"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-white/40 hover:text-white/70"
+                    data-testid="button-toggle-password"
+                  >
+                    {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                  </button>
+                </div>
+              </div>
+
+              {localError && (
+                <motion.p
+                  initial={{ opacity: 0, y: -5 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="text-red-400 text-sm"
+                  data-testid="text-login-error"
+                >
+                  {localError}
+                </motion.p>
+              )}
+
+              <div className="flex-1" />
+
+              <Button
+                type="submit"
+                disabled={isLoggingIn}
+                className="w-full h-14 text-lg rounded-2xl shadow-xl bg-[#DAA112] text-[#10383A] hover:bg-[#DAA112]/90 transition-transform active:scale-95 font-bold disabled:opacity-50"
+                data-testid="button-login-submit"
+              >
+                {isLoggingIn ? "Signing in..." : "Sign In"}
+              </Button>
+
+              <p className="text-center text-white/50 text-sm">
+                Don't have an account?{" "}
+                <button type="button" onClick={() => { setAuthMode("register"); setLocalError(""); }} className="text-[#DAA112] hover:underline" data-testid="button-switch-to-register">
+                  Sign up
+                </button>
+              </p>
+            </form>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="w-full h-screen bg-[#10383A] flex items-center justify-center overflow-hidden" data-testid="register-page">
+      <div className="w-full h-full md:max-w-[400px] md:h-[850px] md:rounded-[2.5rem] shadow-2xl overflow-hidden relative flex flex-col bg-[#10383A]">
+        <div className="p-6">
+          <button onClick={() => setAuthMode("welcome")} className="text-white/70 hover:text-white transition-colors" data-testid="button-back-to-welcome-register">
+            <ArrowLeft className="w-6 h-6" />
+          </button>
+        </div>
+
+        <ScrollArea className="flex-1 px-8 pb-8">
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="mb-6"
+          >
+            <h1 className="text-3xl font-serif font-bold text-[#E8E8E8] mb-2">Create Account</h1>
+            <p className="text-white/60">Join our caring community</p>
+          </motion.div>
+
+          <form onSubmit={handleRegister} className="space-y-4">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-sm text-white/60 mb-1.5 block">First Name</label>
+                <input
+                  type="text"
+                  value={formData.firstName}
+                  onChange={(e) => setFormData(f => ({ ...f, firstName: e.target.value }))}
+                  className={inputClass}
+                  placeholder="First name"
+                  required
+                  data-testid="input-register-firstname"
+                />
+              </div>
+              <div>
+                <label className="text-sm text-white/60 mb-1.5 block">Last Name</label>
+                <input
+                  type="text"
+                  value={formData.lastName}
+                  onChange={(e) => setFormData(f => ({ ...f, lastName: e.target.value }))}
+                  className={inputClass}
+                  placeholder="Last name"
+                  required
+                  data-testid="input-register-lastname"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="text-sm text-white/60 mb-1.5 block">Email</label>
+              <input
+                type="email"
+                value={formData.email}
+                onChange={(e) => setFormData(f => ({ ...f, email: e.target.value }))}
+                className={inputClass}
+                placeholder="you@example.com"
+                required
+                data-testid="input-register-email"
+              />
+            </div>
+
+            <div>
+              <label className="text-sm text-white/60 mb-1.5 block">Password</label>
+              <div className="relative">
+                <input
+                  type={showPassword ? "text" : "password"}
+                  value={formData.password}
+                  onChange={(e) => setFormData(f => ({ ...f, password: e.target.value }))}
+                  className={inputClass}
+                  placeholder="At least 8 characters"
+                  required
+                  minLength={8}
+                  data-testid="input-register-password"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-white/40 hover:text-white/70"
+                  data-testid="button-toggle-password-register"
+                >
+                  {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                </button>
+              </div>
+            </div>
+
+            <div>
+              <label className="text-sm text-white/60 mb-1.5 block">Profession</label>
+              <input
+                type="text"
+                value={formData.profession}
+                onChange={(e) => setFormData(f => ({ ...f, profession: e.target.value }))}
+                className={inputClass}
+                placeholder="e.g. Designer, Student, Coach..."
+                data-testid="input-register-profession"
+              />
+            </div>
+
+            <div>
+              <label className="text-sm text-white/60 mb-1.5 block">How did you hear about us?</label>
+              <div className="grid grid-cols-2 gap-2">
+                {REFERRAL_OPTIONS.map((option) => (
+                  <button
+                    key={option}
+                    type="button"
+                    onClick={() => setFormData(f => ({ ...f, referralSource: f.referralSource === option ? "" : option }))}
+                    className={cn(
+                      "px-3 py-2.5 rounded-xl text-sm font-medium transition-all border",
+                      formData.referralSource === option
+                        ? "bg-[#DAA112]/20 border-[#DAA112] text-[#DAA112]"
+                        : "bg-white/5 border-white/10 text-white/60 hover:border-white/30"
+                    )}
+                    data-testid={`button-referral-${option.toLowerCase().replace(/\s+/g, "-")}`}
+                  >
+                    {option}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {localError && (
+              <motion.p
+                initial={{ opacity: 0, y: -5 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="text-red-400 text-sm"
+                data-testid="text-register-error"
+              >
+                {localError}
+              </motion.p>
+            )}
+
+            <div className="pt-2 pb-4">
+              <Button
+                type="submit"
+                disabled={isRegistering}
+                className="w-full h-14 text-lg rounded-2xl shadow-xl bg-[#DAA112] text-[#10383A] hover:bg-[#DAA112]/90 transition-transform active:scale-95 font-bold disabled:opacity-50"
+                data-testid="button-register-submit"
+              >
+                {isRegistering ? "Creating account..." : "Create Account"}
+              </Button>
+
+              <p className="text-center text-white/50 text-sm mt-4">
+                Already have an account?{" "}
+                <button type="button" onClick={() => { setAuthMode("login"); setLocalError(""); }} className="text-[#DAA112] hover:underline" data-testid="button-switch-to-login">
+                  Sign in
+                </button>
+              </p>
+            </div>
+          </form>
+        </ScrollArea>
       </div>
     </div>
   );
@@ -175,7 +493,7 @@ const SharedFooter = ({
   );
 };
 
-const ProfileView = ({ onClose, user }: { onClose: () => void; user: any }) => {
+const ProfileView = ({ onClose, user, onLogout }: { onClose: () => void; user: any; onLogout: () => void }) => {
   return (
     <motion.div
       initial={{ x: "100%" }}
@@ -247,12 +565,10 @@ const ProfileView = ({ onClose, user }: { onClose: () => void; user: any }) => {
             </section>
 
             <section>
-              <a href="/api/logout" className="block w-full" data-testid="link-logout">
-                <Button variant="destructive" className="w-full h-12 rounded-xl gap-2" data-testid="button-logout">
-                  <LogOut className="w-5 h-5" />
-                  Log Out
-                </Button>
-              </a>
+              <Button variant="destructive" className="w-full h-12 rounded-xl gap-2" onClick={onLogout} data-testid="button-logout">
+                <LogOut className="w-5 h-5" />
+                Log Out
+              </Button>
             </section>
           </div>
         </ScrollArea>
@@ -628,7 +944,7 @@ const OnboardingView = ({ onComplete }: { onComplete: () => void }) => {
 // --- Main App Component ---
 
 function App() {
-  const { user, isLoading: authLoading, isAuthenticated } = useAuth();
+  const { user, isLoading: authLoading, isAuthenticated, login, register, loginError, registerError, isLoggingIn, isRegistering, logout } = useAuth();
   const queryClient = useQueryClient();
 
   const [mode, setMode] = useState<Mode>("voice");
@@ -767,7 +1083,16 @@ function App() {
   }
 
   if (!isAuthenticated) {
-    return <LandingPage />;
+    return (
+      <AuthPage
+        onLogin={login}
+        onRegister={register}
+        loginError={loginError}
+        registerError={registerError}
+        isLoggingIn={isLoggingIn}
+        isRegistering={isRegistering}
+      />
+    );
   }
 
   return (
@@ -804,7 +1129,7 @@ function App() {
 
         <AnimatePresence>
           {showProfile && (
-            <ProfileView onClose={() => setShowProfile(false)} user={user} />
+            <ProfileView onClose={() => setShowProfile(false)} user={user} onLogout={logout} />
           )}
         </AnimatePresence>
 
