@@ -238,9 +238,9 @@ const VoiceView = ({ isActive, onEndCall, onProfile, persona, setPersona, mode, 
 }) => {
   return (
     <motion.div 
-      className="absolute top-0 left-0 right-0 z-40 bg-background rounded-b-[2.5rem] shadow-2xl overflow-hidden"
+      className="absolute top-0 left-0 right-0 z-40 bg-background rounded-b-[2.5rem] shadow-lg overflow-hidden"
       initial={false}
-      animate={{ height: mode === "voice" ? "100%" : "130px" }}
+      animate={{ height: mode === "voice" ? "100%" : "110px" }}
       transition={{ type: "spring", stiffness: 200, damping: 25 }}
       drag="y"
       dragConstraints={{ top: 0, bottom: 0 }}
