@@ -194,7 +194,7 @@ const SharedHeader = ({
       
       {/* Timer only visible in Voice Mode when active */}
       <AnimatePresence>
-        {mode === "voice" && isActive && (
+        {isActive && (
           <motion.div 
             initial={{ opacity: 0, y: -10 }}
             animate={{ opacity: 1, y: 0 }}
@@ -220,94 +220,150 @@ const SharedHeader = ({
   );
 };
 
-const VoiceView = ({ isActive, onEndCall, onProfile, persona, setPersona }: { 
+const VoiceView = ({ isActive, onEndCall, onProfile, persona, setPersona, mode, setMode, duration }: { 
   isActive: boolean; 
   onEndCall: () => void;
   onProfile: () => void;
   persona: Persona;
   setPersona: (p: Persona) => void;
+  mode: Mode;
+  setMode: (m: Mode) => void;
+  duration: number;
 }) => {
   return (
-    <div className="h-full flex flex-col relative pt-24 pb-4">
-      {/* Main Content */}
-      <div className="flex-1 flex flex-col items-center justify-center relative">
-        {isActive ? (
-          /* Active Call State */
-          <div className="w-full h-full flex items-center justify-center px-8">
-            <div className="flex items-center justify-center gap-1.5 h-32 w-full">
-              {[...Array(8)].map((_, i) => (
-                <motion.div
-                  key={i}
-                  className="w-4 bg-primary rounded-full opacity-80"
-                  animate={{
-                    height: ["20%", "80%", "20%"],
-                    backgroundColor: ["hsl(175 45% 25%)", "hsl(45 80% 60%)", "hsl(175 45% 25%)"]
-                  }}
-                  transition={{
-                    duration: 1 + Math.random() * 0.5,
-                    repeat: Infinity,
-                    delay: i * 0.1,
-                    ease: "easeInOut"
-                  }}
-                />
-              ))}
+    <motion.div 
+      className="absolute top-0 left-0 right-0 z-40 bg-background rounded-b-[2.5rem] shadow-2xl overflow-hidden"
+      initial={false}
+      animate={{ height: mode === "voice" ? "100%" : "130px" }}
+      transition={{ type: "spring", stiffness: 200, damping: 25 }}
+      drag="y"
+      dragConstraints={{ top: 0, bottom: 0 }}
+      dragElastic={0.05} // Slightly reduced elastic for tighter feel
+      onDragEnd={(_, info) => {
+         if (mode === "voice" && info.offset.y < -100) {
+           setMode("text");
+         } else if (mode === "text" && info.offset.y > 50) {
+           setMode("voice");
+         }
+      }}
+    >
+      {/* Container to prevent squishing of content when height shrinks */}
+      <div className="w-full h-screen relative flex flex-col pointer-events-none">
+        
+        {/* Header embedded inside VoiceView */}
+        <div className="relative z-50 pointer-events-auto">
+          <SharedHeader 
+            persona={persona} 
+            setPersona={setPersona} 
+            onProfile={onProfile} 
+            isActive={isActive} 
+            duration={duration} 
+            mode={mode} 
+          />
+        </div>
+
+        {/* Main Voice Content */}
+        <motion.div 
+          className="flex-1 flex flex-col pt-24 pb-4 pointer-events-auto"
+          animate={{ opacity: mode === "voice" ? 1 : 0 }}
+          transition={{ duration: 0.2 }}
+        >
+          {/* Main Content */}
+          <div className="flex-1 flex flex-col items-center justify-center relative">
+            {isActive ? (
+              /* Active Call State */
+              <div className="w-full h-full flex items-center justify-center px-8">
+                <div className="flex items-center justify-center gap-1.5 h-32 w-full">
+                  {[...Array(8)].map((_, i) => (
+                    <motion.div
+                      key={i}
+                      className="w-4 bg-primary rounded-full opacity-80"
+                      animate={{
+                        height: ["20%", "80%", "20%"],
+                        backgroundColor: ["hsl(175 45% 25%)", "hsl(45 80% 60%)", "hsl(175 45% 25%)"]
+                      }}
+                      transition={{
+                        duration: 1 + Math.random() * 0.5,
+                        repeat: Infinity,
+                        delay: i * 0.1,
+                        ease: "easeInOut"
+                      }}
+                    />
+                  ))}
+                </div>
+              </div>
+            ) : (
+              /* Idle State */
+              <div className="flex flex-col items-center gap-8">
+                 <div className="relative group cursor-pointer" onClick={onEndCall}>
+                   {/* Pulse Rings */}
+                   <div className="absolute inset-0 bg-accent/20 rounded-full animate-ping opacity-20 duration-3000" />
+                   <div className="absolute -inset-4 bg-secondary/20 rounded-full animate-pulse opacity-30" />
+                   
+                   {/* Main Button */}
+                   <div className="w-24 h-24 bg-gradient-to-tr from-accent to-accent/80 rounded-full flex items-center justify-center shadow-xl transform transition-transform group-hover:scale-105 active:scale-95">
+                      <Mic className="w-10 h-10 text-accent-foreground" />
+                   </div>
+                 </div>
+                 <p className="text-muted-foreground font-medium">Tap to speak to {persona}</p>
+              </div>
+            )}
+          </div>
+
+          {/* Controls & Bottom Handle */}
+          <div className="px-6 space-y-6 pb-24">
+            {/* Call Controls (Only visible when active) */}
+            {isActive && (
+              <div className="flex items-center justify-center gap-8 mb-4">
+                  <Button 
+                    variant="outline" 
+                    size="icon" 
+                    className="w-14 h-14 rounded-full border-2 border-border bg-background hover:bg-muted transition-colors"
+                  >
+                    <Video className="w-6 h-6 text-foreground" />
+                  </Button>
+                  <Button 
+                    variant="destructive" 
+                    size="icon" 
+                    className="w-20 h-20 rounded-full shadow-2xl hover:scale-105 transition-transform bg-red-500 hover:bg-red-600 text-white border-4 border-background"
+                    onClick={onEndCall}
+                  >
+                    <PhoneOff className="w-8 h-8" />
+                  </Button>
+                  <Button 
+                    variant="outline" 
+                    size="icon" 
+                    className="w-14 h-14 rounded-full border-2 border-border bg-background hover:bg-muted transition-colors"
+                  >
+                    <Mic className="w-6 h-6 text-foreground" />
+                  </Button>
+              </div>
+            )}
+
+            {/* Swipe Up Handle */}
+            <div className="flex flex-col items-center justify-center gap-2 py-2 text-muted-foreground/50 cursor-grab active:cursor-grabbing">
+               <div className="w-12 h-1.5 bg-muted-foreground/20 rounded-full" />
+               <span className="text-xs font-medium uppercase tracking-wider">Swipe up to chat</span>
             </div>
           </div>
-        ) : (
-          /* Idle State */
-          <div className="flex flex-col items-center gap-8">
-             <div className="relative group cursor-pointer" onClick={onEndCall}>
-               {/* Pulse Rings */}
-               <div className="absolute inset-0 bg-accent/20 rounded-full animate-ping opacity-20 duration-3000" />
-               <div className="absolute -inset-4 bg-secondary/20 rounded-full animate-pulse opacity-30" />
-               
-               {/* Main Button */}
-               <div className="w-24 h-24 bg-gradient-to-tr from-accent to-accent/80 rounded-full flex items-center justify-center shadow-xl transform transition-transform group-hover:scale-105 active:scale-95">
-                  <Mic className="w-10 h-10 text-accent-foreground" />
-               </div>
-             </div>
-             <p className="text-muted-foreground font-medium">Tap to speak to {persona}</p>
-          </div>
-        )}
+        </motion.div>
+        
+        {/* Collapsed Handle (Visible only in Text Mode) */}
+        <AnimatePresence>
+          {mode === "text" && (
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="absolute bottom-2 left-0 right-0 flex justify-center pb-2 pointer-events-none"
+            >
+               <div className="w-12 h-1.5 bg-muted-foreground/20 rounded-full" />
+            </motion.div>
+          )}
+        </AnimatePresence>
+        
       </div>
-
-      {/* Controls & Bottom Handle */}
-      <div className="px-6 space-y-6 pb-24">
-        {/* Call Controls (Only visible when active) */}
-        {isActive && (
-          <div className="flex items-center justify-center gap-8 mb-4">
-              <Button 
-                variant="outline" 
-                size="icon" 
-                className="w-14 h-14 rounded-full border-2 border-border bg-background hover:bg-muted transition-colors"
-              >
-                <Video className="w-6 h-6 text-foreground" />
-              </Button>
-              <Button 
-                variant="destructive" 
-                size="icon" 
-                className="w-20 h-20 rounded-full shadow-2xl hover:scale-105 transition-transform bg-red-500 hover:bg-red-600 text-white border-4 border-background"
-                onClick={onEndCall}
-              >
-                <PhoneOff className="w-8 h-8" />
-              </Button>
-              <Button 
-                variant="outline" 
-                size="icon" 
-                className="w-14 h-14 rounded-full border-2 border-border bg-background hover:bg-muted transition-colors"
-              >
-                <Mic className="w-6 h-6 text-foreground" />
-              </Button>
-          </div>
-        )}
-
-        {/* Swipe Handle */}
-        <div className="flex flex-col items-center justify-center gap-2 py-2 text-muted-foreground/50">
-           <div className="w-12 h-1.5 bg-muted-foreground/20 rounded-full" />
-           <span className="text-xs font-medium uppercase tracking-wider">Swipe up to chat</span>
-        </div>
-      </div>
-    </div>
+    </motion.div>
   );
 };
 
@@ -388,57 +444,22 @@ function App() {
           onVoiceMode={() => setMode(mode === "voice" ? "text" : "voice")}
         />
 
-        {/* Shared Header (Always Visible) */}
-        <SharedHeader 
-          persona={persona}
-          setPersona={setPersona}
-          onProfile={() => setShowProfile(true)}
-          isActive={isCalling}
-          duration={duration}
-          mode={mode}
-        />
-
         {/* Base Layer: Text View (Transcript) */}
         <div className="absolute inset-0 z-0">
           <TextView />
         </div>
 
         {/* Curtain Layer: Voice View */}
-        <motion.div
-          initial={{ y: 0 }}
-          animate={{ y: mode === "voice" ? "0%" : "-85%" }}
-          transition={{ 
-            type: "spring", 
-            stiffness: 120, 
-            damping: 20, 
-            mass: 1 
-          }}
-          drag="y"
-          dragConstraints={{ top: -700, bottom: 0 }}
-          dragElastic={0.1}
-          onDragEnd={(_, info) => {
-             if (info.offset.y < -150) {
-               setMode("text");
-             } else if (info.offset.y > 150) {
-               setMode("voice");
-             }
-          }}
-          className="absolute inset-0 z-10 bg-background shadow-2xl rounded-b-[2.5rem] flex flex-col pointer-events-auto"
-        >
-          {/* Drag Handle Indicator */}
-          <div className="absolute bottom-28 left-1/2 -translate-x-1/2 w-full flex justify-center z-20 pointer-events-none">
-             {/* This is handled inside VoiceView now, removing duplicate handle here if present or moving it */}
-          </div>
-          
-          <VoiceView 
-            isActive={isCalling} 
-            onTextMode={() => setMode("text")}
-            onEndCall={() => setIsCalling(!isCalling)}
-            onProfile={() => setShowProfile(true)}
-            persona={persona}
-            setPersona={setPersona}
-          />
-        </motion.div>
+        <VoiceView 
+          isActive={isCalling} 
+          onEndCall={() => setIsCalling(!isCalling)}
+          onProfile={() => setShowProfile(true)}
+          persona={persona}
+          setPersona={setPersona}
+          mode={mode}
+          setMode={setMode}
+          duration={duration}
+        />
 
         {/* Profile Overlay */}
         <AnimatePresence>
