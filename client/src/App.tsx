@@ -488,20 +488,13 @@ const AuthPage = ({ onLogin, onRegister, loginError, registerError, isLoggingIn,
 
             <div>
               <label className="text-sm text-white/60 mb-1.5 block">How did you hear about us?</label>
-              <select
+              <SearchableDropdown
                 value={formData.referralSource}
-                onChange={(e) => setFormData(f => ({ ...f, referralSource: e.target.value }))}
-                className={cn(inputClass, "appearance-none cursor-pointer")}
-                required
-                data-testid="select-register-referral"
-              >
-                <option value="" disabled className="bg-[#10383A]">Select an option</option>
-                {REFERRAL_OPTIONS.map((option) => (
-                  <option key={option} value={option} className="bg-[#10383A] text-white">
-                    {option}
-                  </option>
-                ))}
-              </select>
+                onChange={(val) => setFormData(f => ({ ...f, referralSource: val }))}
+                options={REFERRAL_OPTIONS}
+                placeholder="Select an option..."
+                testId="select-register-referral"
+              />
             </div>
 
             {localError && (
