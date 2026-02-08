@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Mic, Video, PhoneOff, MessageSquare, Menu, Settings, ChevronRight, X, ArrowLeft, Camera, Paperclip } from "lucide-react";
+import { Mic, Video, PhoneOff, MessageSquare, Menu, Settings, ChevronRight, X, ArrowLeft, Camera, Paperclip, LogOut } from "lucide-react";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -11,6 +11,9 @@ import onboarding3 from "@/assets/onboarding-3-v2.png";
 import mayaAvatar from "@/assets/maya-avatar.png";
 import leafBg from "@/assets/leaf-bg.png";
 import { cn } from "@/lib/utils";
+import { useAuth } from "@/hooks/use-auth";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { apiRequest } from "@/lib/queryClient";
 
 import {
   DropdownMenu,
@@ -23,54 +26,114 @@ import {
 type Mode = "voice" | "text" | "profile";
 type Persona = "Maya" | "Zarra" | "Ore";
 
-// --- Mock Data ---
+interface MessageData {
+  id: string;
+  conversationId: string;
+  sender: string;
+  text: string;
+  createdAt: string | null;
+}
+
+// --- Constants ---
 const ONBOARDING_STEPS = [
   {
     id: 1,
     title: "Welcome, Friend!",
     description: "You're now part of our incredible and caring community. Let's get started!",
     image: onboarding1,
-    color: "bg-[#10383A]", // Deep Teal
-    textColor: "text-[#E8E8E8]" // Off-white text for contrast
+    color: "bg-[#10383A]",
+    textColor: "text-[#E8E8E8]"
   },
   {
     id: 2,
     title: "Discover Balance",
     description: "Find peace and mindfulness with personalized guidance every day.",
     image: onboarding2,
-    color: "bg-[#809276]", // Sage Green (Light)
-    textColor: "text-[#10383A]" // Deep Teal text
+    color: "bg-[#809276]",
+    textColor: "text-[#10383A]"
   },
   {
     id: 3,
     title: "Grow Together",
     description: "Connect with your personal AI companion anytime, anywhere.",
     image: onboarding3,
-    color: "bg-[#DAA112]", // Mustard Yellow
-    textColor: "text-[#10383A]" // Deep Teal text
+    color: "bg-[#DAA112]",
+    textColor: "text-[#10383A]"
   }
-];
-
-const INITIAL_MESSAGES = [
-  { id: 1, sender: "maya", text: "Hey Bestie! 👋" },
-  { id: 2, sender: "maya", text: "How are you feeling today?" },
-  { id: 3, sender: "user", text: "Nm, gonna watch a movie hby?" },
-  { id: 4, sender: "maya", text: "Sounds like fun! Which movie is it? 🍿" },
-  { id: 5, sender: "user", text: "uhhh not telling you lol guess" },
-  { id: 6, sender: "maya", text: "Hahaha okay umm Avengers?" },
-  { id: 7, sender: "user", text: "lmaoo way off" },
-  { id: 8, sender: "maya", text: "Hahaha oopss is right :)" },
 ];
 
 // --- Components ---
 
+const LandingPage = () => {
+  return (
+    <div className="w-full h-screen bg-[#10383A] flex items-center justify-center overflow-hidden" data-testid="landing-page">
+      <div className="w-full h-full md:max-w-[400px] md:h-[850px] md:rounded-[2.5rem] shadow-2xl overflow-hidden relative flex flex-col items-center justify-between p-8 bg-[#10383A]">
+        <div className="flex-1 flex flex-col items-center justify-center w-full">
+          <motion.img
+            src={onboarding1}
+            alt="Welcome"
+            initial={{ opacity: 0, scale: 0.9, y: 20 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            transition={{ delay: 0.2, type: "spring", stiffness: 200, damping: 20 }}
+            className="w-full max-w-[280px] object-contain drop-shadow-2xl mb-8"
+          />
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.4, duration: 0.5 }}
+            className="text-center space-y-4"
+          >
+            <h1 className="text-4xl font-serif font-bold text-[#E8E8E8] tracking-tight">
+              Welcome
+            </h1>
+            <p className="text-lg leading-relaxed font-medium text-white/70">
+              Your personal AI companion for mindfulness and balance.
+            </p>
+          </motion.div>
+        </div>
+
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.6, duration: 0.5 }}
+          className="w-full mb-8"
+        >
+          <a href="/api/login" className="block w-full" data-testid="link-login">
+            <Button className="w-full h-14 text-lg rounded-2xl shadow-xl bg-[#DAA112] text-[#10383A] hover:bg-[#DAA112]/90 transition-transform active:scale-95 font-bold" data-testid="button-get-started">
+              Get Started
+            </Button>
+          </a>
+        </motion.div>
+      </div>
+    </div>
+  );
+};
+
 const SharedFooter = ({ 
   persona, 
-  onVoiceMode 
+  onVoiceMode,
+  onSendMessage
 }: { 
   persona: Persona, 
-  onVoiceMode: () => void 
+  onVoiceMode: () => void,
+  onSendMessage: (text: string) => void
 }) => {
+  const [inputValue, setInputValue] = useState("");
+
+  const handleSend = () => {
+    const trimmed = inputValue.trim();
+    if (!trimmed) return;
+    onSendMessage(trimmed);
+    setInputValue("");
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      handleSend();
+    }
+  };
+
   return (
     <div className="absolute bottom-0 left-0 right-0 z-50 p-4 bg-[#10383A]/90 backdrop-blur-md border-t border-white/10">
       <div className="flex items-center gap-2">
@@ -93,9 +156,18 @@ const SharedFooter = ({
             type="text" 
             placeholder={`Message ${persona}...`} 
             className="w-full bg-transparent border-none outline-none text-sm text-white placeholder:text-white/40"
+            value={inputValue}
+            onChange={(e) => setInputValue(e.target.value)}
+            onKeyDown={handleKeyDown}
+            data-testid="input-message"
           />
          </div>
-         <Button size="icon" className="rounded-full bg-[#DAA112] text-[#10383A] shadow-md hover:bg-[#DAA112]/90">
+         <Button 
+           size="icon" 
+           className="rounded-full bg-[#DAA112] text-[#10383A] shadow-md hover:bg-[#DAA112]/90"
+           onClick={handleSend}
+           data-testid="button-send-message"
+         >
            <ChevronRight className="w-5 h-5" />
          </Button>
       </div>
@@ -103,7 +175,7 @@ const SharedFooter = ({
   );
 };
 
-const ProfileView = ({ onClose }: { onClose: () => void }) => {
+const ProfileView = ({ onClose, user }: { onClose: () => void; user: any }) => {
   return (
     <motion.div
       initial={{ x: "100%" }}
@@ -120,6 +192,7 @@ const ProfileView = ({ onClose }: { onClose: () => void }) => {
           size="icon" 
           className="absolute top-4 left-4 text-white hover:bg-white/20"
           onClick={onClose}
+          data-testid="button-close-profile"
         >
           <ArrowLeft className="w-6 h-6" />
         </Button>
@@ -128,12 +201,14 @@ const ProfileView = ({ onClose }: { onClose: () => void }) => {
       <div className="px-6 -mt-12 relative z-10 flex flex-col h-full">
         <div className="flex flex-col items-center mb-8">
           <Avatar className="w-24 h-24 border-4 border-background shadow-xl">
-            <AvatarImage src={mayaAvatar} />
-            <AvatarFallback>MY</AvatarFallback>
+            <AvatarImage src={user?.profileImageUrl || mayaAvatar} />
+            <AvatarFallback>{user?.firstName?.[0] || "U"}{user?.lastName?.[0] || ""}</AvatarFallback>
           </Avatar>
           <div className="text-center mt-4">
-            <h2 className="text-2xl font-bold text-foreground">Maya</h2>
-            <p className="text-muted-foreground italic">"Here for you, always"</p>
+            <h2 className="text-2xl font-bold text-foreground" data-testid="text-username">
+              {user?.firstName || ""} {user?.lastName || ""}
+            </h2>
+            <p className="text-muted-foreground italic" data-testid="text-user-tagline">"Here for you, always"</p>
           </div>
         </div>
 
@@ -144,7 +219,7 @@ const ProfileView = ({ onClose }: { onClose: () => void }) => {
               <div className="bg-card rounded-xl p-4 shadow-sm border space-y-4">
                 <div className="flex items-center justify-between">
                   <span className="font-medium">Email</span>
-                  <span className="text-muted-foreground text-sm">zorevl18@gmail.com</span>
+                  <span className="text-muted-foreground text-sm" data-testid="text-user-email">{user?.email || "Not set"}</span>
                 </div>
               </div>
             </section>
@@ -170,6 +245,15 @@ const ProfileView = ({ onClose }: { onClose: () => void }) => {
                 </button>
               </div>
             </section>
+
+            <section>
+              <a href="/api/logout" className="block w-full" data-testid="link-logout">
+                <Button variant="destructive" className="w-full h-12 rounded-xl gap-2" data-testid="button-logout">
+                  <LogOut className="w-5 h-5" />
+                  Log Out
+                </Button>
+              </a>
+            </section>
           </div>
         </ScrollArea>
       </div>
@@ -183,14 +267,16 @@ const SharedHeader = ({
   onProfile, 
   isActive, 
   duration,
-  mode 
+  mode,
+  userProfileImage
 }: { 
   persona: Persona, 
   setPersona: (p: Persona) => void, 
   onProfile: () => void, 
   isActive: boolean,
   duration: number,
-  mode: Mode
+  mode: Mode,
+  userProfileImage?: string
 }) => {
   const formatTime = (secs: number) => {
     const m = Math.floor(secs / 60);
@@ -203,24 +289,24 @@ const SharedHeader = ({
       <div className="pointer-events-auto">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <button className="flex items-center gap-2 bg-[#10383A] border border-white/10 px-4 py-2 rounded-2xl shadow-sm hover:bg-[#10383A]/80 transition-colors focus:outline-none">
+            <button className="flex items-center gap-2 bg-[#10383A] border border-white/10 px-4 py-2 rounded-2xl shadow-sm hover:bg-[#10383A]/80 transition-colors focus:outline-none" data-testid="button-persona-selector">
               <span className="font-bold text-lg text-white">{persona}</span>
               <ChevronRight className="w-4 h-4 rotate-90 text-white/70" />
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="w-48 rounded-xl bg-[#10383A] border-white/10 text-white">
-            <DropdownMenuItem onClick={() => setPersona("Maya")} className="gap-2 p-3 font-medium cursor-pointer focus:bg-white/10 focus:text-white">
+            <DropdownMenuItem onClick={() => setPersona("Maya")} className="gap-2 p-3 font-medium cursor-pointer focus:bg-white/10 focus:text-white" data-testid="button-persona-maya">
               <Avatar className="w-6 h-6">
                 <AvatarImage src={mayaAvatar} />
                 <AvatarFallback>M</AvatarFallback>
               </Avatar>
               Maya
             </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => setPersona("Zarra")} className="gap-2 p-3 font-medium cursor-pointer focus:bg-white/10 focus:text-white">
+            <DropdownMenuItem onClick={() => setPersona("Zarra")} className="gap-2 p-3 font-medium cursor-pointer focus:bg-white/10 focus:text-white" data-testid="button-persona-zarra">
               <div className="w-6 h-6 rounded-full bg-purple-500 flex items-center justify-center text-[10px] text-white font-bold">Z</div>
               Zarra
             </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => setPersona("Ore")} className="gap-2 p-3 font-medium cursor-pointer focus:bg-white/10 focus:text-white">
+            <DropdownMenuItem onClick={() => setPersona("Ore")} className="gap-2 p-3 font-medium cursor-pointer focus:bg-white/10 focus:text-white" data-testid="button-persona-ore">
               <div className="w-6 h-6 rounded-full bg-orange-500 flex items-center justify-center text-[10px] text-white font-bold">O</div>
               Ore
             </DropdownMenuItem>
@@ -228,7 +314,6 @@ const SharedHeader = ({
         </DropdownMenu>
       </div>
       
-      {/* Timer only visible in Voice Mode when active */}
       <AnimatePresence>
         {isActive && (
           <motion.div 
@@ -243,10 +328,10 @@ const SharedHeader = ({
       </AnimatePresence>
 
       <div className="pointer-events-auto">
-        <Button variant="ghost" size="icon" className="rounded-full w-12 h-12" onClick={onProfile}>
+        <Button variant="ghost" size="icon" className="rounded-full w-12 h-12" onClick={onProfile} data-testid="button-profile">
           <div className="w-full h-full rounded-full border border-white/20 bg-white/10 overflow-hidden p-0.5">
               <Avatar className="w-full h-full">
-                <AvatarImage src={mayaAvatar} className="object-cover" />
+                <AvatarImage src={userProfileImage || mayaAvatar} className="object-cover" />
                 <AvatarFallback>M</AvatarFallback>
               </Avatar>
           </div>
@@ -256,7 +341,7 @@ const SharedHeader = ({
   );
 };
 
-const VoiceView = ({ isActive, onEndCall, onProfile, persona, setPersona, mode, setMode, duration }: { 
+const VoiceView = ({ isActive, onEndCall, onProfile, persona, setPersona, mode, setMode, duration, userProfileImage }: { 
   isActive: boolean; 
   onEndCall: () => void;
   onProfile: () => void;
@@ -265,6 +350,7 @@ const VoiceView = ({ isActive, onEndCall, onProfile, persona, setPersona, mode, 
   mode: Mode;
   setMode: (m: Mode) => void;
   duration: number;
+  userProfileImage?: string;
 }) => {
   return (
     <motion.div 
@@ -274,7 +360,7 @@ const VoiceView = ({ isActive, onEndCall, onProfile, persona, setPersona, mode, 
       transition={{ type: "spring", stiffness: 200, damping: 25 }}
       drag="y"
       dragConstraints={{ top: 0, bottom: 0 }}
-      dragElastic={0.05} // Slightly reduced elastic for tighter feel
+      dragElastic={0.05}
       onDragEnd={(_, info) => {
          if (mode === "voice" && info.offset.y < -100) {
            setMode("text");
@@ -283,10 +369,8 @@ const VoiceView = ({ isActive, onEndCall, onProfile, persona, setPersona, mode, 
          }
       }}
     >
-      {/* Container to prevent squishing of content when height shrinks */}
       <div className="w-full h-screen relative flex flex-col pointer-events-none">
         
-        {/* Header embedded inside VoiceView */}
         <div className="relative z-50 pointer-events-auto">
           <SharedHeader 
             persona={persona} 
@@ -294,20 +378,18 @@ const VoiceView = ({ isActive, onEndCall, onProfile, persona, setPersona, mode, 
             onProfile={onProfile} 
             isActive={isActive} 
             duration={duration} 
-            mode={mode} 
+            mode={mode}
+            userProfileImage={userProfileImage}
           />
         </div>
 
-        {/* Main Voice Content */}
         <motion.div 
           className="flex-1 flex flex-col pt-24 pb-4 pointer-events-auto"
           animate={{ opacity: mode === "voice" ? 1 : 0 }}
           transition={{ duration: 0.2 }}
         >
-          {/* Main Content */}
           <div className="flex-1 flex flex-col items-center justify-center relative">
             {isActive ? (
-              /* Active Call State */
               <div className="w-full h-full flex items-center justify-center px-8">
                 <div className="flex items-center justify-center gap-1.5 h-32 w-full">
                   {[...Array(8)].map((_, i) => (
@@ -329,14 +411,11 @@ const VoiceView = ({ isActive, onEndCall, onProfile, persona, setPersona, mode, 
                 </div>
               </div>
             ) : (
-              /* Idle State */
               <div className="flex flex-col items-center gap-8">
                  <div className="relative group cursor-pointer" onClick={onEndCall}>
-                   {/* Pulse Rings */}
                    <div className="absolute inset-0 bg-[#DAA112]/20 rounded-full animate-ping opacity-20 duration-3000" />
                    <div className="absolute -inset-4 bg-[#DAA112]/10 rounded-full animate-pulse opacity-30" />
                    
-                   {/* Main Button */}
                    <div className="w-32 h-32 bg-[#DAA112] rounded-full flex items-center justify-center shadow-[0_0_40px_rgba(218,161,18,0.3)] transform transition-transform group-hover:scale-105 active:scale-95">
                       <Mic className="w-12 h-12 text-[#10383A]" />
                    </div>
@@ -346,9 +425,7 @@ const VoiceView = ({ isActive, onEndCall, onProfile, persona, setPersona, mode, 
             )}
           </div>
 
-          {/* Controls & Bottom Handle */}
           <div className="px-6 space-y-6 pb-24">
-            {/* Call Controls (Only visible when active) */}
             {isActive && (
               <div className="flex items-center justify-center gap-8 mb-4">
                   <Button 
@@ -363,6 +440,7 @@ const VoiceView = ({ isActive, onEndCall, onProfile, persona, setPersona, mode, 
                     size="icon" 
                     className="w-20 h-20 rounded-full shadow-2xl hover:scale-105 transition-transform bg-red-500 hover:bg-red-600 text-white border-4 border-[#10383A]"
                     onClick={onEndCall}
+                    data-testid="button-end-call"
                   >
                     <PhoneOff className="w-8 h-8" />
                   </Button>
@@ -376,7 +454,6 @@ const VoiceView = ({ isActive, onEndCall, onProfile, persona, setPersona, mode, 
               </div>
             )}
 
-            {/* Swipe Up Handle */}
             <div className="flex flex-col items-center justify-center gap-2 py-2 text-white/30 cursor-grab active:cursor-grabbing">
                <div className="w-12 h-1.5 bg-white/20 rounded-full" />
                <span className="text-xs font-medium uppercase tracking-wider">Swipe up to chat</span>
@@ -384,7 +461,6 @@ const VoiceView = ({ isActive, onEndCall, onProfile, persona, setPersona, mode, 
           </div>
         </motion.div>
         
-        {/* Collapsed Handle (Visible only in Text Mode) */}
         <AnimatePresence>
           {mode === "text" && (
             <motion.div 
@@ -403,13 +479,12 @@ const VoiceView = ({ isActive, onEndCall, onProfile, persona, setPersona, mode, 
   );
 };
 
-const TextView = () => {
+const TextView = ({ messages, onSendMessage, persona }: { messages: MessageData[]; onSendMessage: (text: string) => void; persona: Persona }) => {
   return (
     <div className="h-full flex flex-col bg-[#0D2E30] pt-40 pb-20">
-      {/* Messages */}
       <ScrollArea className="flex-1 p-4">
         <div className="space-y-4 pb-4">
-          {INITIAL_MESSAGES.map((msg) => (
+          {messages.map((msg) => (
             <motion.div
               key={msg.id}
               initial={{ opacity: 0, y: 10 }}
@@ -420,7 +495,7 @@ const TextView = () => {
               )}
             >
               <div className="flex items-end gap-2 max-w-[80%]">
-                {msg.sender === "maya" && (
+                {msg.sender !== "user" && (
                   <Avatar className="w-8 h-8 mb-1 shrink-0 ring-2 ring-white/10">
                     <AvatarImage src={mayaAvatar} />
                     <AvatarFallback>M</AvatarFallback>
@@ -484,7 +559,6 @@ const OnboardingView = ({ onComplete }: { onComplete: () => void }) => {
                 }
               }}
             >
-              {/* Illustration Area */}
               <div className="flex-1 flex items-center justify-center w-full relative">
                  <motion.img 
                    src={slide.image} 
@@ -496,7 +570,6 @@ const OnboardingView = ({ onComplete }: { onComplete: () => void }) => {
                  />
               </div>
 
-              {/* Text Content */}
               <div className="w-full space-y-10 mb-8 z-10">
                 <div className="text-center space-y-4">
                   <motion.div
@@ -513,7 +586,6 @@ const OnboardingView = ({ onComplete }: { onComplete: () => void }) => {
                   </motion.div>
                 </div>
 
-                {/* Pagination Dots */}
                 <div className="flex justify-center gap-3">
                   {ONBOARDING_STEPS.map((_, dotIdx) => (
                     <div 
@@ -527,18 +599,19 @@ const OnboardingView = ({ onComplete }: { onComplete: () => void }) => {
                   ))}
                 </div>
 
-                {/* Buttons */}
                 <div className="flex items-center gap-4 pt-2">
                   <Button 
                     variant="ghost" 
                     className={`flex-1 h-14 text-base font-medium transition-colors ${step === 0 ? "text-white/70 hover:text-white hover:bg-white/10" : "text-black/60 hover:text-black hover:bg-black/5"}`}
                     onClick={onComplete}
+                    data-testid="button-skip-onboarding"
                   >
                     Skip
                   </Button>
                   <Button 
                     className={`flex-[2] h-14 text-lg rounded-2xl shadow-xl transition-transform active:scale-95 ${step === 0 ? "bg-white text-[#10383A] hover:bg-white/90" : "bg-[#10383A] text-white hover:bg-[#10383A]/90"}`}
                     onClick={handleNext}
+                    data-testid="button-next-onboarding"
                   >
                     {step === ONBOARDING_STEPS.length - 1 ? "Get Started" : "Next"}
                   </Button>
@@ -555,12 +628,121 @@ const OnboardingView = ({ onComplete }: { onComplete: () => void }) => {
 // --- Main App Component ---
 
 function App() {
-  const [showOnboarding, setShowOnboarding] = useState(true);
+  const { user, isLoading: authLoading, isAuthenticated } = useAuth();
+  const queryClient = useQueryClient();
+
   const [mode, setMode] = useState<Mode>("voice");
   const [isCalling, setIsCalling] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
-  const [persona, setPersona] = useState<Persona>("Maya");
   const [duration, setDuration] = useState(0);
+  const [callStartTime, setCallStartTime] = useState<number | null>(null);
+
+  const { data: preferences, isLoading: prefsLoading } = useQuery<{ selectedPersona?: string; onboardingCompleted?: boolean }>({
+    queryKey: ["/api/preferences"],
+    enabled: isAuthenticated,
+  });
+
+  const [showOnboarding, setShowOnboarding] = useState(false);
+  const [persona, setPersona] = useState<Persona>("Maya");
+
+  useEffect(() => {
+    if (preferences) {
+      setShowOnboarding(!preferences.onboardingCompleted);
+      if (preferences.selectedPersona) {
+        setPersona(preferences.selectedPersona as Persona);
+      }
+    }
+  }, [preferences]);
+
+  const updatePreferencesMutation = useMutation({
+    mutationFn: async (data: { selectedPersona?: string; onboardingCompleted?: boolean }) => {
+      const res = await apiRequest("PUT", "/api/preferences", data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/preferences"] });
+    },
+  });
+
+  const handleOnboardingComplete = () => {
+    setShowOnboarding(false);
+    updatePreferencesMutation.mutate({ selectedPersona: persona, onboardingCompleted: true });
+  };
+
+  const handlePersonaChange = (p: Persona) => {
+    setPersona(p);
+    updatePreferencesMutation.mutate({ selectedPersona: p, onboardingCompleted: preferences?.onboardingCompleted ?? true });
+  };
+
+  const { data: conversations } = useQuery<any[]>({
+    queryKey: ["/api/conversations"],
+    enabled: isAuthenticated && !showOnboarding,
+  });
+
+  const createConversationMutation = useMutation({
+    mutationFn: async (data: { persona: string }) => {
+      const res = await apiRequest("POST", "/api/conversations", data);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/conversations"] });
+    },
+  });
+
+  const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isAuthenticated || showOnboarding) return;
+    if (conversations && conversations.length > 0) {
+      setActiveConversationId(conversations[0].id);
+    } else if (conversations && conversations.length === 0) {
+      createConversationMutation.mutate({ persona });
+    }
+  }, [conversations, isAuthenticated, showOnboarding]);
+
+  const { data: messagesData } = useQuery<MessageData[]>({
+    queryKey: [`/api/conversations/${activeConversationId}/messages`],
+    enabled: !!activeConversationId,
+    refetchInterval: 5000,
+  });
+
+  const sendMessageMutation = useMutation({
+    mutationFn: async (text: string) => {
+      if (!activeConversationId) return;
+      const res = await apiRequest("POST", `/api/conversations/${activeConversationId}/messages`, {
+        sender: "user",
+        text,
+      });
+      return res.json();
+    },
+    onSuccess: () => {
+      if (activeConversationId) {
+        queryClient.invalidateQueries({ queryKey: [`/api/conversations/${activeConversationId}/messages`] });
+      }
+    },
+  });
+
+  const handleSendMessage = (text: string) => {
+    sendMessageMutation.mutate(text);
+  };
+
+  const saveVoiceSessionMutation = useMutation({
+    mutationFn: async (data: { persona: string; duration: number }) => {
+      const res = await apiRequest("POST", "/api/voice-sessions", data);
+      return res.json();
+    },
+  });
+
+  const handleEndCall = () => {
+    if (isCalling) {
+      saveVoiceSessionMutation.mutate({ persona, duration });
+      setIsCalling(false);
+      setCallStartTime(null);
+    } else {
+      setIsCalling(true);
+      setCallStartTime(Date.now());
+    }
+  };
 
   useEffect(() => {
     let interval: NodeJS.Timeout;
@@ -572,45 +754,57 @@ function App() {
     return () => clearInterval(interval);
   }, [isCalling]);
 
+  if (authLoading) {
+    return (
+      <div className="w-full h-screen bg-[#10383A] flex items-center justify-center" data-testid="loading-screen">
+        <motion.div
+          animate={{ rotate: 360 }}
+          transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
+          className="w-10 h-10 border-4 border-white/20 border-t-[#DAA112] rounded-full"
+        />
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return <LandingPage />;
+  }
+
   return (
     <div className="w-full h-screen bg-neutral-100 flex items-center justify-center overflow-hidden">
-      {/* Mobile Frame */}
       <div className="w-full h-full md:max-w-[400px] md:h-[850px] bg-background md:rounded-[2.5rem] shadow-2xl overflow-hidden relative">
         
-        {/* Onboarding Overlay */}
         <AnimatePresence>
           {showOnboarding && (
-            <OnboardingView onComplete={() => setShowOnboarding(false)} />
+            <OnboardingView onComplete={handleOnboardingComplete} />
           )}
         </AnimatePresence>
 
-        {/* Shared Footer (Always Visible) */}
         <SharedFooter 
           persona={persona}
           onVoiceMode={() => setMode(mode === "voice" ? "text" : "voice")}
+          onSendMessage={handleSendMessage}
         />
 
-        {/* Base Layer: Text View (Transcript) */}
         <div className="absolute inset-0 z-0">
-          <TextView />
+          <TextView messages={messagesData || []} onSendMessage={handleSendMessage} persona={persona} />
         </div>
 
-        {/* Curtain Layer: Voice View */}
         <VoiceView 
           isActive={isCalling} 
-          onEndCall={() => setIsCalling(!isCalling)}
+          onEndCall={handleEndCall}
           onProfile={() => setShowProfile(true)}
           persona={persona}
-          setPersona={setPersona}
+          setPersona={handlePersonaChange}
           mode={mode}
           setMode={setMode}
           duration={duration}
+          userProfileImage={user?.profileImageUrl || undefined}
         />
 
-        {/* Profile Overlay */}
         <AnimatePresence>
           {showProfile && (
-            <ProfileView onClose={() => setShowProfile(false)} />
+            <ProfileView onClose={() => setShowProfile(false)} user={user} />
           )}
         </AnimatePresence>
 
