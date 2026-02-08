@@ -30,24 +30,24 @@ const ONBOARDING_STEPS = [
     title: "Welcome, Friend!",
     description: "You're now part of our incredible and caring community. Let's get started!",
     image: onboarding1,
-    color: "bg-[#FEF9C3]", // Pastel Yellow
-    textColor: "text-yellow-900"
+    color: "bg-[#10383A]", // Deep Teal
+    textColor: "text-[#E8E8E8]" // Off-white text for contrast
   },
   {
     id: 2,
     title: "Discover Balance",
     description: "Find peace and mindfulness with personalized guidance every day.",
     image: onboarding2,
-    color: "bg-[#FCE7F3]", // Pastel Pink
-    textColor: "text-pink-900"
+    color: "bg-[#809276]", // Sage Green (Light)
+    textColor: "text-[#10383A]" // Deep Teal text
   },
   {
     id: 3,
     title: "Grow Together",
     description: "Connect with your personal AI companion anytime, anywhere.",
     image: onboarding3,
-    color: "bg-[#DCFCE7]", // Pastel Green
-    textColor: "text-green-900"
+    color: "bg-[#DAA112]", // Mustard Yellow
+    textColor: "text-[#10383A]" // Deep Teal text
   }
 ];
 
@@ -502,7 +502,7 @@ const OnboardingView = ({ onComplete }: { onComplete: () => void }) => {
               <h1 className={`text-3xl font-serif font-bold mb-3 ${currentStep.textColor}`}>
                 {currentStep.title}
               </h1>
-              <p className="text-muted-foreground/80 leading-relaxed font-medium">
+              <p className={`leading-relaxed font-medium ${step === 0 ? "text-white/80" : "text-black/60"}`}>
                 {currentStep.description}
               </p>
             </motion.div>
@@ -515,7 +515,9 @@ const OnboardingView = ({ onComplete }: { onComplete: () => void }) => {
             <div 
               key={idx} 
               className={`h-2 rounded-full transition-all duration-300 ${
-                idx === step ? `w-8 ${currentStep.textColor.replace('text', 'bg')}` : "w-2 bg-black/10"
+                idx === step 
+                  ? `w-8 ${step === 0 ? "bg-white" : "bg-[#10383A]"}` 
+                  : `w-2 ${step === 0 ? "bg-white/30" : "bg-black/10"}`
               }`} 
             />
           ))}
@@ -525,13 +527,13 @@ const OnboardingView = ({ onComplete }: { onComplete: () => void }) => {
         <div className="flex items-center gap-4 pt-4">
           <Button 
             variant="outline" 
-            className="flex-1 border-black/10 bg-transparent hover:bg-black/5 text-black/70"
+            className={`flex-1 border-white/20 bg-transparent hover:bg-white/10 ${step === 0 ? "text-white/70" : "text-black/70 border-black/10 hover:bg-black/5"}`}
             onClick={onComplete}
           >
             Skip
           </Button>
           <Button 
-            className="flex-1 bg-neutral-900 text-white hover:bg-neutral-800"
+            className={`flex-1 ${step === 0 ? "bg-white text-[#10383A] hover:bg-white/90" : "bg-[#10383A] text-white hover:bg-[#10383A]/90"}`}
             onClick={handleNext}
           >
             {step === ONBOARDING_STEPS.length - 1 ? "Let's Start" : "Next"}

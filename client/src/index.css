@@ -12,42 +12,42 @@
   --radius-lg: 1.5rem;
   --radius-xl: 2rem;
 
-  --color-background: hsl(40 20% 97%);
-  --color-foreground: hsl(180 30% 15%);
+  --color-background: hsl(40 20% 98%);
+  --color-foreground: hsl(183 57% 15%);
 
   --color-card: hsl(0 0% 100%);
-  --color-card-foreground: hsl(180 30% 15%);
+  --color-card-foreground: hsl(183 57% 15%);
 
   --color-popover: hsl(0 0% 100%);
-  --color-popover-foreground: hsl(180 30% 15%);
+  --color-popover-foreground: hsl(183 57% 15%);
 
-  --color-primary: hsl(175 45% 25%);
+  --color-primary: hsl(183 57% 15%);
   --color-primary-foreground: hsl(40 20% 97%);
 
-  --color-secondary: hsl(95 25% 75%);
-  --color-secondary-foreground: hsl(175 45% 15%);
+  --color-secondary: hsl(98 11% 52%);
+  --color-secondary-foreground: hsl(183 57% 15%);
 
-  --color-muted: hsl(180 10% 92%);
-  --color-muted-foreground: hsl(180 20% 40%);
+  --color-muted: hsl(173 7% 90%);
+  --color-muted-foreground: hsl(173 7% 50%);
 
-  --color-accent: hsl(45 80% 60%);
-  --color-accent-foreground: hsl(175 45% 15%);
+  --color-accent: hsl(43 85% 46%);
+  --color-accent-foreground: hsl(183 57% 15%);
 
   --color-destructive: hsl(0 84% 60%);
   --color-destructive-foreground: hsl(0 0% 98%);
 
-  --color-border: hsl(180 10% 85%);
-  --color-input: hsl(180 10% 85%);
-  --color-ring: hsl(175 45% 25%);
+  --color-border: hsl(173 7% 85%);
+  --color-input: hsl(173 7% 85%);
+  --color-ring: hsl(183 57% 15%);
 
-  --color-sidebar: hsl(175 45% 25%);
+  --color-sidebar: hsl(183 57% 15%);
   --color-sidebar-foreground: hsl(40 20% 97%);
-  --color-sidebar-primary: hsl(45 80% 60%);
-  --color-sidebar-primary-foreground: hsl(175 45% 15%);
-  --color-sidebar-accent: hsl(175 40% 30%);
+  --color-sidebar-primary: hsl(43 85% 46%);
+  --color-sidebar-primary-foreground: hsl(183 57% 15%);
+  --color-sidebar-accent: hsl(183 50% 25%);
   --color-sidebar-accent-foreground: hsl(40 20% 97%);
-  --color-sidebar-border: hsl(175 40% 30%);
-  --color-sidebar-ring: hsl(45 80% 60%);
+  --color-sidebar-border: hsl(183 50% 25%);
+  --color-sidebar-ring: hsl(43 85% 46%);
 }
 
 @layer base {
