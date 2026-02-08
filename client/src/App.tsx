@@ -372,24 +372,20 @@ const AuthPage = ({ onLogin, onRegister, loginError, registerError, isLoggingIn,
 
             <div>
               <label className="text-sm text-white/60 mb-1.5 block">How did you hear about us?</label>
-              <div className="grid grid-cols-2 gap-2">
+              <select
+                value={formData.referralSource}
+                onChange={(e) => setFormData(f => ({ ...f, referralSource: e.target.value }))}
+                className={cn(inputClass, "appearance-none cursor-pointer")}
+                required
+                data-testid="select-register-referral"
+              >
+                <option value="" disabled className="bg-[#10383A]">Select an option</option>
                 {REFERRAL_OPTIONS.map((option) => (
-                  <button
-                    key={option}
-                    type="button"
-                    onClick={() => setFormData(f => ({ ...f, referralSource: f.referralSource === option ? "" : option }))}
-                    className={cn(
-                      "px-3 py-2.5 rounded-xl text-sm font-medium transition-all border",
-                      formData.referralSource === option
-                        ? "bg-[#DAA112]/20 border-[#DAA112] text-[#DAA112]"
-                        : "bg-white/5 border-white/10 text-white/60 hover:border-white/30"
-                    )}
-                    data-testid={`button-referral-${option.toLowerCase().replace(/\s+/g, "-")}`}
-                  >
+                  <option key={option} value={option} className="bg-[#10383A] text-white">
                     {option}
-                  </button>
+                  </option>
                 ))}
-              </div>
+              </select>
             </div>
 
             {localError && (
