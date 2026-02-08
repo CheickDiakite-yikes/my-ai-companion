@@ -10,6 +10,7 @@
     "dev:handoff": "bash script/dev-handoff.sh",
     "security:secrets": "bash script/check-secrets.sh all",
     "security:secrets:staged": "bash script/check-secrets.sh staged",
+    "test:local:e2e": "bash script/local-isolated-e2e.sh",
     "hooks:install": "git config core.hooksPath .githooks",
     "build": "tsx script/build.ts",
     "start": "NODE_ENV=production node dist/index.cjs",

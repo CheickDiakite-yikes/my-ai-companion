@@ -1,5 +1,16 @@
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
 
+function createTraceId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `trace-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+export function getResponseTraceId(res: Response): string | null {
+  return res.headers.get("x-trace-id");
+}
+
 async function throwIfResNotOk(res: Response) {
   if (!res.ok) {
     const text = (await res.text()) || res.statusText;
@@ -11,10 +22,20 @@ export async function apiRequest(
   method: string,
   url: string,
   data?: unknown | undefined,
+  options?: {
+    traceId?: string;
+    headers?: Record<string, string>;
+  },
 ): Promise<Response> {
+  const headers: Record<string, string> = {
+    ...(data ? { "Content-Type": "application/json" } : {}),
+    "x-trace-id": options?.traceId ?? createTraceId(),
+    ...(options?.headers ?? {}),
+  };
+
   const res = await fetch(url, {
     method,
-    headers: data ? { "Content-Type": "application/json" } : {},
+    headers,
     body: data ? JSON.stringify(data) : undefined,
     credentials: "include",
   });
@@ -31,6 +52,9 @@ export const getQueryFn: <T>(options: {
   async ({ queryKey }) => {
     const res = await fetch(queryKey.join("/") as string, {
       credentials: "include",
+      headers: {
+        "x-trace-id": createTraceId(),
+      },
     });
 
     if (unauthorizedBehavior === "returnNull" && res.status === 401) {

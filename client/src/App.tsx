@@ -13,7 +13,7 @@ import leafBg from "@/assets/leaf-bg.png";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/use-auth";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, getResponseTraceId } from "@/lib/queryClient";
 import { GeminiLiveVoiceSession } from "@/lib/gemini-live";
 
 import {
@@ -33,6 +33,31 @@ interface MessageData {
   sender: string;
   text: string;
   createdAt: string | null;
+}
+
+interface TraceAwareResponse {
+  traceId?: string;
+}
+
+function createLocalId(prefix: string): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return `${prefix}-${crypto.randomUUID()}`;
+  }
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  return String(error);
+}
+
+function extractTraceId(
+  response: Response,
+  body?: TraceAwareResponse | null,
+): string | undefined {
+  return getResponseTraceId(response) ?? body?.traceId;
 }
 
 // --- Constants ---
@@ -763,8 +788,9 @@ const SharedHeader = ({
   );
 };
 
-const VoiceView = ({ isActive, onEndCall, onProfile, persona, setPersona, mode, setMode, duration, userProfileImage }: { 
+const VoiceView = ({ isActive, isConnecting, onEndCall, onProfile, persona, setPersona, mode, setMode, duration, userProfileImage }: { 
   isActive: boolean; 
+  isConnecting: boolean;
   onEndCall: () => void;
   onProfile: () => void;
   persona: Persona;
@@ -834,15 +860,30 @@ const VoiceView = ({ isActive, onEndCall, onProfile, persona, setPersona, mode, 
               </div>
             ) : (
               <div className="flex flex-col items-center gap-8">
-                 <div className="relative group cursor-pointer" onClick={onEndCall}>
+                 <button
+                   type="button"
+                   className={cn(
+                     "relative group cursor-pointer",
+                     isConnecting && "cursor-wait opacity-80",
+                   )}
+                   onClick={onEndCall}
+                   disabled={isConnecting}
+                   aria-label={isConnecting ? "Connecting voice session" : `Start voice call with ${persona}`}
+                   data-testid="button-start-call"
+                 >
                    <div className="absolute inset-0 bg-[#DAA112]/20 rounded-full animate-ping opacity-20 duration-3000" />
                    <div className="absolute -inset-4 bg-[#DAA112]/10 rounded-full animate-pulse opacity-30" />
                    
-                   <div className="w-32 h-32 bg-[#DAA112] rounded-full flex items-center justify-center shadow-[0_0_40px_rgba(218,161,18,0.3)] transform transition-transform group-hover:scale-105 active:scale-95">
+                   <div className={cn(
+                     "w-32 h-32 bg-[#DAA112] rounded-full flex items-center justify-center shadow-[0_0_40px_rgba(218,161,18,0.3)] transform transition-transform",
+                     !isConnecting && "group-hover:scale-105 active:scale-95",
+                   )}>
                       <Mic className="w-12 h-12 text-[#10383A]" />
                    </div>
-                 </div>
-                 <p className="text-white/60 font-medium tracking-wide">Tap to speak to {persona}</p>
+                 </button>
+                 <p className="text-white/60 font-medium tracking-wide">
+                   {isConnecting ? `Connecting to ${persona}...` : `Tap to speak to ${persona}`}
+                 </p>
               </div>
             )}
           </div>
@@ -1061,6 +1102,18 @@ function App() {
   const [callStartTime, setCallStartTime] = useState<number | null>(null);
   const [liveError, setLiveError] = useState<string | null>(null);
   const liveSessionRef = useRef<GeminiLiveVoiceSession | null>(null);
+  const liveConversationRef = useRef<string | null>(null);
+  const liveRunIdRef = useRef<string | null>(null);
+  const liveStartNonceRef = useRef(0);
+  const transcriptQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const transcriptSeenRef = useRef<Set<string>>(new Set());
+
+  const logLiveTrace = (
+    event: string,
+    metadata: Record<string, unknown> = {},
+  ) => {
+    console.log("[LiveTrace]", event, metadata);
+  };
 
   const { data: preferences, isLoading: prefsLoading } = useQuery<{ selectedPersona?: string; onboardingCompleted?: boolean }>({
     queryKey: ["/api/preferences"],
@@ -1107,7 +1160,7 @@ function App() {
   const createConversationMutation = useMutation({
     mutationFn: async (data: { persona: string }) => {
       const res = await apiRequest("POST", "/api/conversations", data);
-      return res.json();
+      return res.json() as Promise<{ id: string; persona: Persona }>;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/conversations"] });
@@ -1124,6 +1177,15 @@ function App() {
       createConversationMutation.mutate({ persona });
     }
   }, [conversations, isAuthenticated, showOnboarding]);
+
+  const ensureActiveConversationId = async (): Promise<string> => {
+    if (activeConversationId) {
+      return activeConversationId;
+    }
+    const created = await createConversationMutation.mutateAsync({ persona });
+    setActiveConversationId(created.id);
+    return created.id;
+  };
 
   const { data: messagesData } = useQuery<MessageData[]>({
     queryKey: [`/api/conversations/${activeConversationId}/messages`],
@@ -1172,11 +1234,15 @@ function App() {
         persona: data.persona,
         responseModality: "AUDIO",
       });
-      return res.json() as Promise<{
+      const body = (await res.json()) as {
         ephemeralToken: string;
         model: string;
         traceId?: string;
-      }>;
+      };
+      return {
+        ...body,
+        traceId: extractTraceId(res, body),
+      };
     },
   });
 
@@ -1194,62 +1260,179 @@ function App() {
           text: data.text,
         },
       );
-      return res.json();
+      const body = (await res.json()) as { traceId?: string };
+      return {
+        ...body,
+        traceId: extractTraceId(res, body),
+      };
     },
     onSuccess: (_, vars) => {
       queryClient.invalidateQueries({
         queryKey: [`/api/conversations/${vars.conversationId}/messages`],
       });
     },
+    onError: (error, vars) => {
+      console.error("voice.transcript.persist.failed", {
+        conversationId: vars.conversationId,
+        sender: vars.sender,
+        error: getErrorMessage(error),
+      });
+    },
   });
 
+  const queueTranscriptPersist = (payload: {
+    conversationId: string;
+    sender: "user" | "assistant";
+    text: string;
+  }) => {
+    const dedupeKey = `${payload.sender}:${payload.text}`;
+    if (transcriptSeenRef.current.has(dedupeKey)) {
+      return;
+    }
+    transcriptSeenRef.current.add(dedupeKey);
+
+    transcriptQueueRef.current = transcriptQueueRef.current
+      .catch(() => undefined)
+      .then(async () => {
+        const persisted = await persistVoiceTranscriptMutation.mutateAsync(payload);
+        logLiveTrace("voice.transcript.persisted", {
+          runId: liveRunIdRef.current,
+          conversationId: payload.conversationId,
+          sender: payload.sender,
+          textLength: payload.text.length,
+          traceId: persisted.traceId,
+        });
+      })
+      .catch((error) => {
+        logLiveTrace("voice.transcript.failed", {
+          runId: liveRunIdRef.current,
+          conversationId: payload.conversationId,
+          sender: payload.sender,
+          textLength: payload.text.length,
+          error: getErrorMessage(error),
+        });
+        setLiveError(
+          "Voice transcript sync failed. Conversation still works, but try reconnecting voice.",
+        );
+      });
+  };
+
   const stopLiveSession = async () => {
+    liveStartNonceRef.current += 1;
+    const runId = liveRunIdRef.current;
+
+    logLiveTrace("live.stop.requested", {
+      runId,
+      isCalling,
+      isLiveConnecting,
+    });
+
     if (liveSessionRef.current) {
       await liveSessionRef.current.stop();
       liveSessionRef.current = null;
     }
+    await transcriptQueueRef.current.catch(() => undefined);
+
+    if (liveConversationRef.current) {
+      queryClient.invalidateQueries({
+        queryKey: [`/api/conversations/${liveConversationRef.current}/messages`],
+      });
+    }
+
+    liveConversationRef.current = null;
+    liveRunIdRef.current = null;
+    transcriptSeenRef.current = new Set();
+    transcriptQueueRef.current = Promise.resolve();
     setIsCalling(false);
     setIsLiveConnecting(false);
     setCallStartTime(null);
+    logLiveTrace("live.stop.completed", {
+      runId,
+    });
   };
 
   const startLiveSession = async () => {
-    if (!activeConversationId) {
-      setLiveError("No active conversation. Please try again in a moment.");
-      return;
-    }
-
+    const startNonce = liveStartNonceRef.current + 1;
+    liveStartNonceRef.current = startNonce;
+    const runId = createLocalId("live");
+    liveRunIdRef.current = runId;
     setLiveError(null);
     setIsLiveConnecting(true);
-    const conversationId = activeConversationId;
+    transcriptSeenRef.current = new Set();
+    transcriptQueueRef.current = Promise.resolve();
+
+    let conversationId: string | null = null;
+    let liveSession: GeminiLiveVoiceSession | null = null;
 
     try {
+      conversationId = await ensureActiveConversationId();
+      liveConversationRef.current = conversationId;
+
+      if (startNonce !== liveStartNonceRef.current) {
+        return;
+      }
+
+      logLiveTrace("live.start.requested", {
+        runId,
+        conversationId,
+        persona,
+      });
+
       const tokenPayload = await createLiveTokenMutation.mutateAsync({ persona });
-      const liveSession = new GeminiLiveVoiceSession({
+
+      if (startNonce !== liveStartNonceRef.current) {
+        return;
+      }
+
+      logLiveTrace("live.token.created", {
+        runId,
+        conversationId,
+        model: tokenPayload.model,
+        traceId: tokenPayload.traceId,
+      });
+
+      const resolvedConversationId = conversationId;
+      liveSession = new GeminiLiveVoiceSession({
         onTranscript: ({ sender, text }) => {
-          persistVoiceTranscriptMutation.mutate({
-            conversationId,
+          queueTranscriptPersist({
+            conversationId: resolvedConversationId,
             sender,
             text,
           });
         },
         onError: (error) => {
-          console.error("Gemini Live session error:", error);
+          console.error("Gemini Live session error:", {
+            runId,
+            error: error.message,
+          });
           setLiveError(error.message);
         },
         onDebug: (message, metadata) => {
-          console.log("[GeminiLive]", message, metadata ?? {});
+          logLiveTrace(message, {
+            runId,
+            ...(metadata ?? {}),
+          });
         },
       });
 
       liveSessionRef.current = liveSession;
-      await liveSession.start({
+      await liveSessionRef.current.start({
         ephemeralToken: tokenPayload.ephemeralToken,
         model: tokenPayload.model,
       });
 
+      if (startNonce !== liveStartNonceRef.current) {
+        await liveSessionRef.current.stop().catch(() => undefined);
+        liveSessionRef.current = null;
+        return;
+      }
+
       setIsCalling(true);
       setCallStartTime(Date.now());
+      logLiveTrace("live.start.ready", {
+        runId,
+        conversationId,
+      });
     } catch (error: any) {
       console.error("Failed to start Gemini Live session:", error);
       setLiveError(
@@ -1257,19 +1440,30 @@ function App() {
           "We could not start the live voice session. Please try again.",
       );
 
-      if (liveSessionRef.current) {
-        await liveSessionRef.current.stop().catch(() => {});
+      if (liveSession) {
+        await liveSession.stop().catch(() => undefined);
+      }
+
+      if (liveSessionRef.current === liveSession) {
         liveSessionRef.current = null;
       }
       setIsCalling(false);
       setCallStartTime(null);
+      liveConversationRef.current = null;
+      logLiveTrace("live.start.failed", {
+        runId,
+        conversationId,
+        error: getErrorMessage(error),
+      });
     } finally {
-      setIsLiveConnecting(false);
+      if (startNonce === liveStartNonceRef.current) {
+        setIsLiveConnecting(false);
+      }
     }
   };
 
   const handleEndCall = () => {
-    if (isCalling || isLiveConnecting) {
+    if (isCalling || isLiveConnecting || liveSessionRef.current) {
       if (isCalling) {
         saveVoiceSessionMutation.mutate({ persona, duration });
       }
@@ -1351,6 +1545,7 @@ function App() {
 
         <VoiceView 
           isActive={isCalling} 
+          isConnecting={isLiveConnecting}
           onEndCall={handleEndCall}
           onProfile={() => setShowProfile(true)}
           persona={persona}

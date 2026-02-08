@@ -56,3 +56,16 @@ A companion AI chat/voice app with personalized personas (Maya, Zarra, Ore). Use
   - `npm run hooks:install` enables pre-commit secret scanning.
 - CI scan:
   - `.github/workflows/secret-scan.yml` runs Gitleaks + local secret rules on PRs and pushes.
+
+## Local Isolated API E2E
+- Run isolated local integration validation without touching Replit runtime:
+  - `npm run test:local:e2e`
+- What it does:
+  - Creates/uses local DB `my_ai_companion_local`.
+  - Pushes schema only to that DB.
+  - Starts app on `127.0.0.1:5599`.
+  - Validates `/api/live/token`, `/api/chat/respond`, and transcript stitching end-to-end.
+- Useful overrides:
+  - `TEST_PORT=5600 npm run test:local:e2e`
+  - `TEST_DB_NAME=my_ai_companion_local_alt npm run test:local:e2e`
+  - `START_SERVER=0 TEST_HOST=127.0.0.1 TEST_PORT=5599 npm run test:local:e2e`
