@@ -5,9 +5,9 @@ import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Switch } from "@/components/ui/switch";
-import onboarding1 from "@/assets/onboarding-1.png";
-import onboarding2 from "@/assets/onboarding-2.png";
-import onboarding3 from "@/assets/onboarding-3.png";
+import onboarding1 from "@/assets/onboarding-1-v2.png";
+import onboarding2 from "@/assets/onboarding-2-v2.png";
+import onboarding3 from "@/assets/onboarding-3-v2.png";
 import mayaAvatar from "@/assets/maya-avatar.png";
 import leafBg from "@/assets/leaf-bg.png";
 import { cn } from "@/lib/utils";
@@ -486,16 +486,14 @@ const OnboardingView = ({ onComplete }: { onComplete: () => void }) => {
             >
               {/* Illustration Area */}
               <div className="flex-1 flex items-center justify-center w-full relative">
-                <div className="relative w-72 h-72 rounded-full bg-white/20 backdrop-blur-md flex items-center justify-center mb-8 shadow-inner border border-white/10">
-                   <motion.img 
-                     src={slide.image} 
-                     alt={slide.title}
-                     initial={{ opacity: 0, scale: 0.8, y: 20 }}
-                     animate={{ opacity: 1, scale: 1, y: 0 }}
-                     transition={{ delay: 0.2, type: "spring", stiffness: 200, damping: 20 }}
-                     className="w-64 h-64 object-contain drop-shadow-xl"
-                   />
-                </div>
+                 <motion.img 
+                   src={slide.image} 
+                   alt={slide.title}
+                   initial={{ opacity: 0, scale: 0.9, y: 20 }}
+                   animate={{ opacity: 1, scale: 1, y: 0 }}
+                   transition={{ delay: 0.2, type: "spring", stiffness: 200, damping: 20 }}
+                   className="w-full max-w-[320px] object-contain drop-shadow-2xl mix-blend-normal"
+                 />
               </div>
 
               {/* Text Content */}
@@ -577,7 +575,7 @@ function App() {
   return (
     <div className="w-full h-screen bg-neutral-100 flex items-center justify-center overflow-hidden">
       {/* Mobile Frame */}
-      <div className="w-full h-full md:max-w-[400px] md:h-[850px] bg-background md:rounded-[2.5rem] shadow-2xl overflow-hidden relative border-4 border-neutral-800/5">
+      <div className="w-full h-full md:max-w-[400px] md:h-[850px] bg-background md:rounded-[2.5rem] shadow-2xl overflow-hidden relative">
         
         {/* Onboarding Overlay */}
         <AnimatePresence>
