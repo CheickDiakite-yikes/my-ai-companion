@@ -87,6 +87,7 @@ const AuthPage = ({ onLogin, onRegister, loginError, registerError, isLoggingIn,
   const [formData, setFormData] = useState({
     email: "",
     password: "",
+    confirmPassword: "",
     firstName: "",
     lastName: "",
     profession: "",
@@ -111,10 +112,15 @@ const AuthPage = ({ onLogin, onRegister, loginError, registerError, isLoggingIn,
       setLocalError("Password must be at least 8 characters");
       return;
     }
+    if (formData.password !== formData.confirmPassword) {
+      setLocalError("Passwords do not match");
+      return;
+    }
     try {
       await onRegister({
         email: formData.email,
         password: formData.password,
+        confirmPassword: formData.confirmPassword,
         firstName: formData.firstName,
         lastName: formData.lastName,
         profession: formData.profession || undefined,
@@ -355,6 +361,22 @@ const AuthPage = ({ onLogin, onRegister, loginError, registerError, isLoggingIn,
                 >
                   {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
                 </button>
+              </div>
+            </div>
+
+            <div>
+              <label className="text-sm text-white/60 mb-1.5 block">Confirm Password</label>
+              <div className="relative">
+                <input
+                  type={showPassword ? "text" : "password"}
+                  value={formData.confirmPassword}
+                  onChange={(e) => setFormData(f => ({ ...f, confirmPassword: e.target.value }))}
+                  className={inputClass}
+                  placeholder="Confirm your password"
+                  required
+                  minLength={8}
+                  data-testid="input-register-confirm-password"
+                />
               </div>
             </div>
 

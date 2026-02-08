@@ -49,14 +49,7 @@ export function useAuth() {
   });
 
   const registerMutation = useMutation({
-    mutationFn: async (data: {
-      email: string;
-      password: string;
-      firstName: string;
-      lastName: string;
-      profession?: string;
-      referralSource?: string;
-    }) => {
+    mutationFn: async (data: RegisterData) => {
       const res = await apiRequest("POST", "/api/auth/register", data);
       return res.json();
     },
@@ -88,4 +81,14 @@ export function useAuth() {
     logout: logoutMutation.mutate,
     isLoggingOut: logoutMutation.isPending,
   };
+}
+
+interface RegisterData {
+  email: string;
+  password: string;
+  confirmPassword?: string;
+  firstName: string;
+  lastName: string;
+  profession?: string;
+  referralSource?: string;
 }
