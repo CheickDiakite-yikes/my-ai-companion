@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Mic, Video, PhoneOff, MessageSquare, Menu, Settings, ChevronRight, X, ArrowLeft } from "lucide-react";
+import { Mic, Video, PhoneOff, MessageSquare, Menu, Settings, ChevronRight, X, ArrowLeft, Camera, Paperclip } from "lucide-react";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -48,9 +48,15 @@ const SharedFooter = ({
           variant="ghost" 
           size="icon" 
           className="text-muted-foreground hover:bg-accent/20 hover:text-accent-foreground transition-colors"
-          onClick={onVoiceMode}
         >
-           <Mic className="w-6 h-6" />
+           <Camera className="w-6 h-6" />
+         </Button>
+         <Button 
+          variant="ghost" 
+          size="icon" 
+          className="text-muted-foreground hover:bg-accent/20 hover:text-accent-foreground transition-colors"
+        >
+           <Paperclip className="w-6 h-6" />
          </Button>
          <div className="flex-1 bg-muted/50 rounded-full px-4 py-2.5 border border-transparent focus-within:border-primary/20 focus-within:bg-background transition-all">
            <input 
