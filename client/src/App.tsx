@@ -5,6 +5,9 @@ import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Switch } from "@/components/ui/switch";
+import onboarding1 from "@/assets/onboarding-1.png";
+import onboarding2 from "@/assets/onboarding-2.png";
+import onboarding3 from "@/assets/onboarding-3.png";
 import mayaAvatar from "@/assets/maya-avatar.png";
 import leafBg from "@/assets/leaf-bg.png";
 import { cn } from "@/lib/utils";
@@ -21,6 +24,33 @@ type Mode = "voice" | "text" | "profile";
 type Persona = "Maya" | "Zarra" | "Ore";
 
 // --- Mock Data ---
+const ONBOARDING_STEPS = [
+  {
+    id: 1,
+    title: "Welcome, Friend!",
+    description: "You're now part of our incredible and caring community. Let's get started!",
+    image: onboarding1,
+    color: "bg-[#FEF9C3]", // Pastel Yellow
+    textColor: "text-yellow-900"
+  },
+  {
+    id: 2,
+    title: "Discover Balance",
+    description: "Find peace and mindfulness with personalized guidance every day.",
+    image: onboarding2,
+    color: "bg-[#FCE7F3]", // Pastel Pink
+    textColor: "text-pink-900"
+  },
+  {
+    id: 3,
+    title: "Grow Together",
+    description: "Connect with your personal AI companion anytime, anywhere.",
+    image: onboarding3,
+    color: "bg-[#DCFCE7]", // Pastel Green
+    textColor: "text-green-900"
+  }
+];
+
 const INITIAL_MESSAGES = [
   { id: 1, sender: "maya", text: "Hey Bestie! 👋" },
   { id: 2, sender: "maya", text: "How are you feeling today?" },
@@ -420,9 +450,102 @@ const TextView = () => {
   );
 };
 
+const OnboardingView = ({ onComplete }: { onComplete: () => void }) => {
+  const [step, setStep] = useState(0);
+
+  const handleNext = () => {
+    if (step < ONBOARDING_STEPS.length - 1) {
+      setStep(step + 1);
+    } else {
+      onComplete();
+    }
+  };
+
+  const currentStep = ONBOARDING_STEPS[step];
+
+  return (
+    <motion.div 
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className={`absolute inset-0 z-[100] flex flex-col items-center justify-between p-8 transition-colors duration-700 ease-in-out ${currentStep.color}`}
+    >
+      {/* Illustration Area */}
+      <div className="flex-1 flex items-center justify-center w-full relative">
+        <div className="relative w-64 h-64 rounded-full bg-white/30 backdrop-blur-sm flex items-center justify-center mb-8">
+           <AnimatePresence mode="wait">
+             <motion.img 
+               key={currentStep.id}
+               src={currentStep.image} 
+               alt={currentStep.title}
+               initial={{ opacity: 0, scale: 0.8, x: 20 }}
+               animate={{ opacity: 1, scale: 1, x: 0 }}
+               exit={{ opacity: 0, scale: 0.8, x: -20 }}
+               transition={{ type: "spring", stiffness: 200, damping: 20 }}
+               className="w-56 h-56 object-contain drop-shadow-lg"
+             />
+           </AnimatePresence>
+        </div>
+      </div>
+
+      {/* Text Content */}
+      <div className="w-full space-y-8 mb-8">
+        <div className="text-center space-y-4">
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={currentStep.id}
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              transition={{ duration: 0.3 }}
+            >
+              <h1 className={`text-3xl font-serif font-bold mb-3 ${currentStep.textColor}`}>
+                {currentStep.title}
+              </h1>
+              <p className="text-muted-foreground/80 leading-relaxed font-medium">
+                {currentStep.description}
+              </p>
+            </motion.div>
+          </AnimatePresence>
+        </div>
+
+        {/* Pagination Dots */}
+        <div className="flex justify-center gap-2">
+          {ONBOARDING_STEPS.map((_, idx) => (
+            <div 
+              key={idx} 
+              className={`h-2 rounded-full transition-all duration-300 ${
+                idx === step ? `w-8 ${currentStep.textColor.replace('text', 'bg')}` : "w-2 bg-black/10"
+              }`} 
+            />
+          ))}
+        </div>
+
+        {/* Buttons */}
+        <div className="flex items-center gap-4 pt-4">
+          <Button 
+            variant="outline" 
+            className="flex-1 border-black/10 bg-transparent hover:bg-black/5 text-black/70"
+            onClick={onComplete}
+          >
+            Skip
+          </Button>
+          <Button 
+            className="flex-1 bg-neutral-900 text-white hover:bg-neutral-800"
+            onClick={handleNext}
+          >
+            {step === ONBOARDING_STEPS.length - 1 ? "Let's Start" : "Next"}
+          </Button>
+        </div>
+      </div>
+    </motion.div>
+  );
+};
+
 // --- Main App Component ---
 
 function App() {
+  const [showOnboarding, setShowOnboarding] = useState(true);
   const [mode, setMode] = useState<Mode>("voice");
   const [isCalling, setIsCalling] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
@@ -444,6 +567,13 @@ function App() {
       {/* Mobile Frame */}
       <div className="w-full h-full md:max-w-[400px] md:h-[850px] bg-background md:rounded-[2.5rem] shadow-2xl overflow-hidden relative border-4 border-neutral-800/5">
         
+        {/* Onboarding Overlay */}
+        <AnimatePresence>
+          {showOnboarding && (
+            <OnboardingView onComplete={() => setShowOnboarding(false)} />
+          )}
+        </AnimatePresence>
+
         {/* Shared Footer (Always Visible) */}
         <SharedFooter 
           persona={persona}
