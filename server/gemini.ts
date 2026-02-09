@@ -118,6 +118,24 @@ function parsePositiveInt(input: string | undefined, fallback: number): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+function resolveStartSensitivity(): StartSensitivity {
+  const raw = (process.env.GEMINI_LIVE_VAD_START_SENSITIVITY ?? "HIGH")
+    .trim()
+    .toUpperCase();
+  return raw === "LOW"
+    ? StartSensitivity.START_SENSITIVITY_LOW
+    : StartSensitivity.START_SENSITIVITY_HIGH;
+}
+
+function resolveEndSensitivity(): EndSensitivity {
+  const raw = (process.env.GEMINI_LIVE_VAD_END_SENSITIVITY ?? "HIGH")
+    .trim()
+    .toUpperCase();
+  return raw === "LOW"
+    ? EndSensitivity.END_SENSITIVITY_LOW
+    : EndSensitivity.END_SENSITIVITY_HIGH;
+}
+
 function parseBoundedNumber(
   input: string | undefined,
   fallback: number,
@@ -416,15 +434,15 @@ export async function createLiveToken(
               realtimeInputConfig: {
                 activityHandling: ActivityHandling.START_OF_ACTIVITY_INTERRUPTS,
                 automaticActivityDetection: {
-                  startOfSpeechSensitivity: StartSensitivity.START_SENSITIVITY_HIGH,
-                  endOfSpeechSensitivity: EndSensitivity.END_SENSITIVITY_LOW,
+                  startOfSpeechSensitivity: resolveStartSensitivity(),
+                  endOfSpeechSensitivity: resolveEndSensitivity(),
                   prefixPaddingMs: parsePositiveInt(
                     process.env.GEMINI_LIVE_VAD_PREFIX_PADDING_MS,
-                    120,
+                    80,
                   ),
                   silenceDurationMs: parsePositiveInt(
                     process.env.GEMINI_LIVE_VAD_SILENCE_MS,
-                    650,
+                    380,
                   ),
                 },
               },

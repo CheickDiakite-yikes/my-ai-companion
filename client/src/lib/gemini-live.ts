@@ -26,14 +26,50 @@ export interface GeminiLiveVoiceSessionStartParams {
 
 const INPUT_SAMPLE_RATE = 16000;
 const OUTPUT_SAMPLE_RATE = 24000;
-const PROCESSOR_BUFFER_SIZE = 4096;
+const PROCESSOR_BUFFER_SIZE = 2048;
 const VIDEO_FRAME_INTERVAL_MS = 1000;
 const VIDEO_MAX_EDGE = 640;
 const VIDEO_PERMISSION_TIMEOUT_MS = 12000;
 const TRANSCRIPT_DUPLICATE_WINDOW_MS = 1500;
+const TRANSCRIPT_FLUSH_DEBOUNCE_MS = 900;
+const TRANSCRIPT_OVERLAP_MIN_CHARS = 6;
 
 function normalizeText(input: string | undefined): string {
   return (input ?? "").replace(/\s+/g, " ").trim();
+}
+
+function findTranscriptOverlap(prefix: string, suffix: string): number {
+  const maxOverlap = Math.min(prefix.length, suffix.length);
+  for (let overlap = maxOverlap; overlap >= TRANSCRIPT_OVERLAP_MIN_CHARS; overlap -= 1) {
+    if (
+      prefix.slice(-overlap).toLowerCase() ===
+      suffix.slice(0, overlap).toLowerCase()
+    ) {
+      return overlap;
+    }
+  }
+  return 0;
+}
+
+function mergeTranscriptText(previous: string, incoming: string): string {
+  const existing = normalizeText(previous);
+  const next = normalizeText(incoming);
+
+  if (!existing) return next;
+  if (!next) return existing;
+
+  if (existing === next) return existing;
+  if (next.startsWith(existing)) return next;
+  if (existing.startsWith(next)) return existing;
+  if (existing.endsWith(next)) return existing;
+
+  const overlap = findTranscriptOverlap(existing, next);
+  const merged =
+    overlap > 0
+      ? `${existing} ${next.slice(overlap).trimStart()}`
+      : `${existing} ${next}`;
+
+  return normalizeText(merged);
 }
 
 function downsampleFloat32Buffer(
@@ -182,6 +218,10 @@ export class GeminiLiveVoiceSession {
     user: "",
     assistant: "",
   };
+  private transcriptFlushTimeoutBySender: Record<TranscriptSender, number | null> = {
+    user: null,
+    assistant: null,
+  };
   private lastTranscriptBySender: Record<
     TranscriptSender,
     { text: string; at: number } | null
@@ -212,6 +252,8 @@ export class GeminiLiveVoiceSession {
       user: "",
       assistant: "",
     };
+    this.clearTranscriptFlushTimeout("user");
+    this.clearTranscriptFlushTimeout("assistant");
     this.lastTranscriptBySender = {
       user: null,
       assistant: null,
@@ -244,6 +286,9 @@ export class GeminiLiveVoiceSession {
   }
 
   async stop(): Promise<void> {
+    this.flushPendingTranscript("user", "turn_complete");
+    this.flushPendingTranscript("assistant", "turn_complete");
+
     try {
       this.session?.sendRealtimeInput({ audioStreamEnd: true });
     } catch {
@@ -261,6 +306,8 @@ export class GeminiLiveVoiceSession {
       user: "",
       assistant: "",
     };
+    this.clearTranscriptFlushTimeout("user");
+    this.clearTranscriptFlushTimeout("assistant");
     this.lastTranscriptBySender = {
       user: null,
       assistant: null,
@@ -639,32 +686,54 @@ export class GeminiLiveVoiceSession {
     const text = normalizeText(transcript.text);
     if (!text) return;
 
-    this.pendingTranscriptBySender[sender] = text;
+    const mergedText = mergeTranscriptText(
+      this.pendingTranscriptBySender[sender],
+      text,
+    );
+    this.pendingTranscriptBySender[sender] = mergedText;
     this.debug("live.transcript.received", {
       sender,
       textLength: text.length,
+      mergedTextLength: mergedText.length,
       finished: Boolean(transcript.finished),
     });
 
     if (transcript.finished) {
-      this.flushPendingTranscript(sender, "finished");
+      this.scheduleTranscriptFlush(sender);
     }
   }
 
   private flushPendingTranscript(
     sender: TranscriptSender,
-    reason: "finished" | "turn_complete",
+    reason: "finished" | "turn_complete" | "idle_timeout",
   ): void {
+    this.clearTranscriptFlushTimeout(sender);
     const pendingText = this.pendingTranscriptBySender[sender];
     if (!pendingText) return;
     this.pendingTranscriptBySender[sender] = "";
     this.emitTranscript(sender, pendingText, reason);
   }
 
+  private scheduleTranscriptFlush(sender: TranscriptSender): void {
+    this.clearTranscriptFlushTimeout(sender);
+    this.transcriptFlushTimeoutBySender[sender] = window.setTimeout(() => {
+      this.transcriptFlushTimeoutBySender[sender] = null;
+      this.flushPendingTranscript(sender, "finished");
+    }, TRANSCRIPT_FLUSH_DEBOUNCE_MS);
+  }
+
+  private clearTranscriptFlushTimeout(sender: TranscriptSender): void {
+    const timeout = this.transcriptFlushTimeoutBySender[sender];
+    if (timeout !== null) {
+      window.clearTimeout(timeout);
+      this.transcriptFlushTimeoutBySender[sender] = null;
+    }
+  }
+
   private emitTranscript(
     sender: TranscriptSender,
     rawText: string | undefined,
-    reason: "finished" | "turn_complete",
+    reason: "finished" | "turn_complete" | "idle_timeout",
   ): void {
     const text = normalizeText(rawText);
     if (!text) return;
