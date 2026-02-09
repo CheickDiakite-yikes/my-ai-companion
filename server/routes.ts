@@ -93,6 +93,85 @@ const CHAT_IMAGE_MAX_BYTES = parsePositiveInt(
   8 * 1024 * 1024,
 );
 
+function truncateReason(input: string, maxLen = 180): string {
+  if (input.length <= maxLen) return input;
+  return `${input.slice(0, maxLen)}...[truncated]`;
+}
+
+function summarizeLiveTokenFailure(error: unknown): {
+  reason: string;
+  upstreamStatus?: number;
+  upstreamCode?: string;
+  triedModels?: string[];
+} {
+  const asObj =
+    error && typeof error === "object"
+      ? (error as Record<string, unknown>)
+      : undefined;
+
+  const upstreamStatus =
+    typeof asObj?.status === "number"
+      ? asObj.status
+      : typeof asObj?.statusCode === "number"
+        ? asObj.statusCode
+        : typeof asObj?.code === "number"
+          ? asObj.code
+          : undefined;
+
+  const upstreamCode =
+    typeof asObj?.code === "string" ? asObj.code : undefined;
+  const message =
+    error instanceof Error
+      ? error.message
+      : typeof asObj?.message === "string"
+        ? asObj.message
+        : String(error ?? "");
+  const lowered = message.toLowerCase();
+
+  let reason = "live_token_generation_failed";
+  if (lowered.includes("enoent") && lowered.includes("zee-persona.md")) {
+    reason = "persona_prompt_missing";
+  } else if (lowered.includes("gemini_api_key")) {
+    reason = "missing_gemini_api_key";
+  } else if (
+    upstreamStatus === 401 ||
+    upstreamStatus === 403 ||
+    lowered.includes("permission denied") ||
+    lowered.includes("unauthorized")
+  ) {
+    reason = "gemini_auth_or_permission";
+  } else if (
+    upstreamStatus === 429 ||
+    lowered.includes("quota") ||
+    lowered.includes("rate limit")
+  ) {
+    reason = "gemini_quota_or_rate_limit";
+  } else if (
+    upstreamStatus === 400 ||
+    upstreamStatus === 404 ||
+    lowered.includes("model") ||
+    lowered.includes("unsupported") ||
+    lowered.includes("invalid argument")
+  ) {
+    reason = "gemini_model_or_config_error";
+  } else if (upstreamStatus && upstreamStatus >= 500) {
+    reason = "gemini_upstream_unavailable";
+  }
+
+  const triedModels = Array.isArray(asObj?.triedLiveModels)
+    ? (asObj?.triedLiveModels.filter(
+        (value): value is string => typeof value === "string" && value.length > 0,
+      ) as string[])
+    : undefined;
+
+  return {
+    reason: truncateReason(reason),
+    upstreamStatus,
+    upstreamCode: upstreamCode ? truncateReason(upstreamCode, 40) : undefined,
+    triedModels: triedModels?.length ? triedModels : undefined,
+  };
+}
+
 function normalizePersona(_: unknown): "Zee" {
   return DEFAULT_PERSONA;
 }
@@ -701,9 +780,14 @@ export async function registerRoutes(
       }
       traceError(req, "live.token.failed", error, {
         elapsedMs: elapsedMs(startedAt),
+        ...summarizeLiveTokenFailure(error),
       });
+      const failure = summarizeLiveTokenFailure(error);
       res.status(502).json({
         message: "Failed to generate Live API token",
+        reason: failure.reason,
+        upstreamStatus: failure.upstreamStatus ?? null,
+        upstreamCode: failure.upstreamCode ?? null,
         traceId: getTraceId(req),
       });
     }

@@ -41,10 +41,17 @@ interface TokenUsageSnapshot {
 
 const DEFAULT_TEXT_MODEL = "gemini-3-flash-preview";
 const DEFAULT_LIVE_MODEL = "gemini-2.5-flash-native-audio-preview-12-2025";
+const DEFAULT_ZEE_PROMPT_FALLBACK = [
+  "You are Zee, a warm, emotionally intelligent AI companion.",
+  "Stay helpful, grounded, and conversational.",
+  "When unclear, ask a brief clarifying question before assuming details.",
+  "Keep responses concise unless the user asks for depth.",
+].join(" ");
 
 let geminiClient: GoogleGenAI | null = null;
 let geminiAlphaClient: GoogleGenAI | null = null;
 let zeePromptCache: string | null = null;
+let promptFallbackWarningLogged = false;
 
 interface SanitizedAssistantText {
   text: string;
@@ -69,6 +76,23 @@ function resolveTextModel(): string {
 
 function resolveLiveModel(): string {
   return normalizeModelId(process.env.GEMINI_LIVE_MODEL ?? DEFAULT_LIVE_MODEL);
+}
+
+function resolveLiveModelCandidates(): string[] {
+  const primary = resolveLiveModel();
+  const configuredFallbacks = (process.env.GEMINI_LIVE_MODEL_FALLBACKS ?? "")
+    .split(",")
+    .map((value) => normalizeModelId(value.trim()))
+    .filter((value) => value.length > 0);
+
+  const deduped: string[] = [];
+  const seen = new Set<string>();
+  for (const candidate of [primary, ...configuredFallbacks]) {
+    if (seen.has(candidate)) continue;
+    seen.add(candidate);
+    deduped.push(candidate);
+  }
+  return deduped;
 }
 
 function getGeminiClient(): GoogleGenAI {
@@ -120,11 +144,27 @@ function compactUsage(
 async function loadZeePrompt(): Promise<string> {
   if (zeePromptCache) return zeePromptCache;
   const filePath = resolve(process.cwd(), "zee-persona.md");
-  const rawPrompt = await readFile(filePath, "utf8");
-  zeePromptCache = rawPrompt
-    .replace(/^\$\{chainOfThoughtInstructions\}\s*$/gm, "")
-    .replace(/^\$\{outputFormatInstructions\}\s*$/gm, "")
-    .trim();
+
+  try {
+    const rawPrompt = await readFile(filePath, "utf8");
+    const cleanedPrompt = rawPrompt
+      .replace(/^\$\{chainOfThoughtInstructions\}\s*$/gm, "")
+      .replace(/^\$\{outputFormatInstructions\}\s*$/gm, "")
+      .trim();
+
+    zeePromptCache =
+      cleanedPrompt.length > 0 ? cleanedPrompt : DEFAULT_ZEE_PROMPT_FALLBACK;
+  } catch (error) {
+    zeePromptCache = DEFAULT_ZEE_PROMPT_FALLBACK;
+    if (!promptFallbackWarningLogged) {
+      promptFallbackWarningLogged = true;
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(
+        `[gemini] Failed to load zee-persona.md; using fallback prompt. reason=${message}`,
+      );
+    }
+  }
+
   return zeePromptCache;
 }
 
@@ -313,7 +353,7 @@ export async function createLiveToken(
   input: CreateLiveTokenInput,
 ): Promise<CreateLiveTokenResult> {
   const ai = getGeminiAlphaClient();
-  const model = resolveLiveModel();
+  const modelCandidates = resolveLiveModelCandidates();
   const personaPrompt = await getPersonaPrompt(input.persona);
   const responseModality = input.responseModality ?? "AUDIO";
   const voiceName = input.voiceName ?? DEFAULT_LIVE_VOICE;
@@ -340,51 +380,92 @@ export async function createLiveToken(
     "outputAudioTranscription",
   ];
 
-  const token = await ai.authTokens.create({
-    config: {
-      uses,
-      expireTime,
-      newSessionExpireTime,
-      liveConnectConstraints: {
-        model,
+  let lastError: unknown = null;
+  let resolvedModel = modelCandidates[0];
+  let token:
+    | Awaited<ReturnType<GoogleGenAI["authTokens"]["create"]>>
+    | null = null;
+
+  for (let index = 0; index < modelCandidates.length; index += 1) {
+    const model = modelCandidates[index];
+    resolvedModel = model;
+    try {
+      token = await ai.authTokens.create({
         config: {
-          responseModalities: [
-            responseModality === "TEXT" ? Modality.TEXT : Modality.AUDIO,
-          ],
-          systemInstruction: personaPrompt,
-          speechConfig:
-            responseModality === "AUDIO"
-              ? {
-                  voiceConfig: {
-                    prebuiltVoiceConfig: {
-                      voiceName,
-                    },
-                  },
-                }
-              : undefined,
-          // These defaults prioritize natural turn-taking and low interruption latency.
-          realtimeInputConfig: {
-            activityHandling: ActivityHandling.START_OF_ACTIVITY_INTERRUPTS,
-            automaticActivityDetection: {
-              startOfSpeechSensitivity: StartSensitivity.START_SENSITIVITY_HIGH,
-              endOfSpeechSensitivity: EndSensitivity.END_SENSITIVITY_LOW,
-              prefixPaddingMs: parsePositiveInt(
-                process.env.GEMINI_LIVE_VAD_PREFIX_PADDING_MS,
-                120,
-              ),
-              silenceDurationMs: parsePositiveInt(
-                process.env.GEMINI_LIVE_VAD_SILENCE_MS,
-                650,
-              ),
+          uses,
+          expireTime,
+          newSessionExpireTime,
+          liveConnectConstraints: {
+            model,
+            config: {
+              responseModalities: [
+                responseModality === "TEXT" ? Modality.TEXT : Modality.AUDIO,
+              ],
+              systemInstruction: personaPrompt,
+              speechConfig:
+                responseModality === "AUDIO"
+                  ? {
+                      voiceConfig: {
+                        prebuiltVoiceConfig: {
+                          voiceName,
+                        },
+                      },
+                    }
+                  : undefined,
+              // These defaults prioritize natural turn-taking and low interruption latency.
+              realtimeInputConfig: {
+                activityHandling: ActivityHandling.START_OF_ACTIVITY_INTERRUPTS,
+                automaticActivityDetection: {
+                  startOfSpeechSensitivity: StartSensitivity.START_SENSITIVITY_HIGH,
+                  endOfSpeechSensitivity: EndSensitivity.END_SENSITIVITY_LOW,
+                  prefixPaddingMs: parsePositiveInt(
+                    process.env.GEMINI_LIVE_VAD_PREFIX_PADDING_MS,
+                    120,
+                  ),
+                  silenceDurationMs: parsePositiveInt(
+                    process.env.GEMINI_LIVE_VAD_SILENCE_MS,
+                    650,
+                  ),
+                },
+              },
+              inputAudioTranscription: {},
+              outputAudioTranscription: {},
             },
           },
-          inputAudioTranscription: {},
-          outputAudioTranscription: {},
+          lockAdditionalFields,
         },
-      },
-      lockAdditionalFields,
-    },
-  });
+      });
+      break;
+    } catch (error) {
+      lastError = error;
+      const message = error instanceof Error ? error.message.toLowerCase() : "";
+      const status =
+        typeof (error as { status?: unknown } | null)?.status === "number"
+          ? (error as { status: number }).status
+          : typeof (error as { statusCode?: unknown } | null)?.statusCode === "number"
+            ? (error as { statusCode: number }).statusCode
+            : undefined;
+      const isModelSelectionFailure =
+        status === 400 ||
+        status === 404 ||
+        (status === 403 && message.includes("model")) ||
+        message.includes("model") ||
+        message.includes("unsupported") ||
+        message.includes("not found") ||
+        message.includes("invalid argument");
+
+      if (!isModelSelectionFailure || index >= modelCandidates.length - 1) {
+        break;
+      }
+    }
+  }
+
+  if (!token) {
+    if (lastError && typeof lastError === "object" && lastError !== null) {
+      (lastError as Record<string, unknown>).triedLiveModels = modelCandidates;
+    }
+    throw (lastError ?? new Error("Gemini did not return a live auth token"));
+  }
 
   if (!token.name) {
     throw new Error("Gemini did not return an ephemeral token name");
@@ -392,7 +473,7 @@ export async function createLiveToken(
 
   return {
     tokenName: token.name,
-    model,
+    model: resolvedModel,
     responseModality,
     voiceName,
     expireTime,
