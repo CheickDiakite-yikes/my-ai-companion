@@ -1391,8 +1391,11 @@ const SharedHeader = ({
               >
                 <div
                   className={cn(
-                    "w-6 h-6 rounded-full flex items-center justify-center text-[10px] text-white font-bold",
-                    voice.style === "feminine" ? "bg-pink-500/80" : "bg-sky-500/80",
+                    "w-7 h-7 rounded-full flex items-center justify-center text-[10px] font-bold border",
+                    voice.style === "feminine"
+                      ? "bg-[#DAA112]/15 text-[#DAA112] border-[#DAA112]/30"
+                      : "bg-[#809276]/15 text-[#809276] border-[#809276]/30",
+                    selectedVoice === voice.id && "ring-1 ring-white/30",
                   )}
                 >
                   {voice.id.slice(0, 1)}
