@@ -1040,7 +1040,7 @@ const ProfileView = ({
         </Button>
       </div>
 
-      <div className="px-6 -mt-12 relative z-10 flex flex-col h-full">
+      <div className="px-6 -mt-12 relative z-10 flex flex-col min-h-0" style={{ height: "calc(100% - 12rem + 3rem)" }}>
         <div className="flex flex-col items-center mb-6">
           <label
             htmlFor={avatarInputId}
@@ -1089,7 +1089,7 @@ const ProfileView = ({
           </div>
         </div>
 
-        <ScrollArea className="flex-1 -mx-6 px-6 pb-6">
+        <ScrollArea className="flex-1 min-h-0 -mx-6 px-6 pb-6">
           <form onSubmit={onSubmit} className="space-y-6">
             <section>
               <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3">
