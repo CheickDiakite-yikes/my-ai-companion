@@ -1060,25 +1060,14 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onProfile, persona, setP
           <div className="flex-1 flex flex-col items-center justify-center relative">
             {isActive ? (
               <div className="w-full h-full flex items-center justify-center px-8">
-                <div className="relative flex items-center justify-center gap-1.5 h-32 w-full">
-                  {[...Array(8)].map((_, i) => (
-                    <motion.div
-                      key={i}
-                      className="w-4 bg-[#DAA112] rounded-full opacity-80"
-                      animate={{
-                        height: ["20%", "80%", "20%"],
-                        backgroundColor: ["#DAA112", "#FFF", "#DAA112"]
-                      }}
-                      transition={{
-                        duration: 1 + Math.random() * 0.5,
-                        repeat: Infinity,
-                        delay: i * 0.1,
-                        ease: "easeInOut"
-                      }}
-                    />
-                  ))}
+                <div
+                  className={cn(
+                    "relative flex w-full items-center justify-center",
+                    isVideoEnabled ? "h-[56vh]" : "h-32",
+                  )}
+                >
                   {isVideoEnabled && (
-                    <div className="absolute right-2 top-2 w-28 h-40 rounded-xl overflow-hidden border border-white/20 shadow-xl bg-black/40">
+                    <div className="absolute left-1/2 top-1/2 h-[52vh] max-h-[460px] w-[82%] max-w-[340px] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-[2rem] border border-white/20 bg-black/40 shadow-2xl">
                       <video
                         ref={videoPreviewRef}
                         autoPlay
@@ -1086,11 +1075,38 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onProfile, persona, setP
                         playsInline
                         className="h-full w-full object-cover"
                       />
-                      <div className="absolute bottom-0 left-0 right-0 bg-black/60 px-1 py-0.5 text-center text-[10px] text-white/90">
+                      <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/65 to-transparent px-3 pb-3 pt-8 text-center text-sm text-white/95">
                         Camera on
                       </div>
                     </div>
                   )}
+                  <div
+                    className={cn(
+                      "z-10 flex items-center justify-center gap-1.5",
+                      isVideoEnabled &&
+                        "absolute bottom-5 left-1/2 -translate-x-1/2 rounded-full bg-black/35 px-4 py-3 backdrop-blur-sm",
+                    )}
+                  >
+                    {[...Array(8)].map((_, i) => (
+                      <motion.div
+                        key={i}
+                        className={cn(
+                          "rounded-full opacity-80",
+                          isVideoEnabled ? "w-3" : "w-4",
+                        )}
+                        animate={{
+                          height: ["20%", "80%", "20%"],
+                          backgroundColor: ["#DAA112", "#FFF", "#DAA112"]
+                        }}
+                        transition={{
+                          duration: 1 + Math.random() * 0.5,
+                          repeat: Infinity,
+                          delay: i * 0.1,
+                          ease: "easeInOut"
+                        }}
+                      />
+                    ))}
+                  </div>
                 </div>
               </div>
             ) : (
