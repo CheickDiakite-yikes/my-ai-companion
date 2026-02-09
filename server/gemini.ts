@@ -160,7 +160,8 @@ function compactUsage(
 }
 
 async function loadZeePrompt(): Promise<string> {
-  if (zeePromptCache) return zeePromptCache;
+  const usePromptCache = process.env.NODE_ENV === "production";
+  if (usePromptCache && zeePromptCache) return zeePromptCache;
   const filePath = resolve(process.cwd(), "zee-persona.md");
 
   try {
@@ -170,10 +171,16 @@ async function loadZeePrompt(): Promise<string> {
       .replace(/^\$\{outputFormatInstructions\}\s*$/gm, "")
       .trim();
 
-    zeePromptCache =
+    const resolvedPrompt =
       cleanedPrompt.length > 0 ? cleanedPrompt : DEFAULT_ZEE_PROMPT_FALLBACK;
+    if (usePromptCache) {
+      zeePromptCache = resolvedPrompt;
+    }
+    return resolvedPrompt;
   } catch (error) {
-    zeePromptCache = DEFAULT_ZEE_PROMPT_FALLBACK;
+    if (usePromptCache) {
+      zeePromptCache = DEFAULT_ZEE_PROMPT_FALLBACK;
+    }
     if (!promptFallbackWarningLogged) {
       promptFallbackWarningLogged = true;
       const message = error instanceof Error ? error.message : String(error);
@@ -181,9 +188,8 @@ async function loadZeePrompt(): Promise<string> {
         `[gemini] Failed to load zee-persona.md; using fallback prompt. reason=${message}`,
       );
     }
+    return DEFAULT_ZEE_PROMPT_FALLBACK;
   }
-
-  return zeePromptCache;
 }
 
 export async function getPersonaPrompt(persona: Persona): Promise<string> {
