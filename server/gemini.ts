@@ -11,6 +11,23 @@ import { resolve } from "path";
 
 type Persona = "Zee";
 export type LiveVoiceName = "Aoede" | "Kore" | "Charon" | "Fenrir";
+export type ResponseStylePreset =
+  | "concise"
+  | "balanced"
+  | "expressive"
+  | "playful";
+
+export interface TextPersonalizationProfile {
+  displayName?: string | null;
+  bio?: string | null;
+  location?: string | null;
+  age?: number | null;
+  profession?: string | null;
+  gender?: string | null;
+  genderOther?: string | null;
+  responseStylePreset?: ResponseStylePreset | null;
+  responseStyleNote?: string | null;
+}
 
 export const DEFAULT_PERSONA: Persona = "Zee";
 export const LIVE_VOICE_NAMES: readonly LiveVoiceName[] = [
@@ -20,6 +37,8 @@ export const LIVE_VOICE_NAMES: readonly LiveVoiceName[] = [
   "Fenrir",
 ] as const;
 export const DEFAULT_LIVE_VOICE: LiveVoiceName = "Aoede";
+export const ZEE_SPLIT_TOKEN = "[[ZEE_SPLIT]]";
+const MAX_MULTIPART_SEGMENTS = 3;
 
 interface ConversationAttachmentMessage {
   mimeType: string;
@@ -52,6 +71,17 @@ let geminiClient: GoogleGenAI | null = null;
 let geminiAlphaClient: GoogleGenAI | null = null;
 let zeePromptCache: string | null = null;
 let promptFallbackWarningLogged = false;
+
+const STYLE_PRESET_INSTRUCTIONS: Record<ResponseStylePreset, string> = {
+  concise:
+    "Prefer compact, punchy replies. Use short messages often and avoid unnecessary detail.",
+  balanced:
+    "Balance warmth and brevity. Keep replies natural, useful, and moderately short.",
+  expressive:
+    "Be emotionally vivid and conversational while staying grounded and clear.",
+  playful:
+    "Use light humor and friendly playful tone when context allows, but stay respectful.",
+};
 
 interface SanitizedAssistantText {
   text: string;
@@ -159,6 +189,179 @@ function compactUsage(
   };
 }
 
+function parseBooleanFlag(input: string | undefined, fallback: boolean): boolean {
+  if (typeof input !== "string") return fallback;
+  const normalized = input.trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "off"].includes(normalized)) return false;
+  return fallback;
+}
+
+function cleanTextInput(value: string | null | undefined): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function buildProfileContext(profile: TextPersonalizationProfile | null | undefined): string {
+  if (!profile) return "";
+
+  const lines: string[] = [];
+
+  const displayName = cleanTextInput(profile.displayName);
+  if (displayName) lines.push(`- Preferred name: ${displayName}`);
+
+  const location = cleanTextInput(profile.location);
+  if (location) lines.push(`- Location: ${location}`);
+
+  if (typeof profile.age === "number" && Number.isFinite(profile.age)) {
+    lines.push(`- Age: ${profile.age}`);
+  }
+
+  const profession = cleanTextInput(profile.profession);
+  if (profession) lines.push(`- Profession: ${profession}`);
+
+  const gender = cleanTextInput(profile.gender);
+  if (gender) lines.push(`- Gender identity: ${gender}`);
+
+  const genderOther = cleanTextInput(profile.genderOther);
+  if (genderOther) lines.push(`- Gender detail: ${genderOther}`);
+
+  const bio = cleanTextInput(profile.bio);
+  if (bio) lines.push(`- Bio: ${bio}`);
+
+  if (lines.length === 0) return "";
+  return `USER PROFILE CONTEXT (optional fields user shared):\n${lines.join("\n")}`;
+}
+
+function resolveResponseStyle(
+  profile: TextPersonalizationProfile | null | undefined,
+): ResponseStylePreset {
+  const style = profile?.responseStylePreset;
+  if (style && style in STYLE_PRESET_INSTRUCTIONS) {
+    return style;
+  }
+  return "balanced";
+}
+
+function buildTextPromptAdditions(params: {
+  profileContext?: TextPersonalizationProfile | null;
+  enableMultipart: boolean;
+}): string {
+  const sections: string[] = [];
+
+  const profileBlock = buildProfileContext(params.profileContext ?? null);
+  if (profileBlock) {
+    sections.push(profileBlock);
+  }
+
+  const style = resolveResponseStyle(params.profileContext ?? null);
+  const styleLines = [
+    `TEXT STYLE PREFERENCE: ${style.toUpperCase()}`,
+    `- ${STYLE_PRESET_INSTRUCTIONS[style]}`,
+  ];
+  const styleNote = cleanTextInput(params.profileContext?.responseStyleNote);
+  if (styleNote) {
+    styleLines.push(`- User custom note: ${styleNote}`);
+  }
+  sections.push(styleLines.join("\n"));
+
+  sections.push(
+    [
+      "TEXT CONVERSATION BEHAVIOR:",
+      "- Sound like natural human texting and keep pacing dynamic.",
+      "- Many turns should be short. Use one-liners when that feels right.",
+      "- It is okay to send 1-3 messages in one turn when that feels more human (reaction + follow-up).",
+      params.enableMultipart
+        ? `- For multi-message turns, separate each message with ${ZEE_SPLIT_TOKEN}.`
+        : "- Return one assistant message per turn.",
+      `- Never produce more than ${MAX_MULTIPART_SEGMENTS} messages for a single turn.`,
+      "- Avoid overlong replies unless the user explicitly asks for depth.",
+      "- Use emojis naturally when they improve tone.",
+    ].join("\n"),
+  );
+
+  sections.push(
+    [
+      "GROUNDING AND MEMORY SAFETY:",
+      "- Only reference facts that appear in conversation history or the user profile context above.",
+      "- If uncertain whether a memory is real, ask a brief clarifying question.",
+      "- Do not invent memories, journal entries, previous events, or private details.",
+    ].join("\n"),
+  );
+
+  return sections.join("\n\n");
+}
+
+export function splitAssistantReplyParts(
+  replyText: string,
+  maxParts = MAX_MULTIPART_SEGMENTS,
+): string[] {
+  const normalized = replyText.trim();
+  if (!normalized) return [];
+
+  const pieces = normalized
+    .split(ZEE_SPLIT_TOKEN)
+    .map((segment) => segment.trim())
+    .filter((segment) => segment.length > 0);
+
+  if (pieces.length === 0) return [normalized];
+  if (pieces.length <= maxParts) return pieces;
+
+  const head = pieces.slice(0, maxParts - 1);
+  const tail = pieces.slice(maxParts - 1).join(" ");
+  return [...head, tail];
+}
+
+function buildGroundingSnapshot(params: {
+  messages: ConversationMessage[];
+  profileContext?: TextPersonalizationProfile | null;
+}): string {
+  const messageText = params.messages
+    .map((message) => message.text?.trim() ?? "")
+    .filter((text) => text.length > 0)
+    .join("\n")
+    .toLowerCase();
+
+  const profileText = [
+    params.profileContext?.displayName,
+    params.profileContext?.bio,
+    params.profileContext?.location,
+    params.profileContext?.profession,
+    params.profileContext?.gender,
+    params.profileContext?.genderOther,
+    params.profileContext?.responseStyleNote,
+  ]
+    .map((value) => cleanTextInput(value ?? null))
+    .filter((value): value is string => Boolean(value))
+    .join("\n")
+    .toLowerCase();
+
+  return `${messageText}\n${profileText}`;
+}
+
+function detectUngroundedSignals(replyText: string, groundingSnapshot: string): string[] {
+  const normalized = replyText.toLowerCase();
+  const flagged: string[] = [];
+
+  const signalChecks: Array<{ label: string; phrase: string }> = [
+    { label: "journal_reference", phrase: "journal" },
+    { label: "focus_scores_reference", phrase: "focus score" },
+    { label: "stagnant_reference", phrase: "stagnant" },
+    { label: "other_day_reference", phrase: "the other day" },
+    { label: "you_mentioned_reference", phrase: "you mentioned" },
+  ];
+
+  for (const signal of signalChecks) {
+    if (!normalized.includes(signal.phrase)) continue;
+    if (!groundingSnapshot.includes(signal.phrase)) {
+      flagged.push(signal.label);
+    }
+  }
+
+  return flagged;
+}
+
 async function loadZeePrompt(): Promise<string> {
   const usePromptCache = process.env.NODE_ENV === "production";
   if (usePromptCache && zeePromptCache) return zeePromptCache;
@@ -201,6 +404,28 @@ OUTPUT SAFETY RULES:
 - Return only user-facing assistant text.
 - Never output JSON objects for tools or function calls.
 - Never include internal fields like action, action_input, thought, tool, function_call, or arguments.`;
+}
+
+async function getTextPersonaPrompt(params: {
+  persona: Persona;
+  profileContext?: TextPersonalizationProfile | null;
+  enableMultipart: boolean;
+}): Promise<string> {
+  const basePrompt = await loadZeePrompt();
+  const additions = buildTextPromptAdditions({
+    profileContext: params.profileContext,
+    enableMultipart: params.enableMultipart,
+  });
+
+  return `${basePrompt}
+
+${additions}
+
+OUTPUT SAFETY RULES:
+- Return only user-facing assistant text.
+- Never output JSON objects for tools or function calls.
+- Never include internal fields like action, action_input, thought, tool, function_call, or arguments.
+- Do not include the delimiter token in final visible text unless splitting multi-message turns.`;
 }
 
 function findLeadingJsonObjectEnd(value: string): number | null {
@@ -354,6 +579,110 @@ function buildConversationContents(messages: ConversationMessage[]) {
       };
     })
     .filter((content): content is { role: "user" | "model"; parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> } => Boolean(content));
+}
+
+export interface EnforceGroundedReplyInput {
+  persona: Persona;
+  messages: ConversationMessage[];
+  replyText: string;
+  profileContext?: TextPersonalizationProfile | null;
+}
+
+export interface EnforceGroundedReplyResult {
+  replyText: string;
+  rewritten: boolean;
+  signals: string[];
+}
+
+export async function enforceGroundedReply(
+  input: EnforceGroundedReplyInput,
+): Promise<EnforceGroundedReplyResult> {
+  const originalReply = input.replyText.trim();
+  if (!originalReply) {
+    return {
+      replyText: "",
+      rewritten: false,
+      signals: [],
+    };
+  }
+
+  const groundingSnapshot = buildGroundingSnapshot({
+    messages: input.messages,
+    profileContext: input.profileContext,
+  });
+  const signals = detectUngroundedSignals(originalReply, groundingSnapshot);
+  if (signals.length === 0) {
+    return {
+      replyText: originalReply,
+      rewritten: false,
+      signals: [],
+    };
+  }
+
+  const ai = getGeminiClient();
+  const model = resolveTextModel();
+  const basePrompt = await loadZeePrompt();
+
+  try {
+    const rewrite = await ai.models.generateContent({
+      model,
+      contents: [
+        {
+          role: "user",
+          parts: [
+            {
+              text: [
+                "Rewrite the assistant reply so it stays natural, warm, and grounded.",
+                "Remove any claim that is not directly supported by the provided context.",
+                "Keep the user's language style preference in mind.",
+                "Do not add new facts.",
+                "",
+                `Context:\n${groundingSnapshot.slice(0, 3000)}`,
+                "",
+                `Original reply:\n${originalReply}`,
+              ].join("\n"),
+            },
+          ],
+        },
+      ],
+      config: {
+        systemInstruction: `${basePrompt}
+
+GROUNDING ENFORCEMENT:
+- Keep the rewrite faithful to known context only.
+- If context is missing for a claimed memory, remove that memory claim.
+- Preserve conversational tone and empathy.`,
+        temperature: 0.35,
+        topP: 0.9,
+        maxOutputTokens: parsePositiveInt(
+          process.env.GEMINI_TEXT_MAX_OUTPUT_TOKENS,
+          1024,
+        ),
+      },
+    });
+
+    const sanitized = sanitizeAssistantReplyText(rewrite.text ?? "");
+    const rewrittenText = sanitized.text.trim();
+    if (!rewrittenText) {
+      return {
+        replyText: originalReply,
+        rewritten: false,
+        signals,
+      };
+    }
+
+    return {
+      replyText: rewrittenText,
+      rewritten: true,
+      signals,
+    };
+  } catch {
+    return {
+      replyText: originalReply,
+      rewritten: false,
+      signals,
+    };
+  }
 }
 
 export interface CreateLiveTokenInput {
@@ -510,6 +839,8 @@ export async function createLiveToken(
 export interface GenerateTextReplyInput {
   persona: Persona;
   messages: ConversationMessage[];
+  profileContext?: TextPersonalizationProfile | null;
+  enableMultipart?: boolean;
 }
 
 export interface GenerateTextReplyResult {
@@ -547,7 +878,14 @@ export async function generateTextReply(
 ): Promise<GenerateTextReplyResult> {
   const ai = getGeminiClient();
   const model = resolveTextModel();
-  const personaPrompt = await getPersonaPrompt(input.persona);
+  const enableMultipart =
+    input.enableMultipart ??
+    parseBooleanFlag(process.env.ENABLE_MULTIPART_TEXT, true);
+  const personaPrompt = await getTextPersonaPrompt({
+    persona: input.persona,
+    profileContext: input.profileContext,
+    enableMultipart,
+  });
   const contents = buildConversationContents(input.messages);
 
   if (contents.length === 0) {
@@ -579,7 +917,14 @@ export async function generateTextReplyStream(
 ): Promise<GenerateTextReplyStreamResult> {
   const ai = getGeminiClient();
   const model = resolveTextModel();
-  const personaPrompt = await getPersonaPrompt(input.persona);
+  const enableMultipart =
+    input.enableMultipart ??
+    parseBooleanFlag(process.env.ENABLE_MULTIPART_TEXT, true);
+  const personaPrompt = await getTextPersonaPrompt({
+    persona: input.persona,
+    profileContext: input.profileContext,
+    enableMultipart,
+  });
   const contents = buildConversationContents(input.messages);
 
   if (contents.length === 0) {

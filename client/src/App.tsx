@@ -47,6 +47,8 @@ interface MessageData {
   id: string;
   conversationId: string;
   sender: string;
+  turnId?: string | null;
+  partIndex?: number | null;
   text: string;
   createdAt: string | null;
   attachments?: MessageAttachmentData[];
@@ -79,11 +81,20 @@ interface ChatStreamAckEvent {
 interface ChatStreamDeltaEvent {
   type: "delta";
   text: string;
+  partIndex?: number;
+}
+
+interface ChatStreamPartFinalEvent {
+  type: "part_final";
+  turnId: string;
+  partIndex: number;
+  message: MessageData;
 }
 
 interface ChatStreamFinalEvent {
   type: "final";
   assistantMessage: MessageData;
+  assistantMessages?: MessageData[];
   model?: string;
   usage?: unknown;
   elapsedMs?: number;
@@ -98,8 +109,35 @@ interface ChatStreamErrorEvent {
 type ChatStreamEvent =
   | ChatStreamAckEvent
   | ChatStreamDeltaEvent
+  | ChatStreamPartFinalEvent
   | ChatStreamFinalEvent
   | ChatStreamErrorEvent;
+
+type ResponseStylePreset = "concise" | "balanced" | "expressive" | "playful";
+type GenderOption =
+  | "female"
+  | "male"
+  | "non_binary"
+  | "other"
+  | "prefer_not_to_say";
+
+interface UserProfileData {
+  id: string | null;
+  userId: string;
+  displayName: string | null;
+  bio: string | null;
+  location: string | null;
+  age: number | null;
+  profession: string | null;
+  gender: GenderOption | null;
+  genderOther: string | null;
+  responseStylePreset: ResponseStylePreset;
+  responseStyleNote: string | null;
+  avatarAttachmentId: string | null;
+  avatarUrl: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+}
 
 function createLocalId(prefix: string): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -852,7 +890,134 @@ const SharedFooter = ({
   );
 };
 
-const ProfileView = ({ onClose, user, onLogout }: { onClose: () => void; user: any; onLogout: () => void }) => {
+const RESPONSE_STYLE_OPTIONS: Array<{
+  value: ResponseStylePreset;
+  label: string;
+  description: string;
+}> = [
+  { value: "concise", label: "Concise", description: "Short, direct replies" },
+  { value: "balanced", label: "Balanced", description: "Natural mix of short and detailed" },
+  { value: "expressive", label: "Expressive", description: "More emotional and vivid" },
+  { value: "playful", label: "Playful", description: "Light humor and banter" },
+];
+
+const GENDER_OPTIONS: Array<{ value: GenderOption; label: string }> = [
+  { value: "female", label: "Female" },
+  { value: "male", label: "Male" },
+  { value: "non_binary", label: "Non-binary" },
+  { value: "other", label: "Other" },
+  { value: "prefer_not_to_say", label: "Prefer not to say" },
+];
+
+const ProfileView = ({
+  onClose,
+  user,
+  profile,
+  isProfileLoading,
+  isSaving,
+  isUploadingAvatar,
+  onSaveProfile,
+  onUploadAvatar,
+  onLogout,
+}: {
+  onClose: () => void;
+  user: any;
+  profile: UserProfileData | undefined;
+  isProfileLoading: boolean;
+  isSaving: boolean;
+  isUploadingAvatar: boolean;
+  onSaveProfile: (payload: {
+    displayName: string | null;
+    bio: string | null;
+    location: string | null;
+    age: number | null;
+    profession: string | null;
+    gender: GenderOption | null;
+    genderOther: string | null;
+    responseStylePreset: ResponseStylePreset;
+    responseStyleNote: string | null;
+  }) => Promise<void>;
+  onUploadAvatar: (file: File) => Promise<void>;
+  onLogout: () => void;
+}) => {
+  const avatarInputId = useId();
+  const [displayName, setDisplayName] = useState("");
+  const [bio, setBio] = useState("");
+  const [location, setLocation] = useState("");
+  const [ageInput, setAgeInput] = useState("");
+  const [profession, setProfession] = useState("");
+  const [gender, setGender] = useState<GenderOption | "">("");
+  const [genderOther, setGenderOther] = useState("");
+  const [stylePreset, setStylePreset] = useState<ResponseStylePreset>("balanced");
+  const [styleNote, setStyleNote] = useState("");
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saveSuccess, setSaveSuccess] = useState<string | null>(null);
+
+  useEffect(() => {
+    setDisplayName(profile?.displayName ?? "");
+    setBio(profile?.bio ?? "");
+    setLocation(profile?.location ?? "");
+    setAgeInput(
+      typeof profile?.age === "number" && Number.isFinite(profile.age)
+        ? String(profile.age)
+        : "",
+    );
+    setProfession(profile?.profession ?? user?.profession ?? "");
+    setGender((profile?.gender as GenderOption | null) ?? "");
+    setGenderOther(profile?.genderOther ?? "");
+    setStylePreset(profile?.responseStylePreset ?? "balanced");
+    setStyleNote(profile?.responseStyleNote ?? "");
+    setSaveError(null);
+    setSaveSuccess(null);
+  }, [profile, user?.profession]);
+
+  const bioWordCount = bio.trim().length === 0 ? 0 : bio.trim().split(/\s+/).length;
+  const bioWordLimit = 1000;
+  const approxBioCharLimit = 6000;
+
+  const onSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setSaveError(null);
+    setSaveSuccess(null);
+
+    const parsedAge =
+      ageInput.trim().length === 0 ? null : Number.parseInt(ageInput, 10);
+    if (
+      parsedAge !== null &&
+      (!Number.isFinite(parsedAge) || parsedAge < 13 || parsedAge > 120)
+    ) {
+      setSaveError("Age must be between 13 and 120.");
+      return;
+    }
+
+    if (bioWordCount > bioWordLimit) {
+      setSaveError(`Bio is too long. Keep it under ${bioWordLimit} words.`);
+      return;
+    }
+
+    if (gender === "other" && genderOther.trim().length === 0) {
+      setSaveError("Please add details for gender when selecting other.");
+      return;
+    }
+
+    try {
+      await onSaveProfile({
+        displayName: displayName.trim() || null,
+        bio: bio.trim() || null,
+        location: location.trim() || null,
+        age: parsedAge,
+        profession: profession.trim() || null,
+        gender: (gender || null) as GenderOption | null,
+        genderOther: genderOther.trim() || null,
+        responseStylePreset: stylePreset,
+        responseStyleNote: styleNote.trim() || null,
+      });
+      setSaveSuccess("Profile saved.");
+    } catch (error) {
+      setSaveError(getErrorMessage(error));
+    }
+  };
+
   return (
     <motion.div
       initial={{ x: "100%" }}
@@ -864,9 +1029,9 @@ const ProfileView = ({ onClose, user, onLogout }: { onClose: () => void; user: a
       <div className="relative h-48 shrink-0 overflow-hidden">
         <img src={leafBg} alt="Cover" className="w-full h-full object-cover" />
         <div className="absolute inset-0 bg-gradient-to-b from-transparent to-background/90" />
-        <Button 
-          variant="ghost" 
-          size="icon" 
+        <Button
+          variant="ghost"
+          size="icon"
           className="absolute top-4 left-4 text-white hover:bg-white/20"
           onClick={onClose}
           data-testid="button-close-profile"
@@ -874,62 +1039,272 @@ const ProfileView = ({ onClose, user, onLogout }: { onClose: () => void; user: a
           <ArrowLeft className="w-6 h-6" />
         </Button>
       </div>
-      
+
       <div className="px-6 -mt-12 relative z-10 flex flex-col h-full">
-        <div className="flex flex-col items-center mb-8">
-          <Avatar className="w-24 h-24 border-4 border-background shadow-xl">
-            <AvatarImage src={user?.profileImageUrl || mayaAvatar} />
-            <AvatarFallback>{user?.firstName?.[0] || "U"}{user?.lastName?.[0] || ""}</AvatarFallback>
-          </Avatar>
+        <div className="flex flex-col items-center mb-6">
+          <label
+            htmlFor={avatarInputId}
+            className={cn(
+              "relative cursor-pointer rounded-full",
+              isUploadingAvatar && "pointer-events-none opacity-70",
+            )}
+            data-testid="button-edit-avatar"
+          >
+            <Avatar className="w-24 h-24 border-4 border-background shadow-xl">
+              <AvatarImage src={profile?.avatarUrl || user?.profileImageUrl || mayaAvatar} />
+              <AvatarFallback>
+                {user?.firstName?.[0] || "U"}
+                {user?.lastName?.[0] || ""}
+              </AvatarFallback>
+            </Avatar>
+            <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 rounded-full bg-black/65 px-2 py-0.5 text-[10px] text-white">
+              {isUploadingAvatar ? "Uploading..." : "Edit photo"}
+            </div>
+          </label>
+          <input
+            id={avatarInputId}
+            type="file"
+            accept="image/jpeg,image/png,image/webp"
+            className="sr-only"
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (file) {
+                setSaveError(null);
+                void onUploadAvatar(file)
+                  .then(() => {
+                    setSaveSuccess("Profile photo updated.");
+                  })
+                  .catch((error) => {
+                    setSaveError(getErrorMessage(error));
+                  });
+              }
+              event.currentTarget.value = "";
+            }}
+          />
           <div className="text-center mt-4">
             <h2 className="text-2xl font-bold text-foreground" data-testid="text-username">
               {user?.firstName || ""} {user?.lastName || ""}
             </h2>
-            <p className="text-muted-foreground italic" data-testid="text-user-tagline">"Here for you, always"</p>
+            <p className="text-muted-foreground italic">"Here for you, always"</p>
           </div>
         </div>
 
         <ScrollArea className="flex-1 -mx-6 px-6 pb-6">
-          <div className="space-y-6">
+          <form onSubmit={onSubmit} className="space-y-6">
             <section>
-              <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3">Account</h3>
-              <div className="bg-card rounded-xl p-4 shadow-sm border space-y-4">
+              <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3">
+                Account
+              </h3>
+              <div className="bg-card rounded-xl p-4 shadow-sm border space-y-3">
                 <div className="flex items-center justify-between">
                   <span className="font-medium">Email</span>
-                  <span className="text-muted-foreground text-sm" data-testid="text-user-email">{user?.email || "Not set"}</span>
+                  <span className="text-muted-foreground text-sm" data-testid="text-user-email">
+                    {user?.email || "Not set"}
+                  </span>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Optional profile fields help Zee personalize better.
+                </p>
+              </div>
+            </section>
+
+            <section>
+              <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3">
+                Personalization
+              </h3>
+              <div className="bg-card rounded-xl p-4 shadow-sm border space-y-4">
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium" htmlFor="profile-display-name">
+                    Preferred name
+                  </label>
+                  <input
+                    id="profile-display-name"
+                    value={displayName}
+                    onChange={(event) => setDisplayName(event.target.value)}
+                    maxLength={120}
+                    className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm outline-none focus:border-[#DAA112]"
+                    placeholder="How should Zee address you?"
+                    data-testid="input-profile-display-name"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium" htmlFor="profile-bio">
+                    Bio (optional)
+                  </label>
+                  <textarea
+                    id="profile-bio"
+                    value={bio}
+                    onChange={(event) => setBio(event.target.value.slice(0, approxBioCharLimit))}
+                    rows={4}
+                    className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm outline-none focus:border-[#DAA112]"
+                    placeholder="Share what matters to you, your goals, and your vibe."
+                    data-testid="input-profile-bio"
+                  />
+                  <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+                    <span>{bioWordCount}/{bioWordLimit} words</span>
+                    <span>{bio.length}/{approxBioCharLimit} chars</span>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <label className="text-sm font-medium" htmlFor="profile-location">
+                      Location
+                    </label>
+                    <input
+                      id="profile-location"
+                      value={location}
+                      onChange={(event) => setLocation(event.target.value)}
+                      maxLength={120}
+                      className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm outline-none focus:border-[#DAA112]"
+                      placeholder="City, country"
+                      data-testid="input-profile-location"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-sm font-medium" htmlFor="profile-age">
+                      Age
+                    </label>
+                    <input
+                      id="profile-age"
+                      value={ageInput}
+                      onChange={(event) =>
+                        setAgeInput(event.target.value.replace(/[^0-9]/g, ""))
+                      }
+                      className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm outline-none focus:border-[#DAA112]"
+                      placeholder="Optional"
+                      inputMode="numeric"
+                      data-testid="input-profile-age"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium" htmlFor="profile-profession">
+                    Profession
+                  </label>
+                  <input
+                    id="profile-profession"
+                    value={profession}
+                    onChange={(event) => setProfession(event.target.value)}
+                    maxLength={120}
+                    className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm outline-none focus:border-[#DAA112]"
+                    placeholder="What do you do?"
+                    data-testid="input-profile-profession"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium" htmlFor="profile-gender">
+                    Gender
+                  </label>
+                  <select
+                    id="profile-gender"
+                    value={gender}
+                    onChange={(event) => setGender(event.target.value as GenderOption | "")}
+                    className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm outline-none focus:border-[#DAA112]"
+                    data-testid="select-profile-gender"
+                  >
+                    <option value="">Not specified</option>
+                    {GENDER_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {gender === "other" && (
+                  <div className="space-y-1.5">
+                    <label className="text-sm font-medium" htmlFor="profile-gender-other">
+                      Gender details
+                    </label>
+                    <input
+                      id="profile-gender-other"
+                      value={genderOther}
+                      onChange={(event) => setGenderOther(event.target.value)}
+                      maxLength={80}
+                      className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm outline-none focus:border-[#DAA112]"
+                      placeholder="Share if you'd like"
+                      data-testid="input-profile-gender-other"
+                    />
+                  </div>
+                )}
+              </div>
+            </section>
+
+            <section>
+              <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3">
+                Response Style
+              </h3>
+              <div className="bg-card rounded-xl p-4 shadow-sm border space-y-4">
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium" htmlFor="profile-style-preset">
+                    Preset
+                  </label>
+                  <select
+                    id="profile-style-preset"
+                    value={stylePreset}
+                    onChange={(event) =>
+                      setStylePreset(event.target.value as ResponseStylePreset)
+                    }
+                    className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm outline-none focus:border-[#DAA112]"
+                    data-testid="select-profile-style-preset"
+                  >
+                    {RESPONSE_STYLE_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label} - {option.description}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium" htmlFor="profile-style-note">
+                    Custom note (optional)
+                  </label>
+                  <textarea
+                    id="profile-style-note"
+                    value={styleNote}
+                    onChange={(event) => setStyleNote(event.target.value.slice(0, 600))}
+                    rows={3}
+                    className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm outline-none focus:border-[#DAA112]"
+                    placeholder='Example: "Use more humor and quick punchy replies."'
+                    data-testid="input-profile-style-note"
+                  />
                 </div>
               </div>
             </section>
 
-            <section>
-              <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3">Preferences</h3>
-              <div className="bg-card rounded-xl shadow-sm border divide-y divide-border">
-                <button className="w-full flex items-center justify-between p-4 hover:bg-muted/50 transition-colors">
-                  <span className="font-medium">Privacy Settings</span>
-                  <ChevronRight className="w-5 h-5 text-muted-foreground" />
-                </button>
-                <button className="w-full flex items-center justify-between p-4 hover:bg-muted/50 transition-colors">
-                  <span className="font-medium">Permissions</span>
-                  <ChevronRight className="w-5 h-5 text-muted-foreground" />
-                </button>
-                <button className="w-full flex items-center justify-between p-4 hover:bg-muted/50 transition-colors">
-                  <span className="font-medium">Appearance</span>
-                  <div className="flex gap-2">
-                    <div className="w-4 h-4 rounded-full bg-accent" />
-                    <div className="w-4 h-4 rounded-full bg-primary" />
-                    <ChevronRight className="w-5 h-5 text-muted-foreground" />
-                  </div>
-                </button>
+            {(saveError || saveSuccess || isProfileLoading) && (
+              <div className="rounded-xl border border-border bg-card px-3 py-2 text-xs">
+                {isProfileLoading && <p className="text-muted-foreground">Loading profile...</p>}
+                {saveError && <p className="text-red-500">{saveError}</p>}
+                {saveSuccess && <p className="text-emerald-600">{saveSuccess}</p>}
               </div>
-            </section>
+            )}
 
-            <section>
-              <Button variant="destructive" className="w-full h-12 rounded-xl gap-2" onClick={onLogout} data-testid="button-logout">
+            <section className="space-y-3 pb-4">
+              <Button
+                type="submit"
+                className="w-full h-12 rounded-xl gap-2 bg-[#10383A] text-white hover:bg-[#10383A]/90"
+                disabled={isSaving || isProfileLoading}
+                data-testid="button-save-profile"
+              >
+                {isSaving ? "Saving..." : "Save Profile"}
+              </Button>
+              <Button
+                variant="destructive"
+                className="w-full h-12 rounded-xl gap-2"
+                onClick={onLogout}
+                data-testid="button-logout"
+                type="button"
+              >
                 <LogOut className="w-5 h-5" />
                 Log Out
               </Button>
             </section>
-          </div>
+          </form>
         </ScrollArea>
       </div>
     </motion.div>
@@ -1557,6 +1932,12 @@ function App() {
     enabled: isAuthenticated,
   });
 
+  const { data: userProfile, isLoading: isProfileLoading } =
+    useQuery<UserProfileData>({
+      queryKey: ["/api/profile/me"],
+      enabled: isAuthenticated,
+    });
+
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [selectedVoice, setSelectedVoice] =
     useState<LiveVoiceName>(DEFAULT_LIVE_VOICE);
@@ -1609,6 +1990,52 @@ function App() {
     },
   });
 
+  const updateProfileMutation = useMutation({
+    mutationFn: async (payload: {
+      displayName: string | null;
+      bio: string | null;
+      location: string | null;
+      age: number | null;
+      profession: string | null;
+      gender: GenderOption | null;
+      genderOther: string | null;
+      responseStylePreset: ResponseStylePreset;
+      responseStyleNote: string | null;
+    }) => {
+      const response = await apiRequest("PATCH", "/api/profile/me", payload);
+      return response.json() as Promise<UserProfileData>;
+    },
+    onSuccess: (profile) => {
+      queryClient.setQueryData(["/api/profile/me"], profile);
+    },
+  });
+
+  const uploadProfileAvatarMutation = useMutation({
+    mutationFn: async (file: File) => {
+      const formData = new FormData();
+      formData.append("image", file);
+
+      const response = await fetch("/api/profile/avatar", {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "x-trace-id": createRequestTraceId(),
+        },
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const text = (await response.text()) || response.statusText;
+        throw new Error(text);
+      }
+
+      return (await response.json()) as UserProfileData;
+    },
+    onSuccess: (profile) => {
+      queryClient.setQueryData(["/api/profile/me"], profile);
+    },
+  });
+
   const handleOnboardingComplete = () => {
     setShowOnboarding(false);
     updatePreferencesMutation.mutate({
@@ -1625,6 +2052,24 @@ function App() {
       selectedVoice: voice,
       onboardingCompleted: preferences?.onboardingCompleted ?? true,
     });
+  };
+
+  const handleSaveProfile = async (payload: {
+    displayName: string | null;
+    bio: string | null;
+    location: string | null;
+    age: number | null;
+    profession: string | null;
+    gender: GenderOption | null;
+    genderOther: string | null;
+    responseStylePreset: ResponseStylePreset;
+    responseStyleNote: string | null;
+  }) => {
+    await updateProfileMutation.mutateAsync(payload);
+  };
+
+  const handleUploadProfileAvatar = async (file: File) => {
+    await uploadProfileAvatarMutation.mutateAsync(file);
   };
 
   const { data: conversations } = useQuery<any[]>({
@@ -1924,12 +2369,44 @@ function App() {
     }
   };
 
+  const buildOptimisticAssistantPartId = (turnSeed: string, partIndex: number) =>
+    `${turnSeed}::part::${partIndex}`;
+
+  const isOptimisticAssistantPart = (messageId: string, turnSeed: string) =>
+    messageId.startsWith(`${turnSeed}::part::`);
+
+  const replaceOptimisticAssistantTurn = (
+    current: MessageData[],
+    turnSeed: string,
+    replacements: MessageData[],
+  ): MessageData[] => {
+    const next: MessageData[] = [];
+    let inserted = false;
+
+    for (const message of current) {
+      if (isOptimisticAssistantPart(message.id, turnSeed)) {
+        if (!inserted) {
+          next.push(...replacements);
+          inserted = true;
+        }
+        continue;
+      }
+      next.push(message);
+    }
+
+    if (!inserted) {
+      next.push(...replacements);
+    }
+
+    return next;
+  };
+
   const streamChatResponse = async (params: {
     conversationId: string;
     text: string;
     attachmentIds: string[];
     optimisticUserId: string;
-    optimisticAssistantId: string;
+    optimisticAssistantTurnId: string;
   }) => {
     const response = await fetch("/api/chat/respond/stream", {
       method: "POST",
@@ -1958,7 +2435,6 @@ function App() {
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
-    let accumulatedAssistantText = "";
     let finalized = false;
 
     const applyEvent = (event: ChatStreamEvent) => {
@@ -1972,28 +2448,99 @@ function App() {
       }
 
       if (event.type === "delta") {
-        accumulatedAssistantText += event.text;
-        updateConversationMessages(params.conversationId, (current) =>
-          current.map((message) =>
-            message.id === params.optimisticAssistantId
-              ? {
-                  ...message,
-                  text: accumulatedAssistantText,
-                  isTyping: false,
-                }
-              : message,
-          ),
+        const partIndex = Number.isInteger(event.partIndex)
+          ? Math.max(0, event.partIndex ?? 0)
+          : 0;
+        const partId = buildOptimisticAssistantPartId(
+          params.optimisticAssistantTurnId,
+          partIndex,
         );
+
+        updateConversationMessages(params.conversationId, (current) => {
+          const next = [...current];
+          const existingIndex = next.findIndex((message) => message.id === partId);
+          if (existingIndex >= 0) {
+            next[existingIndex] = {
+              ...next[existingIndex],
+              text: `${next[existingIndex].text}${event.text}`,
+              isTyping: false,
+              partIndex,
+            };
+            return next;
+          }
+
+          const newPartMessage: MessageData = {
+            id: partId,
+            conversationId: params.conversationId,
+            sender: "assistant",
+            turnId: params.optimisticAssistantTurnId,
+            partIndex,
+            text: event.text,
+            createdAt: new Date().toISOString(),
+            isTyping: false,
+            localOnly: true,
+          };
+
+          let lastPartIndex = -1;
+          for (let index = 0; index < next.length; index += 1) {
+            if (
+              isOptimisticAssistantPart(
+                next[index].id,
+                params.optimisticAssistantTurnId,
+              )
+            ) {
+              lastPartIndex = index;
+            }
+          }
+
+          if (lastPartIndex >= 0) {
+            next.splice(lastPartIndex + 1, 0, newPartMessage);
+          } else {
+            next.push(newPartMessage);
+          }
+
+          return next;
+        });
+        return;
+      }
+
+      if (event.type === "part_final") {
+        const partId = buildOptimisticAssistantPartId(
+          params.optimisticAssistantTurnId,
+          event.partIndex,
+        );
+        updateConversationMessages(params.conversationId, (current) => {
+          const next = [...current];
+          const finalizedMessage: MessageData = {
+            ...event.message,
+            id: partId,
+            turnId: event.turnId,
+            partIndex: event.partIndex,
+            isTyping: false,
+            localOnly: true,
+          };
+          const existingIndex = next.findIndex((message) => message.id === partId);
+          if (existingIndex >= 0) {
+            next[existingIndex] = finalizedMessage;
+          } else {
+            next.push(finalizedMessage);
+          }
+          return next;
+        });
         return;
       }
 
       if (event.type === "final") {
         finalized = true;
+        const assistantMessages =
+          event.assistantMessages && event.assistantMessages.length > 0
+            ? event.assistantMessages
+            : [event.assistantMessage];
         updateConversationMessages(params.conversationId, (current) =>
-          current.map((message) =>
-            message.id === params.optimisticAssistantId
-              ? event.assistantMessage
-              : message,
+          replaceOptimisticAssistantTurn(
+            current,
+            params.optimisticAssistantTurnId,
+            assistantMessages,
           ),
         );
         return;
@@ -2032,7 +2579,7 @@ function App() {
     text: string;
     attachmentIds: string[];
     optimisticUserId: string;
-    optimisticAssistantId: string;
+    optimisticAssistantTurnId: string;
   }) => {
     const response = await apiRequest("POST", "/api/chat/respond", {
       conversationId: params.conversationId,
@@ -2043,14 +2590,22 @@ function App() {
     const payload = (await response.json()) as {
       userMessage: MessageData;
       assistantMessage: MessageData;
+      assistantMessages?: MessageData[];
     };
 
+    const assistantMessages =
+      payload.assistantMessages && payload.assistantMessages.length > 0
+        ? payload.assistantMessages
+        : [payload.assistantMessage];
+
     updateConversationMessages(params.conversationId, (current) =>
-      current.map((message) => {
-        if (message.id === params.optimisticUserId) return payload.userMessage;
-        if (message.id === params.optimisticAssistantId) return payload.assistantMessage;
-        return message;
-      }),
+      replaceOptimisticAssistantTurn(
+        current.map((message) =>
+          message.id === params.optimisticUserId ? payload.userMessage : message,
+        ),
+        params.optimisticAssistantTurnId,
+        assistantMessages,
+      ),
     );
   };
 
@@ -2079,14 +2634,18 @@ function App() {
 
     let conversationId: string | null = null;
     let optimisticUserId = "";
-    let optimisticAssistantId = "";
+    let optimisticAssistantTurnId = "";
     let attachmentIds: string[] = [];
 
     try {
       conversationId = await ensureActiveConversationId();
       const resolvedConversationId = conversationId;
       optimisticUserId = createLocalId("optimistic-user");
-      optimisticAssistantId = createLocalId("optimistic-assistant");
+      optimisticAssistantTurnId = createLocalId("optimistic-assistant-turn");
+      const firstOptimisticAssistantPartId = buildOptimisticAssistantPartId(
+        optimisticAssistantTurnId,
+        0,
+      );
 
       updateConversationMessages(resolvedConversationId, (current) => [
         ...current,
@@ -2102,9 +2661,11 @@ function App() {
           localOnly: true,
         },
         {
-          id: optimisticAssistantId,
+          id: firstOptimisticAssistantPartId,
           conversationId: resolvedConversationId,
           sender: "assistant",
+          turnId: optimisticAssistantTurnId,
+          partIndex: 0,
           text: "",
           createdAt: new Date().toISOString(),
           isTyping: true,
@@ -2122,7 +2683,7 @@ function App() {
           text: trimmed,
           attachmentIds,
           optimisticUserId,
-          optimisticAssistantId,
+          optimisticAssistantTurnId,
         });
         removePendingAttachmentsByLocalId(readyAttachments.map((item) => item.localId));
       } catch (streamError) {
@@ -2133,7 +2694,7 @@ function App() {
             text: trimmed,
             attachmentIds,
             optimisticUserId,
-            optimisticAssistantId,
+            optimisticAssistantTurnId,
           });
           removePendingAttachmentsByLocalId(
             readyAttachments.map((item) => item.localId),
@@ -2143,7 +2704,10 @@ function App() {
             current.filter(
               (message) =>
                 message.id !== optimisticUserId &&
-                message.id !== optimisticAssistantId,
+                !isOptimisticAssistantPart(
+                  message.id,
+                  optimisticAssistantTurnId,
+                ),
             ),
           );
           setComposerError(
@@ -2471,6 +3035,9 @@ function App() {
     return () => clearInterval(interval);
   }, [isCalling]);
 
+  const resolvedProfileImage =
+    userProfile?.avatarUrl || user?.profileImageUrl || undefined;
+
   if (authLoading) {
     return (
       <div className="w-full h-screen bg-[#10383A] flex items-center justify-center" data-testid="loading-screen">
@@ -2537,7 +3104,7 @@ function App() {
           mode={mode}
           setMode={setMode}
           duration={duration}
-          userProfileImage={user?.profileImageUrl || undefined}
+          userProfileImage={resolvedProfileImage}
           isVideoEnabled={isVideoEnabled}
           onToggleVideo={handleToggleVideo}
           onFlipCamera={handleFlipCamera}
@@ -2547,7 +3114,17 @@ function App() {
 
         <AnimatePresence>
           {showProfile && (
-            <ProfileView onClose={() => setShowProfile(false)} user={user} onLogout={logout} />
+            <ProfileView
+              onClose={() => setShowProfile(false)}
+              user={user}
+              profile={userProfile}
+              isProfileLoading={isProfileLoading}
+              isSaving={updateProfileMutation.isPending}
+              isUploadingAvatar={uploadProfileAvatarMutation.isPending}
+              onSaveProfile={handleSaveProfile}
+              onUploadAvatar={handleUploadProfileAvatar}
+              onLogout={logout}
+            />
           )}
         </AnimatePresence>
 

@@ -10,6 +10,7 @@ import {
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
+import { users } from "./models/auth";
 
 export * from "./models/auth";
 
@@ -22,13 +23,25 @@ export const conversations = pgTable("conversations", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
-export const messages = pgTable("messages", {
-  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
-  conversationId: varchar("conversation_id").notNull(),
-  sender: varchar("sender").notNull(),
-  text: text("text").notNull(),
-  createdAt: timestamp("created_at").defaultNow(),
-});
+export const messages = pgTable(
+  "messages",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    conversationId: varchar("conversation_id").notNull(),
+    sender: varchar("sender").notNull(),
+    turnId: varchar("turn_id").notNull().default(sql`gen_random_uuid()`),
+    partIndex: integer("part_index").notNull().default(0),
+    text: text("text").notNull(),
+    createdAt: timestamp("created_at").defaultNow(),
+  },
+  (table) => [
+    index("messages_conversation_created_idx").on(
+      table.conversationId,
+      table.createdAt,
+    ),
+    index("messages_turn_part_idx").on(table.turnId, table.partIndex),
+  ],
+);
 
 export const messageAttachments = pgTable(
   "message_attachments",
@@ -66,6 +79,29 @@ export const userPreferences = pgTable("user_preferences", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
+export const userProfiles = pgTable(
+  "user_profiles",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    userId: varchar("user_id").notNull().unique(),
+    displayName: varchar("display_name"),
+    bio: text("bio"),
+    location: varchar("location"),
+    age: integer("age"),
+    profession: varchar("profession"),
+    gender: varchar("gender"),
+    genderOther: varchar("gender_other"),
+    responseStylePreset: varchar("response_style_preset")
+      .notNull()
+      .default("balanced"),
+    responseStyleNote: text("response_style_note"),
+    avatarAttachmentId: varchar("avatar_attachment_id"),
+    createdAt: timestamp("created_at").defaultNow(),
+    updatedAt: timestamp("updated_at").defaultNow(),
+  },
+  (table) => [index("user_profiles_user_idx").on(table.userId)],
+);
+
 export const voiceSessions = pgTable("voice_sessions", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   userId: varchar("user_id").notNull(),
@@ -100,6 +136,17 @@ export const messageAttachmentsRelations = relations(
   }),
 );
 
+export const userProfilesRelations = relations(userProfiles, ({ one }) => ({
+  user: one(users, {
+    fields: [userProfiles.userId],
+    references: [users.id],
+  }),
+  avatarAttachment: one(messageAttachments, {
+    fields: [userProfiles.avatarAttachmentId],
+    references: [messageAttachments.id],
+  }),
+}));
+
 export const insertConversationSchema = createInsertSchema(conversations).omit({
   id: true,
   createdAt: true,
@@ -124,6 +171,12 @@ export const insertUserPreferencesSchema = createInsertSchema(userPreferences).o
   updatedAt: true,
 });
 
+export const insertUserProfileSchema = createInsertSchema(userProfiles).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
 export const insertVoiceSessionSchema = createInsertSchema(voiceSessions).omit({
   id: true,
   createdAt: true,
@@ -137,5 +190,7 @@ export type InsertMessageAttachment = z.infer<typeof insertMessageAttachmentSche
 export type MessageAttachment = typeof messageAttachments.$inferSelect;
 export type InsertUserPreferences = z.infer<typeof insertUserPreferencesSchema>;
 export type UserPreferences = typeof userPreferences.$inferSelect;
+export type InsertUserProfile = z.infer<typeof insertUserProfileSchema>;
+export type UserProfile = typeof userProfiles.$inferSelect;
 export type InsertVoiceSession = z.infer<typeof insertVoiceSessionSchema>;
 export type VoiceSession = typeof voiceSessions.$inferSelect;

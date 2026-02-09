@@ -39,6 +39,10 @@ VT1_BODY=""
 VT2_BODY=""
 MSGS_BODY=""
 MEDIA_FILE=""
+PROFILE_GET_BODY=""
+PROFILE_PATCH_BODY=""
+PROFILE_AVATAR_BODY=""
+PROFILE_AVATAR_FILE=""
 
 log() {
   printf "[local-e2e] %s\n" "$1"
@@ -153,7 +157,7 @@ HEADERS_FILE="$(new_tmp)"
 EMAIL="local.e2e.$(date +%s)@example.com"
 PASSWORD="TestPass123!"
 
-log "1/8 register user"
+log "1/10 register user"
 REG_BODY="$(new_tmp)"
 REG_STATUS="$(curl -sS -w "%{http_code}" -D "$HEADERS_FILE" -o "$REG_BODY" -c "$COOKIE_FILE" \
   -H "Content-Type: application/json" \
@@ -167,7 +171,7 @@ REG_TRACE="$(extract_trace "$HEADERS_FILE")"
 USER_ID="$(parse_json "$REG_BODY" "id")"
 log "register ok userId=${USER_ID} traceId=${REG_TRACE}"
 
-log "2/8 create conversation"
+log "2/10 create conversation"
 CONV_BODY="$(new_tmp)"
 CONV_STATUS="$(curl -sS -w "%{http_code}" -D "$HEADERS_FILE" -o "$CONV_BODY" -b "$COOKIE_FILE" -c "$COOKIE_FILE" \
   -H "Content-Type: application/json" \
@@ -181,7 +185,7 @@ CONV_TRACE="$(extract_trace "$HEADERS_FILE")"
 CONV_ID="$(parse_json "$CONV_BODY" "id")"
 log "conversation ok conversationId=${CONV_ID} traceId=${CONV_TRACE}"
 
-log "3/8 call /api/chat/respond (legacy)"
+log "3/10 call /api/chat/respond (legacy)"
 CHAT_BODY="$(new_tmp)"
 CHAT_STATUS="$(curl -sS -w "%{http_code}" -D "$HEADERS_FILE" -o "$CHAT_BODY" -b "$COOKIE_FILE" -c "$COOKIE_FILE" \
   -H "Content-Type: application/json" \
@@ -202,7 +206,7 @@ if [[ ! -f "$IMAGE_PATH" ]]; then
   exit 19
 fi
 
-log "4/8 upload image attachment"
+log "4/10 upload image attachment"
 ATTACH_BODY="$(new_tmp)"
 ATTACH_STATUS="$(curl -sS -w "%{http_code}" -D "$HEADERS_FILE" -o "$ATTACH_BODY" -b "$COOKIE_FILE" -c "$COOKIE_FILE" \
   -X POST "${BASE_URL}/api/conversations/${CONV_ID}/attachments/image" \
@@ -216,7 +220,7 @@ ATTACH_ID="$(parse_json "$ATTACH_BODY" "attachment.id")"
 ATTACH_URL="$(parse_json "$ATTACH_BODY" "attachment.signedUrl")"
 log "attachment ok id=${ATTACH_ID} traceId=${ATTACH_TRACE}"
 
-log "5/8 call /api/chat/respond/stream"
+log "5/10 call /api/chat/respond/stream"
 STREAM_BODY="$(new_tmp)"
 STREAM_STATUS="$(curl -sS -w "%{http_code}" -D "$HEADERS_FILE" -o "$STREAM_BODY" -b "$COOKIE_FILE" -c "$COOKIE_FILE" \
   -H "Content-Type: application/json" \
@@ -227,9 +231,9 @@ if [[ "$STREAM_STATUS" != "200" ]]; then
   exit 21
 fi
 STREAM_TRACE="$(extract_trace "$HEADERS_FILE")"
-node -e "const fs=require('fs');const lines=fs.readFileSync(process.argv[1],'utf8').trim().split(/\\n+/).filter(Boolean);const events=lines.map(l=>JSON.parse(l));const hasAck=events.some(e=>e.type==='ack');const hasFinal=events.some(e=>e.type==='final');if(!hasAck||!hasFinal){console.error(events);process.exit(2)};const final=events.find(e=>e.type==='final');const preview=(final?.assistantMessage?.text||'').replace(/\\s+/g,' ').trim().slice(0,120);console.log('[local-e2e] stream ok traceId=' + process.argv[2] + ' events=' + events.length + ' assistantPreview=\"' + preview + '\"');" "$STREAM_BODY" "$STREAM_TRACE"
+node -e "const fs=require('fs');const lines=fs.readFileSync(process.argv[1],'utf8').trim().split(/\\n+/).filter(Boolean);const events=lines.map(l=>JSON.parse(l));const hasAck=events.some(e=>e.type==='ack');const hasFinal=events.some(e=>e.type==='final');const partFinalCount=events.filter(e=>e.type==='part_final').length;const final=events.find(e=>e.type==='final');const assistantParts=Array.isArray(final?.assistantMessages)?final.assistantMessages.length:0;if(!hasAck||!hasFinal||partFinalCount===0||assistantParts===0){console.error(events);process.exit(2)};const preview=(final?.assistantMessage?.text||'').replace(/\\s+/g,' ').trim().slice(0,120);console.log('[local-e2e] stream ok traceId=' + process.argv[2] + ' events=' + events.length + ' partFinal=' + partFinalCount + ' assistantParts=' + assistantParts + ' assistantPreview=\"' + preview + '\"');" "$STREAM_BODY" "$STREAM_TRACE"
 
-log "6/8 call /api/live/token"
+log "6/10 call /api/live/token"
 TOKEN_BODY="$(new_tmp)"
 TOKEN_STATUS="$(curl -sS -w "%{http_code}" -D "$HEADERS_FILE" -o "$TOKEN_BODY" -b "$COOKIE_FILE" -c "$COOKIE_FILE" \
   -H "Content-Type: application/json" \
@@ -249,7 +253,7 @@ fi
 live_auth_resource_length="${#live_auth_resource}"
 log "live token ok model=${TOKEN_MODEL} traceId=${TOKEN_TRACE} authNameLength=${live_auth_resource_length}"
 
-log "7/8 persist voice transcript"
+log "7/10 persist voice transcript"
 VT1_BODY="$(new_tmp)"
 VT1_STATUS="$(curl -sS -w "%{http_code}" -D "$HEADERS_FILE" -o "$VT1_BODY" -b "$COOKIE_FILE" -c "$COOKIE_FILE" \
   -H "Content-Type: application/json" \
@@ -273,7 +277,7 @@ fi
 VT2_TRACE="$(extract_trace "$HEADERS_FILE")"
 log "voice transcript persisted traces=${VT1_TRACE},${VT2_TRACE}"
 
-log "8/8 verify stitched memory + signed media"
+log "8/10 verify stitched memory + signed media"
 MSGS_BODY="$(new_tmp)"
 MSGS_STATUS="$(curl -sS -w "%{http_code}" -D "$HEADERS_FILE" -o "$MSGS_BODY" -b "$COOKIE_FILE" -c "$COOKIE_FILE" \
   "${BASE_URL}/api/conversations/${CONV_ID}/messages")"
@@ -297,4 +301,59 @@ if [[ "$MEDIA_BYTES" -le 0 ]]; then
 fi
 
 log "messages ok traceId=${MSGS_TRACE} mediaBytes=${MEDIA_BYTES}"
+
+log "9/10 profile read + patch"
+PROFILE_GET_BODY="$(new_tmp)"
+PROFILE_GET_STATUS="$(curl -sS -w "%{http_code}" -D "$HEADERS_FILE" -o "$PROFILE_GET_BODY" -b "$COOKIE_FILE" -c "$COOKIE_FILE" \
+  "${BASE_URL}/api/profile/me")"
+if [[ "$PROFILE_GET_STATUS" != "200" ]]; then
+  echo "[local-e2e] profile_get_failed status=${PROFILE_GET_STATUS} body=$(cat "$PROFILE_GET_BODY")"
+  exit 25
+fi
+
+PROFILE_PATCH_BODY="$(new_tmp)"
+PROFILE_PATCH_STATUS="$(curl -sS -w "%{http_code}" -D "$HEADERS_FILE" -o "$PROFILE_PATCH_BODY" -b "$COOKIE_FILE" -c "$COOKIE_FILE" \
+  -H "Content-Type: application/json" \
+  -X PATCH "${BASE_URL}/api/profile/me" \
+  --data '{"displayName":"Local E2E","bio":"Testing personalization profile endpoint.","location":"NYC","age":31,"profession":"Engineer","gender":"male","responseStylePreset":"playful","responseStyleNote":"Keep messages natural and concise."}')"
+if [[ "$PROFILE_PATCH_STATUS" != "200" ]]; then
+  echo "[local-e2e] profile_patch_failed status=${PROFILE_PATCH_STATUS} body=$(cat "$PROFILE_PATCH_BODY")"
+  exit 26
+fi
+PROFILE_NAME="$(parse_json "$PROFILE_PATCH_BODY" "displayName")"
+PROFILE_STYLE="$(parse_json "$PROFILE_PATCH_BODY" "responseStylePreset")"
+if [[ "$PROFILE_NAME" != "Local E2E" || "$PROFILE_STYLE" != "playful" ]]; then
+  echo "[local-e2e] profile_patch_unexpected name=${PROFILE_NAME} style=${PROFILE_STYLE}"
+  exit 27
+fi
+log "profile patch ok displayName=${PROFILE_NAME} style=${PROFILE_STYLE}"
+
+log "10/10 profile avatar upload + fetch signed media"
+PROFILE_AVATAR_BODY="$(new_tmp)"
+PROFILE_AVATAR_STATUS="$(curl -sS -w "%{http_code}" -D "$HEADERS_FILE" -o "$PROFILE_AVATAR_BODY" -b "$COOKIE_FILE" -c "$COOKIE_FILE" \
+  -X POST "${BASE_URL}/api/profile/avatar" \
+  -F "image=@${IMAGE_PATH};type=image/png")"
+if [[ "$PROFILE_AVATAR_STATUS" != "201" ]]; then
+  echo "[local-e2e] profile_avatar_failed status=${PROFILE_AVATAR_STATUS} body=$(cat "$PROFILE_AVATAR_BODY")"
+  exit 28
+fi
+PROFILE_AVATAR_URL="$(parse_json "$PROFILE_AVATAR_BODY" "avatarUrl")"
+if [[ -z "$PROFILE_AVATAR_URL" || "$PROFILE_AVATAR_URL" == "null" ]]; then
+  echo "[local-e2e] profile_avatar_url_missing body=$(cat "$PROFILE_AVATAR_BODY")"
+  exit 29
+fi
+PROFILE_AVATAR_FILE="$(new_tmp)"
+PROFILE_AVATAR_FETCH_STATUS="$(curl -sS -w "%{http_code}" -D "$HEADERS_FILE" -o "$PROFILE_AVATAR_FILE" -b "$COOKIE_FILE" -c "$COOKIE_FILE" \
+  "${BASE_URL}${PROFILE_AVATAR_URL}")"
+if [[ "$PROFILE_AVATAR_FETCH_STATUS" != "200" ]]; then
+  echo "[local-e2e] profile_avatar_fetch_failed status=${PROFILE_AVATAR_FETCH_STATUS}"
+  exit 30
+fi
+PROFILE_AVATAR_BYTES="$(wc -c < "$PROFILE_AVATAR_FILE" | tr -d ' ')"
+if [[ "$PROFILE_AVATAR_BYTES" -le 0 ]]; then
+  echo "[local-e2e] profile_avatar_fetch_empty bytes=${PROFILE_AVATAR_BYTES}"
+  exit 31
+fi
+log "profile avatar ok bytes=${PROFILE_AVATAR_BYTES}"
+
 log "PASS all endpoints validated on ${BASE_URL} with isolated DB ${TEST_DB_NAME}"

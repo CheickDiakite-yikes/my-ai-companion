@@ -11,15 +11,21 @@ import {
   insertUserPreferencesSchema,
   insertVoiceSessionSchema,
   type MessageAttachment,
+  type UserProfile,
 } from "@shared/schema";
 import {
   createLiveToken,
   DEFAULT_LIVE_VOICE,
   DEFAULT_PERSONA,
+  enforceGroundedReply,
   generateTextReply,
   generateTextReplyStream,
+  splitAssistantReplyParts,
   summarizeImageForMemory,
   type LiveVoiceName,
+  type ResponseStylePreset,
+  type TextPersonalizationProfile,
+  ZEE_SPLIT_TOKEN,
 } from "./gemini";
 import { elapsedMs, getTraceId, trace, traceError } from "./observability";
 import { getMediaStore, type StorageProvider } from "./media-store";
@@ -69,6 +75,46 @@ const mediaQuerySchema = z.object({
   sig: z.string().min(16),
 });
 
+const responseStylePresetSchema = z.enum([
+  "concise",
+  "balanced",
+  "expressive",
+  "playful",
+]);
+
+const genderSchema = z.enum([
+  "female",
+  "male",
+  "non_binary",
+  "other",
+  "prefer_not_to_say",
+]);
+
+const profilePatchSchema = z
+  .object({
+    displayName: z.string().trim().max(120).optional().nullable(),
+    bio: z.string().trim().max(6000).optional().nullable(),
+    location: z.string().trim().max(120).optional().nullable(),
+    age: z.number().int().min(13).max(120).optional().nullable(),
+    profession: z.string().trim().max(120).optional().nullable(),
+    gender: genderSchema.optional().nullable(),
+    genderOther: z.string().trim().max(80).optional().nullable(),
+    responseStylePreset: responseStylePresetSchema.optional(),
+    responseStyleNote: z.string().trim().max(600).optional().nullable(),
+  })
+  .superRefine((value, ctx) => {
+    if (value.gender === "other") {
+      const other = value.genderOther?.trim();
+      if (!other) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["genderOther"],
+          message: "Please provide gender details when selecting other",
+        });
+      }
+    }
+  });
+
 const ALLOWED_IMAGE_MIME_TYPES = new Set([
   "image/jpeg",
   "image/png",
@@ -91,6 +137,23 @@ const CHAT_IMAGE_MAX_COUNT = parsePositiveInt(process.env.CHAT_IMAGE_MAX_COUNT, 
 const CHAT_IMAGE_MAX_BYTES = parsePositiveInt(
   process.env.CHAT_IMAGE_MAX_BYTES,
   8 * 1024 * 1024,
+);
+
+function parseBooleanFlag(input: string | undefined, fallback: boolean): boolean {
+  if (!input) return fallback;
+  const normalized = input.trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "off"].includes(normalized)) return false;
+  return fallback;
+}
+
+const ENABLE_MULTIPART_TEXT = parseBooleanFlag(
+  process.env.ENABLE_MULTIPART_TEXT,
+  true,
+);
+const ENABLE_PROFILE_PERSONALIZATION = parseBooleanFlag(
+  process.env.ENABLE_PROFILE_PERSONALIZATION,
+  true,
 );
 
 function truncateReason(input: string, maxLen = 180): string {
@@ -211,6 +274,115 @@ function mapMessagesWithSignedAttachments(
       .filter((attachment) => attachment.status !== "deleted")
       .map((attachment) => toAttachmentResponse(attachment, userId)),
   }));
+}
+
+function normalizeOptionalString(value: unknown): string | null | undefined {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function toProfilePromptContext(
+  profile: UserProfile | undefined,
+): TextPersonalizationProfile | undefined {
+  if (!profile) return undefined;
+
+  return {
+    displayName: profile.displayName,
+    bio: profile.bio,
+    location: profile.location,
+    age: profile.age,
+    profession: profile.profession,
+    gender: profile.gender,
+    genderOther: profile.genderOther,
+    responseStylePreset:
+      (profile.responseStylePreset as ResponseStylePreset | null) ?? "balanced",
+    responseStyleNote: profile.responseStyleNote,
+  };
+}
+
+async function toProfileResponse(params: {
+  userId: string;
+  profile: UserProfile | undefined;
+}) {
+  const profile = params.profile;
+  const normalized = {
+    id: profile?.id ?? null,
+    userId: params.userId,
+    displayName: profile?.displayName ?? null,
+    bio: profile?.bio ?? null,
+    location: profile?.location ?? null,
+    age: profile?.age ?? null,
+    profession: profile?.profession ?? null,
+    gender: profile?.gender ?? null,
+    genderOther: profile?.genderOther ?? null,
+    responseStylePreset:
+      (profile?.responseStylePreset as ResponseStylePreset | null) ?? "balanced",
+    responseStyleNote: profile?.responseStyleNote ?? null,
+    avatarAttachmentId: profile?.avatarAttachmentId ?? null,
+    avatarUrl: null as string | null,
+    createdAt: profile?.createdAt ?? null,
+    updatedAt: profile?.updatedAt ?? null,
+  };
+
+  if (profile?.avatarAttachmentId) {
+    const avatarAttachment = await storage.getAttachmentById(
+      profile.avatarAttachmentId,
+    );
+    if (
+      avatarAttachment &&
+      avatarAttachment.userId === params.userId &&
+      avatarAttachment.status !== "deleted"
+    ) {
+      normalized.avatarUrl = createSignedMediaPath(avatarAttachment.id, params.userId);
+    }
+  }
+
+  return normalized;
+}
+
+function makeLegacyAssistantMessage(messagesList: Array<{
+  id: string;
+  conversationId: string;
+  sender: string;
+  turnId: string;
+  partIndex: number;
+  text: string;
+  createdAt: Date | null;
+}>): {
+  id: string;
+  conversationId: string;
+  sender: string;
+  turnId: string;
+  partIndex: number;
+  text: string;
+  createdAt: Date | null;
+} {
+  if (messagesList.length === 0) {
+    throw new Error("Assistant message list must not be empty");
+  }
+
+  const joinedText = messagesList.map((message) => message.text.trim()).join("\n\n");
+  const primary = messagesList[0];
+
+  return {
+    ...primary,
+    text: joinedText,
+    partIndex: 0,
+  };
+}
+
+function longestDelimiterPrefixSuffix(buffer: string): number {
+  const delimiter = ZEE_SPLIT_TOKEN;
+  const maxCheck = Math.min(buffer.length, delimiter.length - 1);
+  for (let size = maxCheck; size > 0; size -= 1) {
+    if (buffer.endsWith(delimiter.slice(0, size))) {
+      return size;
+    }
+  }
+  return 0;
 }
 
 async function runMulterSingleImage(req: any, res: any): Promise<void> {
@@ -681,6 +853,227 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/profile/me", isAuthenticated, async (req: any, res) => {
+    const startedAt = Date.now();
+    try {
+      const profile = await storage.getUserProfile(req.session.userId);
+      const payload = await toProfileResponse({
+        userId: req.session.userId,
+        profile,
+      });
+
+      trace(req, "profile.read", {
+        hasProfile: Boolean(profile),
+        hasBio: Boolean(profile?.bio),
+        hasAvatar: Boolean(profile?.avatarAttachmentId),
+        elapsedMs: elapsedMs(startedAt),
+      });
+
+      res.status(200).json(payload);
+    } catch (error) {
+      traceError(req, "profile.read.failed", error, {
+        elapsedMs: elapsedMs(startedAt),
+      });
+      res.status(500).json({
+        message: "Failed to fetch profile",
+        traceId: getTraceId(req),
+      });
+    }
+  });
+
+  app.patch("/api/profile/me", isAuthenticated, async (req: any, res) => {
+    const startedAt = Date.now();
+    try {
+      const parsed = profilePatchSchema.parse(req.body ?? {});
+
+      const profilePayload: {
+        userId: string;
+        displayName?: string | null;
+        bio?: string | null;
+        location?: string | null;
+        age?: number | null;
+        profession?: string | null;
+        gender?: string | null;
+        genderOther?: string | null;
+        responseStylePreset?: ResponseStylePreset;
+        responseStyleNote?: string | null;
+      } = {
+        userId: req.session.userId,
+        displayName: normalizeOptionalString(parsed.displayName),
+        bio: normalizeOptionalString(parsed.bio),
+        location: normalizeOptionalString(parsed.location),
+        age: parsed.age === undefined ? undefined : parsed.age,
+        profession: normalizeOptionalString(parsed.profession),
+        gender: normalizeOptionalString(parsed.gender),
+        genderOther: normalizeOptionalString(parsed.genderOther),
+        responseStylePreset:
+          parsed.responseStylePreset ??
+          (undefined as ResponseStylePreset | undefined),
+        responseStyleNote: normalizeOptionalString(parsed.responseStyleNote),
+      };
+
+      const saved = await storage.upsertUserProfile(profilePayload);
+      const responsePayload = await toProfileResponse({
+        userId: req.session.userId,
+        profile: saved,
+      });
+
+      trace(req, "profile.updated", {
+        userId: req.session.userId,
+        hasDisplayName: Boolean(saved.displayName),
+        hasBio: Boolean(saved.bio),
+        stylePreset: saved.responseStylePreset,
+        elapsedMs: elapsedMs(startedAt),
+      });
+
+      res.status(200).json(responsePayload);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({
+          message: error.errors[0]?.message ?? "Invalid profile payload",
+          traceId: getTraceId(req),
+        });
+      }
+
+      traceError(req, "profile.update.failed", error, {
+        elapsedMs: elapsedMs(startedAt),
+      });
+      res.status(500).json({
+        message: "Failed to update profile",
+        traceId: getTraceId(req),
+      });
+    }
+  });
+
+  app.post("/api/profile/avatar", isAuthenticated, async (req: any, res) => {
+    const startedAt = Date.now();
+    try {
+      await runMulterSingleImage(req, res);
+
+      const file = (req as any).file as
+        | {
+            mimetype: string;
+            size: number;
+            buffer: Buffer;
+          }
+        | undefined;
+
+      if (!file) {
+        return res.status(400).json({
+          message: "No image was uploaded",
+          traceId: getTraceId(req),
+        });
+      }
+
+      if (!ALLOWED_IMAGE_MIME_TYPES.has(file.mimetype)) {
+        return res.status(400).json({
+          message: "Unsupported image format. Use JPEG, PNG, or WebP.",
+          traceId: getTraceId(req),
+        });
+      }
+
+      if (file.size > CHAT_IMAGE_MAX_BYTES) {
+        return res.status(413).json({
+          message: `Image exceeds max size of ${CHAT_IMAGE_MAX_BYTES} bytes`,
+          traceId: getTraceId(req),
+        });
+      }
+
+      const extension = FILE_EXTENSION_BY_MIME[file.mimetype] ?? "bin";
+      const objectKey = `${req.session.userId}/profile/avatar/${Date.now()}-${randomUUID()}.${extension}`;
+      const uploaded = await mediaStore.uploadObject({
+        objectKey,
+        bytes: file.buffer,
+      });
+
+      const avatarAttachment = await storage.createMessageAttachment({
+        conversationId: `profile:${req.session.userId}`,
+        messageId: null,
+        userId: req.session.userId,
+        status: "profile",
+        storageProvider: uploaded.provider,
+        objectKey: uploaded.objectKey,
+        mimeType: file.mimetype,
+        byteSize: file.size,
+        width: null,
+        height: null,
+        sha256: createHash("sha256").update(file.buffer).digest("hex"),
+        summaryText: null,
+      });
+
+      const existingProfile = await storage.getUserProfile(req.session.userId);
+      const savedProfile = await storage.upsertUserProfile({
+        userId: req.session.userId,
+        avatarAttachmentId: avatarAttachment.id,
+      });
+
+      if (
+        existingProfile?.avatarAttachmentId &&
+        existingProfile.avatarAttachmentId !== avatarAttachment.id
+      ) {
+        const previousAttachment = await storage.getAttachmentById(
+          existingProfile.avatarAttachmentId,
+        );
+        await storage.markAttachmentDeleted(
+          existingProfile.avatarAttachmentId,
+          req.session.userId,
+        );
+        if (
+          previousAttachment &&
+          previousAttachment.userId === req.session.userId &&
+          isStorageProvider(previousAttachment.storageProvider)
+        ) {
+          await mediaStore
+            .deleteObject({
+              provider: previousAttachment.storageProvider,
+              objectKey: previousAttachment.objectKey,
+            })
+            .catch(() => undefined);
+        }
+      }
+
+      const responsePayload = await toProfileResponse({
+        userId: req.session.userId,
+        profile: savedProfile,
+      });
+
+      trace(req, "profile.avatar_updated", {
+        userId: req.session.userId,
+        attachmentId: avatarAttachment.id,
+        mimeType: file.mimetype,
+        byteSize: file.size,
+        elapsedMs: elapsedMs(startedAt),
+      });
+
+      res.status(201).json(responsePayload);
+    } catch (error) {
+      if (error instanceof MulterError) {
+        return res.status(400).json({
+          message:
+            error.code === "LIMIT_FILE_SIZE"
+              ? `Image exceeds max size of ${CHAT_IMAGE_MAX_BYTES} bytes`
+              : "Invalid image upload",
+          traceId: getTraceId(req),
+        });
+      }
+
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({
+          message: error.errors[0]?.message ?? "Invalid avatar payload",
+          traceId: getTraceId(req),
+        });
+      }
+
+      traceError(req, "profile.avatar_update.failed", error, {
+        elapsedMs: elapsedMs(startedAt),
+      });
+      res.status(500).json({
+        message: "Failed to upload profile avatar",
+        traceId: getTraceId(req),
+      });
+    }
+  });
+
   app.get("/api/preferences", isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.session.userId;
@@ -833,9 +1226,8 @@ export async function registerRoutes(
         });
       }
 
-      const userMessage = await storage.createMessage({
+      const userMessage = await storage.createUserTurnMessage({
         conversationId: conversation.id,
-        sender: "user",
         text: parsed.text,
       });
 
@@ -852,6 +1244,26 @@ export async function registerRoutes(
         mediaStore,
       });
 
+      const profileContext = ENABLE_PROFILE_PERSONALIZATION
+        ? toProfilePromptContext(await storage.getUserProfile(req.session.userId))
+        : undefined;
+
+      if (profileContext) {
+        trace(req, "chat.personalization.applied", {
+          conversationId: conversation.id,
+          stylePreset: profileContext.responseStylePreset ?? "balanced",
+          hasBio: Boolean(profileContext.bio),
+          hasLocation: Boolean(profileContext.location),
+        });
+      } else {
+        trace(req, "chat.personalization.skipped", {
+          conversationId: conversation.id,
+          reason: ENABLE_PROFILE_PERSONALIZATION
+            ? "profile_missing"
+            : "feature_disabled",
+        });
+      }
+
       trace(req, "chat.respond.memory_loaded", {
         conversationId: conversation.id,
         messageCount: modelMessages.length,
@@ -861,6 +1273,8 @@ export async function registerRoutes(
       const aiResponse = await generateTextReply({
         persona,
         messages: modelMessages,
+        profileContext,
+        enableMultipart: ENABLE_MULTIPART_TEXT,
       });
 
       trace(req, "chat.respond.model_success", {
@@ -871,11 +1285,61 @@ export async function registerRoutes(
         modelLatencyMs: elapsedMs(aiStartedAt),
       });
 
-      const assistantMessage = await storage.createMessage({
-        conversationId: conversation.id,
-        sender: "assistant",
-        text: aiResponse.replyText,
+      const grounded = await enforceGroundedReply({
+        persona,
+        messages: modelMessages,
+        replyText: aiResponse.replyText,
+        profileContext,
       });
+
+      if (grounded.rewritten) {
+        trace(req, "chat.personalization.guardrail_rewrite", {
+          conversationId: conversation.id,
+          signals: grounded.signals,
+        });
+      }
+
+      const groundedReplyText = grounded.replyText.trim();
+      if (!groundedReplyText) {
+        throw new Error("Gemini returned an empty response");
+      }
+
+      const splitParts = ENABLE_MULTIPART_TEXT
+        ? splitAssistantReplyParts(groundedReplyText)
+        : [groundedReplyText];
+
+      const assistantMessages =
+        splitParts.length > 0
+          ? await storage.createAssistantTurnParts({
+              conversationId: conversation.id,
+              textParts: splitParts,
+            })
+          : [];
+
+      if (assistantMessages.length === 0) {
+        trace(req, "chat.multipart.fallback_single", {
+          conversationId: conversation.id,
+          reason: "empty_parts_after_split",
+        });
+      } else {
+        trace(req, "chat.multipart.completed", {
+          conversationId: conversation.id,
+          partCount: assistantMessages.length,
+          delimiterUsed: grounded.replyText.includes(ZEE_SPLIT_TOKEN),
+        });
+      }
+
+      const finalizedAssistantMessages =
+        assistantMessages.length > 0
+          ? assistantMessages
+          : await storage.createAssistantTurnParts({
+              conversationId: conversation.id,
+              textParts: [groundedReplyText],
+            });
+
+      const legacyAssistantMessage = makeLegacyAssistantMessage(
+        finalizedAssistantMessages,
+      );
 
       void summarizeAndPersistAttachments({
         req,
@@ -894,7 +1358,8 @@ export async function registerRoutes(
             toAttachmentResponse(attachment, req.session.userId),
           ),
         },
-        assistantMessage,
+        assistantMessage: legacyAssistantMessage,
+        assistantMessages: finalizedAssistantMessages,
         model: aiResponse.model,
         usage: aiResponse.usage,
         elapsedMs: elapsedMs(startedAt),
@@ -959,9 +1424,8 @@ export async function registerRoutes(
         });
       }
 
-      const userMessage = await storage.createMessage({
+      const userMessage = await storage.createUserTurnMessage({
         conversationId: conversation.id,
-        sender: "user",
         text: parsed.text,
       });
 
@@ -977,6 +1441,26 @@ export async function registerRoutes(
         boundAttachments,
         mediaStore,
       });
+
+      const profileContext = ENABLE_PROFILE_PERSONALIZATION
+        ? toProfilePromptContext(await storage.getUserProfile(req.session.userId))
+        : undefined;
+
+      if (profileContext) {
+        trace(req, "chat.personalization.applied", {
+          conversationId: conversation.id,
+          stylePreset: profileContext.responseStylePreset ?? "balanced",
+          hasBio: Boolean(profileContext.bio),
+          hasLocation: Boolean(profileContext.location),
+        });
+      } else {
+        trace(req, "chat.personalization.skipped", {
+          conversationId: conversation.id,
+          reason: ENABLE_PROFILE_PERSONALIZATION
+            ? "profile_missing"
+            : "feature_disabled",
+        });
+      }
 
       res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
       res.setHeader("Cache-Control", "no-cache");
@@ -1005,14 +1489,122 @@ export async function registerRoutes(
         attachmentCount: boundAttachments.length,
       });
 
+      trace(req, "chat.multipart.started", {
+        conversationId: conversation.id,
+        enabled: ENABLE_MULTIPART_TEXT,
+      });
+
       const { model, stream } = await generateTextReplyStream({
         persona,
         messages: modelMessages,
+        profileContext,
+        enableMultipart: ENABLE_MULTIPART_TEXT,
       });
 
-      let replyText = "";
+      const MAX_MULTIPART_PARTS = 3;
+      const streamTurnId = randomUUID();
+      const streamedParts: string[] = [""];
+      let currentPartIndex = 0;
+      let replyBuffer = "";
+      let streamedReplyText = "";
       let responseId: string | undefined;
       let usage: unknown;
+      let syntheticPartCount = 0;
+
+      const appendDelta = (delta: string) => {
+        if (!delta || disconnected) return;
+        if (!streamedParts[currentPartIndex]) {
+          streamedParts[currentPartIndex] = "";
+        }
+        streamedParts[currentPartIndex] += delta;
+        streamedReplyText += delta;
+        trace(req, "chat.stream.chunk", {
+          conversationId: conversation.id,
+          chunkLength: delta.length,
+          cumulativeLength: streamedReplyText.length,
+          partIndex: currentPartIndex,
+        });
+        writeEvent({
+          type: "delta",
+          text: delta,
+          partIndex: currentPartIndex,
+        });
+      };
+
+      const finalizeCurrentSyntheticPart = () => {
+        if (disconnected) return;
+        const normalizedPart = (streamedParts[currentPartIndex] ?? "").trim();
+        if (!normalizedPart) return;
+
+        syntheticPartCount += 1;
+        writeEvent({
+          type: "part_final",
+          turnId: streamTurnId,
+          partIndex: currentPartIndex,
+          message: {
+            id: `stream-${streamTurnId}-${currentPartIndex}`,
+            conversationId: conversation.id,
+            sender: "assistant",
+            turnId: streamTurnId,
+            partIndex: currentPartIndex,
+            text: normalizedPart,
+            createdAt: new Date().toISOString(),
+            localOnly: true,
+          },
+        });
+
+        trace(req, "chat.multipart.part_final", {
+          conversationId: conversation.id,
+          partIndex: currentPartIndex,
+          textLength: normalizedPart.length,
+        });
+      };
+
+      const flushStreamBuffer = (flushAll: boolean) => {
+        if (!ENABLE_MULTIPART_TEXT) {
+          if (replyBuffer.length > 0) {
+            appendDelta(replyBuffer);
+            replyBuffer = "";
+          }
+          return;
+        }
+
+        while (true) {
+          const delimiterIndex = replyBuffer.indexOf(ZEE_SPLIT_TOKEN);
+          if (delimiterIndex === -1) {
+            break;
+          }
+
+          const segment = replyBuffer.slice(0, delimiterIndex);
+          appendDelta(segment);
+          replyBuffer = replyBuffer.slice(delimiterIndex + ZEE_SPLIT_TOKEN.length);
+
+          if (currentPartIndex < MAX_MULTIPART_PARTS - 1) {
+            finalizeCurrentSyntheticPart();
+            currentPartIndex += 1;
+            if (!streamedParts[currentPartIndex]) {
+              streamedParts[currentPartIndex] = "";
+            }
+          } else {
+            appendDelta(" ");
+          }
+        }
+
+        if (flushAll) {
+          if (replyBuffer.length > 0) {
+            appendDelta(replyBuffer);
+            replyBuffer = "";
+          }
+          return;
+        }
+
+        const holdSuffixLength = longestDelimiterPrefixSuffix(replyBuffer);
+        const safeEmit = replyBuffer.slice(0, replyBuffer.length - holdSuffixLength);
+        if (safeEmit.length > 0) {
+          appendDelta(safeEmit);
+        }
+        replyBuffer = replyBuffer.slice(replyBuffer.length - holdSuffixLength);
+      };
 
       for await (const chunk of stream) {
         if (disconnected) {
@@ -1027,16 +1619,8 @@ export async function registerRoutes(
         }
 
         if (chunk.textDelta.length > 0) {
-          replyText += chunk.textDelta;
-          trace(req, "chat.stream.chunk", {
-            conversationId: conversation.id,
-            chunkLength: chunk.textDelta.length,
-            cumulativeLength: replyText.length,
-          });
-          writeEvent({
-            type: "delta",
-            text: chunk.textDelta,
-          });
+          replyBuffer += chunk.textDelta;
+          flushStreamBuffer(false);
         }
       }
 
@@ -1044,21 +1628,76 @@ export async function registerRoutes(
         trace(req, "chat.stream.client_disconnected", {
           conversationId: conversation.id,
           elapsedMs: elapsedMs(startedAt),
-          replyLength: replyText.length,
+          replyLength: streamedReplyText.length,
         });
         return;
       }
 
-      const normalizedReply = replyText.trim();
+      flushStreamBuffer(true);
+      finalizeCurrentSyntheticPart();
+
+      const normalizedReply = streamedReplyText.trim();
       if (!normalizedReply) {
         throw new Error("Gemini returned an empty response");
       }
 
-      const assistantMessage = await storage.createMessage({
-        conversationId: conversation.id,
-        sender: "assistant",
-        text: normalizedReply,
+      const grounded = await enforceGroundedReply({
+        persona,
+        messages: modelMessages,
+        replyText: normalizedReply,
+        profileContext,
       });
+
+      if (grounded.rewritten) {
+        trace(req, "chat.personalization.guardrail_rewrite", {
+          conversationId: conversation.id,
+          signals: grounded.signals,
+        });
+      }
+
+      const groundedReplyText = grounded.replyText.trim();
+      if (!groundedReplyText) {
+        throw new Error("Gemini returned an empty response");
+      }
+
+      const splitParts = ENABLE_MULTIPART_TEXT
+        ? splitAssistantReplyParts(groundedReplyText)
+        : [groundedReplyText];
+
+      const assistantMessages =
+        splitParts.length > 0
+          ? await storage.createAssistantTurnParts({
+              conversationId: conversation.id,
+              textParts: splitParts,
+              turnId: streamTurnId,
+            })
+          : [];
+
+      const finalizedAssistantMessages =
+        assistantMessages.length > 0
+          ? assistantMessages
+          : await storage.createAssistantTurnParts({
+              conversationId: conversation.id,
+              textParts: [groundedReplyText],
+              turnId: streamTurnId,
+            });
+
+      if (finalizedAssistantMessages.length === 1 && syntheticPartCount <= 1) {
+        trace(req, "chat.multipart.fallback_single", {
+          conversationId: conversation.id,
+          reason: "single_assistant_part",
+        });
+      } else {
+        trace(req, "chat.multipart.completed", {
+          conversationId: conversation.id,
+          partCount: finalizedAssistantMessages.length,
+          delimiterUsed: normalizedReply.includes(ZEE_SPLIT_TOKEN),
+        });
+      }
+
+      const legacyAssistantMessage = makeLegacyAssistantMessage(
+        finalizedAssistantMessages,
+      );
 
       void summarizeAndPersistAttachments({
         req,
@@ -1073,12 +1712,14 @@ export async function registerRoutes(
         model,
         responseId,
         usage,
+        partCount: finalizedAssistantMessages.length,
         elapsedMs: elapsedMs(startedAt),
       });
 
       writeEvent({
         type: "final",
-        assistantMessage,
+        assistantMessage: legacyAssistantMessage,
+        assistantMessages: finalizedAssistantMessages,
         model,
         usage,
         elapsedMs: elapsedMs(startedAt),
