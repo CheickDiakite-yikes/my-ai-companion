@@ -9,7 +9,17 @@ import {
 import { readFile } from "fs/promises";
 import { resolve } from "path";
 
-type Persona = "Maya" | "Zarra" | "Ore";
+type Persona = "Zee";
+export type LiveVoiceName = "Aoede" | "Kore" | "Charon" | "Fenrir";
+
+export const DEFAULT_PERSONA: Persona = "Zee";
+export const LIVE_VOICE_NAMES: readonly LiveVoiceName[] = [
+  "Aoede",
+  "Kore",
+  "Charon",
+  "Fenrir",
+] as const;
+export const DEFAULT_LIVE_VOICE: LiveVoiceName = "Aoede";
 
 interface ConversationAttachmentMessage {
   mimeType: string;
@@ -32,16 +42,9 @@ interface TokenUsageSnapshot {
 const DEFAULT_TEXT_MODEL = "gemini-3-flash-preview";
 const DEFAULT_LIVE_MODEL = "gemini-2.5-flash-native-audio-preview-12-2025";
 
-const FALLBACK_PERSONA_PROMPTS: Record<Exclude<Persona, "Maya">, string> = {
-  Zarra:
-    "You are Zarra, a confident and caring companion. Stay warm, direct, practical, and human.",
-  Ore:
-    "You are Ore, a thoughtful and grounded companion. Be supportive, curious, and concise.",
-};
-
 let geminiClient: GoogleGenAI | null = null;
 let geminiAlphaClient: GoogleGenAI | null = null;
-let mayaPromptCache: string | null = null;
+let zeePromptCache: string | null = null;
 
 interface SanitizedAssistantText {
   text: string;
@@ -114,20 +117,19 @@ function compactUsage(
   };
 }
 
-async function loadMayaPrompt(): Promise<string> {
-  if (mayaPromptCache) return mayaPromptCache;
-  const filePath = resolve(process.cwd(), "maya-persona.md");
+async function loadZeePrompt(): Promise<string> {
+  if (zeePromptCache) return zeePromptCache;
+  const filePath = resolve(process.cwd(), "zee-persona.md");
   const rawPrompt = await readFile(filePath, "utf8");
-  mayaPromptCache = rawPrompt
+  zeePromptCache = rawPrompt
     .replace(/^\$\{chainOfThoughtInstructions\}\s*$/gm, "")
     .replace(/^\$\{outputFormatInstructions\}\s*$/gm, "")
     .trim();
-  return mayaPromptCache;
+  return zeePromptCache;
 }
 
 export async function getPersonaPrompt(persona: Persona): Promise<string> {
-  const basePrompt =
-    persona === "Maya" ? await loadMayaPrompt() : FALLBACK_PERSONA_PROMPTS[persona];
+  const basePrompt = await loadZeePrompt();
 
   return `${basePrompt}
 
@@ -293,12 +295,14 @@ function buildConversationContents(messages: ConversationMessage[]) {
 export interface CreateLiveTokenInput {
   persona: Persona;
   responseModality?: "AUDIO" | "TEXT";
+  voiceName?: LiveVoiceName;
 }
 
 export interface CreateLiveTokenResult {
   tokenName: string;
   model: string;
   responseModality: "AUDIO" | "TEXT";
+  voiceName: LiveVoiceName;
   expireTime: string;
   newSessionExpireTime: string;
   generatedAt: string;
@@ -312,6 +316,7 @@ export async function createLiveToken(
   const model = resolveLiveModel();
   const personaPrompt = await getPersonaPrompt(input.persona);
   const responseModality = input.responseModality ?? "AUDIO";
+  const voiceName = input.voiceName ?? DEFAULT_LIVE_VOICE;
 
   const now = Date.now();
   const expireInMs = parsePositiveInt(
@@ -326,6 +331,14 @@ export async function createLiveToken(
 
   const expireTime = new Date(now + expireInMs).toISOString();
   const newSessionExpireTime = new Date(now + newSessionExpireInMs).toISOString();
+  const lockAdditionalFields = [
+    "responseModalities",
+    "systemInstruction",
+    ...(responseModality === "AUDIO" ? ["speechConfig"] : []),
+    "realtimeInputConfig",
+    "inputAudioTranscription",
+    "outputAudioTranscription",
+  ];
 
   const token = await ai.authTokens.create({
     config: {
@@ -339,6 +352,16 @@ export async function createLiveToken(
             responseModality === "TEXT" ? Modality.TEXT : Modality.AUDIO,
           ],
           systemInstruction: personaPrompt,
+          speechConfig:
+            responseModality === "AUDIO"
+              ? {
+                  voiceConfig: {
+                    prebuiltVoiceConfig: {
+                      voiceName,
+                    },
+                  },
+                }
+              : undefined,
           // These defaults prioritize natural turn-taking and low interruption latency.
           realtimeInputConfig: {
             activityHandling: ActivityHandling.START_OF_ACTIVITY_INTERRUPTS,
@@ -359,13 +382,7 @@ export async function createLiveToken(
           outputAudioTranscription: {},
         },
       },
-      lockAdditionalFields: [
-        "responseModalities",
-        "systemInstruction",
-        "realtimeInputConfig",
-        "inputAudioTranscription",
-        "outputAudioTranscription",
-      ],
+      lockAdditionalFields,
     },
   });
 
@@ -377,6 +394,7 @@ export async function createLiveToken(
     tokenName: token.name,
     model,
     responseModality,
+    voiceName,
     expireTime,
     newSessionExpireTime,
     generatedAt: new Date(now).toISOString(),

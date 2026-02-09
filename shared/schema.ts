@@ -16,7 +16,7 @@ export * from "./models/auth";
 export const conversations = pgTable("conversations", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   userId: varchar("user_id").notNull(),
-  persona: varchar("persona").notNull().default("Maya"),
+  persona: varchar("persona").notNull().default("Zee"),
   title: varchar("title"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
@@ -59,7 +59,8 @@ export const messageAttachments = pgTable(
 export const userPreferences = pgTable("user_preferences", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   userId: varchar("user_id").notNull().unique(),
-  selectedPersona: varchar("selected_persona").notNull().default("Maya"),
+  selectedPersona: varchar("selected_persona").notNull().default("Zee"),
+  selectedVoice: varchar("selected_voice").notNull().default("Aoede"),
   onboardingCompleted: boolean("onboarding_completed").notNull().default(false),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),

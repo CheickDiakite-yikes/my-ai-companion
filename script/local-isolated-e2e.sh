@@ -172,7 +172,7 @@ CONV_BODY="$(new_tmp)"
 CONV_STATUS="$(curl -sS -w "%{http_code}" -D "$HEADERS_FILE" -o "$CONV_BODY" -b "$COOKIE_FILE" -c "$COOKIE_FILE" \
   -H "Content-Type: application/json" \
   -X POST "${BASE_URL}/api/conversations" \
-  --data '{"title":"Local API test","persona":"Maya"}')"
+  --data '{"title":"Local API test","persona":"Zee"}')"
 if [[ "$CONV_STATUS" != "201" ]]; then
   echo "[local-e2e] conversation_failed status=${CONV_STATUS} body=$(cat "$CONV_BODY")"
   exit 12
@@ -186,7 +186,7 @@ CHAT_BODY="$(new_tmp)"
 CHAT_STATUS="$(curl -sS -w "%{http_code}" -D "$HEADERS_FILE" -o "$CHAT_BODY" -b "$COOKIE_FILE" -c "$COOKIE_FILE" \
   -H "Content-Type: application/json" \
   -X POST "${BASE_URL}/api/chat/respond" \
-  --data "{\"conversationId\":\"${CONV_ID}\",\"text\":\"heyy from local api test\",\"persona\":\"Maya\"}")"
+  --data "{\"conversationId\":\"${CONV_ID}\",\"text\":\"heyy from local api test\",\"persona\":\"Zee\"}")"
 if [[ "$CHAT_STATUS" != "201" ]]; then
   echo "[local-e2e] chat_failed status=${CHAT_STATUS} body=$(cat "$CHAT_BODY")"
   exit 13
@@ -221,7 +221,7 @@ STREAM_BODY="$(new_tmp)"
 STREAM_STATUS="$(curl -sS -w "%{http_code}" -D "$HEADERS_FILE" -o "$STREAM_BODY" -b "$COOKIE_FILE" -c "$COOKIE_FILE" \
   -H "Content-Type: application/json" \
   -X POST "${BASE_URL}/api/chat/respond/stream" \
-  --data "{\"conversationId\":\"${CONV_ID}\",\"text\":\"What do you see in this image?\",\"persona\":\"Maya\",\"attachmentIds\":[\"${ATTACH_ID}\"]}")"
+  --data "{\"conversationId\":\"${CONV_ID}\",\"text\":\"What do you see in this image?\",\"persona\":\"Zee\",\"attachmentIds\":[\"${ATTACH_ID}\"]}")"
 if [[ "$STREAM_STATUS" != "200" ]]; then
   echo "[local-e2e] stream_failed status=${STREAM_STATUS} body=$(cat "$STREAM_BODY")"
   exit 21
@@ -234,7 +234,7 @@ TOKEN_BODY="$(new_tmp)"
 TOKEN_STATUS="$(curl -sS -w "%{http_code}" -D "$HEADERS_FILE" -o "$TOKEN_BODY" -b "$COOKIE_FILE" -c "$COOKIE_FILE" \
   -H "Content-Type: application/json" \
   -X POST "${BASE_URL}/api/live/token" \
-  --data '{"persona":"Maya","responseModality":"AUDIO"}')"
+  --data '{"persona":"Zee","responseModality":"AUDIO","voice":"Aoede"}')"
 if [[ "$TOKEN_STATUS" != "201" ]]; then
   echo "[local-e2e] token_failed status=${TOKEN_STATUS} body=$(cat "$TOKEN_BODY")"
   exit 14

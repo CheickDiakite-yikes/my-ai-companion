@@ -2,6 +2,10 @@ import { GoogleGenAI, Modality, type LiveServerMessage, type Session } from "@go
 
 type TranscriptSender = "user" | "assistant";
 type CameraFacingMode = "user" | "environment";
+type LiveTranscriptionPayload = {
+  text?: string;
+  finished?: boolean;
+};
 
 export interface LiveTranscriptEvent {
   sender: TranscriptSender;
@@ -26,6 +30,7 @@ const PROCESSOR_BUFFER_SIZE = 4096;
 const VIDEO_FRAME_INTERVAL_MS = 1000;
 const VIDEO_MAX_EDGE = 640;
 const VIDEO_PERMISSION_TIMEOUT_MS = 12000;
+const TRANSCRIPT_DUPLICATE_WINDOW_MS = 1500;
 
 function normalizeText(input: string | undefined): string {
   return (input ?? "").replace(/\s+/g, " ").trim();
@@ -173,9 +178,16 @@ export class GeminiLiveVoiceSession {
 
   private scheduledPlaybackTime = 0;
   private activePlaybackNodes = new Set<AudioBufferSourceNode>();
-  private lastTranscriptBySender: Record<TranscriptSender, string> = {
+  private pendingTranscriptBySender: Record<TranscriptSender, string> = {
     user: "",
     assistant: "",
+  };
+  private lastTranscriptBySender: Record<
+    TranscriptSender,
+    { text: string; at: number } | null
+  > = {
+    user: null,
+    assistant: null,
   };
 
   constructor(callbacks: GeminiLiveVoiceSessionCallbacks = {}) {
@@ -196,10 +208,21 @@ export class GeminiLiveVoiceSession {
     await this.outputContext.resume();
     this.scheduledPlaybackTime = this.outputContext.currentTime;
 
+    this.pendingTranscriptBySender = {
+      user: "",
+      assistant: "",
+    };
+    this.lastTranscriptBySender = {
+      user: null,
+      assistant: null,
+    };
+
     this.session = await ai.live.connect({
       model: params.model,
       config: {
         responseModalities: [Modality.AUDIO],
+        inputAudioTranscription: {},
+        outputAudioTranscription: {},
       },
       callbacks: {
         onopen: () => {
@@ -234,6 +257,14 @@ export class GeminiLiveVoiceSession {
     }
 
     this.session = null;
+    this.pendingTranscriptBySender = {
+      user: "",
+      assistant: "",
+    };
+    this.lastTranscriptBySender = {
+      user: null,
+      assistant: null,
+    };
     this.clearPlaybackQueue();
     await this.stopVideo();
 
@@ -543,14 +574,12 @@ export class GeminiLiveVoiceSession {
       }
     }
 
-    const inputTranscript = serverContent.inputTranscription;
-    if (inputTranscript?.finished) {
-      this.emitTranscript("user", inputTranscript.text);
-    }
+    this.captureTranscript("user", serverContent.inputTranscription);
+    this.captureTranscript("assistant", serverContent.outputTranscription);
 
-    const outputTranscript = serverContent.outputTranscription;
-    if (outputTranscript?.finished) {
-      this.emitTranscript("assistant", outputTranscript.text);
+    if (serverContent.turnComplete) {
+      this.flushPendingTranscript("user", "turn_complete");
+      this.flushPendingTranscript("assistant", "turn_complete");
     }
   }
 
@@ -601,12 +630,56 @@ export class GeminiLiveVoiceSession {
     }
   }
 
-  private emitTranscript(sender: TranscriptSender, rawText: string | undefined): void {
+  private captureTranscript(
+    sender: TranscriptSender,
+    transcript: LiveTranscriptionPayload | undefined,
+  ): void {
+    if (!transcript) return;
+
+    const text = normalizeText(transcript.text);
+    if (!text) return;
+
+    this.pendingTranscriptBySender[sender] = text;
+    this.debug("live.transcript.received", {
+      sender,
+      textLength: text.length,
+      finished: Boolean(transcript.finished),
+    });
+
+    if (transcript.finished) {
+      this.flushPendingTranscript(sender, "finished");
+    }
+  }
+
+  private flushPendingTranscript(
+    sender: TranscriptSender,
+    reason: "finished" | "turn_complete",
+  ): void {
+    const pendingText = this.pendingTranscriptBySender[sender];
+    if (!pendingText) return;
+    this.pendingTranscriptBySender[sender] = "";
+    this.emitTranscript(sender, pendingText, reason);
+  }
+
+  private emitTranscript(
+    sender: TranscriptSender,
+    rawText: string | undefined,
+    reason: "finished" | "turn_complete",
+  ): void {
     const text = normalizeText(rawText);
     if (!text) return;
 
-    if (this.lastTranscriptBySender[sender] === text) return;
-    this.lastTranscriptBySender[sender] = text;
+    const now = Date.now();
+    const last = this.lastTranscriptBySender[sender];
+    if (last && last.text === text && now - last.at < TRANSCRIPT_DUPLICATE_WINDOW_MS) {
+      this.debug("live.transcript.duplicate_skipped", {
+        sender,
+        textLength: text.length,
+        reason,
+      });
+      return;
+    }
+    this.lastTranscriptBySender[sender] = { text, at: now };
 
     this.callbacks.onTranscript?.({ sender, text });
   }

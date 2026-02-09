@@ -25,7 +25,8 @@ import {
 
 // --- Types ---
 type Mode = "voice" | "text" | "profile";
-type Persona = "Maya" | "Zarra" | "Ore";
+type Persona = "Zee";
+type LiveVoiceName = "Aoede" | "Kore" | "Charon" | "Fenrir";
 type CameraFacingMode = "user" | "environment";
 
 interface MessageAttachmentData {
@@ -179,6 +180,24 @@ const ONBOARDING_STEPS = [
 ];
 
 const CHAT_IMAGE_MAX_COUNT = 3;
+const TRANSCRIPT_DEDUPE_WINDOW_MS = 2500;
+const TRANSCRIPT_DEDUPE_PRUNE_MS = 60000;
+const ASSISTANT_NAME: Persona = "Zee";
+const DEFAULT_LIVE_VOICE: LiveVoiceName = "Aoede";
+const LIVE_VOICE_OPTIONS: Array<{
+  id: LiveVoiceName;
+  label: string;
+  style: "feminine" | "masculine";
+}> = [
+  { id: "Aoede", label: "Aoede", style: "feminine" },
+  { id: "Kore", label: "Kore", style: "feminine" },
+  { id: "Charon", label: "Charon", style: "masculine" },
+  { id: "Fenrir", label: "Fenrir", style: "masculine" },
+];
+
+function isLiveVoiceName(value: unknown): value is LiveVoiceName {
+  return LIVE_VOICE_OPTIONS.some((option) => option.id === value);
+}
 
 // --- Components ---
 
@@ -918,16 +937,18 @@ const ProfileView = ({ onClose, user, onLogout }: { onClose: () => void; user: a
 };
 
 const SharedHeader = ({ 
-  persona, 
-  setPersona, 
+  assistantName,
+  selectedVoice,
+  setSelectedVoice,
   onProfile, 
   isActive, 
   duration,
   mode,
   userProfileImage
 }: { 
-  persona: Persona, 
-  setPersona: (p: Persona) => void, 
+  assistantName: Persona,
+  selectedVoice: LiveVoiceName,
+  setSelectedVoice: (voice: LiveVoiceName) => void,
   onProfile: () => void, 
   isActive: boolean,
   duration: number,
@@ -946,26 +967,39 @@ const SharedHeader = ({
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button className="flex items-center gap-2 bg-[#10383A] border border-white/10 px-4 py-2 rounded-2xl shadow-sm hover:bg-[#10383A]/80 transition-colors focus:outline-none" data-testid="button-persona-selector">
-              <span className="font-bold text-lg text-white">{persona}</span>
+              <div className="flex flex-col items-start leading-tight">
+                <span className="font-bold text-lg text-white">{assistantName}</span>
+                <span className="text-[10px] uppercase tracking-wide text-white/60">
+                  Voice: {selectedVoice}
+                </span>
+              </div>
               <ChevronRight className="w-4 h-4 rotate-90 text-white/70" />
             </button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="w-48 rounded-xl bg-[#10383A] border-white/10 text-white">
-            <DropdownMenuItem onClick={() => setPersona("Maya")} className="gap-2 p-3 font-medium cursor-pointer focus:bg-white/10 focus:text-white" data-testid="button-persona-maya">
-              <Avatar className="w-6 h-6">
-                <AvatarImage src={mayaAvatar} />
-                <AvatarFallback>M</AvatarFallback>
-              </Avatar>
-              Maya
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => setPersona("Zarra")} className="gap-2 p-3 font-medium cursor-pointer focus:bg-white/10 focus:text-white" data-testid="button-persona-zarra">
-              <div className="w-6 h-6 rounded-full bg-purple-500 flex items-center justify-center text-[10px] text-white font-bold">Z</div>
-              Zarra
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => setPersona("Ore")} className="gap-2 p-3 font-medium cursor-pointer focus:bg-white/10 focus:text-white" data-testid="button-persona-ore">
-              <div className="w-6 h-6 rounded-full bg-orange-500 flex items-center justify-center text-[10px] text-white font-bold">O</div>
-              Ore
-            </DropdownMenuItem>
+          <DropdownMenuContent align="start" className="w-56 rounded-xl bg-[#10383A] border-white/10 text-white">
+            {LIVE_VOICE_OPTIONS.map((voice) => (
+              <DropdownMenuItem
+                key={voice.id}
+                onClick={() => setSelectedVoice(voice.id)}
+                className="gap-2 p-3 font-medium cursor-pointer focus:bg-white/10 focus:text-white"
+                data-testid={`button-voice-${voice.id.toLowerCase()}`}
+              >
+                <div
+                  className={cn(
+                    "w-6 h-6 rounded-full flex items-center justify-center text-[10px] text-white font-bold",
+                    voice.style === "feminine" ? "bg-pink-500/80" : "bg-sky-500/80",
+                  )}
+                >
+                  {voice.id.slice(0, 1)}
+                </div>
+                <div className="flex items-center gap-2">
+                  <span>{voice.label}</span>
+                  <span className="text-[10px] uppercase tracking-wide text-white/60">
+                    {voice.style === "feminine" ? "Woman" : "Man"}
+                  </span>
+                </div>
+              </DropdownMenuItem>
+            ))}
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
@@ -997,13 +1031,14 @@ const SharedHeader = ({
   );
 };
 
-const VoiceView = ({ isActive, isConnecting, onEndCall, onProfile, persona, setPersona, mode, setMode, duration, userProfileImage, isVideoEnabled, onToggleVideo, onFlipCamera, videoStream, isVideoTransitioning }: { 
+const VoiceView = ({ isActive, isConnecting, onEndCall, onProfile, assistantName, selectedVoice, setSelectedVoice, mode, setMode, duration, userProfileImage, isVideoEnabled, onToggleVideo, onFlipCamera, videoStream, isVideoTransitioning }: { 
   isActive: boolean; 
   isConnecting: boolean;
   onEndCall: () => void;
   onProfile: () => void;
-  persona: Persona;
-  setPersona: (p: Persona) => void;
+  assistantName: Persona;
+  selectedVoice: LiveVoiceName;
+  setSelectedVoice: (voice: LiveVoiceName) => void;
   mode: Mode;
   setMode: (m: Mode) => void;
   duration: number;
@@ -1042,8 +1077,9 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onProfile, persona, setP
         
         <div className="relative z-50 pointer-events-auto">
           <SharedHeader 
-            persona={persona} 
-            setPersona={setPersona} 
+            assistantName={assistantName}
+            selectedVoice={selectedVoice}
+            setSelectedVoice={setSelectedVoice}
             onProfile={onProfile} 
             isActive={isActive} 
             duration={duration} 
@@ -1119,7 +1155,7 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onProfile, persona, setP
                    )}
                    onClick={onEndCall}
                    disabled={isConnecting}
-                   aria-label={isConnecting ? "Connecting voice session" : `Start voice call with ${persona}`}
+                   aria-label={isConnecting ? "Connecting voice session" : `Start voice call with ${assistantName}`}
                    data-testid="button-start-call"
                  >
                    <div className="absolute inset-0 bg-[#DAA112]/20 rounded-full animate-ping opacity-20 duration-3000" />
@@ -1133,7 +1169,7 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onProfile, persona, setP
                    </div>
                  </button>
                  <p className="text-white/60 font-medium tracking-wide">
-                   {isConnecting ? `Connecting to ${persona}...` : `Tap to speak to ${persona}`}
+                   {isConnecting ? `Connecting to ${assistantName}...` : `Tap to speak to ${assistantName}`}
                  </p>
               </div>
             )}
@@ -1484,12 +1520,13 @@ function App() {
   const liveRunIdRef = useRef<string | null>(null);
   const liveStartNonceRef = useRef(0);
   const transcriptQueueRef = useRef<Promise<void>>(Promise.resolve());
-  const transcriptSeenRef = useRef<Set<string>>(new Set());
+  const transcriptSeenRef = useRef<Map<string, number>>(new Map());
   const manualLiveStopRef = useRef(false);
   const autoResumeBudgetRef = useRef(1);
   const isVideoEnabledRef = useRef(false);
   const cameraFacingModeRef = useRef<CameraFacingMode>("environment");
   const pendingAttachmentsRef = useRef<PendingImageAttachment[]>([]);
+  const selectedVoiceRef = useRef<LiveVoiceName>(DEFAULT_LIVE_VOICE);
 
   const logLiveTrace = (
     event: string,
@@ -1513,6 +1550,7 @@ function App() {
 
   const { data: preferences } = useQuery<{
     selectedPersona?: string;
+    selectedVoice?: string;
     onboardingCompleted?: boolean;
   }>({
     queryKey: ["/api/preferences"],
@@ -1520,13 +1558,15 @@ function App() {
   });
 
   const [showOnboarding, setShowOnboarding] = useState(false);
-  const [persona, setPersona] = useState<Persona>("Maya");
+  const [selectedVoice, setSelectedVoice] =
+    useState<LiveVoiceName>(DEFAULT_LIVE_VOICE);
+  const persona: Persona = ASSISTANT_NAME;
 
   useEffect(() => {
     if (preferences) {
       setShowOnboarding(!preferences.onboardingCompleted);
-      if (preferences.selectedPersona) {
-        setPersona(preferences.selectedPersona as Persona);
+      if (isLiveVoiceName(preferences.selectedVoice)) {
+        setSelectedVoice(preferences.selectedVoice);
       }
     }
   }, [preferences]);
@@ -1544,6 +1584,10 @@ function App() {
   }, [pendingAttachments]);
 
   useEffect(() => {
+    selectedVoiceRef.current = selectedVoice;
+  }, [selectedVoice]);
+
+  useEffect(() => {
     return () => {
       for (const attachment of pendingAttachmentsRef.current) {
         URL.revokeObjectURL(attachment.previewUrl);
@@ -1553,7 +1597,8 @@ function App() {
 
   const updatePreferencesMutation = useMutation({
     mutationFn: async (data: {
-      selectedPersona?: string;
+      selectedPersona?: Persona;
+      selectedVoice?: LiveVoiceName;
       onboardingCompleted?: boolean;
     }) => {
       const res = await apiRequest("PUT", "/api/preferences", data);
@@ -1568,14 +1613,16 @@ function App() {
     setShowOnboarding(false);
     updatePreferencesMutation.mutate({
       selectedPersona: persona,
+      selectedVoice,
       onboardingCompleted: true,
     });
   };
 
-  const handlePersonaChange = (p: Persona) => {
-    setPersona(p);
+  const handleVoiceChange = (voice: LiveVoiceName) => {
+    setSelectedVoice(voice);
     updatePreferencesMutation.mutate({
-      selectedPersona: p,
+      selectedPersona: persona,
+      selectedVoice: voice,
       onboardingCompleted: preferences?.onboardingCompleted ?? true,
     });
   };
@@ -1606,7 +1653,7 @@ function App() {
     } else if (conversations && conversations.length === 0) {
       createConversationMutation.mutate({ persona });
     }
-  }, [conversations, isAuthenticated, showOnboarding, persona]);
+  }, [conversations, isAuthenticated, showOnboarding]);
 
   const ensureActiveConversationId = async (): Promise<string> => {
     if (activeConversationId) {
@@ -1635,14 +1682,16 @@ function App() {
   });
 
   const createLiveTokenMutation = useMutation({
-    mutationFn: async (data: { persona: Persona }) => {
+    mutationFn: async (data: { persona: Persona; voice: LiveVoiceName }) => {
       const res = await apiRequest("POST", "/api/live/token", {
         persona: data.persona,
+        voice: data.voice,
         responseModality: "AUDIO",
       });
       const body = (await res.json()) as {
         ephemeralToken: string;
         model: string;
+        voice?: LiveVoiceName;
         traceId?: string;
       };
       return {
@@ -1692,10 +1741,17 @@ function App() {
     text: string;
   }) => {
     const dedupeKey = `${payload.sender}:${payload.text}`;
-    if (transcriptSeenRef.current.has(dedupeKey)) {
+    const now = Date.now();
+    const lastSeenAt = transcriptSeenRef.current.get(dedupeKey);
+    if (typeof lastSeenAt === "number" && now - lastSeenAt < TRANSCRIPT_DEDUPE_WINDOW_MS) {
       return;
     }
-    transcriptSeenRef.current.add(dedupeKey);
+    transcriptSeenRef.current.set(dedupeKey, now);
+    transcriptSeenRef.current.forEach((seenAt, key) => {
+      if (now - seenAt > TRANSCRIPT_DEDUPE_PRUNE_MS) {
+        transcriptSeenRef.current.delete(key);
+      }
+    });
 
     transcriptQueueRef.current = transcriptQueueRef.current
       .catch(() => undefined)
@@ -2134,7 +2190,7 @@ function App() {
 
     liveConversationRef.current = null;
     liveRunIdRef.current = null;
-    transcriptSeenRef.current = new Set();
+    transcriptSeenRef.current = new Map();
     transcriptQueueRef.current = Promise.resolve();
     setIsCalling(false);
     setIsLiveConnecting(false);
@@ -2157,7 +2213,7 @@ function App() {
     liveRunIdRef.current = runId;
     setLiveError(null);
     setIsLiveConnecting(true);
-    transcriptSeenRef.current = new Set();
+    transcriptSeenRef.current = new Map();
     transcriptQueueRef.current = Promise.resolve();
     manualLiveStopRef.current = false;
     if (!options?.autoResumed) {
@@ -2179,10 +2235,14 @@ function App() {
         runId,
         conversationId,
         persona,
+        voice: selectedVoiceRef.current,
         autoResumed: Boolean(options?.autoResumed),
       });
 
-      const tokenPayload = await createLiveTokenMutation.mutateAsync({ persona });
+      const tokenPayload = await createLiveTokenMutation.mutateAsync({
+        persona,
+        voice: selectedVoiceRef.current,
+      });
 
       if (startNonce !== liveStartNonceRef.current) {
         return;
@@ -2192,6 +2252,7 @@ function App() {
         runId,
         conversationId,
         model: tokenPayload.model,
+        voice: tokenPayload.voice ?? selectedVoiceRef.current,
         traceId: tokenPayload.traceId,
       });
 
@@ -2470,8 +2531,9 @@ function App() {
           isConnecting={isLiveConnecting}
           onEndCall={handleEndCall}
           onProfile={() => setShowProfile(true)}
-          persona={persona}
-          setPersona={handlePersonaChange}
+          assistantName={persona}
+          selectedVoice={selectedVoice}
+          setSelectedVoice={handleVoiceChange}
           mode={mode}
           setMode={setMode}
           duration={duration}

@@ -14,19 +14,24 @@ import {
 } from "@shared/schema";
 import {
   createLiveToken,
+  DEFAULT_LIVE_VOICE,
+  DEFAULT_PERSONA,
   generateTextReply,
   generateTextReplyStream,
   summarizeImageForMemory,
+  type LiveVoiceName,
 } from "./gemini";
 import { elapsedMs, getTraceId, trace, traceError } from "./observability";
 import { getMediaStore, type StorageProvider } from "./media-store";
 import { createSignedMediaPath, verifyMediaSignature } from "./media-signing";
 
-const personaSchema = z.enum(["Maya", "Zarra", "Ore"]);
+const acceptedPersonaSchema = z.enum(["Zee", "Maya", "Zarra", "Ore"]);
+const liveVoiceSchema = z.enum(["Aoede", "Kore", "Charon", "Fenrir"]);
 
 const liveTokenSchema = z.object({
-  persona: personaSchema.optional(),
+  persona: acceptedPersonaSchema.optional(),
   responseModality: z.enum(["AUDIO", "TEXT"]).optional(),
+  voice: liveVoiceSchema.optional(),
 });
 
 const chatRespondSchema = z
@@ -34,7 +39,7 @@ const chatRespondSchema = z
     conversationId: z.string().min(1, "conversationId is required"),
     text: z.string().trim().max(8000, "Message is too long").default(""),
     attachmentIds: z.array(z.string().min(1)).optional().default([]),
-    persona: personaSchema.optional(),
+    persona: acceptedPersonaSchema.optional(),
   })
   .superRefine((value, ctx) => {
     if (value.text.length === 0 && value.attachmentIds.length === 0) {
@@ -87,6 +92,15 @@ const CHAT_IMAGE_MAX_BYTES = parsePositiveInt(
   process.env.CHAT_IMAGE_MAX_BYTES,
   8 * 1024 * 1024,
 );
+
+function normalizePersona(_: unknown): "Zee" {
+  return DEFAULT_PERSONA;
+}
+
+function resolveLiveVoice(input: unknown): LiveVoiceName {
+  const parsed = liveVoiceSchema.safeParse(input);
+  return parsed.success ? parsed.data : DEFAULT_LIVE_VOICE;
+}
 
 function isStorageProvider(value: string): value is StorageProvider {
   return value === "local" || value === "replit";
@@ -187,7 +201,7 @@ async function buildModelMessages(params: {
 
 async function summarizeAndPersistAttachments(params: {
   req: any;
-  persona: "Maya" | "Zarra" | "Ore";
+  persona: "Zee";
   userText: string;
   attachments: MessageAttachment[];
   mediaStore: ReturnType<typeof getMediaStore>;
@@ -264,7 +278,11 @@ export async function registerRoutes(
   app.post("/api/conversations", isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.session.userId;
-      const data = insertConversationSchema.parse({ ...req.body, userId });
+      const data = insertConversationSchema.parse({
+        ...req.body,
+        userId,
+        persona: DEFAULT_PERSONA,
+      });
       const conv = await storage.createConversation(data);
       res.status(201).json(conv);
     } catch (error) {
@@ -588,7 +606,13 @@ export async function registerRoutes(
     try {
       const userId = req.session.userId;
       const prefs = await storage.getUserPreferences(userId);
-      res.json(prefs || { selectedPersona: "Maya", onboardingCompleted: false });
+      res.json(
+        prefs || {
+          selectedPersona: DEFAULT_PERSONA,
+          selectedVoice: DEFAULT_LIVE_VOICE,
+          onboardingCompleted: false,
+        },
+      );
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch preferences" });
     }
@@ -631,20 +655,24 @@ export async function registerRoutes(
     try {
       const parsed = liveTokenSchema.parse(req.body ?? {});
       const prefs = await storage.getUserPreferences(req.session.userId);
-      const persona = parsed.persona ?? personaSchema.parse(prefs?.selectedPersona ?? "Maya");
+      const persona = normalizePersona(parsed.persona ?? prefs?.selectedPersona);
+      const voice = resolveLiveVoice(parsed.voice ?? prefs?.selectedVoice);
 
       trace(req, "live.token.requested", {
         persona,
+        voice,
         responseModality: parsed.responseModality ?? "AUDIO",
       });
 
       const token = await createLiveToken({
         persona,
         responseModality: parsed.responseModality,
+        voiceName: voice,
       });
 
       trace(req, "live.token.generated", {
         persona,
+        voice: token.voiceName,
         model: token.model,
         responseModality: token.responseModality,
         elapsedMs: elapsedMs(startedAt),
@@ -654,6 +682,7 @@ export async function registerRoutes(
         traceId: getTraceId(req),
         ephemeralToken: token.tokenName,
         model: token.model,
+        voice: token.voiceName,
         responseModality: token.responseModality,
         generatedAt: token.generatedAt,
         expireTime: token.expireTime,
@@ -698,7 +727,7 @@ export async function registerRoutes(
         });
       }
 
-      const persona = parsed.persona ?? personaSchema.parse(conversation.persona ?? "Maya");
+      const persona = normalizePersona(parsed.persona ?? conversation.persona);
 
       trace(req, "chat.respond.requested", {
         conversationId: conversation.id,
@@ -831,7 +860,7 @@ export async function registerRoutes(
         });
       }
 
-      const persona = parsed.persona ?? personaSchema.parse(conversation.persona ?? "Maya");
+      const persona = normalizePersona(parsed.persona ?? conversation.persona);
 
       const pendingAttachments = await storage.getPendingAttachmentsByIds(
         conversation.id,
