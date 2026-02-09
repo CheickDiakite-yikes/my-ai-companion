@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useId } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Mic, Video, PhoneOff, MessageSquare, Menu, Settings, ChevronRight, X, ArrowLeft, Camera, Paperclip, LogOut, Eye, EyeOff, ImageIcon } from "lucide-react";
+import { Mic, Video, PhoneOff, MessageSquare, Menu, Settings, ChevronRight, X, ArrowLeft, Camera, LogOut, Eye, EyeOff, ImageIcon } from "lucide-react";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -893,15 +893,6 @@ const SharedFooter = ({
           disabled={isSending}
         >
            <Camera className="w-6 h-6" />
-         </Button>
-         <Button 
-          variant="ghost" 
-          size="icon" 
-          className="text-white/70 hover:bg-white/10 hover:text-white transition-colors"
-          onClick={() => setIsMediaTrayOpen((current) => !current)}
-          disabled={isSending}
-        >
-           <Paperclip className="w-6 h-6" />
          </Button>
          <div className="flex-1 bg-black/20 rounded-full px-4 py-2.5 border border-white/5 focus-within:border-white/20 focus-within:bg-black/30 transition-all">
            <input 
