@@ -293,24 +293,68 @@ function buildTextPromptAdditions(params: {
   return sections.join("\n\n");
 }
 
+export interface SplitDiagnostics {
+  parts: string[];
+  rawLength: number;
+  delimiterCount: number;
+  rawDelimiterPositions: number[];
+  partLengths: number[];
+  wasCapped: boolean;
+  endsAbruptly: boolean;
+}
+
 export function splitAssistantReplyParts(
   replyText: string,
   maxParts = MAX_MULTIPART_SEGMENTS,
 ): string[] {
+  return splitAssistantReplyPartsWithDiagnostics(replyText, maxParts).parts;
+}
+
+export function splitAssistantReplyPartsWithDiagnostics(
+  replyText: string,
+  maxParts = MAX_MULTIPART_SEGMENTS,
+): SplitDiagnostics {
   const normalized = replyText.trim();
-  if (!normalized) return [];
+  if (!normalized) return { parts: [], rawLength: 0, delimiterCount: 0, rawDelimiterPositions: [], partLengths: [], wasCapped: false, endsAbruptly: false };
+
+  const rawDelimiterPositions: number[] = [];
+  let searchStart = 0;
+  while (true) {
+    const idx = normalized.indexOf(ZEE_SPLIT_TOKEN, searchStart);
+    if (idx === -1) break;
+    rawDelimiterPositions.push(idx);
+    searchStart = idx + ZEE_SPLIT_TOKEN.length;
+  }
 
   const pieces = normalized
     .split(ZEE_SPLIT_TOKEN)
     .map((segment) => segment.trim())
     .filter((segment) => segment.length > 0);
 
-  if (pieces.length === 0) return [normalized];
-  if (pieces.length <= maxParts) return pieces;
+  const endsAbruptly = /[a-zA-Z,;:]\s*$/.test(normalized) && !normalized.endsWith(".");
 
-  const head = pieces.slice(0, maxParts - 1);
-  const tail = pieces.slice(maxParts - 1).join(" ");
-  return [...head, tail];
+  let parts: string[];
+  let wasCapped = false;
+  if (pieces.length === 0) {
+    parts = [normalized];
+  } else if (pieces.length <= maxParts) {
+    parts = pieces;
+  } else {
+    wasCapped = true;
+    const head = pieces.slice(0, maxParts - 1);
+    const tail = pieces.slice(maxParts - 1).join(" ");
+    parts = [...head, tail];
+  }
+
+  return {
+    parts,
+    rawLength: normalized.length,
+    delimiterCount: rawDelimiterPositions.length,
+    rawDelimiterPositions,
+    partLengths: parts.map((p) => p.length),
+    wasCapped,
+    endsAbruptly,
+  };
 }
 
 function buildGroundingSnapshot(params: {

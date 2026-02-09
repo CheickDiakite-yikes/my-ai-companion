@@ -21,6 +21,7 @@ import {
   generateTextReply,
   generateTextReplyStream,
   splitAssistantReplyParts,
+  splitAssistantReplyPartsWithDiagnostics,
   summarizeImageForMemory,
   type LiveVoiceName,
   type ResponseStylePreset,
@@ -1282,6 +1283,7 @@ export async function registerRoutes(
         model: aiResponse.model,
         responseId: aiResponse.responseId,
         usage: aiResponse.usage,
+        rawReplyLength: aiResponse.replyText.length,
         modelLatencyMs: elapsedMs(aiStartedAt),
       });
 
@@ -1304,9 +1306,23 @@ export async function registerRoutes(
         throw new Error("Gemini returned an empty response");
       }
 
-      const splitParts = ENABLE_MULTIPART_TEXT
-        ? splitAssistantReplyParts(groundedReplyText)
-        : [groundedReplyText];
+      const splitDiag = ENABLE_MULTIPART_TEXT
+        ? splitAssistantReplyPartsWithDiagnostics(groundedReplyText)
+        : { parts: [groundedReplyText], rawLength: groundedReplyText.length, delimiterCount: 0, rawDelimiterPositions: [], partLengths: [groundedReplyText.length], wasCapped: false, endsAbruptly: false };
+      const splitParts = splitDiag.parts;
+
+      trace(req, "chat.multipart.split_diagnostics", {
+        conversationId: conversation.id,
+        enabled: ENABLE_MULTIPART_TEXT,
+        rawLength: splitDiag.rawLength,
+        delimiterCount: splitDiag.delimiterCount,
+        delimiterPositions: splitDiag.rawDelimiterPositions,
+        partCount: splitDiag.parts.length,
+        partLengths: splitDiag.partLengths,
+        wasCapped: splitDiag.wasCapped,
+        endsAbruptly: splitDiag.endsAbruptly,
+        tailSnippet: groundedReplyText.slice(-80),
+      });
 
       const assistantMessages =
         splitParts.length > 0
@@ -1325,7 +1341,7 @@ export async function registerRoutes(
         trace(req, "chat.multipart.completed", {
           conversationId: conversation.id,
           partCount: assistantMessages.length,
-          delimiterUsed: grounded.replyText.includes(ZEE_SPLIT_TOKEN),
+          delimiterUsed: splitDiag.delimiterCount > 0,
         });
       }
 
@@ -1660,9 +1676,24 @@ export async function registerRoutes(
         throw new Error("Gemini returned an empty response");
       }
 
-      const splitParts = ENABLE_MULTIPART_TEXT
-        ? splitAssistantReplyParts(groundedReplyText)
-        : [groundedReplyText];
+      const splitDiag = ENABLE_MULTIPART_TEXT
+        ? splitAssistantReplyPartsWithDiagnostics(groundedReplyText)
+        : { parts: [groundedReplyText], rawLength: groundedReplyText.length, delimiterCount: 0, rawDelimiterPositions: [], partLengths: [groundedReplyText.length], wasCapped: false, endsAbruptly: false };
+      const splitParts = splitDiag.parts;
+
+      trace(req, "chat.multipart.split_diagnostics", {
+        conversationId: conversation.id,
+        enabled: ENABLE_MULTIPART_TEXT,
+        rawLength: splitDiag.rawLength,
+        delimiterCount: splitDiag.delimiterCount,
+        delimiterPositions: splitDiag.rawDelimiterPositions,
+        partCount: splitDiag.parts.length,
+        partLengths: splitDiag.partLengths,
+        wasCapped: splitDiag.wasCapped,
+        endsAbruptly: splitDiag.endsAbruptly,
+        syntheticPartCount,
+        tailSnippet: groundedReplyText.slice(-80),
+      });
 
       const assistantMessages =
         splitParts.length > 0
@@ -1691,7 +1722,7 @@ export async function registerRoutes(
         trace(req, "chat.multipart.completed", {
           conversationId: conversation.id,
           partCount: finalizedAssistantMessages.length,
-          delimiterUsed: normalizedReply.includes(ZEE_SPLIT_TOKEN),
+          delimiterUsed: splitDiag.delimiterCount > 0,
         });
       }
 
@@ -1712,7 +1743,9 @@ export async function registerRoutes(
         model,
         responseId,
         usage,
+        rawReplyLength: normalizedReply.length,
         partCount: finalizedAssistantMessages.length,
+        syntheticPartCount,
         elapsedMs: elapsedMs(startedAt),
       });
 
