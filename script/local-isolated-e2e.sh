@@ -190,7 +190,7 @@ CHAT_BODY="$(new_tmp)"
 CHAT_STATUS="$(curl -sS -w "%{http_code}" -D "$HEADERS_FILE" -o "$CHAT_BODY" -b "$COOKIE_FILE" -c "$COOKIE_FILE" \
   -H "Content-Type: application/json" \
   -X POST "${BASE_URL}/api/chat/respond" \
-  --data "{\"conversationId\":\"${CONV_ID}\",\"text\":\"heyy from local api test\",\"persona\":\"Zee\"}")"
+  --data "{\"conversationId\":\"${CONV_ID}\",\"text\":\"Double text me in exactly 2 short playful messages.\",\"persona\":\"Zee\"}")"
 if [[ "$CHAT_STATUS" != "201" ]]; then
   echo "[local-e2e] chat_failed status=${CHAT_STATUS} body=$(cat "$CHAT_BODY")"
   exit 13
@@ -198,7 +198,12 @@ fi
 CHAT_TRACE="$(extract_trace "$HEADERS_FILE")"
 CHAT_MODEL="$(parse_json "$CHAT_BODY" "model")"
 CHAT_PREVIEW="$(node -e "const fs=require('fs');const j=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));const t=(j.assistantMessage?.text||'').replace(/\\s+/g,' ').trim();process.stdout.write(t.slice(0,120));" "$CHAT_BODY")"
-log "chat ok model=${CHAT_MODEL} traceId=${CHAT_TRACE} assistantPreview=\"${CHAT_PREVIEW}\""
+CHAT_PARTS="$(node -e "const fs=require('fs');const j=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));const c=Array.isArray(j.assistantMessages)?j.assistantMessages.length:0;process.stdout.write(String(c));" "$CHAT_BODY")"
+if [[ "$CHAT_PARTS" -lt 2 ]]; then
+  echo "[local-e2e] chat_multipart_failed expected>=2 got=${CHAT_PARTS} body=$(cat "$CHAT_BODY")"
+  exit 32
+fi
+log "chat ok model=${CHAT_MODEL} traceId=${CHAT_TRACE} assistantParts=${CHAT_PARTS} assistantPreview=\"${CHAT_PREVIEW}\""
 
 IMAGE_PATH="client/src/assets/maya-avatar.png"
 if [[ ! -f "$IMAGE_PATH" ]]; then
@@ -225,13 +230,13 @@ STREAM_BODY="$(new_tmp)"
 STREAM_STATUS="$(curl -sS -w "%{http_code}" -D "$HEADERS_FILE" -o "$STREAM_BODY" -b "$COOKIE_FILE" -c "$COOKIE_FILE" \
   -H "Content-Type: application/json" \
   -X POST "${BASE_URL}/api/chat/respond/stream" \
-  --data "{\"conversationId\":\"${CONV_ID}\",\"text\":\"What do you see in this image?\",\"persona\":\"Zee\",\"attachmentIds\":[\"${ATTACH_ID}\"]}")"
+  --data "{\"conversationId\":\"${CONV_ID}\",\"text\":\"Triple text me in 3 short messages about what you see in this image.\",\"persona\":\"Zee\",\"attachmentIds\":[\"${ATTACH_ID}\"]}")"
 if [[ "$STREAM_STATUS" != "200" ]]; then
   echo "[local-e2e] stream_failed status=${STREAM_STATUS} body=$(cat "$STREAM_BODY")"
   exit 21
 fi
 STREAM_TRACE="$(extract_trace "$HEADERS_FILE")"
-node -e "const fs=require('fs');const lines=fs.readFileSync(process.argv[1],'utf8').trim().split(/\\n+/).filter(Boolean);const events=lines.map(l=>JSON.parse(l));const hasAck=events.some(e=>e.type==='ack');const hasFinal=events.some(e=>e.type==='final');const partFinalCount=events.filter(e=>e.type==='part_final').length;const final=events.find(e=>e.type==='final');const assistantParts=Array.isArray(final?.assistantMessages)?final.assistantMessages.length:0;if(!hasAck||!hasFinal||partFinalCount===0||assistantParts===0){console.error(events);process.exit(2)};const preview=(final?.assistantMessage?.text||'').replace(/\\s+/g,' ').trim().slice(0,120);console.log('[local-e2e] stream ok traceId=' + process.argv[2] + ' events=' + events.length + ' partFinal=' + partFinalCount + ' assistantParts=' + assistantParts + ' assistantPreview=\"' + preview + '\"');" "$STREAM_BODY" "$STREAM_TRACE"
+node -e "const fs=require('fs');const lines=fs.readFileSync(process.argv[1],'utf8').trim().split(/\\n+/).filter(Boolean);const events=lines.map(l=>JSON.parse(l));const hasAck=events.some(e=>e.type==='ack');const hasFinal=events.some(e=>e.type==='final');const partFinalCount=events.filter(e=>e.type==='part_final').length;const final=events.find(e=>e.type==='final');const assistantParts=Array.isArray(final?.assistantMessages)?final.assistantMessages.length:0;if(!hasAck||!hasFinal||partFinalCount===0||assistantParts<3){console.error(events);process.exit(2)};const preview=(final?.assistantMessage?.text||'').replace(/\\s+/g,' ').trim().slice(0,120);console.log('[local-e2e] stream ok traceId=' + process.argv[2] + ' events=' + events.length + ' partFinal=' + partFinalCount + ' assistantParts=' + assistantParts + ' assistantPreview=\"' + preview + '\"');" "$STREAM_BODY" "$STREAM_TRACE"
 
 log "6/10 call /api/live/token"
 TOKEN_BODY="$(new_tmp)"

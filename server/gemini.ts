@@ -272,6 +272,8 @@ function buildTextPromptAdditions(params: {
       "- Sound like natural human texting and keep pacing dynamic.",
       "- Many turns should be short. Use one-liners when that feels right.",
       "- It is okay to send 1-3 messages in one turn when that feels more human (reaction + follow-up).",
+      "- If the user asks to double text, return 2 messages. If they ask to triple/tripple text, return 3 messages.",
+      "- For casual banter, often send a short reaction first, then a follow-up.",
       params.enableMultipart
         ? `- For multi-message turns, separate each message with ${ZEE_SPLIT_TOKEN}.`
         : "- Return one assistant message per turn.",

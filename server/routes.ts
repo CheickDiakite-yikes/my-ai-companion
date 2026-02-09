@@ -386,6 +386,122 @@ function longestDelimiterPrefixSuffix(buffer: string): number {
   return 0;
 }
 
+function inferDesiredMultipartCount(userText: string): number {
+  const normalized = userText.toLowerCase();
+  const tripleKeyword = "(?:triple|tripple)";
+  if (
+    new RegExp(
+      `\\b(${tripleKeyword}\\s*texts?|${tripleKeyword}-text|3\\s*texts?|three\\s*texts?|three\\s*messages?|3\\s*messages?|${tripleKeyword}\\s*texting|${tripleKeyword}\\s*texts?)\\b`,
+    ).test(normalized)
+  ) {
+    return 3;
+  }
+  if (
+    /\b(double text|double-text|2 texts?|two texts?|two messages?|2 messages?|multiple texts?)\b/.test(
+      normalized,
+    )
+  ) {
+    return 2;
+  }
+
+  const tokenCount = normalized.trim().split(/\s+/).filter(Boolean).length;
+  const casualSignal = /\b(hey+|yo+|sup|wyd|lol|lmao|haha|omg|bro|sis|bet|nah|yep|yup)\b/.test(
+    normalized,
+  );
+
+  if (tokenCount <= 12 && casualSignal) {
+    return 2;
+  }
+
+  return 1;
+}
+
+function splitByNearestWhitespace(input: string, targetLength: number): number {
+  if (input.length <= targetLength) return input.length;
+  let best = targetLength;
+  for (let offset = 0; offset < 40; offset += 1) {
+    const left = targetLength - offset;
+    const right = targetLength + offset;
+    if (left > 10 && /\s/.test(input[left] ?? "")) return left;
+    if (right < input.length - 10 && /\s/.test(input[right] ?? "")) return right;
+    best = right < input.length ? right : best;
+  }
+  return best;
+}
+
+function autoSplitReplyParts(replyText: string, targetParts: number): string[] {
+  const target = Math.min(Math.max(targetParts, 1), 3);
+  const normalized = replyText.replace(/\s+/g, " ").trim();
+  if (!normalized) return [];
+  if (target === 1) return [normalized];
+
+  const sentences =
+    normalized
+      .match(/[^.!?]+[.!?]+|[^.!?]+$/g)
+      ?.map((segment) => segment.trim())
+      .filter((segment) => segment.length > 0) ?? [];
+
+  if (sentences.length >= target) {
+    if (target === 2) {
+      return [sentences[0], sentences.slice(1).join(" ")].filter(Boolean);
+    }
+    if (target === 3) {
+      return [
+        sentences[0],
+        sentences[1],
+        sentences.slice(2).join(" "),
+      ].filter(Boolean);
+    }
+  }
+
+  if (target === 2) {
+    const splitIndex = splitByNearestWhitespace(
+      normalized,
+      Math.max(18, Math.floor(normalized.length * 0.42)),
+    );
+    const first = normalized.slice(0, splitIndex).trim();
+    const second = normalized.slice(splitIndex).trim();
+    return [first, second].filter(Boolean);
+  }
+
+  const firstCut = splitByNearestWhitespace(
+    normalized,
+    Math.max(16, Math.floor(normalized.length / 3)),
+  );
+  const remainder = normalized.slice(firstCut).trim();
+  const secondCut = splitByNearestWhitespace(
+    remainder,
+    Math.max(16, Math.floor(remainder.length / 2)),
+  );
+  const first = normalized.slice(0, firstCut).trim();
+  const second = remainder.slice(0, secondCut).trim();
+  const third = remainder.slice(secondCut).trim();
+  return [first, second, third].filter(Boolean);
+}
+
+function resolveAssistantParts(params: {
+  groundedReplyText: string;
+  userText: string;
+  enableMultipart: boolean;
+}): string[] {
+  if (!params.enableMultipart) {
+    return [params.groundedReplyText.trim()];
+  }
+
+  let parts = splitAssistantReplyParts(params.groundedReplyText);
+  const desiredCount = inferDesiredMultipartCount(params.userText);
+
+  if (parts.length < desiredCount) {
+    parts = autoSplitReplyParts(params.groundedReplyText, desiredCount);
+  }
+
+  if (parts.length === 0) {
+    parts = [params.groundedReplyText.trim()];
+  }
+
+  return parts.slice(0, 3).filter((part) => part.trim().length > 0);
+}
+
 async function runMulterSingleImage(req: any, res: any): Promise<void> {
   const upload = multer({
     storage: multer.memoryStorage(),
@@ -1306,21 +1422,39 @@ export async function registerRoutes(
         throw new Error("Gemini returned an empty response");
       }
 
+      const desiredParts = inferDesiredMultipartCount(parsed.text);
       const splitDiag = ENABLE_MULTIPART_TEXT
         ? splitAssistantReplyPartsWithDiagnostics(groundedReplyText)
-        : { parts: [groundedReplyText], rawLength: groundedReplyText.length, delimiterCount: 0, rawDelimiterPositions: [], partLengths: [groundedReplyText.length], wasCapped: false, endsAbruptly: false };
-      const splitParts = splitDiag.parts;
+        : {
+            parts: [groundedReplyText],
+            rawLength: groundedReplyText.length,
+            delimiterCount: 0,
+            rawDelimiterPositions: [],
+            partLengths: [groundedReplyText.length],
+            wasCapped: false,
+            endsAbruptly: false,
+          };
+      const splitParts = resolveAssistantParts({
+        groundedReplyText,
+        userText: parsed.text,
+        enableMultipart: ENABLE_MULTIPART_TEXT,
+      });
 
       trace(req, "chat.multipart.split_diagnostics", {
         conversationId: conversation.id,
         enabled: ENABLE_MULTIPART_TEXT,
+        desiredParts,
         rawLength: splitDiag.rawLength,
         delimiterCount: splitDiag.delimiterCount,
         delimiterPositions: splitDiag.rawDelimiterPositions,
         partCount: splitDiag.parts.length,
+        resolvedPartCount: splitParts.length,
         partLengths: splitDiag.partLengths,
         wasCapped: splitDiag.wasCapped,
         endsAbruptly: splitDiag.endsAbruptly,
+        fallbackSegmentationApplied:
+          splitDiag.parts.length !== splitParts.length ||
+          splitDiag.parts.some((part, index) => splitParts[index] !== part),
         tailSnippet: groundedReplyText.slice(-80),
       });
 
@@ -1340,6 +1474,7 @@ export async function registerRoutes(
       } else {
         trace(req, "chat.multipart.completed", {
           conversationId: conversation.id,
+          desiredParts,
           partCount: assistantMessages.length,
           delimiterUsed: splitDiag.delimiterCount > 0,
         });
@@ -1676,22 +1811,40 @@ export async function registerRoutes(
         throw new Error("Gemini returned an empty response");
       }
 
+      const desiredParts = inferDesiredMultipartCount(parsed.text);
       const splitDiag = ENABLE_MULTIPART_TEXT
         ? splitAssistantReplyPartsWithDiagnostics(groundedReplyText)
-        : { parts: [groundedReplyText], rawLength: groundedReplyText.length, delimiterCount: 0, rawDelimiterPositions: [], partLengths: [groundedReplyText.length], wasCapped: false, endsAbruptly: false };
-      const splitParts = splitDiag.parts;
+        : {
+            parts: [groundedReplyText],
+            rawLength: groundedReplyText.length,
+            delimiterCount: 0,
+            rawDelimiterPositions: [],
+            partLengths: [groundedReplyText.length],
+            wasCapped: false,
+            endsAbruptly: false,
+          };
+      const splitParts = resolveAssistantParts({
+        groundedReplyText,
+        userText: parsed.text,
+        enableMultipart: ENABLE_MULTIPART_TEXT,
+      });
 
       trace(req, "chat.multipart.split_diagnostics", {
         conversationId: conversation.id,
         enabled: ENABLE_MULTIPART_TEXT,
+        desiredParts,
         rawLength: splitDiag.rawLength,
         delimiterCount: splitDiag.delimiterCount,
         delimiterPositions: splitDiag.rawDelimiterPositions,
         partCount: splitDiag.parts.length,
+        resolvedPartCount: splitParts.length,
         partLengths: splitDiag.partLengths,
         wasCapped: splitDiag.wasCapped,
         endsAbruptly: splitDiag.endsAbruptly,
         syntheticPartCount,
+        fallbackSegmentationApplied:
+          splitDiag.parts.length !== splitParts.length ||
+          splitDiag.parts.some((part, index) => splitParts[index] !== part),
         tailSnippet: groundedReplyText.slice(-80),
       });
 
@@ -1717,10 +1870,12 @@ export async function registerRoutes(
         trace(req, "chat.multipart.fallback_single", {
           conversationId: conversation.id,
           reason: "single_assistant_part",
+          desiredParts,
         });
       } else {
         trace(req, "chat.multipart.completed", {
           conversationId: conversation.id,
+          desiredParts,
           partCount: finalizedAssistantMessages.length,
           delimiterUsed: splitDiag.delimiterCount > 0,
         });
