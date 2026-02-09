@@ -15,6 +15,8 @@ const REDACT_KEYS = new Set([
   "authorization",
   "apiKey",
   "apikey",
+  "sig",
+  "signature",
   "token",
   "accessToken",
   "refreshToken",
@@ -28,7 +30,12 @@ const REDACT_KEYS = new Set([
 
 function shouldRedactKey(key: string): boolean {
   const lower = key.toLowerCase();
-  if (REDACT_KEYS.has(key)) return true;
+  if (REDACT_KEYS.has(key) || REDACT_KEYS.has(lower)) return true;
+
+  const isTokenCountField =
+    lower.endsWith("tokencount") || lower.includes("token_count");
+  if (isTokenCountField) return false;
+
   return (
     lower.includes("token") ||
     lower.includes("secret") ||
@@ -48,10 +55,13 @@ function truncate(input: string, maxLen = MAX_LOG_STRING): string {
 }
 
 function sanitizeString(input: string): string {
-  if (/^auth_tokens\//.test(input)) {
-    return `${input.slice(0, 22)}...[redacted]`;
-  }
-  return truncate(input);
+  let sanitized = input;
+  sanitized = sanitized.replace(
+    /([?&](?:sig|signature)=)[^&]+/gi,
+    "$1[redacted]",
+  );
+  sanitized = sanitized.replace(/auth_tokens\/[A-Za-z0-9_-]{8,}/g, "auth_tokens/[redacted]");
+  return truncate(sanitized);
 }
 
 function sanitizeValue(value: unknown, depth = 0): unknown {

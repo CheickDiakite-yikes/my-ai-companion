@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useId } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Mic, Video, PhoneOff, MessageSquare, Menu, Settings, ChevronRight, X, ArrowLeft, Camera, Paperclip, LogOut, Eye, EyeOff } from "lucide-react";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
@@ -26,6 +26,21 @@ import {
 // --- Types ---
 type Mode = "voice" | "text" | "profile";
 type Persona = "Maya" | "Zarra" | "Ore";
+type CameraFacingMode = "user" | "environment";
+
+interface MessageAttachmentData {
+  id: string;
+  conversationId: string;
+  messageId: string | null;
+  status: string;
+  mimeType: string;
+  byteSize: number;
+  width: number | null;
+  height: number | null;
+  summaryText: string | null;
+  createdAt: string | null;
+  signedUrl: string;
+}
 
 interface MessageData {
   id: string;
@@ -33,11 +48,57 @@ interface MessageData {
   sender: string;
   text: string;
   createdAt: string | null;
+  attachments?: MessageAttachmentData[];
+  isTyping?: boolean;
+  localOnly?: boolean;
 }
 
 interface TraceAwareResponse {
   traceId?: string;
 }
+
+interface PendingImageAttachment {
+  localId: string;
+  attachmentId?: string;
+  attachment?: MessageAttachmentData;
+  previewUrl: string;
+  status: "uploading" | "ready" | "error";
+  error?: string;
+  mimeType: string;
+  byteSize: number;
+}
+
+interface ChatStreamAckEvent {
+  type: "ack";
+  traceId?: string;
+  conversationId: string;
+  userMessage: MessageData;
+}
+
+interface ChatStreamDeltaEvent {
+  type: "delta";
+  text: string;
+}
+
+interface ChatStreamFinalEvent {
+  type: "final";
+  assistantMessage: MessageData;
+  model?: string;
+  usage?: unknown;
+  elapsedMs?: number;
+}
+
+interface ChatStreamErrorEvent {
+  type: "error";
+  message: string;
+  traceId?: string;
+}
+
+type ChatStreamEvent =
+  | ChatStreamAckEvent
+  | ChatStreamDeltaEvent
+  | ChatStreamFinalEvent
+  | ChatStreamErrorEvent;
 
 function createLocalId(prefix: string): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -46,11 +107,40 @@ function createLocalId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+function createRequestTraceId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `trace-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 function getErrorMessage(error: unknown): string {
   if (error instanceof Error) {
     return error.message;
   }
   return String(error);
+}
+
+function toUserFacingCameraError(error: unknown, fallback: string): string {
+  const message = getErrorMessage(error).trim();
+  if (!message) return fallback;
+
+  const lower = message.toLowerCase();
+  if (
+    lower.includes("permission") ||
+    lower.includes("denied") ||
+    lower.includes("notallowederror")
+  ) {
+    return "Camera permission is blocked. Allow camera access and try again.";
+  }
+  if (lower.includes("notfounderror") || lower.includes("device not found")) {
+    return "No camera device was found for this browser session.";
+  }
+  if (lower.includes("timed out")) {
+    return "Camera permission prompt timed out. Try again and approve access.";
+  }
+
+  return `${fallback} (${message})`;
 }
 
 function extractTraceId(
@@ -87,6 +177,8 @@ const ONBOARDING_STEPS = [
     textColor: "text-[#10383A]"
   }
 ];
+
+const CHAT_IMAGE_MAX_COUNT = 3;
 
 // --- Components ---
 
@@ -560,20 +652,40 @@ const AuthPage = ({ onLogin, onRegister, loginError, registerError, isLoggingIn,
 
 const SharedFooter = ({ 
   persona, 
-  onVoiceMode,
-  onSendMessage
+  onSendMessage,
+  onSelectCameraFiles,
+  onSelectGalleryFiles,
+  onRemoveAttachment,
+  pendingAttachments,
+  isSending,
+  uploadError,
 }: { 
   persona: Persona, 
-  onVoiceMode: () => void,
-  onSendMessage: (text: string) => void
+  onSendMessage: (text: string) => void,
+  onSelectCameraFiles: (files: FileList | null) => void;
+  onSelectGalleryFiles: (files: FileList | null) => void;
+  onRemoveAttachment: (localId: string) => void;
+  pendingAttachments: PendingImageAttachment[];
+  isSending: boolean;
+  uploadError: string | null;
 }) => {
   const [inputValue, setInputValue] = useState("");
+  const [isMediaTrayOpen, setIsMediaTrayOpen] = useState(false);
+  const cameraInputId = useId();
+  const galleryInputId = useId();
+
+  const hasReadyAttachment = pendingAttachments.some((item) => item.status === "ready");
+  const hasUploadingAttachment = pendingAttachments.some(
+    (item) => item.status === "uploading",
+  );
 
   const handleSend = () => {
     const trimmed = inputValue.trim();
-    if (!trimmed) return;
+    if (!trimmed && !hasReadyAttachment) return;
+    if (hasUploadingAttachment || isSending) return;
     onSendMessage(trimmed);
     setInputValue("");
+    setIsMediaTrayOpen(false);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -585,11 +697,104 @@ const SharedFooter = ({
 
   return (
     <div className="absolute bottom-0 left-0 right-0 z-50 p-4 bg-[#10383A]/90 backdrop-blur-md border-t border-white/10">
+      {pendingAttachments.length > 0 && (
+        <div className="mb-2 flex items-center gap-2 overflow-x-auto pb-1">
+          {pendingAttachments.map((attachment) => (
+            <div
+              key={attachment.localId}
+              className="relative h-14 w-14 shrink-0 rounded-lg border border-white/20 bg-black/25"
+            >
+              <img
+                src={attachment.previewUrl}
+                alt="Selected attachment"
+                className="h-full w-full rounded-lg object-cover"
+              />
+              <button
+                type="button"
+                className="absolute -right-1 -top-1 rounded-full bg-black/70 p-0.5 text-white"
+                onClick={() => onRemoveAttachment(attachment.localId)}
+                aria-label="Remove attachment"
+              >
+                <X className="h-3 w-3" />
+              </button>
+              <div className="absolute bottom-0 left-0 right-0 rounded-b-lg bg-black/70 px-1 py-[1px] text-center text-[9px] text-white">
+                {attachment.status === "uploading"
+                  ? "Uploading..."
+                  : attachment.status === "error"
+                    ? "Retry"
+                    : "Ready"}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      {uploadError && (
+        <p className="mb-2 text-xs text-red-200" role="status">
+          {uploadError}
+        </p>
+      )}
+      {isMediaTrayOpen && (
+        <div className="mb-2 rounded-xl border border-white/20 bg-black/35 p-2 backdrop-blur-sm">
+          <p className="mb-2 text-[11px] text-white/70">
+            Add an image
+          </p>
+          <div className="grid grid-cols-2 gap-2">
+            <label
+              htmlFor={cameraInputId}
+              className={cn(
+                "flex cursor-pointer items-center justify-center gap-1 rounded-lg border border-white/20 px-3 py-2 text-xs text-white transition-colors",
+                isSending && "pointer-events-none opacity-60",
+              )}
+              onClick={() => setIsMediaTrayOpen(false)}
+            >
+              <Camera className="h-3.5 w-3.5" />
+              Take photo
+            </label>
+            <label
+              htmlFor={galleryInputId}
+              className={cn(
+                "flex cursor-pointer items-center justify-center gap-1 rounded-lg border border-white/20 px-3 py-2 text-xs text-white transition-colors",
+                isSending && "pointer-events-none opacity-60",
+              )}
+              onClick={() => setIsMediaTrayOpen(false)}
+            >
+              <Paperclip className="h-3.5 w-3.5" />
+              Photo library
+            </label>
+          </div>
+        </div>
+      )}
       <div className="flex items-center gap-2">
+         <input
+          id={cameraInputId}
+          type="file"
+          accept="image/*"
+          capture="environment"
+          className="sr-only"
+          onChange={(event) => {
+            onSelectCameraFiles(event.target.files);
+            event.currentTarget.value = "";
+            setIsMediaTrayOpen(false);
+          }}
+        />
+        <input
+          id={galleryInputId}
+          type="file"
+          accept="image/*"
+          multiple
+          className="sr-only"
+          onChange={(event) => {
+            onSelectGalleryFiles(event.target.files);
+            event.currentTarget.value = "";
+            setIsMediaTrayOpen(false);
+          }}
+        />
          <Button 
           variant="ghost" 
           size="icon" 
           className="text-white/70 hover:bg-white/10 hover:text-white transition-colors"
+          onClick={() => setIsMediaTrayOpen((current) => !current)}
+          disabled={isSending}
         >
            <Camera className="w-6 h-6" />
          </Button>
@@ -597,6 +802,8 @@ const SharedFooter = ({
           variant="ghost" 
           size="icon" 
           className="text-white/70 hover:bg-white/10 hover:text-white transition-colors"
+          onClick={() => setIsMediaTrayOpen((current) => !current)}
+          disabled={isSending}
         >
            <Paperclip className="w-6 h-6" />
          </Button>
@@ -608,6 +815,7 @@ const SharedFooter = ({
             value={inputValue}
             onChange={(e) => setInputValue(e.target.value)}
             onKeyDown={handleKeyDown}
+            disabled={isSending}
             data-testid="input-message"
           />
          </div>
@@ -615,6 +823,7 @@ const SharedFooter = ({
            size="icon" 
            className="rounded-full bg-[#DAA112] text-[#10383A] shadow-md hover:bg-[#DAA112]/90"
            onClick={handleSend}
+           disabled={isSending || hasUploadingAttachment || (!inputValue.trim() && !hasReadyAttachment)}
            data-testid="button-send-message"
          >
            <ChevronRight className="w-5 h-5" />
@@ -788,7 +997,7 @@ const SharedHeader = ({
   );
 };
 
-const VoiceView = ({ isActive, isConnecting, onEndCall, onProfile, persona, setPersona, mode, setMode, duration, userProfileImage }: { 
+const VoiceView = ({ isActive, isConnecting, onEndCall, onProfile, persona, setPersona, mode, setMode, duration, userProfileImage, isVideoEnabled, onToggleVideo, onFlipCamera, videoStream, isVideoTransitioning }: { 
   isActive: boolean; 
   isConnecting: boolean;
   onEndCall: () => void;
@@ -799,7 +1008,19 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onProfile, persona, setP
   setMode: (m: Mode) => void;
   duration: number;
   userProfileImage?: string;
+  isVideoEnabled: boolean;
+  onToggleVideo: () => void;
+  onFlipCamera: () => void;
+  videoStream: MediaStream | null;
+  isVideoTransitioning: boolean;
 }) => {
+  const videoPreviewRef = useRef<HTMLVideoElement | null>(null);
+
+  useEffect(() => {
+    if (!videoPreviewRef.current) return;
+    videoPreviewRef.current.srcObject = videoStream;
+  }, [videoStream]);
+
   return (
     <motion.div 
       className="absolute top-0 left-0 right-0 z-40 bg-[#10383A] rounded-b-[2.5rem] shadow-2xl overflow-hidden"
@@ -839,7 +1060,7 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onProfile, persona, setP
           <div className="flex-1 flex flex-col items-center justify-center relative">
             {isActive ? (
               <div className="w-full h-full flex items-center justify-center px-8">
-                <div className="flex items-center justify-center gap-1.5 h-32 w-full">
+                <div className="relative flex items-center justify-center gap-1.5 h-32 w-full">
                   {[...Array(8)].map((_, i) => (
                     <motion.div
                       key={i}
@@ -856,6 +1077,20 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onProfile, persona, setP
                       }}
                     />
                   ))}
+                  {isVideoEnabled && (
+                    <div className="absolute right-2 top-2 w-28 h-40 rounded-xl overflow-hidden border border-white/20 shadow-xl bg-black/40">
+                      <video
+                        ref={videoPreviewRef}
+                        autoPlay
+                        muted
+                        playsInline
+                        className="h-full w-full object-cover"
+                      />
+                      <div className="absolute bottom-0 left-0 right-0 bg-black/60 px-1 py-0.5 text-center text-[10px] text-white/90">
+                        Camera on
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             ) : (
@@ -894,7 +1129,15 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onProfile, persona, setP
                   <Button 
                     variant="outline" 
                     size="icon" 
-                    className="w-14 h-14 rounded-full border-2 border-white/10 bg-white/5 hover:bg-white/10 transition-colors text-white"
+                    className={cn(
+                      "w-14 h-14 rounded-full border-2 border-white/10 transition-colors text-white",
+                      isVideoEnabled
+                        ? "bg-[#DAA112]/30 border-[#DAA112]/70"
+                        : "bg-white/5 hover:bg-white/10",
+                    )}
+                    onClick={onToggleVideo}
+                    disabled={isVideoTransitioning}
+                    data-testid="button-toggle-video"
                   >
                     <Video className="w-6 h-6" />
                   </Button>
@@ -911,8 +1154,11 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onProfile, persona, setP
                     variant="outline" 
                     size="icon" 
                     className="w-14 h-14 rounded-full border-2 border-white/10 bg-white/5 hover:bg-white/10 transition-colors text-white"
+                    onClick={onFlipCamera}
+                    disabled={!isVideoEnabled || isVideoTransitioning}
+                    data-testid="button-flip-camera"
                   >
-                    <Mic className="w-6 h-6" />
+                    <Camera className="w-6 h-6" />
                   </Button>
               </div>
             )}
@@ -942,11 +1188,69 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onProfile, persona, setP
   );
 };
 
-const TextView = ({ messages, onSendMessage, persona }: { messages: MessageData[]; onSendMessage: (text: string) => void; persona: Persona }) => {
+const TextView = ({
+  messages,
+  isStreamingReply,
+  persona,
+  mode,
+}: {
+  messages: MessageData[];
+  isStreamingReply: boolean;
+  persona: Persona;
+  mode: Mode;
+}) => {
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const [showJumpToNewest, setShowJumpToNewest] = useState(false);
+  const shouldAutoStickRef = useRef(true);
+
+  const scrollToBottom = (smooth: boolean) => {
+    if (!scrollRef.current) return;
+    scrollRef.current.scrollTo({
+      top: scrollRef.current.scrollHeight,
+      behavior: smooth ? "smooth" : "auto",
+    });
+  };
+
+  const handleScroll = () => {
+    const node = scrollRef.current;
+    if (!node) return;
+    const nearBottom = node.scrollHeight - (node.scrollTop + node.clientHeight) < 120;
+    shouldAutoStickRef.current = nearBottom;
+    setShowJumpToNewest(!nearBottom);
+  };
+
+  useEffect(() => {
+    scrollToBottom(false);
+    shouldAutoStickRef.current = true;
+    setShowJumpToNewest(false);
+  }, []);
+
+  useEffect(() => {
+    if (shouldAutoStickRef.current) {
+      scrollToBottom(isStreamingReply);
+      setShowJumpToNewest(false);
+    }
+  }, [messages, isStreamingReply]);
+
+  const latestAssistantText =
+    [...messages]
+      .reverse()
+      .find((msg) => msg.sender === "assistant")
+      ?.text ?? "";
+
   return (
-    <div className="h-full flex flex-col bg-[#0D2E30] pt-40 pb-20">
-      <ScrollArea className="flex-1 p-4">
-        <div className="space-y-4 pb-4">
+    <div className="h-full flex flex-col bg-[#0D2E30] pt-40 pb-24 relative">
+      <div className="sr-only" aria-live="polite">
+        {isStreamingReply && !latestAssistantText
+          ? `${persona} is typing`
+          : latestAssistantText}
+      </div>
+      <div
+        ref={scrollRef}
+        onScroll={handleScroll}
+        className="flex-1 overflow-y-auto p-4"
+      >
+        <div className="space-y-4 pb-8">
           {messages.map((msg) => (
             <motion.div
               key={msg.id}
@@ -954,7 +1258,7 @@ const TextView = ({ messages, onSendMessage, persona }: { messages: MessageData[
               animate={{ opacity: 1, y: 0 }}
               className={cn(
                 "flex w-full",
-                msg.sender === "user" ? "justify-end" : "justify-start"
+                msg.sender === "user" ? "justify-end" : "justify-start",
               )}
             >
               <div className="flex items-end gap-2 max-w-[80%]">
@@ -966,15 +1270,37 @@ const TextView = ({ messages, onSendMessage, persona }: { messages: MessageData[
                 )}
                 <div
                   className={cn(
-                    "px-5 py-3 rounded-2xl text-sm leading-relaxed shadow-sm",
-                    msg.sender === "user" 
-                      ? "bg-[#DAA112] text-[#10383A] font-medium rounded-br-none" 
-                      : "bg-white text-[#10383A] rounded-bl-none"
+                    "rounded-2xl text-sm leading-relaxed shadow-sm",
+                    msg.sender === "user"
+                      ? "bg-[#DAA112] text-[#10383A] font-medium rounded-br-none"
+                      : "bg-white text-[#10383A] rounded-bl-none",
                   )}
                 >
-                  {msg.text}
+                  {(msg.attachments ?? []).length > 0 && (
+                    <div className="grid gap-2 p-2">
+                      {(msg.attachments ?? []).map((attachment) => (
+                        <img
+                          key={attachment.id}
+                          src={attachment.signedUrl}
+                          alt="Shared attachment"
+                          className="max-h-48 w-full rounded-xl object-cover"
+                        />
+                      ))}
+                    </div>
+                  )}
+                  <div className="px-5 py-3">
+                    {msg.isTyping ? (
+                      <div className="flex items-center gap-1.5">
+                        <span className="h-2 w-2 animate-bounce rounded-full bg-[#10383A]" />
+                        <span className="h-2 w-2 animate-bounce rounded-full bg-[#10383A] [animation-delay:120ms]" />
+                        <span className="h-2 w-2 animate-bounce rounded-full bg-[#10383A] [animation-delay:220ms]" />
+                      </div>
+                    ) : (
+                      msg.text
+                    )}
+                  </div>
                 </div>
-                 {msg.sender === "user" && (
+                {msg.sender === "user" && (
                   <div className="w-8 h-8 rounded-full bg-[#DAA112]/20 border border-[#DAA112]/30 flex items-center justify-center mb-1 text-xs font-bold text-[#DAA112]">
                     U
                   </div>
@@ -983,7 +1309,20 @@ const TextView = ({ messages, onSendMessage, persona }: { messages: MessageData[
             </motion.div>
           ))}
         </div>
-      </ScrollArea>
+      </div>
+      {mode === "text" && showJumpToNewest && (
+        <button
+          type="button"
+          onClick={() => {
+            shouldAutoStickRef.current = true;
+            scrollToBottom(true);
+            setShowJumpToNewest(false);
+          }}
+          className="absolute bottom-28 left-1/2 -translate-x-1/2 rounded-full border border-white/30 bg-black/40 px-3 py-1 text-xs text-white backdrop-blur-sm"
+        >
+          Jump to newest
+        </button>
+      )}
     </div>
   );
 };
@@ -1091,7 +1430,18 @@ const OnboardingView = ({ onComplete }: { onComplete: () => void }) => {
 // --- Main App Component ---
 
 function App() {
-  const { user, isLoading: authLoading, isAuthenticated, login, register, loginError, registerError, isLoggingIn, isRegistering, logout } = useAuth();
+  const {
+    user,
+    isLoading: authLoading,
+    isAuthenticated,
+    login,
+    register,
+    loginError,
+    registerError,
+    isLoggingIn,
+    isRegistering,
+    logout,
+  } = useAuth();
   const queryClient = useQueryClient();
 
   const [mode, setMode] = useState<Mode>("voice");
@@ -1101,12 +1451,29 @@ function App() {
   const [duration, setDuration] = useState(0);
   const [callStartTime, setCallStartTime] = useState<number | null>(null);
   const [liveError, setLiveError] = useState<string | null>(null);
+  const [isVideoEnabled, setIsVideoEnabled] = useState(false);
+  const [isVideoTransitioning, setIsVideoTransitioning] = useState(false);
+  const [cameraFacingMode, setCameraFacingMode] =
+    useState<CameraFacingMode>("environment");
+  const [videoStream, setVideoStream] = useState<MediaStream | null>(null);
+
+  const [pendingAttachments, setPendingAttachments] = useState<
+    PendingImageAttachment[]
+  >([]);
+  const [composerError, setComposerError] = useState<string | null>(null);
+  const [isSendingMessage, setIsSendingMessage] = useState(false);
+
   const liveSessionRef = useRef<GeminiLiveVoiceSession | null>(null);
   const liveConversationRef = useRef<string | null>(null);
   const liveRunIdRef = useRef<string | null>(null);
   const liveStartNonceRef = useRef(0);
   const transcriptQueueRef = useRef<Promise<void>>(Promise.resolve());
   const transcriptSeenRef = useRef<Set<string>>(new Set());
+  const manualLiveStopRef = useRef(false);
+  const autoResumeBudgetRef = useRef(1);
+  const isVideoEnabledRef = useRef(false);
+  const cameraFacingModeRef = useRef<CameraFacingMode>("environment");
+  const pendingAttachmentsRef = useRef<PendingImageAttachment[]>([]);
 
   const logLiveTrace = (
     event: string,
@@ -1115,7 +1482,23 @@ function App() {
     console.log("[LiveTrace]", event, metadata);
   };
 
-  const { data: preferences, isLoading: prefsLoading } = useQuery<{ selectedPersona?: string; onboardingCompleted?: boolean }>({
+  const getConversationMessagesKey = (conversationId: string) =>
+    [`/api/conversations/${conversationId}/messages`];
+
+  const updateConversationMessages = (
+    conversationId: string,
+    updater: (current: MessageData[]) => MessageData[],
+  ) => {
+    queryClient.setQueryData<MessageData[]>(
+      getConversationMessagesKey(conversationId),
+      (current) => updater(current ?? []),
+    );
+  };
+
+  const { data: preferences } = useQuery<{
+    selectedPersona?: string;
+    onboardingCompleted?: boolean;
+  }>({
     queryKey: ["/api/preferences"],
     enabled: isAuthenticated,
   });
@@ -1132,8 +1515,31 @@ function App() {
     }
   }, [preferences]);
 
+  useEffect(() => {
+    isVideoEnabledRef.current = isVideoEnabled;
+  }, [isVideoEnabled]);
+
+  useEffect(() => {
+    cameraFacingModeRef.current = cameraFacingMode;
+  }, [cameraFacingMode]);
+
+  useEffect(() => {
+    pendingAttachmentsRef.current = pendingAttachments;
+  }, [pendingAttachments]);
+
+  useEffect(() => {
+    return () => {
+      for (const attachment of pendingAttachmentsRef.current) {
+        URL.revokeObjectURL(attachment.previewUrl);
+      }
+    };
+  }, []);
+
   const updatePreferencesMutation = useMutation({
-    mutationFn: async (data: { selectedPersona?: string; onboardingCompleted?: boolean }) => {
+    mutationFn: async (data: {
+      selectedPersona?: string;
+      onboardingCompleted?: boolean;
+    }) => {
       const res = await apiRequest("PUT", "/api/preferences", data);
       return res.json();
     },
@@ -1144,12 +1550,18 @@ function App() {
 
   const handleOnboardingComplete = () => {
     setShowOnboarding(false);
-    updatePreferencesMutation.mutate({ selectedPersona: persona, onboardingCompleted: true });
+    updatePreferencesMutation.mutate({
+      selectedPersona: persona,
+      onboardingCompleted: true,
+    });
   };
 
   const handlePersonaChange = (p: Persona) => {
     setPersona(p);
-    updatePreferencesMutation.mutate({ selectedPersona: p, onboardingCompleted: preferences?.onboardingCompleted ?? true });
+    updatePreferencesMutation.mutate({
+      selectedPersona: p,
+      onboardingCompleted: preferences?.onboardingCompleted ?? true,
+    });
   };
 
   const { data: conversations } = useQuery<any[]>({
@@ -1167,7 +1579,9 @@ function App() {
     },
   });
 
-  const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
+  const [activeConversationId, setActiveConversationId] = useState<string | null>(
+    null,
+  );
 
   useEffect(() => {
     if (!isAuthenticated || showOnboarding) return;
@@ -1176,7 +1590,7 @@ function App() {
     } else if (conversations && conversations.length === 0) {
       createConversationMutation.mutate({ persona });
     }
-  }, [conversations, isAuthenticated, showOnboarding]);
+  }, [conversations, isAuthenticated, showOnboarding, persona]);
 
   const ensureActiveConversationId = async (): Promise<string> => {
     if (activeConversationId) {
@@ -1187,39 +1601,15 @@ function App() {
     return created.id;
   };
 
-  const { data: messagesData } = useQuery<MessageData[]>({
-    queryKey: [`/api/conversations/${activeConversationId}/messages`],
+  const messageQueryKey = activeConversationId
+    ? getConversationMessagesKey(activeConversationId)
+    : ["/api/conversations/none/messages"];
+
+  const { data: messagesData = [] } = useQuery<MessageData[]>({
+    queryKey: messageQueryKey,
     enabled: !!activeConversationId,
     refetchInterval: 5000,
   });
-
-  const sendMessageMutation = useMutation({
-    mutationFn: async (text: string) => {
-      if (!activeConversationId) {
-        throw new Error("No active conversation selected");
-      }
-      const res = await apiRequest("POST", "/api/chat/respond", {
-        conversationId: activeConversationId,
-        text,
-        persona,
-      });
-      return res.json();
-    },
-    onSuccess: () => {
-      if (activeConversationId) {
-        queryClient.invalidateQueries({ queryKey: [`/api/conversations/${activeConversationId}/messages`] });
-      }
-    },
-    onError: () => {
-      if (activeConversationId) {
-        queryClient.invalidateQueries({ queryKey: [`/api/conversations/${activeConversationId}/messages`] });
-      }
-    },
-  });
-
-  const handleSendMessage = (text: string) => {
-    sendMessageMutation.mutate(text);
-  };
 
   const saveVoiceSessionMutation = useMutation({
     mutationFn: async (data: { persona: string; duration: number }) => {
@@ -1268,7 +1658,7 @@ function App() {
     },
     onSuccess: (_, vars) => {
       queryClient.invalidateQueries({
-        queryKey: [`/api/conversations/${vars.conversationId}/messages`],
+        queryKey: getConversationMessagesKey(vars.conversationId),
       });
     },
     onError: (error, vars) => {
@@ -1317,7 +1707,394 @@ function App() {
       });
   };
 
+  const revokeAttachmentPreview = (attachment: PendingImageAttachment) => {
+    URL.revokeObjectURL(attachment.previewUrl);
+  };
+
+  const removePendingAttachmentsByLocalId = (localIds: string[]) => {
+    if (localIds.length === 0) return;
+    const toRemove = new Set(localIds);
+    setPendingAttachments((current) => {
+      const removed = current.filter((item) => toRemove.has(item.localId));
+      for (const item of removed) {
+        revokeAttachmentPreview(item);
+      }
+      return current.filter((item) => !toRemove.has(item.localId));
+    });
+  };
+
+  const uploadImageFile = async (
+    conversationId: string,
+    file: File,
+    localId: string,
+  ) => {
+    const formData = new FormData();
+    formData.append("image", file);
+
+    const response = await fetch(
+      `/api/conversations/${conversationId}/attachments/image`,
+      {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "x-trace-id": createRequestTraceId(),
+        },
+        body: formData,
+      },
+    );
+
+    if (!response.ok) {
+      const text = (await response.text()) || response.statusText;
+      throw new Error(text);
+    }
+
+    const payload = (await response.json()) as {
+      attachment: MessageAttachmentData;
+      traceId?: string;
+    };
+
+    setPendingAttachments((current) =>
+      current.map((item) =>
+        item.localId === localId
+          ? {
+              ...item,
+              status: "ready",
+              attachmentId: payload.attachment.id,
+              attachment: payload.attachment,
+              error: undefined,
+            }
+          : item,
+      ),
+    );
+
+    console.log("[ChatTrace] chat.attachment.uploaded", {
+      conversationId,
+      localId,
+      attachmentId: payload.attachment.id,
+      traceId: payload.traceId,
+    });
+  };
+
+  const handleIncomingFiles = async (files: FileList | null) => {
+    if (!files || files.length === 0 || isSendingMessage) {
+      return;
+    }
+
+    // Clone synchronously before the input value is reset by the caller.
+    const selectedFiles = Array.from(files);
+
+    setComposerError(null);
+    const remainingSlots = Math.max(0, CHAT_IMAGE_MAX_COUNT - pendingAttachments.length);
+    if (remainingSlots <= 0) {
+      setComposerError(`You can attach up to ${CHAT_IMAGE_MAX_COUNT} images per message.`);
+      return;
+    }
+
+    const conversationId = await ensureActiveConversationId();
+    const fileList = selectedFiles.slice(0, remainingSlots);
+
+    for (const file of fileList) {
+      if (!file.type.startsWith("image/")) {
+        setComposerError("Only image files are supported.");
+        continue;
+      }
+
+      const localId = createLocalId("attachment");
+      const previewUrl = URL.createObjectURL(file);
+      setPendingAttachments((current) => [
+        ...current,
+        {
+          localId,
+          previewUrl,
+          status: "uploading",
+          mimeType: file.type,
+          byteSize: file.size,
+        },
+      ]);
+
+      void uploadImageFile(conversationId, file, localId).catch((error) => {
+        setPendingAttachments((current) =>
+          current.map((item) =>
+            item.localId === localId
+              ? {
+                  ...item,
+                  status: "error",
+                  error: getErrorMessage(error),
+                }
+              : item,
+          ),
+        );
+        setComposerError("One image failed to upload. Remove it or try again.");
+      });
+    }
+  };
+
+  const handleRemoveAttachment = async (localId: string) => {
+    setComposerError(null);
+    const attachment = pendingAttachments.find((item) => item.localId === localId);
+
+    setPendingAttachments((current) =>
+      current.filter((item) => item.localId !== localId),
+    );
+    if (attachment) {
+      revokeAttachmentPreview(attachment);
+    }
+
+    if (attachment?.attachmentId && attachment.attachment?.conversationId) {
+      try {
+        await apiRequest(
+          "DELETE",
+          `/api/conversations/${attachment.attachment.conversationId}/attachments/${attachment.attachmentId}`,
+        );
+      } catch (error) {
+        setComposerError("Could not remove attachment from server.");
+      }
+    }
+  };
+
+  const streamChatResponse = async (params: {
+    conversationId: string;
+    text: string;
+    attachmentIds: string[];
+    optimisticUserId: string;
+    optimisticAssistantId: string;
+  }) => {
+    const response = await fetch("/api/chat/respond/stream", {
+      method: "POST",
+      credentials: "include",
+      headers: {
+        "Content-Type": "application/json",
+        "x-trace-id": createRequestTraceId(),
+      },
+      body: JSON.stringify({
+        conversationId: params.conversationId,
+        text: params.text,
+        persona,
+        attachmentIds: params.attachmentIds,
+      }),
+    });
+
+    if (!response.ok) {
+      const text = (await response.text()) || response.statusText;
+      throw new Error(text);
+    }
+
+    if (!response.body) {
+      throw new Error("Streaming is not supported in this browser.");
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let accumulatedAssistantText = "";
+    let finalized = false;
+
+    const applyEvent = (event: ChatStreamEvent) => {
+      if (event.type === "ack") {
+        updateConversationMessages(params.conversationId, (current) =>
+          current.map((message) =>
+            message.id === params.optimisticUserId ? event.userMessage : message,
+          ),
+        );
+        return;
+      }
+
+      if (event.type === "delta") {
+        accumulatedAssistantText += event.text;
+        updateConversationMessages(params.conversationId, (current) =>
+          current.map((message) =>
+            message.id === params.optimisticAssistantId
+              ? {
+                  ...message,
+                  text: accumulatedAssistantText,
+                  isTyping: false,
+                }
+              : message,
+          ),
+        );
+        return;
+      }
+
+      if (event.type === "final") {
+        finalized = true;
+        updateConversationMessages(params.conversationId, (current) =>
+          current.map((message) =>
+            message.id === params.optimisticAssistantId
+              ? event.assistantMessage
+              : message,
+          ),
+        );
+        return;
+      }
+
+      if (event.type === "error") {
+        throw new Error(event.message);
+      }
+    };
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      while (true) {
+        const lineBreakIndex = buffer.indexOf("\n");
+        if (lineBreakIndex === -1) break;
+
+        const line = buffer.slice(0, lineBreakIndex).trim();
+        buffer = buffer.slice(lineBreakIndex + 1);
+        if (!line) continue;
+
+        const parsed = JSON.parse(line) as ChatStreamEvent;
+        applyEvent(parsed);
+      }
+    }
+
+    if (!finalized) {
+      throw new Error("Stream ended before final response.");
+    }
+  };
+
+  const fallbackChatResponse = async (params: {
+    conversationId: string;
+    text: string;
+    attachmentIds: string[];
+    optimisticUserId: string;
+    optimisticAssistantId: string;
+  }) => {
+    const response = await apiRequest("POST", "/api/chat/respond", {
+      conversationId: params.conversationId,
+      text: params.text,
+      persona,
+      attachmentIds: params.attachmentIds,
+    });
+    const payload = (await response.json()) as {
+      userMessage: MessageData;
+      assistantMessage: MessageData;
+    };
+
+    updateConversationMessages(params.conversationId, (current) =>
+      current.map((message) => {
+        if (message.id === params.optimisticUserId) return payload.userMessage;
+        if (message.id === params.optimisticAssistantId) return payload.assistantMessage;
+        return message;
+      }),
+    );
+  };
+
+  const handleSendMessage = async (text: string) => {
+    const trimmed = text.trim();
+    if (isSendingMessage) return;
+
+    const readyAttachments = pendingAttachments.filter(
+      (item) => item.status === "ready" && item.attachmentId && item.attachment,
+    );
+    const uploadingAttachments = pendingAttachments.filter(
+      (item) => item.status === "uploading",
+    );
+
+    if (uploadingAttachments.length > 0) {
+      setComposerError("Wait for images to finish uploading before sending.");
+      return;
+    }
+
+    if (!trimmed && readyAttachments.length === 0) {
+      return;
+    }
+
+    setComposerError(null);
+    setIsSendingMessage(true);
+
+    let conversationId: string | null = null;
+    let optimisticUserId = "";
+    let optimisticAssistantId = "";
+    let attachmentIds: string[] = [];
+
+    try {
+      conversationId = await ensureActiveConversationId();
+      const resolvedConversationId = conversationId;
+      optimisticUserId = createLocalId("optimistic-user");
+      optimisticAssistantId = createLocalId("optimistic-assistant");
+
+      updateConversationMessages(resolvedConversationId, (current) => [
+        ...current,
+        {
+          id: optimisticUserId,
+          conversationId: resolvedConversationId,
+          sender: "user",
+          text: trimmed,
+          createdAt: new Date().toISOString(),
+          attachments: readyAttachments
+            .map((item) => item.attachment)
+            .filter((item): item is MessageAttachmentData => Boolean(item)),
+          localOnly: true,
+        },
+        {
+          id: optimisticAssistantId,
+          conversationId: resolvedConversationId,
+          sender: "assistant",
+          text: "",
+          createdAt: new Date().toISOString(),
+          isTyping: true,
+          localOnly: true,
+        },
+      ]);
+
+      attachmentIds = readyAttachments
+        .map((item) => item.attachmentId)
+        .filter((id): id is string => Boolean(id));
+
+      try {
+        await streamChatResponse({
+          conversationId: resolvedConversationId,
+          text: trimmed,
+          attachmentIds,
+          optimisticUserId,
+          optimisticAssistantId,
+        });
+        removePendingAttachmentsByLocalId(readyAttachments.map((item) => item.localId));
+      } catch (streamError) {
+        console.error("chat.stream.failed", streamError);
+        try {
+          await fallbackChatResponse({
+            conversationId: resolvedConversationId,
+            text: trimmed,
+            attachmentIds,
+            optimisticUserId,
+            optimisticAssistantId,
+          });
+          removePendingAttachmentsByLocalId(
+            readyAttachments.map((item) => item.localId),
+          );
+        } catch (fallbackError) {
+          updateConversationMessages(resolvedConversationId, (current) =>
+            current.filter(
+              (message) =>
+                message.id !== optimisticUserId &&
+                message.id !== optimisticAssistantId,
+            ),
+          );
+          setComposerError(
+            "Message failed to send. Your uploaded images are still attached for retry.",
+          );
+          console.error("chat.respond.fallback.failed", fallbackError);
+        }
+      }
+    } catch (error) {
+      setComposerError("Message failed to send. Please try again.");
+      console.error("chat.send.failed", error);
+    } finally {
+      setIsSendingMessage(false);
+      if (conversationId) {
+        queryClient.invalidateQueries({
+          queryKey: getConversationMessagesKey(conversationId),
+        });
+      }
+    }
+  };
+
   const stopLiveSession = async () => {
+    manualLiveStopRef.current = true;
     liveStartNonceRef.current += 1;
     const runId = liveRunIdRef.current;
 
@@ -1335,7 +2112,7 @@ function App() {
 
     if (liveConversationRef.current) {
       queryClient.invalidateQueries({
-        queryKey: [`/api/conversations/${liveConversationRef.current}/messages`],
+        queryKey: getConversationMessagesKey(liveConversationRef.current),
       });
     }
 
@@ -1346,12 +2123,18 @@ function App() {
     setIsCalling(false);
     setIsLiveConnecting(false);
     setCallStartTime(null);
+    setIsVideoEnabled(false);
+    setVideoStream(null);
+    setIsVideoTransitioning(false);
     logLiveTrace("live.stop.completed", {
       runId,
     });
   };
 
-  const startLiveSession = async () => {
+  const startLiveSession = async (options?: {
+    autoResumed?: boolean;
+    restoreVideo?: boolean;
+  }) => {
     const startNonce = liveStartNonceRef.current + 1;
     liveStartNonceRef.current = startNonce;
     const runId = createLocalId("live");
@@ -1360,6 +2143,10 @@ function App() {
     setIsLiveConnecting(true);
     transcriptSeenRef.current = new Set();
     transcriptQueueRef.current = Promise.resolve();
+    manualLiveStopRef.current = false;
+    if (!options?.autoResumed) {
+      autoResumeBudgetRef.current = 1;
+    }
 
     let conversationId: string | null = null;
     let liveSession: GeminiLiveVoiceSession | null = null;
@@ -1376,6 +2163,7 @@ function App() {
         runId,
         conversationId,
         persona,
+        autoResumed: Boolean(options?.autoResumed),
       });
 
       const tokenPayload = await createLiveTokenMutation.mutateAsync({ persona });
@@ -1407,6 +2195,37 @@ function App() {
           });
           setLiveError(error.message);
         },
+        onClosed: (reason) => {
+          logLiveTrace("live.video.session_closed", {
+            runId,
+            reason: reason ?? "unknown",
+          });
+          const shouldAutoResume =
+            !manualLiveStopRef.current && isVideoEnabledRef.current;
+          setIsLiveConnecting(false);
+          setIsCalling(false);
+          setCallStartTime(null);
+          setIsVideoEnabled(false);
+          setVideoStream(null);
+          if (liveSessionRef.current === liveSession) {
+            liveSessionRef.current = null;
+          }
+
+          if (shouldAutoResume) {
+            if (autoResumeBudgetRef.current <= 0) {
+              logLiveTrace("live.video.auto_resume_failed", {
+                runId,
+                reason: "budget_exhausted",
+              });
+              setLiveError(
+                "Live camera session ended. Reconnect to continue sharing video.",
+              );
+              return;
+            }
+            autoResumeBudgetRef.current -= 1;
+            void startLiveSession({ autoResumed: true, restoreVideo: true });
+          }
+        },
         onDebug: (message, metadata) => {
           logLiveTrace(message, {
             runId,
@@ -1425,6 +2244,18 @@ function App() {
         await liveSessionRef.current.stop().catch(() => undefined);
         liveSessionRef.current = null;
         return;
+      }
+
+      if (options?.restoreVideo && liveSessionRef.current) {
+        const stream = await liveSessionRef.current.startVideo({
+          facingMode: cameraFacingModeRef.current,
+        });
+        setVideoStream(stream);
+        setIsVideoEnabled(true);
+        logLiveTrace("live.video.auto_resumed", {
+          runId,
+          facingMode: cameraFacingModeRef.current,
+        });
       }
 
       setIsCalling(true);
@@ -1450,6 +2281,8 @@ function App() {
       setIsCalling(false);
       setCallStartTime(null);
       liveConversationRef.current = null;
+      setIsVideoEnabled(false);
+      setVideoStream(null);
       logLiveTrace("live.start.failed", {
         runId,
         conversationId,
@@ -1459,6 +2292,66 @@ function App() {
       if (startNonce === liveStartNonceRef.current) {
         setIsLiveConnecting(false);
       }
+    }
+  };
+
+  const handleToggleVideo = async () => {
+    if (!liveSessionRef.current || !isCalling) {
+      return;
+    }
+
+    setLiveError(null);
+    setIsVideoTransitioning(true);
+    try {
+      if (liveSessionRef.current.isVideoEnabled()) {
+        await liveSessionRef.current.stopVideo();
+        setIsVideoEnabled(false);
+        setVideoStream(null);
+        logLiveTrace("live.video.stopped", { runId: liveRunIdRef.current });
+      } else {
+        const stream = await liveSessionRef.current.startVideo({
+          facingMode: cameraFacingModeRef.current,
+        });
+        setVideoStream(stream);
+        setIsVideoEnabled(true);
+        logLiveTrace("live.video.started", {
+          runId: liveRunIdRef.current,
+          facingMode: cameraFacingModeRef.current,
+        });
+      }
+    } catch (error) {
+      setLiveError(toUserFacingCameraError(error, "Failed to toggle camera sharing"));
+      logLiveTrace("live.video.toggle_failed", {
+        runId: liveRunIdRef.current,
+        error: getErrorMessage(error),
+      });
+    } finally {
+      setIsVideoTransitioning(false);
+    }
+  };
+
+  const handleFlipCamera = async () => {
+    if (!liveSessionRef.current || !isCalling || !isVideoEnabled) {
+      return;
+    }
+
+    setIsVideoTransitioning(true);
+    try {
+      const nextFacingMode = await liveSessionRef.current.flipCamera();
+      setCameraFacingMode(nextFacingMode);
+      setVideoStream(liveSessionRef.current.getVideoStream());
+      logLiveTrace("live.video.flipped", {
+        runId: liveRunIdRef.current,
+        facingMode: nextFacingMode,
+      });
+    } catch (error) {
+      setLiveError(toUserFacingCameraError(error, "Failed to switch camera"));
+      logLiveTrace("live.video.flip_failed", {
+        runId: liveRunIdRef.current,
+        error: getErrorMessage(error),
+      });
+    } finally {
+      setIsVideoTransitioning(false);
     }
   };
 
@@ -1483,7 +2376,10 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (!isAuthenticated && (isCalling || isLiveConnecting || liveSessionRef.current)) {
+    if (
+      !isAuthenticated &&
+      (isCalling || isLiveConnecting || liveSessionRef.current)
+    ) {
       void stopLiveSession();
     }
   }, [isAuthenticated, isCalling, isLiveConnecting]);
@@ -1491,7 +2387,7 @@ function App() {
   useEffect(() => {
     let interval: NodeJS.Timeout;
     if (isCalling) {
-      interval = setInterval(() => setDuration(d => d + 1), 1000);
+      interval = setInterval(() => setDuration((d) => d + 1), 1000);
     } else {
       setDuration(0);
     }
@@ -1535,12 +2431,22 @@ function App() {
 
         <SharedFooter 
           persona={persona}
-          onVoiceMode={() => setMode(mode === "voice" ? "text" : "voice")}
           onSendMessage={handleSendMessage}
+          onSelectCameraFiles={handleIncomingFiles}
+          onSelectGalleryFiles={handleIncomingFiles}
+          onRemoveAttachment={handleRemoveAttachment}
+          pendingAttachments={pendingAttachments}
+          isSending={isSendingMessage}
+          uploadError={composerError}
         />
 
         <div className="absolute inset-0 z-0">
-          <TextView messages={messagesData || []} onSendMessage={handleSendMessage} persona={persona} />
+          <TextView
+            messages={messagesData}
+            isStreamingReply={isSendingMessage}
+            persona={persona}
+            mode={mode}
+          />
         </div>
 
         <VoiceView 
@@ -1554,6 +2460,11 @@ function App() {
           setMode={setMode}
           duration={duration}
           userProfileImage={user?.profileImageUrl || undefined}
+          isVideoEnabled={isVideoEnabled}
+          onToggleVideo={handleToggleVideo}
+          onFlipCamera={handleFlipCamera}
+          videoStream={videoStream}
+          isVideoTransitioning={isVideoTransitioning}
         />
 
         <AnimatePresence>

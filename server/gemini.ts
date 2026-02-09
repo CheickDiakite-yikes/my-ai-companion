@@ -11,9 +11,16 @@ import { resolve } from "path";
 
 type Persona = "Maya" | "Zarra" | "Ore";
 
+interface ConversationAttachmentMessage {
+  mimeType: string;
+  inlineDataBase64?: string;
+  summaryText?: string;
+}
+
 interface ConversationMessage {
   sender: string;
   text: string;
+  attachments?: ConversationAttachmentMessage[];
 }
 
 interface TokenUsageSnapshot {
@@ -35,6 +42,11 @@ const FALLBACK_PERSONA_PROMPTS: Record<Exclude<Persona, "Maya">, string> = {
 let geminiClient: GoogleGenAI | null = null;
 let geminiAlphaClient: GoogleGenAI | null = null;
 let mayaPromptCache: string | null = null;
+
+interface SanitizedAssistantText {
+  text: string;
+  awaitingToolPrefix: boolean;
+}
 
 function requireGeminiApiKey(): string {
   const key = process.env.GEMINI_API_KEY;
@@ -105,15 +117,130 @@ function compactUsage(
 async function loadMayaPrompt(): Promise<string> {
   if (mayaPromptCache) return mayaPromptCache;
   const filePath = resolve(process.cwd(), "maya-persona.md");
-  mayaPromptCache = await readFile(filePath, "utf8");
+  const rawPrompt = await readFile(filePath, "utf8");
+  mayaPromptCache = rawPrompt
+    .replace(/^\$\{chainOfThoughtInstructions\}\s*$/gm, "")
+    .replace(/^\$\{outputFormatInstructions\}\s*$/gm, "")
+    .trim();
   return mayaPromptCache;
 }
 
 export async function getPersonaPrompt(persona: Persona): Promise<string> {
-  if (persona === "Maya") {
-    return loadMayaPrompt();
+  const basePrompt =
+    persona === "Maya" ? await loadMayaPrompt() : FALLBACK_PERSONA_PROMPTS[persona];
+
+  return `${basePrompt}
+
+OUTPUT SAFETY RULES:
+- Return only user-facing assistant text.
+- Never output JSON objects for tools or function calls.
+- Never include internal fields like action, action_input, thought, tool, function_call, or arguments.`;
+}
+
+function findLeadingJsonObjectEnd(value: string): number | null {
+  if (!value.startsWith("{")) return null;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index];
+
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (char === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === '"') {
+      inString = true;
+      continue;
+    }
+
+    if (char === "{") {
+      depth += 1;
+      continue;
+    }
+
+    if (char === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        return index + 1;
+      }
+    }
   }
-  return FALLBACK_PERSONA_PROMPTS[persona];
+
+  return null;
+}
+
+function isToolMetadataObject(candidate: string): boolean {
+  try {
+    const parsed = JSON.parse(candidate);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return false;
+    }
+
+    const keys = new Set(
+      Object.keys(parsed as Record<string, unknown>).map((key) => key.toLowerCase()),
+    );
+
+    if (keys.has("thought")) return true;
+    if (keys.has("action_input")) return true;
+    if (keys.has("function_call")) return true;
+    if (keys.has("tool") || keys.has("tool_name")) return true;
+    if (keys.has("name") && keys.has("arguments")) return true;
+    if (keys.has("action") && (keys.has("input") || keys.has("args"))) return true;
+
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+function sanitizeAssistantReplyText(rawText: string): SanitizedAssistantText {
+  if (!rawText) {
+    return { text: "", awaitingToolPrefix: false };
+  }
+
+  const leadingWhitespaceLength = rawText.match(/^\s*/)?.[0].length ?? 0;
+  let remaining = rawText.slice(leadingWhitespaceLength);
+  let strippedPrefix = false;
+
+  while (remaining.startsWith("{")) {
+    const objectEnd = findLeadingJsonObjectEnd(remaining);
+    if (objectEnd === null) {
+      // Hold streaming output until we know whether the leading object is tool metadata.
+      return { text: "", awaitingToolPrefix: true };
+    }
+
+    const candidate = remaining.slice(0, objectEnd);
+    if (!isToolMetadataObject(candidate)) {
+      return {
+        text: strippedPrefix ? remaining.trimStart() : rawText,
+        awaitingToolPrefix: false,
+      };
+    }
+
+    strippedPrefix = true;
+    remaining = remaining
+      .slice(objectEnd)
+      .replace(/^```(?:json)?\s*/i, "")
+      .trimStart();
+  }
+
+  return {
+    text: strippedPrefix ? remaining : rawText,
+    awaitingToolPrefix: false,
+  };
 }
 
 function toGeminiRole(sender: string): "user" | "model" {
@@ -125,14 +252,42 @@ function buildConversationContents(messages: ConversationMessage[]) {
     process.env.GEMINI_TEXT_MEMORY_WINDOW_MESSAGES,
     40,
   );
-  const clipped = messages
-    .filter((msg) => msg.text && msg.text.trim().length > 0)
-    .slice(-recentWindow);
 
-  return clipped.map((msg) => ({
-    role: toGeminiRole(msg.sender),
-    parts: [{ text: msg.text }],
-  }));
+  const clipped = messages.slice(-recentWindow);
+
+  return clipped
+    .map((msg) => {
+      const parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = [];
+      const text = msg.text.trim();
+      if (text.length > 0) {
+        parts.push({ text });
+      }
+
+      for (const attachment of msg.attachments ?? []) {
+        if (attachment.inlineDataBase64) {
+          parts.push({
+            inlineData: {
+              mimeType: attachment.mimeType,
+              data: attachment.inlineDataBase64,
+            },
+          });
+          continue;
+        }
+        if (attachment.summaryText && attachment.summaryText.trim().length > 0) {
+          parts.push({ text: `[Image memory] ${attachment.summaryText.trim()}` });
+        }
+      }
+
+      if (parts.length === 0) {
+        return null;
+      }
+
+      return {
+        role: toGeminiRole(msg.sender),
+        parts,
+      };
+    })
+    .filter((content): content is { role: "user" | "model"; parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> } => Boolean(content));
 }
 
 export interface CreateLiveTokenInput {
@@ -241,6 +396,29 @@ export interface GenerateTextReplyResult {
   usage?: TokenUsageSnapshot;
 }
 
+export interface GenerateTextReplyStreamChunk {
+  textDelta: string;
+  responseId?: string;
+  usage?: TokenUsageSnapshot;
+}
+
+export interface GenerateTextReplyStreamResult {
+  model: string;
+  stream: AsyncGenerator<GenerateTextReplyStreamChunk>;
+}
+
+function buildTextGenerationConfig(personaPrompt: string) {
+  return {
+    systemInstruction: personaPrompt,
+    temperature: parseBoundedNumber(process.env.GEMINI_TEXT_TEMPERATURE, 0.85, 0, 2),
+    topP: parseBoundedNumber(process.env.GEMINI_TEXT_TOP_P, 0.95, 0, 1),
+    maxOutputTokens: parsePositiveInt(
+      process.env.GEMINI_TEXT_MAX_OUTPUT_TOKENS,
+      1024,
+    ),
+  };
+}
+
 export async function generateTextReply(
   input: GenerateTextReplyInput,
 ): Promise<GenerateTextReplyResult> {
@@ -256,23 +434,11 @@ export async function generateTextReply(
   const response = await ai.models.generateContent({
     model,
     contents,
-    config: {
-      systemInstruction: personaPrompt,
-      temperature: parseBoundedNumber(
-        process.env.GEMINI_TEXT_TEMPERATURE,
-        0.85,
-        0,
-        2,
-      ),
-      topP: parseBoundedNumber(process.env.GEMINI_TEXT_TOP_P, 0.95, 0, 1),
-      maxOutputTokens: parsePositiveInt(
-        process.env.GEMINI_TEXT_MAX_OUTPUT_TOKENS,
-        1024,
-      ),
-    },
+    config: buildTextGenerationConfig(personaPrompt),
   });
 
-  const replyText = response.text?.trim();
+  const sanitized = sanitizeAssistantReplyText(response.text ?? "");
+  const replyText = sanitized.text.trim();
   if (!replyText) {
     throw new Error("Gemini returned an empty response");
   }
@@ -285,3 +451,101 @@ export async function generateTextReply(
   };
 }
 
+export async function generateTextReplyStream(
+  input: GenerateTextReplyInput,
+): Promise<GenerateTextReplyStreamResult> {
+  const ai = getGeminiClient();
+  const model = resolveTextModel();
+  const personaPrompt = await getPersonaPrompt(input.persona);
+  const contents = buildConversationContents(input.messages);
+
+  if (contents.length === 0) {
+    throw new Error("Conversation is empty. No content to generate a reply from.");
+  }
+
+  const responseStream = await ai.models.generateContentStream({
+    model,
+    contents,
+    config: buildTextGenerationConfig(personaPrompt),
+  });
+
+  async function* streamChunks(): AsyncGenerator<GenerateTextReplyStreamChunk> {
+    let rawText = "";
+    let emittedLength = 0;
+
+    for await (const chunk of responseStream) {
+      rawText += chunk.text ?? "";
+
+      const sanitized = sanitizeAssistantReplyText(rawText);
+      const stableText = sanitized.awaitingToolPrefix ? "" : sanitized.text;
+      let textDelta = "";
+
+      if (stableText.length >= emittedLength) {
+        textDelta = stableText.slice(emittedLength);
+        emittedLength = stableText.length;
+      } else {
+        emittedLength = stableText.length;
+      }
+
+      yield {
+        textDelta,
+        responseId: chunk.responseId,
+        usage: compactUsage(chunk.usageMetadata),
+      };
+    }
+  }
+
+  return {
+    model,
+    stream: streamChunks(),
+  };
+}
+
+export interface SummarizeImageForMemoryInput {
+  persona: Persona;
+  mimeType: string;
+  inlineDataBase64: string;
+  userText?: string;
+}
+
+export async function summarizeImageForMemory(
+  input: SummarizeImageForMemoryInput,
+): Promise<string> {
+  const ai = getGeminiClient();
+  const model = resolveTextModel();
+
+  const response = await ai.models.generateContent({
+    model,
+    contents: [
+      {
+        role: "user",
+        parts: [
+          {
+            text:
+              "Summarize this image for long-term conversation memory in 1-2 concise sentences. Focus on visual facts and likely user intent. Avoid style flourishes. " +
+              (input.userText
+                ? `Related user text: ${input.userText}`
+                : "No related user text provided."),
+          },
+          {
+            inlineData: {
+              mimeType: input.mimeType,
+              data: input.inlineDataBase64,
+            },
+          },
+        ],
+      },
+    ],
+    config: {
+      temperature: 0.2,
+      maxOutputTokens: 140,
+    },
+  });
+
+  const summary = response.text?.trim();
+  if (!summary) {
+    throw new Error("Gemini returned an empty image summary");
+  }
+
+  return summary.slice(0, 500);
+}

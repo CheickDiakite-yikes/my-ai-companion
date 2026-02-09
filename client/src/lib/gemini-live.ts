@@ -1,6 +1,7 @@
 import { GoogleGenAI, Modality, type LiveServerMessage, type Session } from "@google/genai";
 
 type TranscriptSender = "user" | "assistant";
+type CameraFacingMode = "user" | "environment";
 
 export interface LiveTranscriptEvent {
   sender: TranscriptSender;
@@ -10,6 +11,7 @@ export interface LiveTranscriptEvent {
 export interface GeminiLiveVoiceSessionCallbacks {
   onTranscript?: (event: LiveTranscriptEvent) => void;
   onError?: (error: Error) => void;
+  onClosed?: (reason?: string) => void;
   onDebug?: (message: string, metadata?: Record<string, unknown>) => void;
 }
 
@@ -21,6 +23,9 @@ export interface GeminiLiveVoiceSessionStartParams {
 const INPUT_SAMPLE_RATE = 16000;
 const OUTPUT_SAMPLE_RATE = 24000;
 const PROCESSOR_BUFFER_SIZE = 4096;
+const VIDEO_FRAME_INTERVAL_MS = 1000;
+const VIDEO_MAX_EDGE = 640;
+const VIDEO_PERMISSION_TIMEOUT_MS = 12000;
 
 function normalizeText(input: string | undefined): string {
   return (input ?? "").replace(/\s+/g, " ").trim();
@@ -108,6 +113,46 @@ function base64ToPcm16(base64: string): Int16Array {
   return new Int16Array(bytes.buffer, bytes.byteOffset, Math.floor(bytes.byteLength / 2));
 }
 
+function chooseVideoSize(video: HTMLVideoElement): { width: number; height: number } {
+  const srcWidth = video.videoWidth || 640;
+  const srcHeight = video.videoHeight || 360;
+  const maxEdge = Math.max(srcWidth, srcHeight);
+  if (maxEdge <= VIDEO_MAX_EDGE) {
+    return { width: srcWidth, height: srcHeight };
+  }
+
+  const scale = VIDEO_MAX_EDGE / maxEdge;
+  return {
+    width: Math.max(2, Math.round(srcWidth * scale)),
+    height: Math.max(2, Math.round(srcHeight * scale)),
+  };
+}
+
+async function getUserMediaWithTimeout(
+  constraints: MediaStreamConstraints,
+  timeoutMs = VIDEO_PERMISSION_TIMEOUT_MS,
+): Promise<MediaStream> {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    throw new Error("Camera API is not available in this browser");
+  }
+
+  let timeoutId: number | undefined;
+  try {
+    return await Promise.race([
+      navigator.mediaDevices.getUserMedia(constraints),
+      new Promise<MediaStream>((_, reject) => {
+        timeoutId = window.setTimeout(() => {
+          reject(new Error("Camera permission request timed out"));
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeoutId !== undefined) {
+      window.clearTimeout(timeoutId);
+    }
+  }
+}
+
 export class GeminiLiveVoiceSession {
   private readonly callbacks: GeminiLiveVoiceSessionCallbacks;
 
@@ -118,6 +163,13 @@ export class GeminiLiveVoiceSession {
   private mediaSourceNode: MediaStreamAudioSourceNode | null = null;
   private processorNode: ScriptProcessorNode | null = null;
   private mutedGainNode: GainNode | null = null;
+
+  private videoStream: MediaStream | null = null;
+  private videoElement: HTMLVideoElement | null = null;
+  private videoCanvas: HTMLCanvasElement | null = null;
+  private videoCaptureInterval: number | null = null;
+  private videoFrameInFlight = false;
+  private preferredFacingMode: CameraFacingMode = "environment";
 
   private scheduledPlaybackTime = 0;
   private activePlaybackNodes = new Set<AudioBufferSourceNode>();
@@ -160,6 +212,7 @@ export class GeminiLiveVoiceSession {
         },
         onclose: (event) => {
           this.debug("live.session.closed", { reason: event.reason || "unknown" });
+          this.callbacks.onClosed?.(event.reason || undefined);
         },
       },
     });
@@ -182,6 +235,7 @@ export class GeminiLiveVoiceSession {
 
     this.session = null;
     this.clearPlaybackQueue();
+    await this.stopVideo();
 
     if (this.processorNode) {
       this.processorNode.onaudioprocess = null;
@@ -211,6 +265,215 @@ export class GeminiLiveVoiceSession {
       await this.outputContext.close().catch(() => {});
       this.outputContext = null;
     }
+  }
+
+  async startVideo(params: { facingMode?: CameraFacingMode } = {}): Promise<MediaStream> {
+    if (!this.session) {
+      throw new Error("Cannot start camera stream without an active live session");
+    }
+
+    const facingMode = params.facingMode ?? this.preferredFacingMode;
+    this.preferredFacingMode = facingMode;
+
+    await this.stopVideo();
+
+    const oppositeFacingMode: CameraFacingMode =
+      facingMode === "user" ? "environment" : "user";
+    const attemptConstraints: MediaStreamConstraints[] = [
+      {
+        video: {
+          facingMode: { ideal: facingMode },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+        },
+        audio: false,
+      },
+      {
+        video: {
+          facingMode: { ideal: oppositeFacingMode },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+        },
+        audio: false,
+      },
+      {
+        video: {
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+        },
+        audio: false,
+      },
+    ];
+
+    let lastError: unknown = null;
+    try {
+      for (let index = 0; index < attemptConstraints.length; index += 1) {
+        try {
+          this.videoStream = await getUserMediaWithTimeout(attemptConstraints[index]);
+          break;
+        } catch (attemptError) {
+          lastError = attemptError;
+          this.debug("live.video.camera_attempt_failed", {
+            attempt: index + 1,
+            message:
+              attemptError instanceof Error
+                ? attemptError.message
+                : String(attemptError),
+          });
+        }
+      }
+    } catch (error) {
+      lastError = error;
+    }
+
+    if (!this.videoStream) {
+      this.emitError(new Error("Camera permission was denied or unavailable"));
+      throw (lastError ?? new Error("Camera permission was denied or unavailable"));
+    }
+
+    this.videoElement = document.createElement("video");
+    this.videoElement.muted = true;
+    this.videoElement.playsInline = true;
+    this.videoElement.autoplay = true;
+    this.videoElement.srcObject = this.videoStream;
+    await this.videoElement.play();
+
+    this.videoCanvas = document.createElement("canvas");
+    this.startVideoCaptureLoop();
+
+    const resolvedFacingMode = this.videoStream
+      .getVideoTracks()
+      .at(0)
+      ?.getSettings()
+      .facingMode;
+    if (resolvedFacingMode === "user" || resolvedFacingMode === "environment") {
+      this.preferredFacingMode = resolvedFacingMode;
+    }
+
+    this.debug("live.video.started", {
+      facingMode: this.preferredFacingMode,
+      requestedFacingMode: facingMode,
+      width: this.videoElement.videoWidth,
+      height: this.videoElement.videoHeight,
+    });
+
+    return this.videoStream;
+  }
+
+  async stopVideo(): Promise<void> {
+    if (this.videoCaptureInterval !== null) {
+      window.clearInterval(this.videoCaptureInterval);
+      this.videoCaptureInterval = null;
+    }
+
+    this.videoFrameInFlight = false;
+
+    if (this.videoElement) {
+      this.videoElement.pause();
+      this.videoElement.srcObject = null;
+      this.videoElement = null;
+    }
+
+    if (this.videoStream) {
+      this.videoStream.getTracks().forEach((track) => track.stop());
+      this.videoStream = null;
+    }
+
+    this.videoCanvas = null;
+    this.debug("live.video.stopped");
+  }
+
+  async flipCamera(): Promise<CameraFacingMode> {
+    this.preferredFacingMode =
+      this.preferredFacingMode === "user" ? "environment" : "user";
+
+    if (this.videoStream) {
+      await this.startVideo({ facingMode: this.preferredFacingMode });
+    }
+
+    this.debug("live.video.flipped", {
+      facingMode: this.preferredFacingMode,
+    });
+
+    return this.preferredFacingMode;
+  }
+
+  getVideoStream(): MediaStream | null {
+    return this.videoStream;
+  }
+
+  isVideoEnabled(): boolean {
+    return Boolean(this.videoStream && this.videoCaptureInterval !== null);
+  }
+
+  getFacingMode(): CameraFacingMode {
+    return this.preferredFacingMode;
+  }
+
+  private startVideoCaptureLoop(): void {
+    if (!this.videoElement || !this.videoCanvas) {
+      return;
+    }
+
+    const renderFrame = () => {
+      if (
+        !this.session ||
+        !this.videoElement ||
+        !this.videoCanvas ||
+        this.videoFrameInFlight
+      ) {
+        return;
+      }
+
+      if (this.videoElement.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+        return;
+      }
+
+      const { width, height } = chooseVideoSize(this.videoElement);
+      this.videoCanvas.width = width;
+      this.videoCanvas.height = height;
+
+      const ctx = this.videoCanvas.getContext("2d");
+      if (!ctx) return;
+      ctx.drawImage(this.videoElement, 0, 0, width, height);
+
+      this.videoFrameInFlight = true;
+      try {
+        if (!this.session) {
+          this.debug("live.video.frame_dropped", {
+            reason: "session_missing",
+          });
+          return;
+        }
+
+        const dataUrl = this.videoCanvas.toDataURL("image/jpeg", 0.72);
+        const base64 = dataUrl.split(",")[1];
+        if (!base64) {
+          this.debug("live.video.frame_dropped", {
+            reason: "encode_failed",
+          });
+          return;
+        }
+
+        this.session.sendRealtimeInput({
+          video: {
+            data: base64,
+            mimeType: "image/jpeg",
+          },
+        });
+        this.debug("live.video.frame_sent", {
+          bytes: Math.floor((base64.length * 3) / 4),
+          mimeType: "image/jpeg",
+          width,
+          height,
+        });
+      } finally {
+        this.videoFrameInFlight = false;
+      }
+    };
+
+    renderFrame();
+    this.videoCaptureInterval = window.setInterval(renderFrame, VIDEO_FRAME_INTERVAL_MS);
   }
 
   private async startMicrophoneStream(): Promise<void> {

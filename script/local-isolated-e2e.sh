@@ -32,10 +32,13 @@ HEADERS_FILE=""
 REG_BODY=""
 CONV_BODY=""
 CHAT_BODY=""
+ATTACH_BODY=""
+STREAM_BODY=""
 TOKEN_BODY=""
 VT1_BODY=""
 VT2_BODY=""
 MSGS_BODY=""
+MEDIA_FILE=""
 
 log() {
   printf "[local-e2e] %s\n" "$1"
@@ -95,7 +98,7 @@ if (!adminUrl || !dbName) {
   process.exit(1);
 }
 
-const escapedDbName = dbName.replace(/"/g, "\"\"");
+const escapedDbName = dbName.replace(/"/g, '""');
 
 (async () => {
   const client = new Client({ connectionString: adminUrl });
@@ -150,7 +153,7 @@ HEADERS_FILE="$(new_tmp)"
 EMAIL="local.e2e.$(date +%s)@example.com"
 PASSWORD="TestPass123!"
 
-log "1/6 register user"
+log "1/8 register user"
 REG_BODY="$(new_tmp)"
 REG_STATUS="$(curl -sS -w "%{http_code}" -D "$HEADERS_FILE" -o "$REG_BODY" -c "$COOKIE_FILE" \
   -H "Content-Type: application/json" \
@@ -164,7 +167,7 @@ REG_TRACE="$(extract_trace "$HEADERS_FILE")"
 USER_ID="$(parse_json "$REG_BODY" "id")"
 log "register ok userId=${USER_ID} traceId=${REG_TRACE}"
 
-log "2/6 create conversation"
+log "2/8 create conversation"
 CONV_BODY="$(new_tmp)"
 CONV_STATUS="$(curl -sS -w "%{http_code}" -D "$HEADERS_FILE" -o "$CONV_BODY" -b "$COOKIE_FILE" -c "$COOKIE_FILE" \
   -H "Content-Type: application/json" \
@@ -178,7 +181,7 @@ CONV_TRACE="$(extract_trace "$HEADERS_FILE")"
 CONV_ID="$(parse_json "$CONV_BODY" "id")"
 log "conversation ok conversationId=${CONV_ID} traceId=${CONV_TRACE}"
 
-log "3/6 call /api/chat/respond"
+log "3/8 call /api/chat/respond (legacy)"
 CHAT_BODY="$(new_tmp)"
 CHAT_STATUS="$(curl -sS -w "%{http_code}" -D "$HEADERS_FILE" -o "$CHAT_BODY" -b "$COOKIE_FILE" -c "$COOKIE_FILE" \
   -H "Content-Type: application/json" \
@@ -193,7 +196,40 @@ CHAT_MODEL="$(parse_json "$CHAT_BODY" "model")"
 CHAT_PREVIEW="$(node -e "const fs=require('fs');const j=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));const t=(j.assistantMessage?.text||'').replace(/\\s+/g,' ').trim();process.stdout.write(t.slice(0,120));" "$CHAT_BODY")"
 log "chat ok model=${CHAT_MODEL} traceId=${CHAT_TRACE} assistantPreview=\"${CHAT_PREVIEW}\""
 
-log "4/6 call /api/live/token"
+IMAGE_PATH="client/src/assets/maya-avatar.png"
+if [[ ! -f "$IMAGE_PATH" ]]; then
+  echo "[local-e2e] expected image fixture missing: ${IMAGE_PATH}"
+  exit 19
+fi
+
+log "4/8 upload image attachment"
+ATTACH_BODY="$(new_tmp)"
+ATTACH_STATUS="$(curl -sS -w "%{http_code}" -D "$HEADERS_FILE" -o "$ATTACH_BODY" -b "$COOKIE_FILE" -c "$COOKIE_FILE" \
+  -X POST "${BASE_URL}/api/conversations/${CONV_ID}/attachments/image" \
+  -F "image=@${IMAGE_PATH};type=image/png")"
+if [[ "$ATTACH_STATUS" != "201" ]]; then
+  echo "[local-e2e] attachment_failed status=${ATTACH_STATUS} body=$(cat "$ATTACH_BODY")"
+  exit 20
+fi
+ATTACH_TRACE="$(extract_trace "$HEADERS_FILE")"
+ATTACH_ID="$(parse_json "$ATTACH_BODY" "attachment.id")"
+ATTACH_URL="$(parse_json "$ATTACH_BODY" "attachment.signedUrl")"
+log "attachment ok id=${ATTACH_ID} traceId=${ATTACH_TRACE}"
+
+log "5/8 call /api/chat/respond/stream"
+STREAM_BODY="$(new_tmp)"
+STREAM_STATUS="$(curl -sS -w "%{http_code}" -D "$HEADERS_FILE" -o "$STREAM_BODY" -b "$COOKIE_FILE" -c "$COOKIE_FILE" \
+  -H "Content-Type: application/json" \
+  -X POST "${BASE_URL}/api/chat/respond/stream" \
+  --data "{\"conversationId\":\"${CONV_ID}\",\"text\":\"What do you see in this image?\",\"persona\":\"Maya\",\"attachmentIds\":[\"${ATTACH_ID}\"]}")"
+if [[ "$STREAM_STATUS" != "200" ]]; then
+  echo "[local-e2e] stream_failed status=${STREAM_STATUS} body=$(cat "$STREAM_BODY")"
+  exit 21
+fi
+STREAM_TRACE="$(extract_trace "$HEADERS_FILE")"
+node -e "const fs=require('fs');const lines=fs.readFileSync(process.argv[1],'utf8').trim().split(/\\n+/).filter(Boolean);const events=lines.map(l=>JSON.parse(l));const hasAck=events.some(e=>e.type==='ack');const hasFinal=events.some(e=>e.type==='final');if(!hasAck||!hasFinal){console.error(events);process.exit(2)};const final=events.find(e=>e.type==='final');const preview=(final?.assistantMessage?.text||'').replace(/\\s+/g,' ').trim().slice(0,120);console.log('[local-e2e] stream ok traceId=' + process.argv[2] + ' events=' + events.length + ' assistantPreview=\"' + preview + '\"');" "$STREAM_BODY" "$STREAM_TRACE"
+
+log "6/8 call /api/live/token"
 TOKEN_BODY="$(new_tmp)"
 TOKEN_STATUS="$(curl -sS -w "%{http_code}" -D "$HEADERS_FILE" -o "$TOKEN_BODY" -b "$COOKIE_FILE" -c "$COOKIE_FILE" \
   -H "Content-Type: application/json" \
@@ -205,15 +241,15 @@ if [[ "$TOKEN_STATUS" != "201" ]]; then
 fi
 TOKEN_TRACE="$(extract_trace "$HEADERS_FILE")"
 TOKEN_MODEL="$(parse_json "$TOKEN_BODY" "model")"
-live_auth_name="$(parse_json "$TOKEN_BODY" "ephemeralToken")"
-if [[ -z "$live_auth_name" ]]; then
+live_auth_resource="$(parse_json "$TOKEN_BODY" "ephemeralToken")"
+if [[ -z "$live_auth_resource" ]]; then
   echo "[local-e2e] live auth token missing in response"
   exit 18
 fi
-live_auth_name_length="${#live_auth_name}"
-log "live token ok model=${TOKEN_MODEL} traceId=${TOKEN_TRACE} authNameLength=${live_auth_name_length}"
+live_auth_resource_length="${#live_auth_resource}"
+log "live token ok model=${TOKEN_MODEL} traceId=${TOKEN_TRACE} authNameLength=${live_auth_resource_length}"
 
-log "5/6 persist voice transcript"
+log "7/8 persist voice transcript"
 VT1_BODY="$(new_tmp)"
 VT1_STATUS="$(curl -sS -w "%{http_code}" -D "$HEADERS_FILE" -o "$VT1_BODY" -b "$COOKIE_FILE" -c "$COOKIE_FILE" \
   -H "Content-Type: application/json" \
@@ -237,7 +273,7 @@ fi
 VT2_TRACE="$(extract_trace "$HEADERS_FILE")"
 log "voice transcript persisted traces=${VT1_TRACE},${VT2_TRACE}"
 
-log "6/6 verify stitched memory"
+log "8/8 verify stitched memory + signed media"
 MSGS_BODY="$(new_tmp)"
 MSGS_STATUS="$(curl -sS -w "%{http_code}" -D "$HEADERS_FILE" -o "$MSGS_BODY" -b "$COOKIE_FILE" -c "$COOKIE_FILE" \
   "${BASE_URL}/api/conversations/${CONV_ID}/messages")"
@@ -246,7 +282,19 @@ if [[ "$MSGS_STATUS" != "200" ]]; then
   exit 17
 fi
 MSGS_TRACE="$(extract_trace "$HEADERS_FILE")"
-node -e "const fs=require('fs');const msgs=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));const haveUser=msgs.some(m=>m.text==='voice transcript user line');const haveAssistant=msgs.some(m=>m.text==='voice transcript assistant line');if(!haveUser||!haveAssistant){console.error('[local-e2e] stitched memory check failed');process.exit(1);}console.log('[local-e2e] stitched memory ok count=' + msgs.length);" "$MSGS_BODY"
-log "messages ok traceId=${MSGS_TRACE}"
+node -e "const fs=require('fs');const msgs=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));const haveUser=msgs.some(m=>m.text==='voice transcript user line');const haveAssistant=msgs.some(m=>m.text==='voice transcript assistant line');const haveAttachment=msgs.some(m=>Array.isArray(m.attachments)&&m.attachments.length>0);if(!haveUser||!haveAssistant||!haveAttachment){console.error('[local-e2e] stitched memory check failed');process.exit(1);}console.log('[local-e2e] stitched memory ok count=' + msgs.length);" "$MSGS_BODY"
 
+MEDIA_FILE="$(new_tmp)"
+MEDIA_STATUS="$(curl -sS -w "%{http_code}" -D "$HEADERS_FILE" -o "$MEDIA_FILE" -b "$COOKIE_FILE" -c "$COOKIE_FILE" "${BASE_URL}${ATTACH_URL}")"
+if [[ "$MEDIA_STATUS" != "200" ]]; then
+  echo "[local-e2e] media_fetch_failed status=${MEDIA_STATUS}"
+  exit 23
+fi
+MEDIA_BYTES="$(wc -c < "$MEDIA_FILE" | tr -d ' ')"
+if [[ "$MEDIA_BYTES" -le 0 ]]; then
+  echo "[local-e2e] media_fetch_empty bytes=${MEDIA_BYTES}"
+  exit 24
+fi
+
+log "messages ok traceId=${MSGS_TRACE} mediaBytes=${MEDIA_BYTES}"
 log "PASS all endpoints validated on ${BASE_URL} with isolated DB ${TEST_DB_NAME}"
