@@ -9,6 +9,8 @@ import onboarding1 from "@/assets/onboarding-1-v2.png";
 import onboarding2 from "@/assets/onboarding-2-v2.png";
 import onboarding3 from "@/assets/onboarding-3-v2.png";
 import mayaAvatar from "@/assets/maya-avatar.png";
+import zarraAvatar from "@/assets/zarra-avatar.png";
+import zeeAvatar from "@/assets/zee-avatar.png";
 import leafBg from "@/assets/leaf-bg.png";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/use-auth";
@@ -25,9 +27,19 @@ import {
 
 // --- Types ---
 type Mode = "voice" | "text" | "profile";
-type Persona = "Zee";
+type Persona = "Maya" | "Zarra" | "Zee";
 type LiveVoiceName = "Aoede" | "Kore" | "Charon" | "Fenrir";
 type CameraFacingMode = "user" | "environment";
+
+const PERSONA_AVATARS: Record<Persona, string> = {
+  Maya: mayaAvatar,
+  Zarra: zarraAvatar,
+  Zee: zeeAvatar,
+};
+
+function getPersonaAvatar(persona: Persona | string): string {
+  return PERSONA_AVATARS[persona as Persona] || zeeAvatar;
+}
 
 interface MessageAttachmentData {
   id: string;
@@ -1051,7 +1063,7 @@ const ProfileView = ({
             data-testid="button-edit-avatar"
           >
             <Avatar className="w-24 h-24 border-4 border-background shadow-xl">
-              <AvatarImage src={profile?.avatarUrl || user?.profileImageUrl || mayaAvatar} />
+              <AvatarImage src={profile?.avatarUrl || user?.profileImageUrl} />
               <AvatarFallback>
                 {user?.firstName?.[0] || "U"}
                 {user?.lastName?.[0] || ""}
@@ -1396,8 +1408,8 @@ const SharedHeader = ({
         <Button variant="ghost" size="icon" className="rounded-full w-12 h-12" onClick={onProfile} data-testid="button-profile">
           <div className="w-full h-full rounded-full border border-white/20 bg-white/10 overflow-hidden p-0.5">
               <Avatar className="w-full h-full">
-                <AvatarImage src={userProfileImage || mayaAvatar} className="object-cover" />
-                <AvatarFallback>M</AvatarFallback>
+                <AvatarImage src={userProfileImage} className="object-cover" />
+                <AvatarFallback className="bg-[#809276] text-white text-sm">U</AvatarFallback>
               </Avatar>
           </div>
         </Button>
@@ -1691,8 +1703,8 @@ const TextView = ({
               <div className="flex items-end gap-2 max-w-[80%]">
                 {msg.sender !== "user" && (
                   <Avatar className="w-8 h-8 mb-1 shrink-0 ring-2 ring-white/10">
-                    <AvatarImage src={mayaAvatar} />
-                    <AvatarFallback>M</AvatarFallback>
+                    <AvatarImage src={getPersonaAvatar(persona)} />
+                    <AvatarFallback>{persona[0]}</AvatarFallback>
                   </Avatar>
                 )}
                 <div
