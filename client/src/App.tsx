@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useId } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Mic, Video, PhoneOff, MessageSquare, Menu, Settings, ChevronRight, X, ArrowLeft, Camera, Paperclip, LogOut, Eye, EyeOff } from "lucide-react";
+import { Mic, Video, PhoneOff, MessageSquare, Menu, Settings, ChevronRight, X, ArrowLeft, Camera, Paperclip, LogOut, Eye, EyeOff, ImageIcon } from "lucide-react";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -802,37 +802,64 @@ const SharedFooter = ({
           {uploadError}
         </p>
       )}
-      {isMediaTrayOpen && (
-        <div className="mb-2 rounded-xl border border-white/20 bg-black/35 p-2 backdrop-blur-sm">
-          <p className="mb-2 text-[11px] text-white/70">
-            Add an image
-          </p>
-          <div className="grid grid-cols-2 gap-2">
-            <label
-              htmlFor={cameraInputId}
-              className={cn(
-                "flex cursor-pointer items-center justify-center gap-1 rounded-lg border border-white/20 px-3 py-2 text-xs text-white transition-colors",
-                isSending && "pointer-events-none opacity-60",
-              )}
-              onClick={() => setIsMediaTrayOpen(false)}
-            >
-              <Camera className="h-3.5 w-3.5" />
-              Take photo
-            </label>
-            <label
-              htmlFor={galleryInputId}
-              className={cn(
-                "flex cursor-pointer items-center justify-center gap-1 rounded-lg border border-white/20 px-3 py-2 text-xs text-white transition-colors",
-                isSending && "pointer-events-none opacity-60",
-              )}
-              onClick={() => setIsMediaTrayOpen(false)}
-            >
-              <Paperclip className="h-3.5 w-3.5" />
-              Photo library
-            </label>
-          </div>
-        </div>
-      )}
+      <AnimatePresence>
+        {isMediaTrayOpen && (
+          <motion.div
+            initial={{ opacity: 0, y: 8, scale: 0.96 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 8, scale: 0.96 }}
+            transition={{ duration: 0.18, ease: "easeOut" }}
+            className="mb-3 rounded-2xl border border-[#DAA112]/20 bg-gradient-to-b from-[#10383A] to-[#0D2E30] p-3 shadow-lg shadow-black/30"
+          >
+            <div className="flex items-center justify-between mb-3">
+              <span className="text-xs font-semibold tracking-wide text-white/80 uppercase">
+                Add an image
+              </span>
+              <button
+                type="button"
+                onClick={() => setIsMediaTrayOpen(false)}
+                className="rounded-full p-1 text-white/40 hover:text-white/80 hover:bg-white/10 transition-colors"
+                aria-label="Close image picker"
+                data-testid="button-close-media-tray"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+            <div className="grid grid-cols-2 gap-2.5">
+              <label
+                htmlFor={cameraInputId}
+                className={cn(
+                  "group flex cursor-pointer flex-col items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-4 py-3.5 transition-all hover:border-[#DAA112]/40 hover:bg-[#DAA112]/10 active:scale-[0.97]",
+                  isSending && "pointer-events-none opacity-60",
+                )}
+                onClick={() => setIsMediaTrayOpen(false)}
+              >
+                <div className="flex h-9 w-9 items-center justify-center rounded-full bg-[#DAA112]/15 text-[#DAA112] group-hover:bg-[#DAA112]/25 transition-colors">
+                  <Camera className="h-4.5 w-4.5" />
+                </div>
+                <span className="text-xs font-medium text-white/70 group-hover:text-white transition-colors">
+                  Take photo
+                </span>
+              </label>
+              <label
+                htmlFor={galleryInputId}
+                className={cn(
+                  "group flex cursor-pointer flex-col items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-4 py-3.5 transition-all hover:border-[#DAA112]/40 hover:bg-[#DAA112]/10 active:scale-[0.97]",
+                  isSending && "pointer-events-none opacity-60",
+                )}
+                onClick={() => setIsMediaTrayOpen(false)}
+              >
+                <div className="flex h-9 w-9 items-center justify-center rounded-full bg-[#809276]/20 text-[#809276] group-hover:bg-[#809276]/30 transition-colors">
+                  <ImageIcon className="h-4.5 w-4.5" />
+                </div>
+                <span className="text-xs font-medium text-white/70 group-hover:text-white transition-colors">
+                  Photo library
+                </span>
+              </label>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
       <div className="flex items-center gap-2">
          <input
           id={cameraInputId}
