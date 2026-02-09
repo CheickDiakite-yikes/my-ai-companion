@@ -25,11 +25,11 @@ import { elapsedMs, getTraceId, trace, traceError } from "./observability";
 import { getMediaStore, type StorageProvider } from "./media-store";
 import { createSignedMediaPath, verifyMediaSignature } from "./media-signing";
 
-const acceptedPersonaSchema = z.enum(["Zee", "Maya", "Zarra", "Ore"]);
+const personaInputSchema = z.string().trim().min(1).max(64);
 const liveVoiceSchema = z.enum(["Aoede", "Kore", "Charon", "Fenrir"]);
 
 const liveTokenSchema = z.object({
-  persona: acceptedPersonaSchema.optional(),
+  persona: personaInputSchema.optional(),
   responseModality: z.enum(["AUDIO", "TEXT"]).optional(),
   voice: liveVoiceSchema.optional(),
 });
@@ -39,7 +39,7 @@ const chatRespondSchema = z
     conversationId: z.string().min(1, "conversationId is required"),
     text: z.string().trim().max(8000, "Message is too long").default(""),
     attachmentIds: z.array(z.string().min(1)).optional().default([]),
-    persona: acceptedPersonaSchema.optional(),
+    persona: personaInputSchema.optional(),
   })
   .superRefine((value, ctx) => {
     if (value.text.length === 0 && value.attachmentIds.length === 0) {
