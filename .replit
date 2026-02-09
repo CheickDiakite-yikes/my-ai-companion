@@ -47,3 +47,6 @@ waitForPort = 5000
 stack = "MOCKUP_JS"
 mockupState = "FULLSTACK"
 integrations = ["javascript_log_in_with_replit:2.0.0"]
+
+[objectStorage]
+defaultBucketID = "replit-objstore-b4d43eea-9e5f-4865-9488-56bf8827895e"
