@@ -1507,7 +1507,10 @@ const ProfileView = ({
                           <button
                             key={themeOption.id}
                             type="button"
-                            onClick={() => setThemeChoice(themeOption.id)}
+                            onClick={() => {
+                              setThemeChoice(themeOption.id);
+                              applyAppTheme(themeOption.id);
+                            }}
                             className={cn(
                               "flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left transition-all border",
                               themeChoice === themeOption.id ? "" : "hover:opacity-95",
@@ -3923,7 +3926,10 @@ function App() {
         <AnimatePresence>
           {showProfile && (
             <ProfileView
-              onClose={() => setShowProfile(false)}
+              onClose={() => {
+                applyAppTheme(selectedTheme);
+                setShowProfile(false);
+              }}
               user={user}
               profile={userProfile}
               isProfileLoading={isProfileLoading}
