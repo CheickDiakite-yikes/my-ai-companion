@@ -1666,12 +1666,13 @@ const SharedHeader = ({
   );
 };
 
-const VoiceView = ({ isActive, isConnecting, onEndCall, onProfile, assistantName, selectedVoice, setSelectedVoice, mode, setMode, duration, userProfileImage, isVideoEnabled, onToggleVideo, onFlipCamera, videoStream, isVideoTransitioning }: { 
+const VoiceView = ({ isActive, isConnecting, onEndCall, onProfile, assistantName, assistantAvatar, selectedVoice, setSelectedVoice, mode, setMode, duration, userProfileImage, isVideoEnabled, onToggleVideo, onFlipCamera, videoStream, isVideoTransitioning }: { 
   isActive: boolean; 
   isConnecting: boolean;
   onEndCall: () => void;
   onProfile: () => void;
   assistantName: Persona;
+  assistantAvatar: string;
   selectedVoice: LiveVoiceName;
   setSelectedVoice: (voice: LiveVoiceName) => void;
   mode: Mode;
@@ -1734,7 +1735,7 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onProfile, assistantName
                 <div
                   className={cn(
                     "relative flex w-full items-center justify-center",
-                    isVideoEnabled ? "h-[56vh]" : "h-32",
+                    isVideoEnabled ? "h-[56vh]" : "h-48",
                   )}
                 >
                   {isVideoEnabled && (
@@ -1751,11 +1752,42 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onProfile, assistantName
                       </div>
                     </div>
                   )}
+
+                  {!isVideoEnabled && (
+                    <div className="relative flex items-center justify-center">
+                      {[0, 1, 2].map((i) => (
+                        <motion.div
+                          key={`active-ring-${i}`}
+                          className="absolute rounded-full border border-[#DAA112]/20"
+                          animate={{
+                            width: [120, 200 + i * 40],
+                            height: [120, 200 + i * 40],
+                            opacity: [0.4, 0],
+                          }}
+                          transition={{
+                            duration: 2,
+                            repeat: Infinity,
+                            delay: i * 0.6,
+                            ease: "easeOut",
+                          }}
+                        />
+                      ))}
+                      <motion.div
+                        className="w-28 h-28 rounded-full overflow-hidden ring-4 ring-[#DAA112]/40 shadow-[0_0_50px_rgba(218,161,18,0.25)]"
+                        animate={{ scale: [1, 1.06, 1] }}
+                        transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}
+                      >
+                        <img src={assistantAvatar} alt={assistantName} className="w-full h-full object-cover" />
+                      </motion.div>
+                    </div>
+                  )}
+
                   <div
                     className={cn(
                       "z-10 flex items-center justify-center gap-1.5",
-                      isVideoEnabled &&
-                        "absolute bottom-5 left-1/2 -translate-x-1/2 rounded-full bg-black/35 px-4 py-3 backdrop-blur-sm",
+                      isVideoEnabled
+                        ? "absolute bottom-5 left-1/2 -translate-x-1/2 rounded-full bg-black/35 px-4 py-3 backdrop-blur-sm"
+                        : "absolute -bottom-12 left-1/2 -translate-x-1/2 rounded-full bg-white/5 px-4 py-2 backdrop-blur-sm",
                     )}
                   >
                     {[...Array(8)].map((_, i) => (
@@ -1763,7 +1795,7 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onProfile, assistantName
                         key={i}
                         className={cn(
                           "rounded-full opacity-80",
-                          isVideoEnabled ? "w-3" : "w-4",
+                          isVideoEnabled ? "w-3" : "w-2.5",
                         )}
                         animate={{
                           height: ["20%", "80%", "20%"],
@@ -1781,31 +1813,71 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onProfile, assistantName
                 </div>
               </div>
             ) : (
-              <div className="flex flex-col items-center gap-8">
+              <div className="flex flex-col items-center gap-6">
                  <button
                    type="button"
                    className={cn(
-                     "relative group cursor-pointer",
-                     isConnecting && "cursor-wait opacity-80",
+                     "relative group cursor-pointer flex items-center justify-center",
+                     isConnecting && "cursor-wait",
                    )}
                    onClick={onEndCall}
                    disabled={isConnecting}
                    aria-label={isConnecting ? "Connecting voice session" : `Start voice call with ${assistantName}`}
                    data-testid="button-start-call"
                  >
-                   <div className="absolute inset-0 bg-[#DAA112]/20 rounded-full animate-ping opacity-20 duration-3000" />
-                   <div className="absolute -inset-4 bg-[#DAA112]/10 rounded-full animate-pulse opacity-30" />
-                   
-                   <div className={cn(
-                     "w-32 h-32 bg-[#DAA112] rounded-full flex items-center justify-center shadow-[0_0_40px_rgba(218,161,18,0.3)] transform transition-transform",
-                     !isConnecting && "group-hover:scale-105 active:scale-95",
-                   )}>
-                      <Mic className="w-12 h-12 text-[#10383A]" />
-                   </div>
+                   {[0, 1, 2].map((i) => (
+                     <motion.div
+                       key={`ring-${i}`}
+                       className="absolute rounded-full border-2 border-[#DAA112]/15"
+                       animate={{
+                         width: [140, 220 + i * 50],
+                         height: [140, 220 + i * 50],
+                         opacity: [0.5, 0],
+                       }}
+                       transition={{
+                         duration: 3,
+                         repeat: Infinity,
+                         delay: i * 0.8,
+                         ease: "easeOut",
+                       }}
+                     />
+                   ))}
+
+                   <motion.div
+                     className="absolute w-44 h-44 rounded-full bg-[#DAA112]/8"
+                     animate={{ scale: [1, 1.15, 1], opacity: [0.15, 0.25, 0.15] }}
+                     transition={{ duration: 4, repeat: Infinity, ease: "easeInOut" }}
+                   />
+                   <motion.div
+                     className="absolute w-36 h-36 rounded-full bg-[#DAA112]/12"
+                     animate={{ scale: [1, 1.08, 1], opacity: [0.2, 0.35, 0.2] }}
+                     transition={{ duration: 3, repeat: Infinity, ease: "easeInOut", delay: 0.5 }}
+                   />
+
+                   <motion.div
+                     className={cn(
+                       "relative w-32 h-32 rounded-full overflow-hidden ring-4 ring-[#DAA112]/50 shadow-[0_0_60px_rgba(218,161,18,0.3)]",
+                       isConnecting && "opacity-70",
+                     )}
+                     animate={{ scale: [1, 1.04, 1] }}
+                     transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}
+                     whileHover={!isConnecting ? { scale: 1.08 } : undefined}
+                     whileTap={!isConnecting ? { scale: 0.95 } : undefined}
+                   >
+                     <img src={assistantAvatar} alt={assistantName} className="w-full h-full object-cover" />
+                     <div className="absolute inset-0 bg-gradient-to-t from-[#10383A]/60 via-transparent to-transparent" />
+                     <div className="absolute bottom-2 left-1/2 -translate-x-1/2 bg-[#DAA112] rounded-full p-2 shadow-lg">
+                       <Mic className="w-4 h-4 text-[#10383A]" />
+                     </div>
+                   </motion.div>
                  </button>
-                 <p className="text-white/60 font-medium tracking-wide">
+                 <motion.p
+                   className="text-white/60 font-medium tracking-wide text-center"
+                   animate={isConnecting ? { opacity: [0.5, 1, 0.5] } : { opacity: 1 }}
+                   transition={isConnecting ? { duration: 1.5, repeat: Infinity, ease: "easeInOut" } : {}}
+                 >
                    {isConnecting ? `Connecting to ${assistantName}...` : `Tap to speak to ${assistantName}`}
-                 </p>
+                 </motion.p>
               </div>
             )}
           </div>
@@ -3397,6 +3469,7 @@ function App() {
           onEndCall={handleEndCall}
           onProfile={() => setShowProfile(true)}
           assistantName={persona}
+          assistantAvatar={resolvedAssistantAvatar}
           selectedVoice={selectedVoice}
           setSelectedVoice={handleVoiceChange}
           mode={mode}
