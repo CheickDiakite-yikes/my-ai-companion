@@ -1023,6 +1023,8 @@ const ProfileView = ({
   const [zeeAvatarPreset, setZeeAvatarPreset] = useState<ZeeAvatarPreset>("woman_1");
   const [clearZeeAvatarAttachment, setClearZeeAvatarAttachment] = useState(false);
   const [zeeAvatarOpen, setZeeAvatarOpen] = useState(false);
+  const [personalizationOpen, setPersonalizationOpen] = useState(false);
+  const [responseStyleOpen, setResponseStyleOpen] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveSuccess, setSaveSuccess] = useState<string | null>(null);
 
@@ -1305,125 +1307,156 @@ const ProfileView = ({
               <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3">
                 Personalization
               </h3>
-              <div className="bg-card rounded-xl p-4 shadow-sm border space-y-4">
-                <div className="space-y-1.5">
-                  <label className="text-sm font-medium" htmlFor="profile-display-name">
-                    Preferred name
-                  </label>
-                  <input
-                    id="profile-display-name"
-                    value={displayName}
-                    onChange={(event) => setDisplayName(event.target.value)}
-                    maxLength={120}
-                    className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm outline-none focus:border-[#DAA112]"
-                    placeholder="How should Zee address you?"
-                    data-testid="input-profile-display-name"
-                  />
-                </div>
-
-                <div className="space-y-1.5">
-                  <label className="text-sm font-medium" htmlFor="profile-bio">
-                    Bio (optional)
-                  </label>
-                  <textarea
-                    id="profile-bio"
-                    value={bio}
-                    onChange={(event) => setBio(event.target.value.slice(0, approxBioCharLimit))}
-                    rows={4}
-                    className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm outline-none focus:border-[#DAA112]"
-                    placeholder="Share what matters to you, your goals, and your vibe."
-                    data-testid="input-profile-bio"
-                  />
-                  <div className="flex items-center justify-between text-[11px] text-muted-foreground">
-                    <span>{bioWordCount}/{bioWordLimit} words</span>
-                    <span>{bio.length}/{approxBioCharLimit} chars</span>
+              <div className="bg-card rounded-xl shadow-sm border overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => setPersonalizationOpen((prev) => !prev)}
+                  className="flex w-full items-center gap-3 p-4 text-left transition-colors hover:bg-muted/30"
+                  data-testid="button-personalization-toggle"
+                >
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-semibold text-foreground">
+                      {displayName || "Set up your profile"}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {[profession, location].filter(Boolean).join(" · ") || "Name, bio, location & more"}
+                    </p>
                   </div>
-                </div>
+                  <ChevronDown className={cn("w-4 h-4 text-muted-foreground transition-transform shrink-0", personalizationOpen && "rotate-180")} />
+                </button>
 
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-1.5">
-                    <label className="text-sm font-medium" htmlFor="profile-location">
-                      Location
-                    </label>
-                    <input
-                      id="profile-location"
-                      value={location}
-                      onChange={(event) => setLocation(event.target.value)}
-                      maxLength={120}
-                      className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm outline-none focus:border-[#DAA112]"
-                      placeholder="City, country"
-                      data-testid="input-profile-location"
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <label className="text-sm font-medium" htmlFor="profile-age">
-                      Age
-                    </label>
-                    <input
-                      id="profile-age"
-                      value={ageInput}
-                      onChange={(event) =>
-                        setAgeInput(event.target.value.replace(/[^0-9]/g, ""))
-                      }
-                      className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm outline-none focus:border-[#DAA112]"
-                      placeholder="Optional"
-                      inputMode="numeric"
-                      data-testid="input-profile-age"
-                    />
-                  </div>
-                </div>
+                <AnimatePresence initial={false}>
+                  {personalizationOpen && (
+                    <motion.div
+                      initial={{ height: 0, opacity: 0 }}
+                      animate={{ height: "auto", opacity: 1 }}
+                      exit={{ height: 0, opacity: 0 }}
+                      transition={{ duration: 0.2, ease: "easeInOut" }}
+                      className="overflow-hidden"
+                    >
+                      <div className="px-4 pb-4 space-y-4 border-t border-border pt-3">
+                        <div className="space-y-1.5">
+                          <label className="text-sm font-medium" htmlFor="profile-display-name">
+                            Preferred name
+                          </label>
+                          <input
+                            id="profile-display-name"
+                            value={displayName}
+                            onChange={(event) => setDisplayName(event.target.value)}
+                            maxLength={120}
+                            className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm outline-none focus:border-[#DAA112]"
+                            placeholder="How should Zee address you?"
+                            data-testid="input-profile-display-name"
+                          />
+                        </div>
 
-                <div className="space-y-1.5">
-                  <label className="text-sm font-medium" htmlFor="profile-profession">
-                    Profession
-                  </label>
-                  <input
-                    id="profile-profession"
-                    value={profession}
-                    onChange={(event) => setProfession(event.target.value)}
-                    maxLength={120}
-                    className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm outline-none focus:border-[#DAA112]"
-                    placeholder="What do you do?"
-                    data-testid="input-profile-profession"
-                  />
-                </div>
+                        <div className="space-y-1.5">
+                          <label className="text-sm font-medium" htmlFor="profile-bio">
+                            Bio (optional)
+                          </label>
+                          <textarea
+                            id="profile-bio"
+                            value={bio}
+                            onChange={(event) => setBio(event.target.value.slice(0, approxBioCharLimit))}
+                            rows={4}
+                            className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm outline-none focus:border-[#DAA112]"
+                            placeholder="Share what matters to you, your goals, and your vibe."
+                            data-testid="input-profile-bio"
+                          />
+                          <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+                            <span>{bioWordCount}/{bioWordLimit} words</span>
+                            <span>{bio.length}/{approxBioCharLimit} chars</span>
+                          </div>
+                        </div>
 
-                <div className="space-y-1.5">
-                  <label className="text-sm font-medium" htmlFor="profile-gender">
-                    Gender
-                  </label>
-                  <select
-                    id="profile-gender"
-                    value={gender}
-                    onChange={(event) => setGender(event.target.value as GenderOption | "")}
-                    className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm outline-none focus:border-[#DAA112]"
-                    data-testid="select-profile-gender"
-                  >
-                    <option value="">Not specified</option>
-                    {GENDER_OPTIONS.map((option) => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+                        <div className="grid grid-cols-2 gap-3">
+                          <div className="space-y-1.5">
+                            <label className="text-sm font-medium" htmlFor="profile-location">
+                              Location
+                            </label>
+                            <input
+                              id="profile-location"
+                              value={location}
+                              onChange={(event) => setLocation(event.target.value)}
+                              maxLength={120}
+                              className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm outline-none focus:border-[#DAA112]"
+                              placeholder="City, country"
+                              data-testid="input-profile-location"
+                            />
+                          </div>
+                          <div className="space-y-1.5">
+                            <label className="text-sm font-medium" htmlFor="profile-age">
+                              Age
+                            </label>
+                            <input
+                              id="profile-age"
+                              value={ageInput}
+                              onChange={(event) =>
+                                setAgeInput(event.target.value.replace(/[^0-9]/g, ""))
+                              }
+                              className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm outline-none focus:border-[#DAA112]"
+                              placeholder="Optional"
+                              inputMode="numeric"
+                              data-testid="input-profile-age"
+                            />
+                          </div>
+                        </div>
 
-                {gender === "other" && (
-                  <div className="space-y-1.5">
-                    <label className="text-sm font-medium" htmlFor="profile-gender-other">
-                      Gender details
-                    </label>
-                    <input
-                      id="profile-gender-other"
-                      value={genderOther}
-                      onChange={(event) => setGenderOther(event.target.value)}
-                      maxLength={80}
-                      className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm outline-none focus:border-[#DAA112]"
-                      placeholder="Share if you'd like"
-                      data-testid="input-profile-gender-other"
-                    />
-                  </div>
-                )}
+                        <div className="space-y-1.5">
+                          <label className="text-sm font-medium" htmlFor="profile-profession">
+                            Profession
+                          </label>
+                          <input
+                            id="profile-profession"
+                            value={profession}
+                            onChange={(event) => setProfession(event.target.value)}
+                            maxLength={120}
+                            className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm outline-none focus:border-[#DAA112]"
+                            placeholder="What do you do?"
+                            data-testid="input-profile-profession"
+                          />
+                        </div>
+
+                        <div className="space-y-1.5">
+                          <label className="text-sm font-medium" htmlFor="profile-gender">
+                            Gender
+                          </label>
+                          <select
+                            id="profile-gender"
+                            value={gender}
+                            onChange={(event) => setGender(event.target.value as GenderOption | "")}
+                            className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm outline-none focus:border-[#DAA112]"
+                            data-testid="select-profile-gender"
+                          >
+                            <option value="">Not specified</option>
+                            {GENDER_OPTIONS.map((option) => (
+                              <option key={option.value} value={option.value}>
+                                {option.label}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
+                        {gender === "other" && (
+                          <div className="space-y-1.5">
+                            <label className="text-sm font-medium" htmlFor="profile-gender-other">
+                              Gender details
+                            </label>
+                            <input
+                              id="profile-gender-other"
+                              value={genderOther}
+                              onChange={(event) => setGenderOther(event.target.value)}
+                              maxLength={80}
+                              className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm outline-none focus:border-[#DAA112]"
+                              placeholder="Share if you'd like"
+                              data-testid="input-profile-gender-other"
+                            />
+                          </div>
+                        )}
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
               </div>
             </section>
 
@@ -1431,41 +1464,72 @@ const ProfileView = ({
               <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3">
                 Response Style
               </h3>
-              <div className="bg-card rounded-xl p-4 shadow-sm border space-y-4">
-                <div className="space-y-1.5">
-                  <label className="text-sm font-medium" htmlFor="profile-style-preset">
-                    Preset
-                  </label>
-                  <select
-                    id="profile-style-preset"
-                    value={stylePreset}
-                    onChange={(event) =>
-                      setStylePreset(event.target.value as ResponseStylePreset)
-                    }
-                    className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm outline-none focus:border-[#DAA112]"
-                    data-testid="select-profile-style-preset"
-                  >
-                    {RESPONSE_STYLE_OPTIONS.map((option) => (
-                      <option key={option.value} value={option.value}>
-                        {option.label} - {option.description}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div className="space-y-1.5">
-                  <label className="text-sm font-medium" htmlFor="profile-style-note">
-                    Custom note (optional)
-                  </label>
-                  <textarea
-                    id="profile-style-note"
-                    value={styleNote}
-                    onChange={(event) => setStyleNote(event.target.value.slice(0, 600))}
-                    rows={3}
-                    className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm outline-none focus:border-[#DAA112]"
-                    placeholder='Example: "Use more humor and quick punchy replies."'
-                    data-testid="input-profile-style-note"
-                  />
-                </div>
+              <div className="bg-card rounded-xl shadow-sm border overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => setResponseStyleOpen((prev) => !prev)}
+                  className="flex w-full items-center gap-3 p-4 text-left transition-colors hover:bg-muted/30"
+                  data-testid="button-response-style-toggle"
+                >
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-semibold text-foreground">
+                      {RESPONSE_STYLE_OPTIONS.find((o) => o.value === stylePreset)?.label ?? "Balanced"}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {RESPONSE_STYLE_OPTIONS.find((o) => o.value === stylePreset)?.description ?? "Adjust how Zee responds"}
+                    </p>
+                  </div>
+                  <ChevronDown className={cn("w-4 h-4 text-muted-foreground transition-transform shrink-0", responseStyleOpen && "rotate-180")} />
+                </button>
+
+                <AnimatePresence initial={false}>
+                  {responseStyleOpen && (
+                    <motion.div
+                      initial={{ height: 0, opacity: 0 }}
+                      animate={{ height: "auto", opacity: 1 }}
+                      exit={{ height: 0, opacity: 0 }}
+                      transition={{ duration: 0.2, ease: "easeInOut" }}
+                      className="overflow-hidden"
+                    >
+                      <div className="px-4 pb-4 space-y-4 border-t border-border pt-3">
+                        <div className="space-y-1.5">
+                          <label className="text-sm font-medium" htmlFor="profile-style-preset">
+                            Preset
+                          </label>
+                          <select
+                            id="profile-style-preset"
+                            value={stylePreset}
+                            onChange={(event) =>
+                              setStylePreset(event.target.value as ResponseStylePreset)
+                            }
+                            className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm outline-none focus:border-[#DAA112]"
+                            data-testid="select-profile-style-preset"
+                          >
+                            {RESPONSE_STYLE_OPTIONS.map((option) => (
+                              <option key={option.value} value={option.value}>
+                                {option.label} - {option.description}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className="space-y-1.5">
+                          <label className="text-sm font-medium" htmlFor="profile-style-note">
+                            Custom note (optional)
+                          </label>
+                          <textarea
+                            id="profile-style-note"
+                            value={styleNote}
+                            onChange={(event) => setStyleNote(event.target.value.slice(0, 600))}
+                            rows={3}
+                            className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm outline-none focus:border-[#DAA112]"
+                            placeholder='Example: "Use more humor and quick punchy replies."'
+                            data-testid="input-profile-style-note"
+                          />
+                        </div>
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
               </div>
             </section>
 
