@@ -45,7 +45,13 @@ function createParticle(w: number, h: number, cx: number, cy: number): Particle 
   };
 }
 
-export default function CanvasOrb({ config }: { config: OrbConfig }) {
+export default function CanvasOrb({
+  config,
+  size = 320,
+}: {
+  config: OrbConfig;
+  size?: number;
+}) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animRef = useRef<number>(0);
   const particlesRef = useRef<Particle[]>([]);
@@ -232,8 +238,8 @@ export default function CanvasOrb({ config }: { config: OrbConfig }) {
     const h = 320;
     canvas.width = w * dpr;
     canvas.height = h * dpr;
-    canvas.style.width = `${w}px`;
-    canvas.style.height = `${h}px`;
+    canvas.style.width = `${size}px`;
+    canvas.style.height = `${size}px`;
 
     particlesRef.current = [];
 
@@ -245,13 +251,13 @@ export default function CanvasOrb({ config }: { config: OrbConfig }) {
     animRef.current = requestAnimationFrame(loop);
 
     return () => cancelAnimationFrame(animRef.current);
-  }, [draw]);
+  }, [draw, size]);
 
   return (
     <canvas
       ref={canvasRef}
       className="max-w-full"
-      style={{ width: 320, height: 320, imageRendering: "auto" }}
+      style={{ width: size, height: size, imageRendering: "auto" }}
     />
   );
 }

@@ -97,6 +97,18 @@
   color: var(--app-input-placeholder);
 }
 
+.app-composer-input {
+  color: var(--app-input-text);
+  caret-color: var(--app-input-text);
+  appearance: none;
+  -webkit-appearance: none;
+  box-shadow: none;
+}
+
+.app-composer-input::placeholder {
+  color: var(--app-input-placeholder);
+}
+
 /* Custom scrollbar for chat */
 ::-webkit-scrollbar {
   width: 6px;

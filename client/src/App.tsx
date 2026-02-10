@@ -246,35 +246,67 @@ function extractTraceId(
 const ONBOARDING_STEPS = [
   {
     id: 1,
-    title: "Welcome, Friend.",
+    title: "Welcome.",
     description: "I'm here with you.",
-    orbColor: "#5CE0D8",
-    orbGlow: "rgba(92, 224, 216, 0.4)",
-    bgGradient: "radial-gradient(ellipse at 50% 40%, rgba(16,56,58,0.95) 0%, #080E10 70%)",
-    accentRing: "rgba(92, 224, 216, 0.25)",
-    particleColor: "rgba(92, 224, 216, 0.6)",
+    orbColor: "#6AF4E7",
+    orbGlow: "rgba(106, 244, 231, 0.45)",
+    bgGradient:
+      "radial-gradient(130% 95% at 50% 8%, rgba(57, 172, 180, 0.44) 0%, rgba(14, 41, 60, 0.86) 45%, #040914 100%)",
+    accentRing: "rgba(106, 244, 231, 0.3)",
+    particleColor: "rgba(160, 255, 247, 0.72)",
+    headlineColor: "#ECF7FF",
+    bodyColor: "rgba(222, 245, 255, 0.86)",
+    skipColor: "rgba(216, 243, 255, 0.74)",
+    dotInactive: "rgba(201, 242, 255, 0.2)",
+    ctaText: "#EEF8FF",
+    ctaBackground: "linear-gradient(135deg, rgba(255,255,255,0.18), rgba(255,255,255,0.07))",
+    ctaBorder: "rgba(186, 246, 241, 0.42)",
   },
   {
     id: 2,
-    title: "I listen.",
-    description: "Always here, always present.",
-    orbColor: "#E8834A",
-    orbGlow: "rgba(232, 131, 74, 0.45)",
-    bgGradient: "radial-gradient(ellipse at 50% 40%, rgba(80,25,10,0.95) 0%, #0A0604 70%)",
-    accentRing: "rgba(232, 131, 74, 0.25)",
-    particleColor: "rgba(232, 131, 74, 0.6)",
+    title: "I'm here to listen.",
+    description: "A shoulder to lean on.",
+    orbColor: "#FF9D55",
+    orbGlow: "rgba(255, 157, 85, 0.45)",
+    bgGradient:
+      "radial-gradient(130% 95% at 50% 8%, rgba(245, 95, 72, 0.48) 0%, rgba(77, 28, 33, 0.89) 44%, #11070C 100%)",
+    accentRing: "rgba(255, 157, 85, 0.34)",
+    particleColor: "rgba(255, 183, 136, 0.76)",
+    headlineColor: "#FFE3C8",
+    bodyColor: "rgba(255, 216, 185, 0.86)",
+    skipColor: "rgba(255, 206, 162, 0.72)",
+    dotInactive: "rgba(255, 203, 160, 0.2)",
+    ctaText: "#FFF2E4",
+    ctaBackground: "linear-gradient(135deg, rgba(255,255,255,0.15), rgba(255,196,141,0.12))",
+    ctaBorder: "rgba(255, 191, 144, 0.5)",
   },
   {
     id: 3,
     title: "We grow together.",
-    description: "Your journey, our bond.",
-    orbColor: "#A855F7",
-    orbGlow: "rgba(168, 85, 247, 0.45)",
-    bgGradient: "radial-gradient(ellipse at 50% 40%, rgba(45,15,80,0.95) 0%, #06030D 70%)",
-    accentRing: "rgba(168, 85, 247, 0.25)",
-    particleColor: "rgba(168, 85, 247, 0.6)",
+    description: "Our journey, our bond.",
+    orbColor: "#BC73FF",
+    orbGlow: "rgba(188, 115, 255, 0.48)",
+    bgGradient:
+      "radial-gradient(130% 95% at 50% 8%, rgba(120, 84, 235, 0.5) 0%, rgba(43, 24, 98, 0.88) 45%, #070512 100%)",
+    accentRing: "rgba(188, 115, 255, 0.3)",
+    particleColor: "rgba(208, 171, 255, 0.74)",
+    headlineColor: "#F4E8FF",
+    bodyColor: "rgba(228, 204, 255, 0.84)",
+    skipColor: "rgba(215, 186, 255, 0.7)",
+    dotInactive: "rgba(212, 180, 255, 0.2)",
+    ctaText: "#F8EEFF",
+    ctaBackground: "linear-gradient(135deg, rgba(255,255,255,0.16), rgba(188,115,255,0.12))",
+    ctaBorder: "rgba(208, 170, 255, 0.46)",
   }
 ];
+const ONBOARDING_RELATIONSHIP_WORDS = [
+  "Bestie",
+  "Homie",
+  "Friend",
+  "Assistant",
+  "Helper",
+  "Confidant",
+] as const;
 
 const CHAT_IMAGE_MAX_COUNT = 3;
 const TRANSCRIPT_DEDUPE_WINDOW_MS = 2500;
@@ -403,8 +435,14 @@ const REFERRAL_OPTIONS = [
   "Other",
 ];
 
-const OnboardingOrb = ({ slide }: { slide: typeof ONBOARDING_STEPS[number] }) => (
-  <CanvasOrb config={slide} />
+const OnboardingOrb = ({
+  slide,
+  size = 320,
+}: {
+  slide: typeof ONBOARDING_STEPS[number];
+  size?: number;
+}) => (
+  <CanvasOrb config={slide} size={size} />
 );
 
 const AuthPage = ({ onLogin, onRegister, loginError, registerError, isLoggingIn, isRegistering }: {
@@ -469,7 +507,7 @@ const AuthPage = ({ onLogin, onRegister, loginError, registerError, isLoggingIn,
   if (authMode === "welcome") {
     const landingSlide = ONBOARDING_STEPS[0];
     return (
-      <div className="w-full h-screen flex items-center justify-center overflow-hidden" style={{ background: landingSlide.bgGradient }} data-testid="landing-page">
+      <div className="w-full h-[100dvh] min-h-[100dvh] flex items-center justify-center overflow-hidden" style={{ background: landingSlide.bgGradient }} data-testid="landing-page">
         <div className="w-full h-full md:max-w-[400px] md:h-[850px] md:rounded-[2.5rem] shadow-2xl overflow-hidden relative flex flex-col items-center justify-between p-8" style={{ background: landingSlide.bgGradient }}>
           <div className="flex-1 flex flex-col items-center justify-center w-full">
             <motion.div
@@ -525,7 +563,7 @@ const AuthPage = ({ onLogin, onRegister, loginError, registerError, isLoggingIn,
 
   if (authMode === "login") {
     return (
-      <div className="w-full h-screen bg-[#10383A] flex items-center justify-center overflow-hidden" data-testid="login-page">
+      <div className="w-full h-[100dvh] min-h-[100dvh] bg-[#10383A] flex items-center justify-center overflow-hidden" data-testid="login-page">
         <div className="w-full h-full md:max-w-[400px] md:h-[850px] md:rounded-[2.5rem] shadow-2xl overflow-hidden relative flex flex-col bg-[#10383A]">
           <div className="p-6">
             <button onClick={() => setAuthMode("welcome")} className="text-white/70 hover:text-white transition-colors" data-testid="button-back-to-welcome">
@@ -616,7 +654,7 @@ const AuthPage = ({ onLogin, onRegister, loginError, registerError, isLoggingIn,
   }
 
   return (
-    <div className="w-full h-screen bg-[#10383A] flex items-center justify-center overflow-hidden" data-testid="register-page">
+    <div className="w-full h-[100dvh] min-h-[100dvh] bg-[#10383A] flex items-center justify-center overflow-hidden" data-testid="register-page">
       <div className="w-full h-full md:max-w-[400px] md:h-[850px] md:rounded-[2.5rem] shadow-2xl overflow-hidden relative flex flex-col bg-[#10383A]">
         <div className="p-6">
           <button onClick={() => setAuthMode("welcome")} className="text-white/70 hover:text-white transition-colors" data-testid="button-back-to-welcome-register">
@@ -819,10 +857,14 @@ const SharedFooter = ({
 
   return (
     <div
-      className="absolute bottom-0 left-0 right-0 z-50 p-4 backdrop-blur-md border-t"
+      className="absolute bottom-0 left-0 right-0 z-50 border-t backdrop-blur-md"
       style={{
         backgroundColor: "var(--app-footer-bg)",
         borderTopColor: "var(--app-soft-card-border)",
+        paddingLeft: "0.75rem",
+        paddingRight: "0.75rem",
+        paddingTop: "0.55rem",
+        paddingBottom: "max(0.65rem, env(safe-area-inset-bottom))",
       }}
     >
       {pendingAttachments.length > 0 && (
@@ -953,7 +995,7 @@ const SharedFooter = ({
           </motion.div>
         )}
       </AnimatePresence>
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-1.5 sm:gap-2">
          <input
           id={cameraInputId}
           type="file"
@@ -1000,7 +1042,7 @@ const SharedFooter = ({
            <input 
             type="text" 
             placeholder={`Message ${persona}...`} 
-            className="w-full bg-transparent border-none outline-none text-sm app-input-theme"
+            className="w-full bg-transparent border-none outline-none text-sm app-composer-input"
             value={inputValue}
             onChange={(e) => setInputValue(e.target.value)}
             onKeyDown={handleKeyDown}
@@ -1071,6 +1113,7 @@ const ProfileView = ({
   onSaveTheme,
   onUploadAvatar,
   onUploadZeeAvatar,
+  onReplayOnboarding,
   onLogout,
 }: {
   onClose: () => void;
@@ -1096,6 +1139,7 @@ const ProfileView = ({
   onSaveTheme: (theme: AppThemeId) => Promise<void>;
   onUploadAvatar: (file: File) => Promise<void>;
   onUploadZeeAvatar: (file: File) => Promise<void>;
+  onReplayOnboarding: () => void;
   onLogout: () => void;
 }) => {
   const avatarInputId = useId();
@@ -1233,7 +1277,7 @@ const ProfileView = ({
         </Button>
       </div>
 
-      <div className="px-6 -mt-12 relative z-10 flex flex-col min-h-0" style={{ height: "calc(100% - 12rem + 3rem)" }}>
+      <div className="px-4 sm:px-6 -mt-12 relative z-10 flex flex-1 flex-col min-h-0">
         <div className="flex flex-col items-center mb-6">
           <label
             htmlFor={avatarInputId}
@@ -1298,7 +1342,7 @@ const ProfileView = ({
           </div>
         </div>
 
-        <ScrollArea className="flex-1 min-h-0 -mx-6 px-6 pb-6">
+        <ScrollArea className="flex-1 min-h-0 -mx-4 px-4 pb-6 sm:-mx-6 sm:px-6">
           <form onSubmit={onSubmit} className="space-y-6">
             <section>
               <h3
@@ -1308,12 +1352,12 @@ const ProfileView = ({
                 Account
               </h3>
               <div className="rounded-xl p-4 shadow-sm border space-y-3" style={themedCardStyle}>
-                <div className="flex items-center justify-between">
+                <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between">
                   <span className="font-medium" style={{ color: "var(--app-on-dark)" }}>
                     Email
                   </span>
                   <span
-                    className="text-sm"
+                    className="text-sm break-all sm:text-right"
                     style={{ color: "var(--app-on-dark-muted)" }}
                     data-testid="text-user-email"
                   >
@@ -1323,6 +1367,19 @@ const ProfileView = ({
                 <p className="text-xs" style={{ color: "var(--app-on-dark-muted)" }}>
                   Optional profile fields help Zee personalize better.
                 </p>
+                <button
+                  type="button"
+                  onClick={onReplayOnboarding}
+                  className="w-full rounded-xl border px-3 py-2 text-sm font-medium transition-colors hover:opacity-95"
+                  style={{
+                    borderColor: "var(--app-soft-card-border)",
+                    backgroundColor: "var(--app-input-bg)",
+                    color: "var(--app-on-dark)",
+                  }}
+                  data-testid="button-replay-onboarding"
+                >
+                  Replay onboarding
+                </button>
               </div>
             </section>
 
@@ -1639,7 +1696,7 @@ const ProfileView = ({
                           </div>
                         </div>
 
-                        <div className="grid grid-cols-2 gap-3">
+                        <div className="grid grid-cols-1 gap-3 min-[370px]:grid-cols-2">
                           <div className="space-y-1.5">
                             <label className="text-sm font-medium" htmlFor="profile-location">
                               Location
@@ -1879,7 +1936,15 @@ const SharedHeader = ({
   };
 
   return (
-    <div className="absolute top-0 left-0 right-0 z-50 flex items-center justify-between p-6 pt-8 pointer-events-none">
+    <div
+      className="absolute top-0 left-0 right-0 z-50 flex items-center justify-between pointer-events-none"
+      style={{
+        paddingLeft: "1rem",
+        paddingRight: "1rem",
+        paddingTop: "max(0.85rem, env(safe-area-inset-top))",
+        paddingBottom: "0.75rem",
+      }}
+    >
       <div className="pointer-events-auto">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
@@ -1992,6 +2057,27 @@ const SharedHeader = ({
           </div>
         </Button>
       </div>
+
+      <AnimatePresence>
+        {mode === "text" && (
+          <motion.div
+            initial={{ opacity: 0, y: -6 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -6 }}
+            transition={{ duration: 0.2, ease: "easeOut" }}
+            className="absolute inset-x-0 bottom-2 flex justify-center pointer-events-none"
+            aria-hidden="true"
+          >
+            <motion.div
+              className="h-1.5 w-14 rounded-full"
+              style={{ backgroundColor: "var(--app-on-dark-muted)" }}
+              animate={{ opacity: [0.45, 0.8, 0.45] }}
+              transition={{ duration: 1.8, repeat: Infinity, ease: "easeInOut" }}
+              data-testid="header-drape-handle"
+            />
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };
@@ -2040,7 +2126,7 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onProfile, assistantName
          }
       }}
     >
-      <div className="w-full h-screen relative flex flex-col pointer-events-none">
+      <div className="w-full h-full relative flex flex-col pointer-events-none">
         
         <div className="relative z-50 pointer-events-auto">
           <SharedHeader 
@@ -2055,8 +2141,12 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onProfile, assistantName
           />
         </div>
 
-        <motion.div 
-          className="flex-1 flex flex-col pt-24 pb-4 pointer-events-auto"
+        <motion.div
+          className="flex-1 flex flex-col pointer-events-auto"
+          style={{
+            paddingTop: "max(5rem, calc(env(safe-area-inset-top) + 3.2rem))",
+            paddingBottom: "0.25rem",
+          }}
           animate={{ opacity: mode === "voice" ? 1 : 0 }}
           transition={{ duration: 0.2 }}
         >
@@ -2228,7 +2318,10 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onProfile, assistantName
             )}
           </div>
 
-          <div className="px-6 space-y-6 pb-24">
+          <div
+            className="px-4 sm:px-6 space-y-5"
+            style={{ paddingBottom: "max(5rem, calc(env(safe-area-inset-bottom) + 4.1rem))" }}
+          >
             {isActive && (
               <div className="flex items-center justify-center gap-8 mb-4">
                  <Button 
@@ -2365,9 +2458,14 @@ const TextView = ({
 
   return (
     <div
-      className="h-full flex flex-col pt-40 pb-24 relative"
+      className="h-full relative flex flex-col"
       style={{ backgroundColor: "var(--app-panel-bg)" }}
     >
+      <div
+        className="absolute inset-x-0 top-0 pointer-events-none"
+        style={{ height: "clamp(6.5rem, 19vh, 10rem)" }}
+        aria-hidden="true"
+      />
       <div className="sr-only" aria-live="polite">
         {isStreamingReply && !latestAssistantText
           ? `${persona} is typing`
@@ -2377,6 +2475,10 @@ const TextView = ({
         ref={scrollRef}
         onScroll={handleScroll}
         className="flex-1 overflow-y-auto p-4"
+        style={{
+          paddingTop: "clamp(6.75rem, 19vh, 10rem)",
+          paddingBottom: "max(5.5rem, calc(env(safe-area-inset-bottom) + 4.5rem))",
+        }}
       >
         <div className="space-y-4 pb-8">
           {messages.map((msg, idx) => (
@@ -2508,111 +2610,349 @@ const TextView = ({
   );
 };
 
-const OnboardingView = ({ onComplete }: { onComplete: () => void }) => {
+const OnboardingView = ({
+  onComplete,
+  userName,
+}: {
+  onComplete: () => void;
+  userName?: string | null;
+}) => {
   const [step, setStep] = useState(0);
+  const [direction, setDirection] = useState<1 | -1>(1);
+  const [relationshipIndex, setRelationshipIndex] = useState(0);
+  const [viewportHeight, setViewportHeight] = useState(() =>
+    typeof window !== "undefined" ? window.innerHeight : 844,
+  );
   const slide = ONBOARDING_STEPS[step];
   const dragX = useRef(0);
+  const isFinalStep = step === ONBOARDING_STEPS.length - 1;
+  const resolvedName = (userName?.trim().split(/\s+/)[0] || "Friend").slice(0, 20);
+  const relationshipWord = ONBOARDING_RELATIONSHIP_WORDS[relationshipIndex];
+  const isCompactHeight = viewportHeight <= 700;
+  const isVeryCompactHeight = viewportHeight <= 620;
+  const orbSize = isVeryCompactHeight ? 220 : isCompactHeight ? 260 : 320;
+  const glowSize = isVeryCompactHeight ? 170 : isCompactHeight ? 220 : 256;
+  const contentHorizontalPadding = isVeryCompactHeight ? "1rem" : "1.75rem";
+  const contentTopPadding = isVeryCompactHeight
+    ? "max(0.5rem, env(safe-area-inset-top))"
+    : "max(0.85rem, env(safe-area-inset-top))";
+  const contentBottomPadding = isVeryCompactHeight
+    ? "max(0.6rem, env(safe-area-inset-bottom))"
+    : "max(1rem, env(safe-area-inset-bottom))";
+
+  const transitionVariants = {
+    initial: (dir: number) => ({
+      opacity: 0,
+      x: dir > 0 ? 36 : -36,
+      y: 16,
+      filter: "blur(8px)",
+    }),
+    animate: {
+      opacity: 1,
+      x: 0,
+      y: 0,
+      filter: "blur(0px)",
+    },
+    exit: (dir: number) => ({
+      opacity: 0,
+      x: dir > 0 ? -24 : 24,
+      y: -8,
+      filter: "blur(8px)",
+    }),
+  };
+
+  const goToStep = (nextStep: number, nextDirection: 1 | -1) => {
+    if (nextStep < 0 || nextStep >= ONBOARDING_STEPS.length || nextStep === step) {
+      return;
+    }
+    setDirection(nextDirection);
+    setStep(nextStep);
+  };
 
   const handleNext = () => {
-    if (step < ONBOARDING_STEPS.length - 1) {
-      setStep(step + 1);
+    if (!isFinalStep) {
+      goToStep(step + 1, 1);
     } else {
       onComplete();
     }
   };
 
+  useEffect(() => {
+    if (step !== 0) {
+      return;
+    }
+
+    const rotationTimer = window.setInterval(() => {
+      setRelationshipIndex((index) => (index + 1) % ONBOARDING_RELATIONSHIP_WORDS.length);
+    }, 1700);
+
+    return () => window.clearInterval(rotationTimer);
+  }, [step]);
+
+  useEffect(() => {
+    if (step !== 0) {
+      setRelationshipIndex(0);
+    }
+  }, [step]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onResize = () => setViewportHeight(window.innerHeight);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
   return (
     <motion.div
-      className="absolute inset-0 z-[100] overflow-hidden flex flex-col items-center justify-between p-8"
+      className="absolute inset-0 z-[100] overflow-hidden"
       animate={{ background: slide.bgGradient }}
-      transition={{ duration: 0.7, ease: "easeInOut" }}
+      transition={{ duration: 0.8, ease: [0.22, 1, 0.36, 1] }}
       drag="x"
       dragConstraints={{ left: 0, right: 0 }}
-      dragElastic={0.12}
+      dragElastic={0.08}
       onDrag={(_, info) => { dragX.current = info.offset.x; }}
       onDragEnd={() => {
         if (dragX.current < -50 && step < ONBOARDING_STEPS.length - 1) {
-          setStep(s => s + 1);
+          goToStep(step + 1, 1);
         } else if (dragX.current > 50 && step > 0) {
-          setStep(s => s - 1);
+          goToStep(step - 1, -1);
         }
         dragX.current = 0;
       }}
     >
-      <div className="flex-1 flex items-center justify-center w-full relative">
-        <AnimatePresence mode="wait">
-          <motion.div
-            key={`orb-${slide.id}`}
-            initial={{ opacity: 0, scale: 0.6 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.8 }}
-            transition={{ duration: 0.5, ease: [0.25, 0.46, 0.45, 0.94] }}
-          >
-            <OnboardingOrb slide={slide} />
-          </motion.div>
-        </AnimatePresence>
-      </div>
+      <motion.div
+        className="absolute inset-0 pointer-events-none"
+        style={{
+          backgroundImage:
+            "radial-gradient(circle at 15% 20%, rgba(255,255,255,0.34) 0 1px, transparent 1.3px), radial-gradient(circle at 77% 16%, rgba(255,255,255,0.28) 0 1px, transparent 1.3px), radial-gradient(circle at 85% 31%, rgba(255,255,255,0.22) 0 1.2px, transparent 1.4px), radial-gradient(circle at 26% 40%, rgba(255,255,255,0.18) 0 1px, transparent 1.4px), radial-gradient(circle at 73% 55%, rgba(255,255,255,0.18) 0 1px, transparent 1.4px), radial-gradient(circle at 40% 70%, rgba(255,255,255,0.15) 0 1.2px, transparent 1.5px)",
+        }}
+        animate={{
+          opacity: [0.2, 0.36, 0.2],
+          scale: [1, 1.03, 1],
+        }}
+        transition={{ duration: 8, repeat: Infinity, ease: "easeInOut" }}
+      />
 
-      <div className="w-full space-y-8 mb-8 z-10">
-        <div className="text-center space-y-3">
-          <AnimatePresence mode="wait">
+      <motion.div
+        className="absolute left-1/2 -translate-x-1/2 rounded-full blur-3xl pointer-events-none"
+        style={{
+          backgroundColor: slide.orbColor,
+          top: isVeryCompactHeight ? "10%" : isCompactHeight ? "14%" : "18%",
+          width: glowSize,
+          height: glowSize,
+        }}
+        animate={{
+          opacity: [0.35, 0.62, 0.35],
+          scale: [0.9, 1.1, 0.9],
+        }}
+        transition={{ duration: 4.5, repeat: Infinity, ease: "easeInOut" }}
+      />
+
+      <motion.div
+        className="absolute inset-0 pointer-events-none"
+        style={{
+          background: "linear-gradient(to bottom, rgba(1,2,8,0.15), rgba(1,2,8,0.72))",
+        }}
+        animate={{ opacity: [0.68, 0.84, 0.68] }}
+        transition={{ duration: 5, repeat: Infinity, ease: "easeInOut" }}
+      />
+
+      <div
+        className="relative z-10 mx-auto flex h-full w-full max-w-[480px] flex-col justify-between"
+        style={{
+          paddingLeft: contentHorizontalPadding,
+          paddingRight: contentHorizontalPadding,
+          paddingTop: contentTopPadding,
+          paddingBottom: contentBottomPadding,
+        }}
+      >
+        <div
+          className="flex flex-1 items-center justify-center w-full"
+          style={{ minHeight: isVeryCompactHeight ? 180 : isCompactHeight ? 210 : 240 }}
+        >
+          <AnimatePresence custom={direction} mode="wait">
             <motion.div
-              key={`text-${slide.id}`}
-              initial={{ opacity: 0, y: 16 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-              transition={{ duration: 0.4, ease: "easeOut" }}
+              key={`orb-${slide.id}`}
+              custom={direction}
+              variants={transitionVariants}
+              initial="initial"
+              animate="animate"
+              exit="exit"
+              transition={{ duration: 0.52, ease: [0.22, 1, 0.36, 1] }}
+              className="relative"
+              style={{ marginTop: isVeryCompactHeight ? -12 : -4 }}
             >
-              <h1 className="text-3xl font-serif font-bold mb-3 text-white tracking-tight">
-                {slide.title}
-              </h1>
-              <p className="text-base leading-relaxed text-white/60">
-                {slide.description}
-              </p>
+              <motion.div
+                className="absolute inset-[26%] rounded-full border"
+                style={{ borderColor: slide.accentRing }}
+                animate={{ scale: [0.88, 1.08, 0.88], opacity: [0.2, 0.7, 0.2] }}
+                transition={{ duration: 3.2, repeat: Infinity, ease: "easeInOut" }}
+              />
+              <motion.div
+                animate={{ y: [0, -7, 0] }}
+                transition={{ duration: 4.4, repeat: Infinity, ease: "easeInOut" }}
+              >
+                <OnboardingOrb slide={slide} size={orbSize} />
+              </motion.div>
             </motion.div>
           </AnimatePresence>
         </div>
 
-        <div className="flex justify-center gap-3">
-          {ONBOARDING_STEPS.map((s, dotIdx) => (
-            <motion.div
-              key={dotIdx}
-              className="h-2.5 rounded-full"
-              animate={{
-                width: dotIdx === step ? 40 : 10,
-                backgroundColor: dotIdx === step ? slide.orbColor : "rgba(255,255,255,0.2)",
-              }}
-              transition={{ duration: 0.35, ease: "easeOut" }}
-            />
-          ))}
-        </div>
+        <div
+          className="w-full z-10"
+          style={{
+            marginBottom: isVeryCompactHeight ? 2 : 10,
+            display: "grid",
+            gap: isVeryCompactHeight ? 12 : 18,
+          }}
+        >
+          <div className="text-center" style={{ display: "grid", gap: isVeryCompactHeight ? 6 : 10 }}>
+            <AnimatePresence custom={direction} mode="wait">
+              <motion.div
+                key={`text-${slide.id}`}
+                custom={direction}
+                variants={transitionVariants}
+                initial="initial"
+                animate="animate"
+                exit="exit"
+                transition={{ duration: 0.45, ease: [0.22, 1, 0.36, 1] }}
+              >
+                {step === 0 ? (
+                  <>
+                    <h1
+                      className={cn(
+                        "font-serif font-semibold tracking-tight leading-tight",
+                        isVeryCompactHeight
+                          ? "text-[1.5rem] mb-1.5"
+                          : isCompactHeight
+                            ? "text-[1.72rem] mb-2"
+                            : "text-[1.95rem] sm:text-[2.2rem] mb-2",
+                      )}
+                      style={{
+                        color: slide.headlineColor,
+                        display: "-webkit-box",
+                        WebkitLineClamp: 3,
+                        WebkitBoxOrient: "vertical",
+                        overflow: "hidden",
+                      }}
+                    >
+                      <span>{`Welcome ${resolvedName}, I'm Zee, your `}</span>
+                      <span className="inline-block align-baseline">
+                        <AnimatePresence mode="wait">
+                          <motion.span
+                            key={relationshipWord}
+                            initial={{ opacity: 0, y: 10, filter: "blur(6px)" }}
+                            animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
+                            exit={{ opacity: 0, y: -10, filter: "blur(6px)" }}
+                            transition={{ duration: 0.32, ease: "easeOut" }}
+                            className={cn(
+                              "font-semibold tracking-tight",
+                              isVeryCompactHeight
+                                ? "text-[1.25rem]"
+                                : isCompactHeight
+                                  ? "text-[1.4rem]"
+                                  : "text-[1.5rem] sm:text-[1.65rem]",
+                            )}
+                            style={{ color: slide.orbColor }}
+                          >
+                            {`${relationshipWord}.`}
+                          </motion.span>
+                        </AnimatePresence>
+                      </span>
+                    </h1>
+                    <p
+                      className={cn(
+                        "leading-relaxed font-medium",
+                        isVeryCompactHeight
+                          ? "text-[1rem] mt-0.5"
+                          : "text-[1.12rem] mt-1",
+                      )}
+                      style={{ color: slide.bodyColor }}
+                    >
+                      {slide.description}
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <h1
+                      className={cn(
+                        "font-serif font-semibold tracking-tight",
+                        isVeryCompactHeight
+                          ? "text-[1.72rem] mb-2"
+                          : isCompactHeight
+                            ? "text-[1.92rem] mb-2.5"
+                            : "text-[2.1rem] sm:text-[2.25rem] mb-3",
+                      )}
+                      style={{ color: slide.headlineColor }}
+                    >
+                      {slide.title}
+                    </h1>
+                    <p
+                      className={cn(
+                        "leading-relaxed font-medium",
+                        isVeryCompactHeight ? "text-[1rem]" : "text-[1.12rem]",
+                      )}
+                      style={{ color: slide.bodyColor }}
+                    >
+                      {slide.description}
+                    </p>
+                  </>
+                )}
+              </motion.div>
+            </AnimatePresence>
+          </div>
 
-        <div className="flex items-center gap-4 pt-2">
-          <Button
-            variant="ghost"
-            className="flex-1 h-14 text-base font-medium text-white/50 hover:text-white hover:bg-white/10"
-            onClick={onComplete}
-            data-testid="button-skip-onboarding"
-          >
-            Skip
-          </Button>
-          <motion.div
-            className="flex-[2]"
-            animate={{ backgroundColor: slide.orbColor }}
-            transition={{ duration: 0.5 }}
-          >
+          <div className="flex justify-center gap-2.5">
+            {ONBOARDING_STEPS.map((_, dotIdx) => (
+              <motion.span
+                key={dotIdx}
+                className={cn(
+                  "rounded-full",
+                  isVeryCompactHeight ? "h-2 w-2" : "h-2.5 w-2.5",
+                )}
+                animate={{
+                  scale: dotIdx === step ? 1.25 : 1,
+                  opacity: dotIdx === step ? 1 : 0.58,
+                  backgroundColor: dotIdx === step ? slide.orbColor : slide.dotInactive,
+                }}
+                transition={{ duration: 0.3, ease: "easeOut" }}
+              />
+            ))}
+          </div>
+
+          <div className={cn("flex items-center gap-3", isVeryCompactHeight ? "pt-0" : "pt-1")}>
             <Button
-              className="w-full h-14 text-lg rounded-2xl shadow-xl transition-transform active:scale-95 font-semibold"
+              variant="ghost"
+              className={cn(
+                "flex-1 rounded-2xl font-medium hover:bg-white/10",
+                isVeryCompactHeight ? "h-12 text-[1.02rem]" : "h-14 text-[1.15rem]",
+              )}
+              style={{ color: slide.skipColor }}
+              onClick={onComplete}
+              data-testid="button-skip-onboarding"
+            >
+              Skip
+            </Button>
+            <Button
+              className={cn(
+                "flex-[1.8] rounded-2xl border font-semibold transition-transform active:scale-[0.98]",
+                isVeryCompactHeight ? "h-12 text-[1.04rem]" : "h-14 text-[1.2rem]",
+              )}
               style={{
-                backgroundColor: slide.orbColor,
-                color: "#0A0A0A",
+                background: isFinalStep
+                  ? `linear-gradient(135deg, ${slide.orbColor}, rgba(255,255,255,0.18))`
+                  : slide.ctaBackground,
+                borderColor: isFinalStep ? "rgba(255,255,255,0.32)" : slide.ctaBorder,
+                color: isFinalStep ? "#0D1420" : slide.ctaText,
+                boxShadow: `0 16px 40px ${slide.orbGlow}`,
+                backdropFilter: "blur(10px)",
               }}
               onClick={handleNext}
               data-testid="button-next-onboarding"
             >
-              {step === ONBOARDING_STEPS.length - 1 ? "Get Started" : "Next"}
+              {isFinalStep ? "Get Started" : "Next"}
             </Button>
-          </motion.div>
+          </div>
         </div>
       </div>
     </motion.div>
@@ -2668,6 +3008,10 @@ function App() {
   const pendingAttachmentsRef = useRef<PendingImageAttachment[]>([]);
   const selectedVoiceRef = useRef<LiveVoiceName>(DEFAULT_LIVE_VOICE);
   const selectedThemeRef = useRef<AppThemeId>(DEFAULT_APP_THEME_ID);
+  const forceOnboardingRef = useRef<boolean>(
+    typeof window !== "undefined" &&
+      new URLSearchParams(window.location.search).get("onboarding") === "1",
+  );
 
   const logLiveTrace = (
     event: string,
@@ -2714,7 +3058,7 @@ function App() {
 
   useEffect(() => {
     if (preferences) {
-      setShowOnboarding(!preferences.onboardingCompleted);
+      setShowOnboarding(forceOnboardingRef.current || !preferences.onboardingCompleted);
       if (isLiveVoiceName(preferences.selectedVoice)) {
         setSelectedVoice(preferences.selectedVoice);
       }
@@ -2843,12 +3187,37 @@ function App() {
   });
 
   const handleOnboardingComplete = () => {
+    forceOnboardingRef.current = false;
+    if (typeof window !== "undefined") {
+      const url = new URL(window.location.href);
+      if (url.searchParams.has("onboarding")) {
+        url.searchParams.delete("onboarding");
+        window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+      }
+    }
     setShowOnboarding(false);
     updatePreferencesMutation.mutate({
       selectedPersona: persona,
       selectedVoice,
       selectedTheme: selectedThemeRef.current,
       onboardingCompleted: true,
+    });
+  };
+
+  const handleReplayOnboarding = () => {
+    forceOnboardingRef.current = true;
+    if (typeof window !== "undefined") {
+      const url = new URL(window.location.href);
+      url.searchParams.set("onboarding", "1");
+      window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+    }
+    setShowProfile(false);
+    setShowOnboarding(true);
+    updatePreferencesMutation.mutate({
+      selectedPersona: persona,
+      selectedVoice: selectedVoiceRef.current,
+      selectedTheme: selectedThemeRef.current,
+      onboardingCompleted: false,
     });
   };
 
@@ -3866,7 +4235,7 @@ function App() {
   if (authLoading) {
     return (
       <div
-        className="w-full h-screen flex items-center justify-center"
+        className="w-full h-[100dvh] min-h-[100dvh] flex items-center justify-center"
         style={{ backgroundColor: "var(--app-shell-bg)" }}
         data-testid="loading-screen"
       >
@@ -3898,98 +4267,104 @@ function App() {
 
   return (
     <div
-      className="w-full h-screen flex items-center justify-center overflow-hidden"
+      className="w-full h-[100dvh] min-h-[100dvh] flex items-center justify-center overflow-hidden"
       style={{ backgroundColor: "var(--app-panel-bg)" }}
     >
       <div className="w-full h-full md:max-w-[400px] md:h-[850px] bg-background md:rounded-[2.5rem] shadow-2xl overflow-hidden relative">
         
         <AnimatePresence>
           {showOnboarding && (
-            <OnboardingView onComplete={handleOnboardingComplete} />
-          )}
-        </AnimatePresence>
-
-        <SharedFooter 
-          persona={persona}
-          onSendMessage={handleSendMessage}
-          onSelectCameraFiles={handleIncomingFiles}
-          onSelectGalleryFiles={handleIncomingFiles}
-          onRemoveAttachment={handleRemoveAttachment}
-          pendingAttachments={pendingAttachments}
-          isSending={isSendingMessage}
-          uploadError={composerError}
-        />
-
-        <div className="absolute inset-0 z-0">
-          <TextView
-            messages={messagesData}
-            isStreamingReply={isSendingMessage}
-            persona={persona}
-            assistantAvatarSrc={resolvedAssistantAvatar}
-            mode={mode}
-            userProfileImage={resolvedProfileImage}
-          />
-        </div>
-
-        <VoiceView 
-          isActive={isCalling} 
-          isConnecting={isLiveConnecting}
-          onEndCall={handleEndCall}
-          onProfile={() => setShowProfile(true)}
-          assistantName={persona}
-          assistantAvatar={resolvedAssistantAvatar}
-          selectedVoice={selectedVoice}
-          setSelectedVoice={handleVoiceChange}
-          mode={mode}
-          setMode={setMode}
-          duration={duration}
-          userProfileImage={resolvedProfileImage}
-          isVideoEnabled={isVideoEnabled}
-          onToggleVideo={handleToggleVideo}
-          onFlipCamera={handleFlipCamera}
-          videoStream={videoStream}
-          isVideoTransitioning={isVideoTransitioning}
-        />
-
-        <AnimatePresence>
-          {showProfile && (
-            <ProfileView
-              onClose={() => {
-                applyAppTheme(selectedTheme);
-                setShowProfile(false);
-              }}
-              user={user}
-              profile={userProfile}
-              isProfileLoading={isProfileLoading}
-              isSaving={updateProfileMutation.isPending || updatePreferencesMutation.isPending}
-              isUploadingAvatar={uploadProfileAvatarMutation.isPending}
-              selectedTheme={selectedTheme}
-              onSaveProfile={handleSaveProfile}
-              onSaveTheme={handleSaveTheme}
-              onUploadAvatar={handleUploadProfileAvatar}
-              onUploadZeeAvatar={handleUploadZeeAvatar}
-              onLogout={logout}
+            <OnboardingView
+              onComplete={handleOnboardingComplete}
+              userName={user?.firstName ?? null}
             />
           )}
         </AnimatePresence>
 
-        {liveError && (
-          <div className="absolute bottom-24 left-1/2 -translate-x-1/2 z-[90] max-w-[85%] rounded-xl border border-red-400/30 bg-red-500/15 px-3 py-2 text-xs text-red-100 backdrop-blur-sm">
-            {liveError}
+        <div className={cn("absolute inset-0", showOnboarding && "hidden")} aria-hidden={showOnboarding}>
+          <SharedFooter 
+            persona={persona}
+            onSendMessage={handleSendMessage}
+            onSelectCameraFiles={handleIncomingFiles}
+            onSelectGalleryFiles={handleIncomingFiles}
+            onRemoveAttachment={handleRemoveAttachment}
+            pendingAttachments={pendingAttachments}
+            isSending={isSendingMessage}
+            uploadError={composerError}
+          />
+
+          <div className="absolute inset-0 z-0">
+            <TextView
+              messages={messagesData}
+              isStreamingReply={isSendingMessage}
+              persona={persona}
+              assistantAvatarSrc={resolvedAssistantAvatar}
+              mode={mode}
+              userProfileImage={resolvedProfileImage}
+            />
           </div>
-        )}
-        {!liveError && isLiveConnecting && (
-          <div
-            className="absolute bottom-24 left-1/2 -translate-x-1/2 z-[90] max-w-[85%] rounded-xl border px-3 py-2 text-xs backdrop-blur-sm"
-            style={{
-              borderColor: "var(--app-soft-card-border)",
-              backgroundColor: "var(--app-soft-card-bg)",
-              color: "var(--app-on-dark)",
-            }}
-          >
-            Connecting voice session...
-          </div>
-        )}
+
+          <VoiceView 
+            isActive={isCalling} 
+            isConnecting={isLiveConnecting}
+            onEndCall={handleEndCall}
+            onProfile={() => setShowProfile(true)}
+            assistantName={persona}
+            assistantAvatar={resolvedAssistantAvatar}
+            selectedVoice={selectedVoice}
+            setSelectedVoice={handleVoiceChange}
+            mode={mode}
+            setMode={setMode}
+            duration={duration}
+            userProfileImage={resolvedProfileImage}
+            isVideoEnabled={isVideoEnabled}
+            onToggleVideo={handleToggleVideo}
+            onFlipCamera={handleFlipCamera}
+            videoStream={videoStream}
+            isVideoTransitioning={isVideoTransitioning}
+          />
+
+          <AnimatePresence>
+            {showProfile && (
+              <ProfileView
+                onClose={() => {
+                  applyAppTheme(selectedTheme);
+                  setShowProfile(false);
+                }}
+                user={user}
+                profile={userProfile}
+                isProfileLoading={isProfileLoading}
+                isSaving={updateProfileMutation.isPending || updatePreferencesMutation.isPending}
+                isUploadingAvatar={uploadProfileAvatarMutation.isPending}
+                selectedTheme={selectedTheme}
+                onSaveProfile={handleSaveProfile}
+                onSaveTheme={handleSaveTheme}
+                onUploadAvatar={handleUploadProfileAvatar}
+                onUploadZeeAvatar={handleUploadZeeAvatar}
+                onReplayOnboarding={handleReplayOnboarding}
+                onLogout={logout}
+              />
+            )}
+          </AnimatePresence>
+
+          {liveError && (
+            <div className="absolute bottom-24 left-1/2 -translate-x-1/2 z-[90] max-w-[85%] rounded-xl border border-red-400/30 bg-red-500/15 px-3 py-2 text-xs text-red-100 backdrop-blur-sm">
+              {liveError}
+            </div>
+          )}
+          {!liveError && isLiveConnecting && (
+            <div
+              className="absolute bottom-24 left-1/2 -translate-x-1/2 z-[90] max-w-[85%] rounded-xl border px-3 py-2 text-xs backdrop-blur-sm"
+              style={{
+                borderColor: "var(--app-soft-card-border)",
+                backgroundColor: "var(--app-soft-card-bg)",
+                color: "var(--app-on-dark)",
+              }}
+            >
+              Connecting voice session...
+            </div>
+          )}
+        </div>
 
       </div>
     </div>
