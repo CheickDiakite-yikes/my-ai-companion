@@ -1229,43 +1229,49 @@ const ProfileView = ({
                       transition={{ duration: 0.2, ease: "easeInOut" }}
                       className="overflow-hidden"
                     >
-                      <div className="px-4 pb-4 space-y-3 border-t border-border pt-3">
-                        <div className="grid grid-cols-2 gap-3">
-                          {ZEE_AVATAR_PRESET_OPTIONS.map((option) => (
-                            <button
-                              key={option.id}
-                              type="button"
-                              onClick={() => {
-                                setZeeAvatarPreset(option.id);
-                                setClearZeeAvatarAttachment(true);
-                                setSaveSuccess(null);
-                              }}
-                              className={cn(
-                                "rounded-xl border p-2 text-left transition-all",
-                                zeeAvatarPreset === option.id && !hasCustomZeeAvatar
-                                  ? "border-[#DAA112]/70 ring-1 ring-[#DAA112]/40 bg-[#DAA112]/10"
-                                  : "border-border bg-background hover:border-[#DAA112]/40",
-                              )}
-                              data-testid={`button-zee-avatar-preset-${option.id}`}
-                            >
-                              <Avatar className="h-12 w-12 mb-2">
-                                <AvatarImage src={option.src} className="object-cover" />
-                                <AvatarFallback>Z</AvatarFallback>
-                              </Avatar>
-                              <p className="text-xs font-medium text-foreground">{option.label}</p>
+                      <div className="px-4 pb-4 space-y-1 border-t border-border pt-2">
+                        {ZEE_AVATAR_PRESET_OPTIONS.map((option) => (
+                          <button
+                            key={option.id}
+                            type="button"
+                            onClick={() => {
+                              setZeeAvatarPreset(option.id);
+                              setClearZeeAvatarAttachment(true);
+                              setSaveSuccess(null);
+                            }}
+                            className={cn(
+                              "flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left transition-all",
+                              zeeAvatarPreset === option.id && !hasCustomZeeAvatar
+                                ? "bg-[#DAA112]/10 ring-1 ring-[#DAA112]/40"
+                                : "hover:bg-muted/40",
+                            )}
+                            data-testid={`button-zee-avatar-preset-${option.id}`}
+                          >
+                            <Avatar className="h-9 w-9 shrink-0">
+                              <AvatarImage src={option.src} className="object-cover" />
+                              <AvatarFallback>Z</AvatarFallback>
+                            </Avatar>
+                            <div className="min-w-0 flex-1">
+                              <p className="text-sm font-medium text-foreground">{option.label}</p>
                               <p className="text-[11px] text-muted-foreground uppercase tracking-wide">
                                 {option.styleLabel}
                               </p>
-                            </button>
-                          ))}
-                        </div>
+                            </div>
+                            {zeeAvatarPreset === option.id && !hasCustomZeeAvatar && (
+                              <div className="w-2 h-2 rounded-full bg-[#DAA112] shrink-0" />
+                            )}
+                          </button>
+                        ))}
 
                         <label
                           htmlFor={zeeAvatarInputId}
-                          className="inline-flex cursor-pointer items-center rounded-lg border border-border px-3 py-2 text-sm font-medium text-foreground transition-colors hover:border-[#DAA112]/50 hover:bg-[#DAA112]/10"
+                          className="flex w-full cursor-pointer items-center gap-3 rounded-lg px-3 py-2 text-left transition-colors hover:bg-muted/40"
                           data-testid="button-upload-zee-avatar"
                         >
-                          Upload custom Zee avatar
+                          <div className="h-9 w-9 rounded-full bg-muted/50 flex items-center justify-center shrink-0">
+                            <Camera className="w-4 h-4 text-muted-foreground" />
+                          </div>
+                          <p className="text-sm font-medium text-foreground">Upload custom avatar</p>
                         </label>
                         <input
                           id={zeeAvatarInputId}
