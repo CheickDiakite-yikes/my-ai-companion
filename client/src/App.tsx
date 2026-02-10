@@ -2305,12 +2305,14 @@ const TextView = ({
   persona,
   assistantAvatarSrc,
   mode,
+  userProfileImage,
 }: {
   messages: MessageData[];
   isStreamingReply: boolean;
   persona: Persona;
   assistantAvatarSrc: string;
   mode: Mode;
+  userProfileImage?: string;
 }) => {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const [showJumpToNewest, setShowJumpToNewest] = useState(false);
@@ -2455,14 +2457,18 @@ const TextView = ({
                 </div>
                 {msg.sender === "user" && (
                   <div
-                    className="w-8 h-8 rounded-full border flex items-center justify-center mb-1 text-xs font-bold"
+                    className="w-8 h-8 rounded-full border flex items-center justify-center mb-1 text-xs font-bold overflow-hidden"
                     style={{
                       backgroundColor: "var(--app-soft-card-bg)",
                       borderColor: "var(--app-accent)",
                       color: "var(--app-accent)",
                     }}
                   >
-                    U
+                    {userProfileImage ? (
+                      <img src={userProfileImage} alt="" className="w-full h-full object-cover" />
+                    ) : (
+                      "U"
+                    )}
                   </div>
                 )}
               </div>
@@ -3900,6 +3906,7 @@ function App() {
             persona={persona}
             assistantAvatarSrc={resolvedAssistantAvatar}
             mode={mode}
+            userProfileImage={resolvedProfileImage}
           />
         </div>
 
