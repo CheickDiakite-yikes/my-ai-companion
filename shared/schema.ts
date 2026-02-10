@@ -95,6 +95,8 @@ export const userProfiles = pgTable(
       .notNull()
       .default("balanced"),
     responseStyleNote: text("response_style_note"),
+    zeeAvatarPreset: varchar("zee_avatar_preset").notNull().default("woman_1"),
+    zeeAvatarAttachmentId: varchar("zee_avatar_attachment_id"),
     avatarAttachmentId: varchar("avatar_attachment_id"),
     createdAt: timestamp("created_at").defaultNow(),
     updatedAt: timestamp("updated_at").defaultNow(),
@@ -140,6 +142,10 @@ export const userProfilesRelations = relations(userProfiles, ({ one }) => ({
   user: one(users, {
     fields: [userProfiles.userId],
     references: [users.id],
+  }),
+  zeeAvatarAttachment: one(messageAttachments, {
+    fields: [userProfiles.zeeAvatarAttachmentId],
+    references: [messageAttachments.id],
   }),
   avatarAttachment: one(messageAttachments, {
     fields: [userProfiles.avatarAttachmentId],

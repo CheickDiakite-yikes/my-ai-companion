@@ -363,6 +363,12 @@ export class DatabaseStorage implements IStorage {
         data.responseStyleNote,
         existing?.responseStyleNote,
       ),
+      zeeAvatarPreset:
+        data.zeeAvatarPreset ?? existing?.zeeAvatarPreset ?? "woman_1",
+      zeeAvatarAttachmentId: resolveNullable(
+        data.zeeAvatarAttachmentId,
+        existing?.zeeAvatarAttachmentId,
+      ),
       avatarAttachmentId: resolveNullable(
         data.avatarAttachmentId,
         existing?.avatarAttachmentId,

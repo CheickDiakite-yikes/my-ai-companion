@@ -11,6 +11,8 @@ import onboarding3 from "@/assets/onboarding-3-v2.png";
 import mayaAvatar from "@/assets/maya-avatar.png";
 import zarraAvatar from "@/assets/zarra-avatar.png";
 import zeeAvatar from "@/assets/zee-avatar.png";
+import zeeAvatarMan1 from "@/assets/zee-avatar-man-1.svg";
+import zeeAvatarMan2 from "@/assets/zee-avatar-man-2.svg";
 import leafBg from "@/assets/leaf-bg.png";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/use-auth";
@@ -37,7 +39,16 @@ const PERSONA_AVATARS: Record<Persona, string> = {
   Zee: zeeAvatar,
 };
 
-function getPersonaAvatar(persona: Persona | string): string {
+function getPersonaAvatar(
+  persona: Persona | string,
+  profile?: UserProfileData,
+): string {
+  if (persona === "Zee") {
+    if (profile?.zeeAvatarUrl) {
+      return profile.zeeAvatarUrl;
+    }
+    return getZeeAvatarPresetSrc(profile?.zeeAvatarPreset);
+  }
   return PERSONA_AVATARS[persona as Persona] || zeeAvatar;
 }
 
@@ -132,6 +143,7 @@ type GenderOption =
   | "non_binary"
   | "other"
   | "prefer_not_to_say";
+type ZeeAvatarPreset = "woman_1" | "woman_2" | "man_1" | "man_2";
 
 interface UserProfileData {
   id: string | null;
@@ -145,10 +157,33 @@ interface UserProfileData {
   genderOther: string | null;
   responseStylePreset: ResponseStylePreset;
   responseStyleNote: string | null;
+  zeeAvatarPreset: ZeeAvatarPreset;
+  zeeAvatarAttachmentId: string | null;
+  zeeAvatarUrl: string | null;
   avatarAttachmentId: string | null;
   avatarUrl: string | null;
   createdAt: string | null;
   updatedAt: string | null;
+}
+
+const ZEE_AVATAR_PRESET_OPTIONS: Array<{
+  id: ZeeAvatarPreset;
+  label: string;
+  styleLabel: string;
+  src: string;
+}> = [
+  { id: "woman_1", label: "Radiant", styleLabel: "Woman", src: zeeAvatar },
+  { id: "woman_2", label: "Bold", styleLabel: "Woman", src: zarraAvatar },
+  { id: "man_1", label: "Anchor", styleLabel: "Man", src: zeeAvatarMan1 },
+  { id: "man_2", label: "Nova", styleLabel: "Man", src: zeeAvatarMan2 },
+];
+
+function getZeeAvatarPresetSrc(preset: ZeeAvatarPreset | null | undefined): string {
+  const resolvedPreset = preset ?? "woman_1";
+  const match = ZEE_AVATAR_PRESET_OPTIONS.find(
+    (option) => option.id === resolvedPreset,
+  );
+  return match?.src ?? zeeAvatar;
 }
 
 function createLocalId(prefix: string): string {
@@ -948,6 +983,7 @@ const ProfileView = ({
   isUploadingAvatar,
   onSaveProfile,
   onUploadAvatar,
+  onUploadZeeAvatar,
   onLogout,
 }: {
   onClose: () => void;
@@ -966,11 +1002,15 @@ const ProfileView = ({
     genderOther: string | null;
     responseStylePreset: ResponseStylePreset;
     responseStyleNote: string | null;
+    zeeAvatarPreset: ZeeAvatarPreset;
+    clearZeeAvatarAttachment?: boolean;
   }) => Promise<void>;
   onUploadAvatar: (file: File) => Promise<void>;
+  onUploadZeeAvatar: (file: File) => Promise<void>;
   onLogout: () => void;
 }) => {
   const avatarInputId = useId();
+  const zeeAvatarInputId = useId();
   const [displayName, setDisplayName] = useState("");
   const [bio, setBio] = useState("");
   const [location, setLocation] = useState("");
@@ -980,6 +1020,8 @@ const ProfileView = ({
   const [genderOther, setGenderOther] = useState("");
   const [stylePreset, setStylePreset] = useState<ResponseStylePreset>("balanced");
   const [styleNote, setStyleNote] = useState("");
+  const [zeeAvatarPreset, setZeeAvatarPreset] = useState<ZeeAvatarPreset>("woman_1");
+  const [clearZeeAvatarAttachment, setClearZeeAvatarAttachment] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveSuccess, setSaveSuccess] = useState<string | null>(null);
 
@@ -997,6 +1039,8 @@ const ProfileView = ({
     setGenderOther(profile?.genderOther ?? "");
     setStylePreset(profile?.responseStylePreset ?? "balanced");
     setStyleNote(profile?.responseStyleNote ?? "");
+    setZeeAvatarPreset(profile?.zeeAvatarPreset ?? "woman_1");
+    setClearZeeAvatarAttachment(false);
     setSaveError(null);
     setSaveSuccess(null);
   }, [profile, user?.profession]);
@@ -1004,6 +1048,11 @@ const ProfileView = ({
   const bioWordCount = bio.trim().length === 0 ? 0 : bio.trim().split(/\s+/).length;
   const bioWordLimit = 1000;
   const approxBioCharLimit = 6000;
+
+  const hasCustomZeeAvatar = Boolean(profile?.zeeAvatarUrl) && !clearZeeAvatarAttachment;
+  const zeeAvatarPreviewSrc = hasCustomZeeAvatar
+    ? profile?.zeeAvatarUrl ?? getZeeAvatarPresetSrc(zeeAvatarPreset)
+    : getZeeAvatarPresetSrc(zeeAvatarPreset);
 
   const onSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -1041,6 +1090,8 @@ const ProfileView = ({
         genderOther: genderOther.trim() || null,
         responseStylePreset: stylePreset,
         responseStyleNote: styleNote.trim() || null,
+        zeeAvatarPreset,
+        clearZeeAvatarAttachment: clearZeeAvatarAttachment || undefined,
       });
       setSaveSuccess("Profile saved.");
     } catch (error) {
@@ -1135,6 +1186,96 @@ const ProfileView = ({
                 <p className="text-xs text-muted-foreground">
                   Optional profile fields help Zee personalize better.
                 </p>
+              </div>
+            </section>
+
+            <section>
+              <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3">
+                Zee Avatar
+              </h3>
+              <div className="bg-card rounded-xl p-4 shadow-sm border space-y-4">
+                <div className="flex items-center gap-3 rounded-xl border border-border bg-background p-3">
+                  <Avatar className="h-14 w-14 ring-2 ring-[#DAA112]/30">
+                    <AvatarImage src={zeeAvatarPreviewSrc} className="object-cover" />
+                    <AvatarFallback>Z</AvatarFallback>
+                  </Avatar>
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-foreground">Current Zee look</p>
+                    <p className="text-xs text-muted-foreground">
+                      {hasCustomZeeAvatar
+                        ? "Custom image (upload)"
+                        : `Preset: ${
+                            ZEE_AVATAR_PRESET_OPTIONS.find(
+                              (option) => option.id === zeeAvatarPreset,
+                            )?.label ?? "Radiant"
+                          }`}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  {ZEE_AVATAR_PRESET_OPTIONS.map((option) => (
+                    <button
+                      key={option.id}
+                      type="button"
+                      onClick={() => {
+                        setZeeAvatarPreset(option.id);
+                        setClearZeeAvatarAttachment(true);
+                        setSaveSuccess(null);
+                      }}
+                      className={cn(
+                        "rounded-xl border p-2 text-left transition-all",
+                        zeeAvatarPreset === option.id && !hasCustomZeeAvatar
+                          ? "border-[#DAA112]/70 ring-1 ring-[#DAA112]/40 bg-[#DAA112]/10"
+                          : "border-border bg-background hover:border-[#DAA112]/40",
+                      )}
+                      data-testid={`button-zee-avatar-preset-${option.id}`}
+                    >
+                      <Avatar className="h-12 w-12 mb-2">
+                        <AvatarImage src={option.src} className="object-cover" />
+                        <AvatarFallback>Z</AvatarFallback>
+                      </Avatar>
+                      <p className="text-xs font-medium text-foreground">{option.label}</p>
+                      <p className="text-[11px] text-muted-foreground uppercase tracking-wide">
+                        {option.styleLabel}
+                      </p>
+                    </button>
+                  ))}
+                </div>
+
+                <div className="space-y-2">
+                  <label
+                    htmlFor={zeeAvatarInputId}
+                    className="inline-flex cursor-pointer items-center rounded-lg border border-border px-3 py-2 text-sm font-medium text-foreground transition-colors hover:border-[#DAA112]/50 hover:bg-[#DAA112]/10"
+                    data-testid="button-upload-zee-avatar"
+                  >
+                    Upload custom Zee avatar
+                  </label>
+                  <input
+                    id={zeeAvatarInputId}
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp"
+                    className="sr-only"
+                    onChange={(event) => {
+                      const file = event.target.files?.[0];
+                      if (file) {
+                        setSaveError(null);
+                        void onUploadZeeAvatar(file)
+                          .then(() => {
+                            setClearZeeAvatarAttachment(false);
+                            setSaveSuccess("Zee avatar updated.");
+                          })
+                          .catch((error) => {
+                            setSaveError(getErrorMessage(error));
+                          });
+                      }
+                      event.currentTarget.value = "";
+                    }}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Choose one of the presets or upload your own image.
+                  </p>
+                </div>
               </div>
             </section>
 
@@ -1652,11 +1793,13 @@ const TextView = ({
   messages,
   isStreamingReply,
   persona,
+  assistantAvatarSrc,
   mode,
 }: {
   messages: MessageData[];
   isStreamingReply: boolean;
   persona: Persona;
+  assistantAvatarSrc: string;
   mode: Mode;
 }) => {
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -1724,7 +1867,7 @@ const TextView = ({
               <div className="flex items-end gap-2 max-w-[80%]">
                 {msg.sender !== "user" && (
                   <Avatar className="w-8 h-8 mb-1 shrink-0 ring-2 ring-white/10">
-                    <AvatarImage src={getPersonaAvatar(persona)} />
+                    <AvatarImage src={assistantAvatarSrc} className="object-cover" />
                     <AvatarFallback>{persona[0]}</AvatarFallback>
                   </Avatar>
                 )}
@@ -2034,6 +2177,8 @@ function App() {
       genderOther: string | null;
       responseStylePreset: ResponseStylePreset;
       responseStyleNote: string | null;
+      zeeAvatarPreset: ZeeAvatarPreset;
+      clearZeeAvatarAttachment?: boolean;
     }) => {
       const response = await apiRequest("PATCH", "/api/profile/me", payload);
       return response.json() as Promise<UserProfileData>;
@@ -2049,6 +2194,32 @@ function App() {
       formData.append("image", file);
 
       const response = await fetch("/api/profile/avatar", {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "x-trace-id": createRequestTraceId(),
+        },
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const text = (await response.text()) || response.statusText;
+        throw new Error(text);
+      }
+
+      return (await response.json()) as UserProfileData;
+    },
+    onSuccess: (profile) => {
+      queryClient.setQueryData(["/api/profile/me"], profile);
+    },
+  });
+
+  const uploadZeeAvatarMutation = useMutation({
+    mutationFn: async (file: File) => {
+      const formData = new FormData();
+      formData.append("image", file);
+
+      const response = await fetch("/api/profile/zee-avatar", {
         method: "POST",
         credentials: "include",
         headers: {
@@ -2097,12 +2268,18 @@ function App() {
     genderOther: string | null;
     responseStylePreset: ResponseStylePreset;
     responseStyleNote: string | null;
+    zeeAvatarPreset: ZeeAvatarPreset;
+    clearZeeAvatarAttachment?: boolean;
   }) => {
     await updateProfileMutation.mutateAsync(payload);
   };
 
   const handleUploadProfileAvatar = async (file: File) => {
     await uploadProfileAvatarMutation.mutateAsync(file);
+  };
+
+  const handleUploadZeeAvatar = async (file: File) => {
+    await uploadZeeAvatarMutation.mutateAsync(file);
   };
 
   const { data: conversations } = useQuery<any[]>({
@@ -3070,6 +3247,7 @@ function App() {
 
   const resolvedProfileImage =
     userProfile?.avatarUrl || user?.profileImageUrl || undefined;
+  const resolvedAssistantAvatar = getPersonaAvatar(persona, userProfile);
 
   if (authLoading) {
     return (
@@ -3122,6 +3300,7 @@ function App() {
             messages={messagesData}
             isStreamingReply={isSendingMessage}
             persona={persona}
+            assistantAvatarSrc={resolvedAssistantAvatar}
             mode={mode}
           />
         </div>
@@ -3156,6 +3335,7 @@ function App() {
               isUploadingAvatar={uploadProfileAvatarMutation.isPending}
               onSaveProfile={handleSaveProfile}
               onUploadAvatar={handleUploadProfileAvatar}
+              onUploadZeeAvatar={handleUploadZeeAvatar}
               onLogout={logout}
             />
           )}

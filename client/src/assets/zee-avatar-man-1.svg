@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Zee avatar preset man 1">
+  <defs>
+    <linearGradient id="bg1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#10383A"/>
+      <stop offset="100%" stop-color="#1E595C"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" fill="url(#bg1)"/>
+  <circle cx="256" cy="208" r="126" fill="#5B3C2E"/>
+  <path d="M142 200c0-74 56-126 114-126s114 52 114 126c-22-40-65-64-114-64s-92 24-114 64z" fill="#1E1A1A"/>
+  <circle cx="206" cy="206" r="11" fill="#1F1917"/>
+  <circle cx="306" cy="206" r="11" fill="#1F1917"/>
+  <path d="M197 273c18 19 40 28 59 28s41-9 59-28" fill="none" stroke="#2A1E18" stroke-width="11" stroke-linecap="round"/>
+  <path d="M165 268c19 40 56 72 91 72s72-32 91-72c-10 71-47 110-91 110s-81-39-91-110z" fill="#1B1412"/>
+  <path d="M96 510c17-101 77-152 160-152s143 51 160 152H96z" fill="#233A3E"/>
+  <path d="M180 370h152l28 140H152l28-140z" fill="#F0E7DE"/>
+  <path d="M208 510h96l-10-94h-76l-10 94z" fill="#DAA112"/>
+</svg>

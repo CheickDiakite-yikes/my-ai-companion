@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Zee avatar preset man 2">
+  <defs>
+    <linearGradient id="bg2" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#183C54"/>
+      <stop offset="100%" stop-color="#1F5A74"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" fill="url(#bg2)"/>
+  <circle cx="256" cy="212" r="124" fill="#D5A279"/>
+  <path d="M132 196c13-76 65-126 124-126s111 50 124 126c-31-33-74-51-124-51s-93 18-124 51z" fill="#1D1A1A"/>
+  <path d="M156 218c13 8 28 12 44 12s31-4 44-12M268 218c13 8 28 12 44 12s31-4 44-12" fill="none" stroke="#2A2421" stroke-width="10" stroke-linecap="round"/>
+  <circle cx="210" cy="218" r="10" fill="#2A2421"/>
+  <circle cx="302" cy="218" r="10" fill="#2A2421"/>
+  <path d="M212 283c12 15 27 22 44 22s32-7 44-22" fill="none" stroke="#3B2D25" stroke-width="10" stroke-linecap="round"/>
+  <path d="M168 280c13 48 49 86 88 86s75-38 88-86c-8 83-42 130-88 130s-80-47-88-130z" fill="#7A4E34"/>
+  <path d="M98 510c18-107 75-160 158-160s140 53 158 160H98z" fill="#2A3345"/>
+  <rect x="162" y="368" width="188" height="142" rx="12" fill="#ECE8E1"/>
+  <path d="M208 510h96l-8-88h-80l-8 88z" fill="#809276"/>
+</svg>

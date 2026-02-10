@@ -82,6 +82,7 @@ const responseStylePresetSchema = z.enum([
   "expressive",
   "playful",
 ]);
+const zeeAvatarPresetSchema = z.enum(["woman_1", "woman_2", "man_1", "man_2"]);
 
 const genderSchema = z.enum([
   "female",
@@ -102,6 +103,8 @@ const profilePatchSchema = z
     genderOther: z.string().trim().max(80).optional().nullable(),
     responseStylePreset: responseStylePresetSchema.optional(),
     responseStyleNote: z.string().trim().max(600).optional().nullable(),
+    zeeAvatarPreset: zeeAvatarPresetSchema.optional(),
+    clearZeeAvatarAttachment: z.boolean().optional(),
   })
   .superRefine((value, ctx) => {
     if (value.gender === "other") {
@@ -322,11 +325,32 @@ async function toProfileResponse(params: {
     responseStylePreset:
       (profile?.responseStylePreset as ResponseStylePreset | null) ?? "balanced",
     responseStyleNote: profile?.responseStyleNote ?? null,
+    zeeAvatarPreset:
+      (profile?.zeeAvatarPreset as z.infer<typeof zeeAvatarPresetSchema> | null) ??
+      "woman_1",
+    zeeAvatarAttachmentId: profile?.zeeAvatarAttachmentId ?? null,
+    zeeAvatarUrl: null as string | null,
     avatarAttachmentId: profile?.avatarAttachmentId ?? null,
     avatarUrl: null as string | null,
     createdAt: profile?.createdAt ?? null,
     updatedAt: profile?.updatedAt ?? null,
   };
+
+  if (profile?.zeeAvatarAttachmentId) {
+    const zeeAvatarAttachment = await storage.getAttachmentById(
+      profile.zeeAvatarAttachmentId,
+    );
+    if (
+      zeeAvatarAttachment &&
+      zeeAvatarAttachment.userId === params.userId &&
+      zeeAvatarAttachment.status !== "deleted"
+    ) {
+      normalized.zeeAvatarUrl = createSignedMediaPath(
+        zeeAvatarAttachment.id,
+        params.userId,
+      );
+    }
+  }
 
   if (profile?.avatarAttachmentId) {
     const avatarAttachment = await storage.getAttachmentById(
@@ -386,6 +410,33 @@ function longestDelimiterPrefixSuffix(buffer: string): number {
   return 0;
 }
 
+function stripTrailingSplitPrefix(buffer: string): string {
+  if (!buffer) return buffer;
+  const delimiter = ZEE_SPLIT_TOKEN;
+  const maxCheck = Math.min(buffer.length, delimiter.length - 1);
+  for (let size = maxCheck; size >= 2; size -= 1) {
+    if (buffer.endsWith(delimiter.slice(0, size))) {
+      return buffer.slice(0, -size);
+    }
+  }
+  return buffer;
+}
+
+function sanitizeMultipartArtifacts(input: string): string {
+  if (!input) return "";
+
+  const withoutTrailingPrefix = stripTrailingSplitPrefix(input);
+  const withoutTokens = withoutTrailingPrefix
+    .replaceAll(ZEE_SPLIT_TOKEN, " ")
+    .replace(/\[\[ZEE_SPLIT\]?\]?/gi, " ")
+    .replace(/\[\[ZE[E_]*[A-Z_]*\]?\]?/gi, " ");
+
+  return withoutTokens
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 function inferDesiredMultipartCount(userText: string): number {
   const normalized = userText.toLowerCase();
   const tripleKeyword = "(?:triple|tripple)";
@@ -397,7 +448,21 @@ function inferDesiredMultipartCount(userText: string): number {
     return 3;
   }
   if (
+    /\b(?:three|3)\b(?:\W+\w+){0,4}\W+\b(?:texts?|messages?|bubbles?)\b/.test(
+      normalized,
+    )
+  ) {
+    return 3;
+  }
+  if (
     /\b(double text|double-text|2 texts?|two texts?|two messages?|2 messages?|multiple texts?)\b/.test(
+      normalized,
+    )
+  ) {
+    return 2;
+  }
+  if (
+    /\b(?:two|2)\b(?:\W+\w+){0,4}\W+\b(?:texts?|messages?|bubbles?)\b/.test(
       normalized,
     )
   ) {
@@ -484,19 +549,21 @@ function resolveAssistantParts(params: {
   userText: string;
   enableMultipart: boolean;
 }): string[] {
+  const sanitizedReplyText = sanitizeMultipartArtifacts(params.groundedReplyText);
+
   if (!params.enableMultipart) {
-    return [params.groundedReplyText.trim()];
+    return [sanitizedReplyText];
   }
 
-  let parts = splitAssistantReplyParts(params.groundedReplyText);
+  let parts = splitAssistantReplyParts(sanitizedReplyText);
   const desiredCount = inferDesiredMultipartCount(params.userText);
 
   if (parts.length < desiredCount) {
-    parts = autoSplitReplyParts(params.groundedReplyText, desiredCount);
+    parts = autoSplitReplyParts(sanitizedReplyText, desiredCount);
   }
 
   if (parts.length === 0) {
-    parts = [params.groundedReplyText.trim()];
+    parts = [sanitizedReplyText];
   }
 
   return parts.slice(0, 3).filter((part) => part.trim().length > 0);
@@ -606,6 +673,27 @@ async function summarizeAndPersistAttachments(params: {
       }
     }),
   );
+}
+
+async function removeOwnedAttachment(params: {
+  attachmentId: string | null | undefined;
+  userId: string;
+  mediaStore: ReturnType<typeof getMediaStore>;
+}) {
+  if (!params.attachmentId) return;
+
+  const existing = await storage.getAttachmentById(params.attachmentId);
+  if (!existing || existing.userId !== params.userId) return;
+
+  await storage.markAttachmentDeleted(params.attachmentId, params.userId);
+  if (isStorageProvider(existing.storageProvider)) {
+    await params.mediaStore
+      .deleteObject({
+        provider: existing.storageProvider,
+        objectKey: existing.objectKey,
+      })
+      .catch(() => undefined);
+  }
 }
 
 export async function registerRoutes(
@@ -983,6 +1071,8 @@ export async function registerRoutes(
         hasProfile: Boolean(profile),
         hasBio: Boolean(profile?.bio),
         hasAvatar: Boolean(profile?.avatarAttachmentId),
+        hasZeeAvatar: Boolean(profile?.zeeAvatarAttachmentId),
+        zeeAvatarPreset: profile?.zeeAvatarPreset ?? "woman_1",
         elapsedMs: elapsedMs(startedAt),
       });
 
@@ -1014,6 +1104,8 @@ export async function registerRoutes(
         genderOther?: string | null;
         responseStylePreset?: ResponseStylePreset;
         responseStyleNote?: string | null;
+        zeeAvatarPreset?: z.infer<typeof zeeAvatarPresetSchema>;
+        zeeAvatarAttachmentId?: string | null;
       } = {
         userId: req.session.userId,
         displayName: normalizeOptionalString(parsed.displayName),
@@ -1027,7 +1119,20 @@ export async function registerRoutes(
           parsed.responseStylePreset ??
           (undefined as ResponseStylePreset | undefined),
         responseStyleNote: normalizeOptionalString(parsed.responseStyleNote),
+        zeeAvatarPreset: parsed.zeeAvatarPreset,
       };
+
+      if (parsed.clearZeeAvatarAttachment) {
+        const existingProfile = await storage.getUserProfile(req.session.userId);
+        if (existingProfile?.zeeAvatarAttachmentId) {
+          await removeOwnedAttachment({
+            attachmentId: existingProfile.zeeAvatarAttachmentId,
+            userId: req.session.userId,
+            mediaStore,
+          });
+        }
+        profilePayload.zeeAvatarAttachmentId = null;
+      }
 
       const saved = await storage.upsertUserProfile(profilePayload);
       const responsePayload = await toProfileResponse({
@@ -1040,6 +1145,8 @@ export async function registerRoutes(
         hasDisplayName: Boolean(saved.displayName),
         hasBio: Boolean(saved.bio),
         stylePreset: saved.responseStylePreset,
+        zeeAvatarPreset: saved.zeeAvatarPreset ?? "woman_1",
+        hasCustomZeeAvatar: Boolean(saved.zeeAvatarAttachmentId),
         elapsedMs: elapsedMs(startedAt),
       });
 
@@ -1128,25 +1235,11 @@ export async function registerRoutes(
         existingProfile?.avatarAttachmentId &&
         existingProfile.avatarAttachmentId !== avatarAttachment.id
       ) {
-        const previousAttachment = await storage.getAttachmentById(
-          existingProfile.avatarAttachmentId,
-        );
-        await storage.markAttachmentDeleted(
-          existingProfile.avatarAttachmentId,
-          req.session.userId,
-        );
-        if (
-          previousAttachment &&
-          previousAttachment.userId === req.session.userId &&
-          isStorageProvider(previousAttachment.storageProvider)
-        ) {
-          await mediaStore
-            .deleteObject({
-              provider: previousAttachment.storageProvider,
-              objectKey: previousAttachment.objectKey,
-            })
-            .catch(() => undefined);
-        }
+        await removeOwnedAttachment({
+          attachmentId: existingProfile.avatarAttachmentId,
+          userId: req.session.userId,
+          mediaStore,
+        });
       }
 
       const responsePayload = await toProfileResponse({
@@ -1186,6 +1279,121 @@ export async function registerRoutes(
       });
       res.status(500).json({
         message: "Failed to upload profile avatar",
+        traceId: getTraceId(req),
+      });
+    }
+  });
+
+  app.post("/api/profile/zee-avatar", isAuthenticated, async (req: any, res) => {
+    const startedAt = Date.now();
+    try {
+      await runMulterSingleImage(req, res);
+
+      const file = (req as any).file as
+        | {
+            mimetype: string;
+            size: number;
+            buffer: Buffer;
+          }
+        | undefined;
+
+      if (!file) {
+        return res.status(400).json({
+          message: "No image was uploaded",
+          traceId: getTraceId(req),
+        });
+      }
+
+      if (!ALLOWED_IMAGE_MIME_TYPES.has(file.mimetype)) {
+        return res.status(400).json({
+          message: "Unsupported image format. Use JPEG, PNG, or WebP.",
+          traceId: getTraceId(req),
+        });
+      }
+
+      if (file.size > CHAT_IMAGE_MAX_BYTES) {
+        return res.status(413).json({
+          message: `Image exceeds max size of ${CHAT_IMAGE_MAX_BYTES} bytes`,
+          traceId: getTraceId(req),
+        });
+      }
+
+      const extension = FILE_EXTENSION_BY_MIME[file.mimetype] ?? "bin";
+      const objectKey = `${req.session.userId}/profile/zee-avatar/${Date.now()}-${randomUUID()}.${extension}`;
+      const uploaded = await mediaStore.uploadObject({
+        objectKey,
+        bytes: file.buffer,
+      });
+
+      const zeeAvatarAttachment = await storage.createMessageAttachment({
+        conversationId: `profile:${req.session.userId}`,
+        messageId: null,
+        userId: req.session.userId,
+        status: "profile",
+        storageProvider: uploaded.provider,
+        objectKey: uploaded.objectKey,
+        mimeType: file.mimetype,
+        byteSize: file.size,
+        width: null,
+        height: null,
+        sha256: createHash("sha256").update(file.buffer).digest("hex"),
+        summaryText: null,
+      });
+
+      const existingProfile = await storage.getUserProfile(req.session.userId);
+      const savedProfile = await storage.upsertUserProfile({
+        userId: req.session.userId,
+        zeeAvatarAttachmentId: zeeAvatarAttachment.id,
+      });
+
+      if (
+        existingProfile?.zeeAvatarAttachmentId &&
+        existingProfile.zeeAvatarAttachmentId !== zeeAvatarAttachment.id
+      ) {
+        await removeOwnedAttachment({
+          attachmentId: existingProfile.zeeAvatarAttachmentId,
+          userId: req.session.userId,
+          mediaStore,
+        });
+      }
+
+      const responsePayload = await toProfileResponse({
+        userId: req.session.userId,
+        profile: savedProfile,
+      });
+
+      trace(req, "profile.zee_avatar_updated", {
+        userId: req.session.userId,
+        attachmentId: zeeAvatarAttachment.id,
+        mimeType: file.mimetype,
+        byteSize: file.size,
+        elapsedMs: elapsedMs(startedAt),
+      });
+
+      res.status(201).json(responsePayload);
+    } catch (error) {
+      if (error instanceof MulterError) {
+        return res.status(400).json({
+          message:
+            error.code === "LIMIT_FILE_SIZE"
+              ? `Image exceeds max size of ${CHAT_IMAGE_MAX_BYTES} bytes`
+              : "Invalid image upload",
+          traceId: getTraceId(req),
+        });
+      }
+
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({
+          message: error.errors[0]?.message ?? "Invalid Zee avatar payload",
+          traceId: getTraceId(req),
+        });
+      }
+
+      traceError(req, "profile.zee_avatar_update.failed", error, {
+        elapsedMs: elapsedMs(startedAt),
+      });
+      res.status(500).json({
+        message: "Failed to upload Zee avatar",
         traceId: getTraceId(req),
       });
     }
@@ -1417,7 +1625,7 @@ export async function registerRoutes(
         });
       }
 
-      const groundedReplyText = grounded.replyText.trim();
+      const groundedReplyText = sanitizeMultipartArtifacts(grounded.replyText);
       if (!groundedReplyText) {
         throw new Error("Gemini returned an empty response");
       }
@@ -1714,7 +1922,7 @@ export async function registerRoutes(
       const flushStreamBuffer = (flushAll: boolean) => {
         if (!ENABLE_MULTIPART_TEXT) {
           if (replyBuffer.length > 0) {
-            appendDelta(replyBuffer);
+            appendDelta(sanitizeMultipartArtifacts(replyBuffer));
             replyBuffer = "";
           }
           return;
@@ -1743,7 +1951,7 @@ export async function registerRoutes(
 
         if (flushAll) {
           if (replyBuffer.length > 0) {
-            appendDelta(replyBuffer);
+            appendDelta(sanitizeMultipartArtifacts(replyBuffer));
             replyBuffer = "";
           }
           return;
@@ -1787,7 +1995,7 @@ export async function registerRoutes(
       flushStreamBuffer(true);
       finalizeCurrentSyntheticPart();
 
-      const normalizedReply = streamedReplyText.trim();
+      const normalizedReply = sanitizeMultipartArtifacts(streamedReplyText);
       if (!normalizedReply) {
         throw new Error("Gemini returned an empty response");
       }
@@ -1806,7 +2014,7 @@ export async function registerRoutes(
         });
       }
 
-      const groundedReplyText = grounded.replyText.trim();
+      const groundedReplyText = sanitizeMultipartArtifacts(grounded.replyText);
       if (!groundedReplyText) {
         throw new Error("Gemini returned an empty response");
       }
