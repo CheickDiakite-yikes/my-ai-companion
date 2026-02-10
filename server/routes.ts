@@ -545,28 +545,30 @@ function autoSplitReplyParts(replyText: string, targetParts: number): string[] {
 }
 
 function resolveAssistantParts(params: {
-  groundedReplyText: string;
+  rawReplyText: string;
   userText: string;
   enableMultipart: boolean;
 }): string[] {
-  const sanitizedReplyText = sanitizeMultipartArtifacts(params.groundedReplyText);
-
   if (!params.enableMultipart) {
-    return [sanitizedReplyText];
+    return [sanitizeMultipartArtifacts(params.rawReplyText)];
   }
 
-  let parts = splitAssistantReplyParts(sanitizedReplyText);
+  let parts = splitAssistantReplyParts(params.rawReplyText);
   const desiredCount = inferDesiredMultipartCount(params.userText);
 
   if (parts.length < desiredCount) {
-    parts = autoSplitReplyParts(sanitizedReplyText, desiredCount);
+    const sanitized = sanitizeMultipartArtifacts(params.rawReplyText);
+    parts = autoSplitReplyParts(sanitized, desiredCount);
   }
 
   if (parts.length === 0) {
-    parts = [sanitizedReplyText];
+    parts = [params.rawReplyText];
   }
 
-  return parts.slice(0, 3).filter((part) => part.trim().length > 0);
+  return parts
+    .slice(0, 3)
+    .map((part) => sanitizeMultipartArtifacts(part))
+    .filter((part) => part.trim().length > 0);
 }
 
 async function runMulterSingleImage(req: any, res: any): Promise<void> {
@@ -1625,14 +1627,15 @@ export async function registerRoutes(
         });
       }
 
-      const groundedReplyText = sanitizeMultipartArtifacts(grounded.replyText);
+      const rawGroundedReply = grounded.replyText;
+      const groundedReplyText = sanitizeMultipartArtifacts(rawGroundedReply);
       if (!groundedReplyText) {
         throw new Error("Gemini returned an empty response");
       }
 
       const desiredParts = inferDesiredMultipartCount(parsed.text);
       const splitDiag = ENABLE_MULTIPART_TEXT
-        ? splitAssistantReplyPartsWithDiagnostics(groundedReplyText)
+        ? splitAssistantReplyPartsWithDiagnostics(rawGroundedReply)
         : {
             parts: [groundedReplyText],
             rawLength: groundedReplyText.length,
@@ -1643,7 +1646,7 @@ export async function registerRoutes(
             endsAbruptly: false,
           };
       const splitParts = resolveAssistantParts({
-        groundedReplyText,
+        rawReplyText: rawGroundedReply,
         userText: parsed.text,
         enableMultipart: ENABLE_MULTIPART_TEXT,
       });
@@ -1995,7 +1998,16 @@ export async function registerRoutes(
       flushStreamBuffer(true);
       finalizeCurrentSyntheticPart();
 
-      const normalizedReply = sanitizeMultipartArtifacts(streamedReplyText);
+      const cleanStreamedParts = streamedParts
+        .map((p) => sanitizeMultipartArtifacts(p))
+        .filter((p) => p.trim().length > 0);
+
+      const rawReconstructed = streamedParts
+        .map((p) => p.trim())
+        .filter((p) => p.length > 0)
+        .join(` ${ZEE_SPLIT_TOKEN} `);
+
+      const normalizedReply = cleanStreamedParts.join(" ").trim();
       if (!normalizedReply) {
         throw new Error("Gemini returned an empty response");
       }
@@ -2014,45 +2026,42 @@ export async function registerRoutes(
         });
       }
 
+      const desiredParts = inferDesiredMultipartCount(parsed.text);
+      let splitParts: string[];
+
+      if (grounded.rewritten) {
+        splitParts = resolveAssistantParts({
+          rawReplyText: grounded.replyText,
+          userText: parsed.text,
+          enableMultipart: ENABLE_MULTIPART_TEXT,
+        });
+      } else if (ENABLE_MULTIPART_TEXT && cleanStreamedParts.length > 1) {
+        splitParts = cleanStreamedParts;
+        if (splitParts.length < desiredParts) {
+          const sanitized = sanitizeMultipartArtifacts(rawReconstructed);
+          splitParts = autoSplitReplyParts(sanitized, desiredParts);
+        }
+      } else {
+        splitParts = resolveAssistantParts({
+          rawReplyText: cleanStreamedParts.length > 1 ? rawReconstructed : grounded.replyText,
+          userText: parsed.text,
+          enableMultipart: ENABLE_MULTIPART_TEXT,
+        });
+      }
+
       const groundedReplyText = sanitizeMultipartArtifacts(grounded.replyText);
       if (!groundedReplyText) {
         throw new Error("Gemini returned an empty response");
       }
 
-      const desiredParts = inferDesiredMultipartCount(parsed.text);
-      const splitDiag = ENABLE_MULTIPART_TEXT
-        ? splitAssistantReplyPartsWithDiagnostics(groundedReplyText)
-        : {
-            parts: [groundedReplyText],
-            rawLength: groundedReplyText.length,
-            delimiterCount: 0,
-            rawDelimiterPositions: [],
-            partLengths: [groundedReplyText.length],
-            wasCapped: false,
-            endsAbruptly: false,
-          };
-      const splitParts = resolveAssistantParts({
-        groundedReplyText,
-        userText: parsed.text,
-        enableMultipart: ENABLE_MULTIPART_TEXT,
-      });
-
       trace(req, "chat.multipart.split_diagnostics", {
         conversationId: conversation.id,
         enabled: ENABLE_MULTIPART_TEXT,
         desiredParts,
-        rawLength: splitDiag.rawLength,
-        delimiterCount: splitDiag.delimiterCount,
-        delimiterPositions: splitDiag.rawDelimiterPositions,
-        partCount: splitDiag.parts.length,
         resolvedPartCount: splitParts.length,
-        partLengths: splitDiag.partLengths,
-        wasCapped: splitDiag.wasCapped,
-        endsAbruptly: splitDiag.endsAbruptly,
         syntheticPartCount,
-        fallbackSegmentationApplied:
-          splitDiag.parts.length !== splitParts.length ||
-          splitDiag.parts.some((part, index) => splitParts[index] !== part),
+        streamedPartCount: cleanStreamedParts.length,
+        groundingRewritten: grounded.rewritten ?? false,
         tailSnippet: groundedReplyText.slice(-80),
       });
 
@@ -2085,7 +2094,7 @@ export async function registerRoutes(
           conversationId: conversation.id,
           desiredParts,
           partCount: finalizedAssistantMessages.length,
-          delimiterUsed: splitDiag.delimiterCount > 0,
+          delimiterUsed: cleanStreamedParts.length > 1,
         });
       }
 
