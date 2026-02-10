@@ -11,6 +11,7 @@ import zeeAvatar from "@/assets/zee-avatar.png";
 import zeeAvatarMan1 from "@/assets/zee-avatar-man-1.png";
 import zeeAvatarMan2 from "@/assets/zee-avatar-man-2.png";
 import leafBg from "@/assets/leaf-bg.png";
+import CanvasOrb from "@/components/OnboardingOrb";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/use-auth";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -402,92 +403,9 @@ const REFERRAL_OPTIONS = [
   "Other",
 ];
 
-const OnboardingOrb = ({ slide }: { slide: typeof ONBOARDING_STEPS[number] }) => {
-  const particles = Array.from({ length: 12 }, (_, i) => ({
-    id: i,
-    left: `${20 + Math.random() * 60}%`,
-    top: `${10 + Math.random() * 60}%`,
-    size: 2 + Math.random() * 3,
-    delay: `${Math.random() * 4}s`,
-    duration: `${3 + Math.random() * 3}s`,
-  }));
-
-  return (
-    <div className="relative w-64 h-64 flex items-center justify-center">
-      {particles.map((p) => (
-        <div
-          key={p.id}
-          className="absolute rounded-full onb-particle"
-          style={{
-            left: p.left,
-            top: p.top,
-            width: p.size,
-            height: p.size,
-            backgroundColor: slide.particleColor,
-            animationDelay: p.delay,
-            animationDuration: p.duration,
-          }}
-        />
-      ))}
-
-      <div
-        className="absolute w-56 h-56 rounded-full onb-ring-delayed-2"
-        style={{ border: `1px solid ${slide.accentRing}` }}
-      />
-      <div
-        className="absolute w-44 h-44 rounded-full onb-ring-delayed"
-        style={{ border: `1px solid ${slide.accentRing}` }}
-      />
-      <div
-        className="absolute w-36 h-36 rounded-full onb-ring"
-        style={{ border: `1.5px solid ${slide.accentRing}` }}
-      />
-
-      <div
-        className="absolute w-40 h-40 rounded-full onb-orb-glow"
-        style={{
-          background: `radial-gradient(circle, ${slide.orbGlow} 0%, transparent 70%)`,
-        }}
-      />
-
-      <div
-        className="relative w-28 h-28 rounded-full onb-orb-core"
-        style={{
-          background: `radial-gradient(circle at 35% 35%, ${slide.orbColor}, ${slide.orbColor}88 50%, ${slide.orbColor}33 100%)`,
-          boxShadow: `0 0 60px ${slide.orbGlow}, 0 0 120px ${slide.orbGlow}, inset 0 -10px 30px rgba(0,0,0,0.3)`,
-        }}
-      >
-        <div
-          className="absolute inset-0 rounded-full"
-          style={{
-            background: "radial-gradient(circle at 30% 30%, rgba(255,255,255,0.4) 0%, transparent 50%)",
-          }}
-        />
-      </div>
-
-      {slide.id === 2 && (
-        <>
-          <svg className="absolute w-72 h-16 onb-wave" style={{ top: "48%", opacity: 0.4 }} viewBox="0 0 300 40" fill="none">
-            <path d="M0 20 Q 30 5, 60 20 T 120 20 T 180 20 T 240 20 T 300 20" stroke={slide.orbColor} strokeWidth="1.5" fill="none" />
-          </svg>
-          <svg className="absolute w-72 h-16 onb-wave-delayed" style={{ top: "52%", opacity: 0.3 }} viewBox="0 0 300 40" fill="none">
-            <path d="M0 20 Q 30 35, 60 20 T 120 20 T 180 20 T 240 20 T 300 20" stroke={slide.orbColor} strokeWidth="1" fill="none" />
-          </svg>
-        </>
-      )}
-      {slide.id === 3 && (
-        <>
-          <svg className="absolute w-80 h-20 onb-wave" style={{ top: "42%", opacity: 0.5 }} viewBox="0 0 320 50" fill="none">
-            <path d="M0 25 C 40 10, 80 40, 120 25 S 200 10, 240 25 S 300 40, 320 25" stroke={slide.orbColor} strokeWidth="1.5" fill="none" />
-          </svg>
-          <svg className="absolute w-80 h-20 onb-wave-delayed" style={{ top: "54%", opacity: 0.35 }} viewBox="0 0 320 50" fill="none">
-            <path d="M0 25 C 40 40, 80 10, 120 25 S 200 40, 240 25 S 300 10, 320 25" stroke={slide.orbColor} strokeWidth="1" fill="none" />
-          </svg>
-        </>
-      )}
-    </div>
-  );
-};
+const OnboardingOrb = ({ slide }: { slide: typeof ONBOARDING_STEPS[number] }) => (
+  <CanvasOrb config={slide} />
+);
 
 const AuthPage = ({ onLogin, onRegister, loginError, registerError, isLoggingIn, isRegistering }: {
   onLogin: (data: { email: string; password: string }) => Promise<any>;
