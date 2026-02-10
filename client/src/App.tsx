@@ -2079,28 +2079,22 @@ const TextView = ({
                   )}
                   <div className="px-5 py-3">
                     {msg.isTyping ? (
-                      <div className="flex items-center gap-2 py-1">
-                        <Avatar className="w-5 h-5 shrink-0">
-                          <AvatarImage src={assistantAvatarSrc} className="object-cover" />
-                          <AvatarFallback className="text-[8px]">{persona[0]}</AvatarFallback>
-                        </Avatar>
-                        <div className="flex items-center gap-1">
-                          <motion.span
-                            className="h-1.5 w-1.5 rounded-full bg-[#10383A]/60"
-                            animate={{ y: [0, -4, 0], opacity: [0.4, 1, 0.4] }}
-                            transition={{ duration: 0.8, repeat: Infinity, ease: "easeInOut" }}
-                          />
-                          <motion.span
-                            className="h-1.5 w-1.5 rounded-full bg-[#10383A]/60"
-                            animate={{ y: [0, -4, 0], opacity: [0.4, 1, 0.4] }}
-                            transition={{ duration: 0.8, repeat: Infinity, ease: "easeInOut", delay: 0.15 }}
-                          />
-                          <motion.span
-                            className="h-1.5 w-1.5 rounded-full bg-[#10383A]/60"
-                            animate={{ y: [0, -4, 0], opacity: [0.4, 1, 0.4] }}
-                            transition={{ duration: 0.8, repeat: Infinity, ease: "easeInOut", delay: 0.3 }}
-                          />
-                        </div>
+                      <div className="flex items-center gap-1.5 py-1">
+                        <motion.span
+                          className="h-1.5 w-1.5 rounded-full bg-[#10383A]/60"
+                          animate={{ y: [0, -4, 0], opacity: [0.4, 1, 0.4] }}
+                          transition={{ duration: 0.8, repeat: Infinity, ease: "easeInOut" }}
+                        />
+                        <motion.span
+                          className="h-1.5 w-1.5 rounded-full bg-[#10383A]/60"
+                          animate={{ y: [0, -4, 0], opacity: [0.4, 1, 0.4] }}
+                          transition={{ duration: 0.8, repeat: Infinity, ease: "easeInOut", delay: 0.15 }}
+                        />
+                        <motion.span
+                          className="h-1.5 w-1.5 rounded-full bg-[#10383A]/60"
+                          animate={{ y: [0, -4, 0], opacity: [0.4, 1, 0.4] }}
+                          transition={{ duration: 0.8, repeat: Infinity, ease: "easeInOut", delay: 0.3 }}
+                        />
                       </div>
                     ) : (
                       msg.text
