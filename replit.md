@@ -4,6 +4,9 @@
 A companion AI chat/voice app with personalized personas (Maya, Zarra, Ore). Users can interact via text chat and voice calls with their chosen persona. Features onboarding flow, dark teal branding, and persistent conversations.
 
 ## Recent Changes
+- 2026-02-10: Added application theming system with 4 themes (classic_teal, sunset_path, violet_city, crimson_noir)
+- 2026-02-10: Theme persistence via `selectedTheme` in user_preferences + CSS variable system
+- 2026-02-10: Resolved merge conflicts keeping Framer Motion animations + CSS variable theming
 - 2026-02-08: Converted from visual prototype to full-stack app
 - 2026-02-08: Replaced Replit Auth with custom email/password authentication (register, login, logout with bcrypt hashing)
 - 2026-02-08: Added PostgreSQL database for conversations, messages, preferences, voice sessions
@@ -30,6 +33,7 @@ A companion AI chat/voice app with personalized personas (Maya, Zarra, Ore). Use
 - `server/db.ts` - PostgreSQL connection pool
 - `server/gemini.ts` - Gemini text and live token integration helpers
 - `server/observability.ts` - trace IDs, log redaction, structured forensic logging
+- `client/src/lib/app-theme.ts` - Theme definitions (4 themes), CSS variable application, theme ID validation
 
 ### Brand Colors
 - Deep Teal: #10383A (primary)

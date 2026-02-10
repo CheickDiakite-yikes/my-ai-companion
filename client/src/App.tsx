@@ -968,30 +968,18 @@ const SharedFooter = ({
             setIsMediaTrayOpen(false);
           }}
         />
-<<<<<<< HEAD
          <motion.div whileTap={{ scale: 0.85 }} whileHover={{ scale: 1.05 }}>
            <Button 
             variant="ghost" 
             size="icon" 
-            className="text-white/70 hover:bg-white/10 hover:text-white transition-colors"
+            className="transition-colors"
+            style={{ color: "var(--app-on-dark-muted)" }}
             onClick={() => setIsMediaTrayOpen((current) => !current)}
             disabled={isSending}
           >
              <Camera className="w-6 h-6" />
            </Button>
          </motion.div>
-         <div className="flex-1 bg-black/20 rounded-full px-4 py-2.5 border border-white/5 focus-within:border-white/20 focus-within:bg-black/30 transition-all">
-=======
-         <Button 
-          variant="ghost" 
-          size="icon" 
-          className="transition-colors"
-          style={{ color: "var(--app-on-dark-muted)" }}
-          onClick={() => setIsMediaTrayOpen((current) => !current)}
-          disabled={isSending}
-        >
-           <Camera className="w-6 h-6" />
-         </Button>
          <div
            className="flex-1 rounded-full px-4 py-2.5 border transition-all"
            style={{
@@ -999,7 +987,6 @@ const SharedFooter = ({
              borderColor: "var(--app-input-border)",
            }}
          >
->>>>>>> cfb9e5c (feat: Add application theming with server preference storage and client-side CSS variables.)
            <input 
             type="text" 
             placeholder={`Message ${persona}...`} 
@@ -1011,12 +998,11 @@ const SharedFooter = ({
             data-testid="input-message"
           />
          </div>
-<<<<<<< HEAD
          <motion.div
            whileTap={{ scale: 0.8, rotate: -10 }}
            whileHover={{ scale: 1.1 }}
            animate={inputValue.trim() || hasReadyAttachment
-             ? { scale: [1, 1.08, 1], boxShadow: ["0 0 0px rgba(218,161,18,0)", "0 0 12px rgba(218,161,18,0.4)", "0 0 0px rgba(218,161,18,0)"] }
+             ? { scale: [1, 1.08, 1] }
              : { scale: 1 }
            }
            transition={inputValue.trim() || hasReadyAttachment
@@ -1024,22 +1010,14 @@ const SharedFooter = ({
              : { duration: 0.15 }
            }
            className="rounded-full"
-=======
-         <Button 
-           size="icon" 
-           className="rounded-full shadow-md"
-           style={{
-             backgroundColor: "var(--app-accent)",
-             color: "var(--app-accent-text)",
-           }}
-           onClick={handleSend}
-           disabled={isSending || hasUploadingAttachment || (!inputValue.trim() && !hasReadyAttachment)}
-           data-testid="button-send-message"
->>>>>>> cfb9e5c (feat: Add application theming with server preference storage and client-side CSS variables.)
          >
            <Button 
              size="icon" 
-             className="rounded-full bg-[#DAA112] text-[#10383A] shadow-md hover:bg-[#DAA112]/90"
+             className="rounded-full shadow-md"
+             style={{
+               backgroundColor: "var(--app-accent)",
+               color: "var(--app-accent-text)",
+             }}
              onClick={handleSend}
              disabled={isSending || hasUploadingAttachment || (!inputValue.trim() && !hasReadyAttachment)}
              data-testid="button-send-message"
@@ -1265,24 +1243,15 @@ const ProfileView = ({
                 {user?.lastName?.[0] || ""}
               </AvatarFallback>
             </Avatar>
-<<<<<<< HEAD
-            <div className="absolute bottom-0 right-0 w-7 h-7 rounded-full bg-[#10383A] border-2 border-background flex items-center justify-center shadow-md">
+            <div
+              className="absolute bottom-0 right-0 w-7 h-7 rounded-full border-2 border-background flex items-center justify-center shadow-md"
+              style={{ backgroundColor: "var(--app-panel-bg)" }}
+            >
               {isUploadingAvatar ? (
                 <motion.div animate={{ rotate: 360 }} transition={{ duration: 1, repeat: Infinity, ease: "linear" }} className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full" />
               ) : (
-                <Pencil className="w-3 h-3 text-white" />
+                <Pencil className="w-3 h-3" style={{ color: "var(--app-on-dark)" }} />
               )}
-=======
-            <div
-              className="absolute -bottom-1 left-1/2 -translate-x-1/2 rounded-full px-2 py-0.5 text-[10px]"
-              style={{
-                backgroundColor: "color-mix(in srgb, var(--app-panel-bg) 68%, black)",
-                color: "var(--app-on-dark)",
-                border: "1px solid var(--app-soft-card-border)",
-              }}
-            >
-              {isUploadingAvatar ? "Uploading..." : "Edit photo"}
->>>>>>> cfb9e5c (feat: Add application theming with server preference storage and client-side CSS variables.)
             </div>
           </label>
           <input
@@ -1328,16 +1297,6 @@ const ProfileView = ({
               >
                 Account
               </h3>
-<<<<<<< HEAD
-              <div className="bg-card rounded-xl p-4 shadow-sm border space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium">Email</span>
-                  <span className="text-muted-foreground text-sm truncate ml-4" data-testid="text-user-email">
-                    {user?.email || "Not set"}
-                  </span>
-                </div>
-                <p className="text-xs text-muted-foreground text-center pt-1">
-=======
               <div className="rounded-xl p-4 shadow-sm border space-y-3" style={themedCardStyle}>
                 <div className="flex items-center justify-between">
                   <span className="font-medium" style={{ color: "var(--app-on-dark)" }}>
@@ -1352,7 +1311,6 @@ const ProfileView = ({
                   </span>
                 </div>
                 <p className="text-xs" style={{ color: "var(--app-on-dark-muted)" }}>
->>>>>>> cfb9e5c (feat: Add application theming with server preference storage and client-side CSS variables.)
                   Optional profile fields help Zee personalize better.
                 </p>
               </div>
@@ -2189,11 +2147,11 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onProfile, assistantName
                    aria-label={isConnecting ? "Connecting voice session" : `Start voice call with ${assistantName}`}
                    data-testid="button-start-call"
                  >
-<<<<<<< HEAD
                    {[0, 1, 2].map((i) => (
                      <motion.div
                        key={`ring-${i}`}
-                       className="absolute rounded-full border-2 border-[#DAA112]/15"
+                       className="absolute rounded-full border-2"
+                       style={{ borderColor: "color-mix(in srgb, var(--app-accent) 15%, transparent)" }}
                        animate={{
                          width: [140, 220 + i * 50],
                          height: [140, 220 + i * 50],
@@ -2209,59 +2167,48 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onProfile, assistantName
                    ))}
 
                    <motion.div
-                     className="absolute w-44 h-44 rounded-full bg-[#DAA112]/8"
-                     animate={{ scale: [1, 1.15, 1], opacity: [0.15, 0.25, 0.15] }}
+                     className="absolute w-44 h-44 rounded-full opacity-[0.08]"
+                     style={{ backgroundColor: "var(--app-accent)" }}
+                     animate={{ scale: [1, 1.15, 1], opacity: [0.08, 0.16, 0.08] }}
                      transition={{ duration: 4, repeat: Infinity, ease: "easeInOut" }}
                    />
                    <motion.div
-                     className="absolute w-36 h-36 rounded-full bg-[#DAA112]/12"
-                     animate={{ scale: [1, 1.08, 1], opacity: [0.2, 0.35, 0.2] }}
+                     className="absolute w-36 h-36 rounded-full opacity-[0.12]"
+                     style={{ backgroundColor: "var(--app-accent)" }}
+                     animate={{ scale: [1, 1.08, 1], opacity: [0.12, 0.22, 0.12] }}
                      transition={{ duration: 3, repeat: Infinity, ease: "easeInOut", delay: 0.5 }}
                    />
 
                    <motion.div
                      className={cn(
-                       "relative w-32 h-32 rounded-full overflow-hidden ring-4 ring-[#DAA112]/50 shadow-[0_0_60px_rgba(218,161,18,0.3)]",
+                       "relative w-32 h-32 rounded-full overflow-hidden ring-4",
                        isConnecting && "opacity-70",
                      )}
+                     style={{
+                       ["--tw-ring-color" as string]: "color-mix(in srgb, var(--app-accent) 50%, transparent)",
+                       boxShadow: "0 0 60px color-mix(in srgb, var(--app-accent) 30%, transparent)",
+                     }}
                      animate={{ scale: [1, 1.04, 1] }}
                      transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}
                      whileHover={!isConnecting ? { scale: 1.08 } : undefined}
                      whileTap={!isConnecting ? { scale: 0.95 } : undefined}
                    >
                      <img src={assistantAvatar} alt={assistantName} className="w-full h-full object-cover" />
-                     <div className="absolute inset-0 bg-gradient-to-t from-[#10383A]/60 via-transparent to-transparent" />
-                     <div className="absolute bottom-2 left-1/2 -translate-x-1/2 bg-[#DAA112] rounded-full p-2 shadow-lg">
-                       <Mic className="w-4 h-4 text-[#10383A]" />
+                     <div className="absolute inset-0 bg-gradient-to-t from-black/40 via-transparent to-transparent" />
+                     <div
+                       className="absolute bottom-2 left-1/2 -translate-x-1/2 rounded-full p-2 shadow-lg"
+                       style={{ backgroundColor: "var(--app-accent)" }}
+                     >
+                       <Mic className="w-4 h-4" style={{ color: "var(--app-accent-text)" }} />
                      </div>
                    </motion.div>
                  </button>
                  <motion.p
-                   className="text-white/60 font-medium tracking-wide text-center"
+                   className="font-medium tracking-wide text-center"
+                   style={{ color: "var(--app-on-dark-muted)" }}
                    animate={isConnecting ? { opacity: [0.5, 1, 0.5] } : { opacity: 1 }}
                    transition={isConnecting ? { duration: 1.5, repeat: Infinity, ease: "easeInOut" } : {}}
                  >
-=======
-                   <div
-                     className="absolute inset-0 rounded-full animate-ping opacity-20 duration-3000"
-                     style={{ backgroundColor: "var(--app-accent)" }}
-                   />
-                   <div
-                     className="absolute -inset-4 rounded-full animate-pulse opacity-30"
-                     style={{ backgroundColor: "var(--app-accent)" }}
-                   />
-                   
-                   <div className={cn(
-                     "w-32 h-32 rounded-full flex items-center justify-center shadow-[0_0_40px_rgba(218,161,18,0.3)] transform transition-transform",
-                     !isConnecting && "group-hover:scale-105 active:scale-95",
-                   )}
-                   style={{ backgroundColor: "var(--app-accent)" }}
-                   >
-                      <Mic className="w-12 h-12" style={{ color: "var(--app-accent-text)" }} />
-                   </div>
-                 </button>
-                 <p className="font-medium tracking-wide" style={{ color: "var(--app-on-dark-muted)" }}>
->>>>>>> cfb9e5c (feat: Add application theming with server preference storage and client-side CSS variables.)
                    {isConnecting ? `Connecting to ${assistantName}...` : `Tap to speak to ${assistantName}`}
                  </motion.p>
               </div>
@@ -2478,36 +2425,24 @@ const TextView = ({
                   )}
                   <div className="px-5 py-3">
                     {msg.isTyping ? (
-<<<<<<< HEAD
                       <div className="flex items-center gap-1.5 py-1">
                         <motion.span
-                          className="h-1.5 w-1.5 rounded-full bg-[#10383A]/60"
+                          className="h-1.5 w-1.5 rounded-full"
+                          style={{ backgroundColor: "color-mix(in srgb, var(--app-assistant-bubble-text) 60%, transparent)" }}
                           animate={{ y: [0, -4, 0], opacity: [0.4, 1, 0.4] }}
                           transition={{ duration: 0.8, repeat: Infinity, ease: "easeInOut" }}
                         />
                         <motion.span
-                          className="h-1.5 w-1.5 rounded-full bg-[#10383A]/60"
+                          className="h-1.5 w-1.5 rounded-full"
+                          style={{ backgroundColor: "color-mix(in srgb, var(--app-assistant-bubble-text) 60%, transparent)" }}
                           animate={{ y: [0, -4, 0], opacity: [0.4, 1, 0.4] }}
                           transition={{ duration: 0.8, repeat: Infinity, ease: "easeInOut", delay: 0.15 }}
                         />
                         <motion.span
-                          className="h-1.5 w-1.5 rounded-full bg-[#10383A]/60"
+                          className="h-1.5 w-1.5 rounded-full"
+                          style={{ backgroundColor: "color-mix(in srgb, var(--app-assistant-bubble-text) 60%, transparent)" }}
                           animate={{ y: [0, -4, 0], opacity: [0.4, 1, 0.4] }}
                           transition={{ duration: 0.8, repeat: Infinity, ease: "easeInOut", delay: 0.3 }}
-=======
-                      <div className="flex items-center gap-1.5">
-                        <span
-                          className="h-2 w-2 animate-bounce rounded-full"
-                          style={{ backgroundColor: "var(--app-assistant-bubble-text)" }}
-                        />
-                        <span
-                          className="h-2 w-2 animate-bounce rounded-full [animation-delay:120ms]"
-                          style={{ backgroundColor: "var(--app-assistant-bubble-text)" }}
-                        />
-                        <span
-                          className="h-2 w-2 animate-bounce rounded-full [animation-delay:220ms]"
-                          style={{ backgroundColor: "var(--app-assistant-bubble-text)" }}
->>>>>>> cfb9e5c (feat: Add application theming with server preference storage and client-side CSS variables.)
                         />
                       </div>
                     ) : (

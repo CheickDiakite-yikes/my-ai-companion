@@ -1,0 +1,51 @@
+Implemented and locally verified without breaking existing flows.
+
+Updated files:
+- `/Users/cheickdiakite/Codex/my-ai-companion/client/src/App.tsx`
+- `/Users/cheickdiakite/Codex/my-ai-companion/client/src/index.css`
+- `/Users/cheickdiakite/Codex/my-ai-companion/client/src/lib/app-theme.ts`
+- `/Users/cheickdiakite/Codex/my-ai-companion/server/routes.ts`
+- `/Users/cheickdiakite/Codex/my-ai-companion/shared/schema.ts`
+
+What’s now in place:
+1. Profile page theme selector with 4 themes: `classic_teal`, `sunset_path`, `violet_city`, `crimson_noir`.
+2. Theme persistence via preferences (`selectedTheme`) and reload on app start.
+3. Global CSS-variable theme system applied across chat/voice/profile surfaces.
+4. API validation/fallback for theme values.
+
+Validation run:
+1. `npm run check` passed.
+2. `npm run test:local:e2e` passed.
+3. `npm run security:secrets` passed.
+4. Playwright visual check confirmed save + apply (including `violet_city`).
+
+Use this Replit agent prompt for schema check/apply:
+
+```txt
+Please sync and apply DB schema updates for theme preferences in my-ai-companion.
+
+Goal:
+Ensure `user_preferences.selected_theme` exists and matches app expectations.
+
+Source of truth:
+- /home/runner/.../my-ai-companion/shared/schema.ts
+- selectedTheme -> varchar("selected_theme").not null default "classic_teal"
+
+Tasks:
+1) Diff current DB schema against shared/schema.ts.
+2) If missing/mismatched, generate and apply migration (or db push) to enforce:
+   - column: selected_theme
+   - type: varchar
+   - not null
+   - default: 'classic_teal'
+3) Preserve data:
+   - backfill existing nulls to 'classic_teal' before NOT NULL.
+4) Validate with SQL:
+   SELECT column_name, data_type, is_nullable, column_default
+   FROM information_schema.columns
+   WHERE table_name='user_preferences' AND column_name='selected_theme';
+5) API smoke test:
+   - GET /api/preferences includes selectedTheme
+   - PUT /api/preferences with selectedTheme='violet_city' returns success
+6) Return exact commands run and outputs.
+```
