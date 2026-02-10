@@ -920,15 +920,17 @@ const SharedFooter = ({
             setIsMediaTrayOpen(false);
           }}
         />
-         <Button 
-          variant="ghost" 
-          size="icon" 
-          className="text-white/70 hover:bg-white/10 hover:text-white transition-colors"
-          onClick={() => setIsMediaTrayOpen((current) => !current)}
-          disabled={isSending}
-        >
-           <Camera className="w-6 h-6" />
-         </Button>
+         <motion.div whileTap={{ scale: 0.85 }} whileHover={{ scale: 1.05 }}>
+           <Button 
+            variant="ghost" 
+            size="icon" 
+            className="text-white/70 hover:bg-white/10 hover:text-white transition-colors"
+            onClick={() => setIsMediaTrayOpen((current) => !current)}
+            disabled={isSending}
+          >
+             <Camera className="w-6 h-6" />
+           </Button>
+         </motion.div>
          <div className="flex-1 bg-black/20 rounded-full px-4 py-2.5 border border-white/5 focus-within:border-white/20 focus-within:bg-black/30 transition-all">
            <input 
             type="text" 
@@ -941,15 +943,29 @@ const SharedFooter = ({
             data-testid="input-message"
           />
          </div>
-         <Button 
-           size="icon" 
-           className="rounded-full bg-[#DAA112] text-[#10383A] shadow-md hover:bg-[#DAA112]/90"
-           onClick={handleSend}
-           disabled={isSending || hasUploadingAttachment || (!inputValue.trim() && !hasReadyAttachment)}
-           data-testid="button-send-message"
+         <motion.div
+           whileTap={{ scale: 0.8, rotate: -10 }}
+           whileHover={{ scale: 1.1 }}
+           animate={inputValue.trim() || hasReadyAttachment
+             ? { scale: [1, 1.08, 1], boxShadow: ["0 0 0px rgba(218,161,18,0)", "0 0 12px rgba(218,161,18,0.4)", "0 0 0px rgba(218,161,18,0)"] }
+             : { scale: 1 }
+           }
+           transition={inputValue.trim() || hasReadyAttachment
+             ? { duration: 1.5, repeat: Infinity, ease: "easeInOut" }
+             : { duration: 0.15 }
+           }
+           className="rounded-full"
          >
-           <ChevronRight className="w-5 h-5" />
-         </Button>
+           <Button 
+             size="icon" 
+             className="rounded-full bg-[#DAA112] text-[#10383A] shadow-md hover:bg-[#DAA112]/90"
+             onClick={handleSend}
+             disabled={isSending || hasUploadingAttachment || (!inputValue.trim() && !hasReadyAttachment)}
+             data-testid="button-send-message"
+           >
+             <ChevronRight className="w-5 h-5" />
+           </Button>
+         </motion.div>
       </div>
     </div>
   );
@@ -2016,11 +2032,19 @@ const TextView = ({
         className="flex-1 overflow-y-auto p-4"
       >
         <div className="space-y-4 pb-8">
-          {messages.map((msg) => (
+          {messages.map((msg, idx) => (
             <motion.div
               key={msg.id}
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
+              initial={{ opacity: 0, y: 16, scale: 0.97 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              transition={{
+                type: "spring",
+                stiffness: 400,
+                damping: 30,
+                delay: msg.sender !== "user" && msg.partIndex && msg.partIndex > 0
+                  ? msg.partIndex * 0.15
+                  : 0,
+              }}
               className={cn(
                 "flex w-full",
                 msg.sender === "user" ? "justify-end" : "justify-start",
@@ -2055,10 +2079,28 @@ const TextView = ({
                   )}
                   <div className="px-5 py-3">
                     {msg.isTyping ? (
-                      <div className="flex items-center gap-1.5">
-                        <span className="h-2 w-2 animate-bounce rounded-full bg-[#10383A]" />
-                        <span className="h-2 w-2 animate-bounce rounded-full bg-[#10383A] [animation-delay:120ms]" />
-                        <span className="h-2 w-2 animate-bounce rounded-full bg-[#10383A] [animation-delay:220ms]" />
+                      <div className="flex items-center gap-2 py-1">
+                        <Avatar className="w-5 h-5 shrink-0">
+                          <AvatarImage src={assistantAvatarSrc} className="object-cover" />
+                          <AvatarFallback className="text-[8px]">{persona[0]}</AvatarFallback>
+                        </Avatar>
+                        <div className="flex items-center gap-1">
+                          <motion.span
+                            className="h-1.5 w-1.5 rounded-full bg-[#10383A]/60"
+                            animate={{ y: [0, -4, 0], opacity: [0.4, 1, 0.4] }}
+                            transition={{ duration: 0.8, repeat: Infinity, ease: "easeInOut" }}
+                          />
+                          <motion.span
+                            className="h-1.5 w-1.5 rounded-full bg-[#10383A]/60"
+                            animate={{ y: [0, -4, 0], opacity: [0.4, 1, 0.4] }}
+                            transition={{ duration: 0.8, repeat: Infinity, ease: "easeInOut", delay: 0.15 }}
+                          />
+                          <motion.span
+                            className="h-1.5 w-1.5 rounded-full bg-[#10383A]/60"
+                            animate={{ y: [0, -4, 0], opacity: [0.4, 1, 0.4] }}
+                            transition={{ duration: 0.8, repeat: Infinity, ease: "easeInOut", delay: 0.3 }}
+                          />
+                        </div>
                       </div>
                     ) : (
                       msg.text
