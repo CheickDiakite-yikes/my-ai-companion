@@ -2592,79 +2592,126 @@ const TextView = ({
 
 const OnboardingView = ({ onComplete }: { onComplete: () => void }) => {
   const [step, setStep] = useState(0);
+  const [direction, setDirection] = useState(1);
+
+  const goTo = (next: number) => {
+    setDirection(next > step ? 1 : -1);
+    setStep(next);
+  };
 
   const handleNext = () => {
     if (step < ONBOARDING_STEPS.length - 1) {
-      setStep(step + 1);
+      goTo(step + 1);
     } else {
       onComplete();
     }
   };
 
+  const slideVariants = {
+    enter: (dir: number) => ({
+      opacity: 0,
+      x: dir > 0 ? 80 : -80,
+      scale: 0.95,
+    }),
+    center: {
+      opacity: 1,
+      x: 0,
+      scale: 1,
+    },
+    exit: (dir: number) => ({
+      opacity: 0,
+      x: dir > 0 ? -80 : 80,
+      scale: 0.95,
+      zIndex: -1,
+    }),
+  };
+
+  const orbEntries = [
+    { initial: { opacity: 0, scale: 0.3, y: 40 }, animate: { opacity: 1, scale: 1, y: 0 } },
+    { initial: { opacity: 0, scale: 0.5, rotate: -20 }, animate: { opacity: 1, scale: 1, rotate: 0 } },
+    { initial: { opacity: 0, scale: 0.4, y: -30 }, animate: { opacity: 1, scale: 1, y: 0 } },
+  ];
+
   return (
     <div className="absolute inset-0 z-[100] overflow-hidden">
-      <AnimatePresence mode="popLayout" initial={false}>
+      <AnimatePresence mode="popLayout" initial={false} custom={direction}>
         {ONBOARDING_STEPS.map((slide, idx) => (
           idx === step && (
             <motion.div
               key={slide.id}
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0, zIndex: -1 }}
-              transition={{ duration: 0.6, ease: "easeInOut" }}
+              custom={direction}
+              variants={slideVariants}
+              initial="enter"
+              animate="center"
+              exit="exit"
+              transition={{ duration: 0.5, ease: [0.4, 0, 0.2, 1] }}
               className="absolute inset-0 flex flex-col items-center justify-between p-8"
               style={{ background: slide.bgGradient }}
               drag="x"
               dragConstraints={{ left: 0, right: 0 }}
-              dragElastic={0.2}
+              dragElastic={0.15}
               onDragEnd={(_, info) => {
                 if (info.offset.x < -50 && step < ONBOARDING_STEPS.length - 1) {
-                  setStep(s => s + 1);
+                  goTo(step + 1);
                 } else if (info.offset.x > 50 && step > 0) {
-                  setStep(s => s - 1);
+                  goTo(step - 1);
                 }
               }}
             >
               <div className="flex-1 flex items-center justify-center w-full relative">
                 <motion.div
-                  initial={{ opacity: 0, scale: 0.8 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  transition={{ delay: 0.2, type: "spring", stiffness: 150, damping: 20 }}
+                  key={`orb-${slide.id}`}
+                  initial={orbEntries[idx].initial}
+                  animate={orbEntries[idx].animate}
+                  transition={{ delay: 0.15, type: "spring", stiffness: 120, damping: 18 }}
                 >
                   <OnboardingOrb slide={slide} />
                 </motion.div>
               </div>
 
               <div className="w-full space-y-8 mb-8 z-10">
-                <div className="text-center space-y-3">
-                  <motion.div
+                <div className="text-center space-y-3 overflow-hidden">
+                  <motion.h1
+                    key={`title-${slide.id}`}
+                    initial={{ opacity: 0, y: 30, filter: "blur(8px)" }}
+                    animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
+                    transition={{ delay: 0.25, duration: 0.6, ease: "easeOut" }}
+                    className="text-3xl font-serif font-bold mb-3 text-white tracking-tight"
+                  >
+                    {slide.title}
+                  </motion.h1>
+                  <motion.p
+                    key={`desc-${slide.id}`}
                     initial={{ opacity: 0, y: 20 }}
                     animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: 0.3, duration: 0.5 }}
+                    transition={{ delay: 0.4, duration: 0.5, ease: "easeOut" }}
+                    className="text-base leading-relaxed text-white/60"
                   >
-                    <h1 className="text-3xl font-serif font-bold mb-3 text-white tracking-tight">
-                      {slide.title}
-                    </h1>
-                    <p className="text-base leading-relaxed text-white/60">
-                      {slide.description}
-                    </p>
-                  </motion.div>
+                    {slide.description}
+                  </motion.p>
                 </div>
 
                 <div className="flex justify-center gap-3">
                   {ONBOARDING_STEPS.map((s, dotIdx) => (
-                    <div
+                    <motion.div
                       key={dotIdx}
-                      className="h-2.5 rounded-full transition-all duration-500 ease-out"
-                      style={{
+                      className="h-2.5 rounded-full"
+                      animate={{
                         width: dotIdx === step ? 40 : 10,
                         backgroundColor: dotIdx === step ? slide.orbColor : "rgba(255,255,255,0.2)",
                       }}
+                      transition={{ duration: 0.4, ease: "easeOut" }}
                     />
                   ))}
                 </div>
 
-                <div className="flex items-center gap-4 pt-2">
+                <motion.div
+                  key={`buttons-${slide.id}`}
+                  initial={{ opacity: 0, y: 24 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 0.5, duration: 0.45, ease: "easeOut" }}
+                  className="flex items-center gap-4 pt-2"
+                >
                   <Button
                     variant="ghost"
                     className="flex-1 h-14 text-base font-medium text-white/50 hover:text-white hover:bg-white/10"
@@ -2684,7 +2731,7 @@ const OnboardingView = ({ onComplete }: { onComplete: () => void }) => {
                   >
                     {step === ONBOARDING_STEPS.length - 1 ? "Get Started" : "Next"}
                   </Button>
-                </div>
+                </motion.div>
               </div>
             </motion.div>
           )
