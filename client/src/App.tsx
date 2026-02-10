@@ -19,6 +19,14 @@ import { useAuth } from "@/hooks/use-auth";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, getResponseTraceId } from "@/lib/queryClient";
 import { GeminiLiveVoiceSession } from "@/lib/gemini-live";
+import {
+  APP_THEME_OPTIONS,
+  DEFAULT_APP_THEME_ID,
+  applyAppTheme,
+  getAppTheme,
+  isAppThemeId,
+  type AppThemeId,
+} from "@/lib/app-theme";
 
 import {
   DropdownMenu,
@@ -344,7 +352,7 @@ const SearchableDropdown = ({ value, onChange, options, placeholder, testId }: {
         }}
         onBlur={() => setTimeout(() => setOpen(false), 200)}
         placeholder={placeholder}
-        className="w-full h-12 px-4 rounded-xl bg-white/10 border border-white/20 text-white placeholder:text-white/40 focus:outline-none focus:border-[#DAA112] focus:ring-1 focus:ring-[#DAA112] transition-colors"
+        className="w-full h-12 px-4 rounded-xl bg-white/10 border border-white/20 text-white placeholder:text-white/40 focus:outline-none focus:border-[var(--app-accent)] focus:ring-1 focus:ring-[var(--app-accent)] transition-colors"
         data-testid={testId}
       />
       <AnimatePresence>
@@ -448,7 +456,7 @@ const AuthPage = ({ onLogin, onRegister, loginError, registerError, isLoggingIn,
     }
   };
 
-  const inputClass = "w-full h-12 px-4 rounded-xl bg-white/10 border border-white/20 text-white placeholder:text-white/40 focus:outline-none focus:border-[#DAA112] focus:ring-1 focus:ring-[#DAA112] transition-colors";
+  const inputClass = "w-full h-12 px-4 rounded-xl bg-white/10 border border-white/20 text-white placeholder:text-white/40 focus:outline-none focus:border-[var(--app-accent)] focus:ring-1 focus:ring-[var(--app-accent)] transition-colors";
 
   if (authMode === "welcome") {
     return (
@@ -800,7 +808,13 @@ const SharedFooter = ({
   };
 
   return (
-    <div className="absolute bottom-0 left-0 right-0 z-50 p-4 bg-[#10383A]/90 backdrop-blur-md border-t border-white/10">
+    <div
+      className="absolute bottom-0 left-0 right-0 z-50 p-4 backdrop-blur-md border-t"
+      style={{
+        backgroundColor: "var(--app-footer-bg)",
+        borderTopColor: "var(--app-soft-card-border)",
+      }}
+    >
       {pendingAttachments.length > 0 && (
         <div className="mb-2 flex items-center gap-2 overflow-x-auto pb-1">
           {pendingAttachments.map((attachment) => (
@@ -844,12 +858,20 @@ const SharedFooter = ({
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 8, scale: 0.96 }}
             transition={{ duration: 0.18, ease: "easeOut" }}
-            className="mb-3 rounded-2xl border border-[#DAA112]/20 bg-gradient-to-b from-[#10383A] to-[#0D2E30] p-3 shadow-lg shadow-black/30"
+            className="mb-3 rounded-2xl border p-3 shadow-lg shadow-black/30"
+            style={{
+              borderColor: "var(--app-media-tray-border)",
+              backgroundImage:
+                "linear-gradient(to bottom, var(--app-media-tray-from), var(--app-media-tray-to))",
+            }}
           >
             <div className="flex items-center justify-between mb-3">
-              <span className="text-xs font-semibold tracking-wide text-white/80 uppercase">
-                Add an image
-              </span>
+                <span
+                  className="text-xs font-semibold tracking-wide uppercase"
+                  style={{ color: "var(--app-on-dark-muted)" }}
+                >
+                  Add an image
+                </span>
               <button
                 type="button"
                 onClick={() => setIsMediaTrayOpen(false)}
@@ -864,30 +886,56 @@ const SharedFooter = ({
               <label
                 htmlFor={cameraInputId}
                 className={cn(
-                  "group flex cursor-pointer flex-col items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-4 py-3.5 transition-all hover:border-[#DAA112]/40 hover:bg-[#DAA112]/10 active:scale-[0.97]",
+                  "group flex cursor-pointer flex-col items-center gap-2 rounded-xl border px-4 py-3.5 transition-all active:scale-[0.97]",
                   isSending && "pointer-events-none opacity-60",
                 )}
+                style={{
+                  borderColor: "var(--app-soft-card-border)",
+                  backgroundColor: "var(--app-soft-card-bg)",
+                }}
                 onClick={() => setIsMediaTrayOpen(false)}
               >
-                <div className="flex h-9 w-9 items-center justify-center rounded-full bg-[#DAA112]/15 text-[#DAA112] group-hover:bg-[#DAA112]/25 transition-colors">
+                <div
+                  className="flex h-9 w-9 items-center justify-center rounded-full transition-colors"
+                  style={{
+                    backgroundColor: "var(--app-soft-card-bg)",
+                    color: "var(--app-accent)",
+                  }}
+                >
                   <Camera className="h-4.5 w-4.5" />
                 </div>
-                <span className="text-xs font-medium text-white/70 group-hover:text-white transition-colors">
+                <span
+                  className="text-xs font-medium transition-colors"
+                  style={{ color: "var(--app-on-dark-muted)" }}
+                >
                   Take photo
                 </span>
               </label>
               <label
                 htmlFor={galleryInputId}
                 className={cn(
-                  "group flex cursor-pointer flex-col items-center gap-2 rounded-xl border border-white/10 bg-white/5 px-4 py-3.5 transition-all hover:border-[#DAA112]/40 hover:bg-[#DAA112]/10 active:scale-[0.97]",
+                  "group flex cursor-pointer flex-col items-center gap-2 rounded-xl border px-4 py-3.5 transition-all active:scale-[0.97]",
                   isSending && "pointer-events-none opacity-60",
                 )}
+                style={{
+                  borderColor: "var(--app-soft-card-border)",
+                  backgroundColor: "var(--app-soft-card-bg)",
+                }}
                 onClick={() => setIsMediaTrayOpen(false)}
               >
-                <div className="flex h-9 w-9 items-center justify-center rounded-full bg-[#809276]/20 text-[#809276] group-hover:bg-[#809276]/30 transition-colors">
+                <div
+                  className="flex h-9 w-9 items-center justify-center rounded-full transition-colors"
+                  style={{
+                    backgroundColor: "var(--app-soft-card-bg)",
+                    color: "var(--app-muted)",
+                  }}
+                >
                   <ImageIcon className="h-4.5 w-4.5" />
                 </div>
-                <span className="text-xs font-medium text-white/70 group-hover:text-white transition-colors">
+                <span
+                  className="text-xs font-medium transition-colors"
+                  style={{ color: "var(--app-on-dark-muted)" }}
+                >
                   Photo library
                 </span>
               </label>
@@ -920,6 +968,7 @@ const SharedFooter = ({
             setIsMediaTrayOpen(false);
           }}
         />
+<<<<<<< HEAD
          <motion.div whileTap={{ scale: 0.85 }} whileHover={{ scale: 1.05 }}>
            <Button 
             variant="ghost" 
@@ -932,10 +981,29 @@ const SharedFooter = ({
            </Button>
          </motion.div>
          <div className="flex-1 bg-black/20 rounded-full px-4 py-2.5 border border-white/5 focus-within:border-white/20 focus-within:bg-black/30 transition-all">
+=======
+         <Button 
+          variant="ghost" 
+          size="icon" 
+          className="transition-colors"
+          style={{ color: "var(--app-on-dark-muted)" }}
+          onClick={() => setIsMediaTrayOpen((current) => !current)}
+          disabled={isSending}
+        >
+           <Camera className="w-6 h-6" />
+         </Button>
+         <div
+           className="flex-1 rounded-full px-4 py-2.5 border transition-all"
+           style={{
+             backgroundColor: "var(--app-input-bg)",
+             borderColor: "var(--app-input-border)",
+           }}
+         >
+>>>>>>> cfb9e5c (feat: Add application theming with server preference storage and client-side CSS variables.)
            <input 
             type="text" 
             placeholder={`Message ${persona}...`} 
-            className="w-full bg-transparent border-none outline-none text-sm text-white placeholder:text-white/40"
+            className="w-full bg-transparent border-none outline-none text-sm app-input-theme"
             value={inputValue}
             onChange={(e) => setInputValue(e.target.value)}
             onKeyDown={handleKeyDown}
@@ -943,6 +1011,7 @@ const SharedFooter = ({
             data-testid="input-message"
           />
          </div>
+<<<<<<< HEAD
          <motion.div
            whileTap={{ scale: 0.8, rotate: -10 }}
            whileHover={{ scale: 1.1 }}
@@ -955,6 +1024,18 @@ const SharedFooter = ({
              : { duration: 0.15 }
            }
            className="rounded-full"
+=======
+         <Button 
+           size="icon" 
+           className="rounded-full shadow-md"
+           style={{
+             backgroundColor: "var(--app-accent)",
+             color: "var(--app-accent-text)",
+           }}
+           onClick={handleSend}
+           disabled={isSending || hasUploadingAttachment || (!inputValue.trim() && !hasReadyAttachment)}
+           data-testid="button-send-message"
+>>>>>>> cfb9e5c (feat: Add application theming with server preference storage and client-side CSS variables.)
          >
            <Button 
              size="icon" 
@@ -997,7 +1078,9 @@ const ProfileView = ({
   isProfileLoading,
   isSaving,
   isUploadingAvatar,
+  selectedTheme,
   onSaveProfile,
+  onSaveTheme,
   onUploadAvatar,
   onUploadZeeAvatar,
   onLogout,
@@ -1008,6 +1091,7 @@ const ProfileView = ({
   isProfileLoading: boolean;
   isSaving: boolean;
   isUploadingAvatar: boolean;
+  selectedTheme: AppThemeId;
   onSaveProfile: (payload: {
     displayName: string | null;
     bio: string | null;
@@ -1021,6 +1105,7 @@ const ProfileView = ({
     zeeAvatarPreset: ZeeAvatarPreset;
     clearZeeAvatarAttachment?: boolean;
   }) => Promise<void>;
+  onSaveTheme: (theme: AppThemeId) => Promise<void>;
   onUploadAvatar: (file: File) => Promise<void>;
   onUploadZeeAvatar: (file: File) => Promise<void>;
   onLogout: () => void;
@@ -1037,10 +1122,12 @@ const ProfileView = ({
   const [stylePreset, setStylePreset] = useState<ResponseStylePreset>("balanced");
   const [styleNote, setStyleNote] = useState("");
   const [zeeAvatarPreset, setZeeAvatarPreset] = useState<ZeeAvatarPreset>("woman_1");
+  const [themeChoice, setThemeChoice] = useState<AppThemeId>(selectedTheme);
   const [clearZeeAvatarAttachment, setClearZeeAvatarAttachment] = useState(false);
   const [zeeAvatarOpen, setZeeAvatarOpen] = useState(false);
   const [personalizationOpen, setPersonalizationOpen] = useState(false);
   const [responseStyleOpen, setResponseStyleOpen] = useState(false);
+  const [themeOpen, setThemeOpen] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveSuccess, setSaveSuccess] = useState<string | null>(null);
 
@@ -1059,14 +1146,21 @@ const ProfileView = ({
     setStylePreset(profile?.responseStylePreset ?? "balanced");
     setStyleNote(profile?.responseStyleNote ?? "");
     setZeeAvatarPreset(profile?.zeeAvatarPreset ?? "woman_1");
+    setThemeChoice(selectedTheme);
     setClearZeeAvatarAttachment(false);
     setSaveError(null);
     setSaveSuccess(null);
-  }, [profile, user?.profession]);
+  }, [profile, user?.profession, selectedTheme]);
 
   const bioWordCount = bio.trim().length === 0 ? 0 : bio.trim().split(/\s+/).length;
   const bioWordLimit = 1000;
   const approxBioCharLimit = 6000;
+  const themedInputClass =
+    "app-input-theme w-full rounded-xl border px-3 py-2 text-sm outline-none transition-colors focus:border-[var(--app-accent)] focus:ring-1 focus:ring-[var(--app-accent)]";
+  const themedCardStyle = {
+    backgroundColor: "var(--app-soft-card-bg)",
+    borderColor: "var(--app-soft-card-border)",
+  } as const;
 
   const hasCustomZeeAvatar = Boolean(profile?.zeeAvatarUrl) && !clearZeeAvatarAttachment;
   const zeeAvatarPreviewSrc = hasCustomZeeAvatar
@@ -1112,6 +1206,7 @@ const ProfileView = ({
         zeeAvatarPreset,
         clearZeeAvatarAttachment: clearZeeAvatarAttachment || undefined,
       });
+      await onSaveTheme(themeChoice);
       setSaveSuccess("Profile saved.");
     } catch (error) {
       setSaveError(getErrorMessage(error));
@@ -1124,15 +1219,25 @@ const ProfileView = ({
       animate={{ x: 0 }}
       exit={{ x: "100%" }}
       transition={{ type: "spring", damping: 25, stiffness: 200 }}
-      className="absolute inset-0 z-50 bg-background flex flex-col h-full overflow-hidden"
+      className="absolute inset-0 z-50 flex flex-col h-full overflow-hidden"
+      style={{
+        backgroundColor: "var(--app-panel-bg)",
+        color: "var(--app-on-dark)",
+      }}
     >
       <div className="relative h-48 shrink-0 overflow-hidden">
         <img src={leafBg} alt="Cover" className="w-full h-full object-cover" />
-        <div className="absolute inset-0 bg-gradient-to-b from-transparent to-background/90" />
+        <div
+          className="absolute inset-0"
+          style={{
+            background: "linear-gradient(to bottom, transparent 0%, var(--app-panel-bg) 100%)",
+          }}
+        />
         <Button
           variant="ghost"
           size="icon"
-          className="absolute top-4 left-4 text-white hover:bg-white/20"
+          className="absolute top-4 left-4 hover:opacity-90"
+          style={{ color: "var(--app-on-dark)" }}
           onClick={onClose}
           data-testid="button-close-profile"
         >
@@ -1150,19 +1255,34 @@ const ProfileView = ({
             )}
             data-testid="button-edit-avatar"
           >
-            <Avatar className="w-24 h-24 border-4 border-background shadow-xl">
+            <Avatar
+              className="w-24 h-24 border-4 shadow-xl"
+              style={{ borderColor: "var(--app-soft-card-border)" }}
+            >
               <AvatarImage src={profile?.avatarUrl || user?.profileImageUrl} />
               <AvatarFallback>
                 {user?.firstName?.[0] || "U"}
                 {user?.lastName?.[0] || ""}
               </AvatarFallback>
             </Avatar>
+<<<<<<< HEAD
             <div className="absolute bottom-0 right-0 w-7 h-7 rounded-full bg-[#10383A] border-2 border-background flex items-center justify-center shadow-md">
               {isUploadingAvatar ? (
                 <motion.div animate={{ rotate: 360 }} transition={{ duration: 1, repeat: Infinity, ease: "linear" }} className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full" />
               ) : (
                 <Pencil className="w-3 h-3 text-white" />
               )}
+=======
+            <div
+              className="absolute -bottom-1 left-1/2 -translate-x-1/2 rounded-full px-2 py-0.5 text-[10px]"
+              style={{
+                backgroundColor: "color-mix(in srgb, var(--app-panel-bg) 68%, black)",
+                color: "var(--app-on-dark)",
+                border: "1px solid var(--app-soft-card-border)",
+              }}
+            >
+              {isUploadingAvatar ? "Uploading..." : "Edit photo"}
+>>>>>>> cfb9e5c (feat: Add application theming with server preference storage and client-side CSS variables.)
             </div>
           </label>
           <input
@@ -1186,19 +1306,29 @@ const ProfileView = ({
             }}
           />
           <div className="text-center mt-4">
-            <h2 className="text-2xl font-bold text-foreground" data-testid="text-username">
+            <h2
+              className="text-2xl font-bold"
+              style={{ color: "var(--app-on-dark)" }}
+              data-testid="text-username"
+            >
               {user?.firstName || ""} {user?.lastName || ""}
             </h2>
-            <p className="text-muted-foreground italic">"Here for you, always"</p>
+            <p className="italic" style={{ color: "var(--app-on-dark-muted)" }}>
+              "Here for you, always"
+            </p>
           </div>
         </div>
 
         <ScrollArea className="flex-1 min-h-0 -mx-6 px-6 pb-6">
           <form onSubmit={onSubmit} className="space-y-6">
             <section>
-              <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3">
+              <h3
+                className="text-sm font-semibold uppercase tracking-wider mb-3"
+                style={{ color: "var(--app-on-dark-muted)" }}
+              >
                 Account
               </h3>
+<<<<<<< HEAD
               <div className="bg-card rounded-xl p-4 shadow-sm border space-y-2">
                 <div className="flex items-center justify-between">
                   <span className="text-sm font-medium">Email</span>
@@ -1207,29 +1337,53 @@ const ProfileView = ({
                   </span>
                 </div>
                 <p className="text-xs text-muted-foreground text-center pt-1">
+=======
+              <div className="rounded-xl p-4 shadow-sm border space-y-3" style={themedCardStyle}>
+                <div className="flex items-center justify-between">
+                  <span className="font-medium" style={{ color: "var(--app-on-dark)" }}>
+                    Email
+                  </span>
+                  <span
+                    className="text-sm"
+                    style={{ color: "var(--app-on-dark-muted)" }}
+                    data-testid="text-user-email"
+                  >
+                    {user?.email || "Not set"}
+                  </span>
+                </div>
+                <p className="text-xs" style={{ color: "var(--app-on-dark-muted)" }}>
+>>>>>>> cfb9e5c (feat: Add application theming with server preference storage and client-side CSS variables.)
                   Optional profile fields help Zee personalize better.
                 </p>
               </div>
             </section>
 
             <section>
-              <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3">
+              <h3
+                className="text-sm font-semibold uppercase tracking-wider mb-3"
+                style={{ color: "var(--app-on-dark-muted)" }}
+              >
                 Zee Avatar
               </h3>
-              <div className="bg-card rounded-xl shadow-sm border overflow-hidden">
+              <div className="rounded-xl shadow-sm border overflow-hidden" style={themedCardStyle}>
                 <button
                   type="button"
                   onClick={() => setZeeAvatarOpen((prev) => !prev)}
-                  className="flex w-full items-center gap-3 p-4 text-left transition-colors hover:bg-muted/30"
+                  className="flex w-full items-center gap-3 p-4 text-left transition-opacity hover:opacity-95"
                   data-testid="button-zee-avatar-toggle"
                 >
-                  <Avatar className="h-10 w-10 ring-2 ring-[#DAA112]/30 shrink-0">
+                  <Avatar
+                    className="h-10 w-10 shrink-0 border-2"
+                    style={{ borderColor: "var(--app-accent)" }}
+                  >
                     <AvatarImage src={zeeAvatarPreviewSrc} className="object-cover" />
                     <AvatarFallback>Z</AvatarFallback>
                   </Avatar>
                   <div className="min-w-0 flex-1">
-                    <p className="text-sm font-semibold text-foreground">Current Zee look</p>
-                    <p className="text-xs text-muted-foreground">
+                    <p className="text-sm font-semibold" style={{ color: "var(--app-on-dark)" }}>
+                      Current Zee look
+                    </p>
+                    <p className="text-xs" style={{ color: "var(--app-on-dark-muted)" }}>
                       {hasCustomZeeAvatar
                         ? "Custom image"
                         : `Preset: ${
@@ -1239,7 +1393,10 @@ const ProfileView = ({
                           }`}
                     </p>
                   </div>
-                  <ChevronDown className={cn("w-4 h-4 text-muted-foreground transition-transform shrink-0", zeeAvatarOpen && "rotate-180")} />
+                  <ChevronDown
+                    className={cn("w-4 h-4 transition-transform shrink-0", zeeAvatarOpen && "rotate-180")}
+                    style={{ color: "var(--app-on-dark-muted)" }}
+                  />
                 </button>
 
                 <AnimatePresence initial={false}>
@@ -1251,7 +1408,10 @@ const ProfileView = ({
                       transition={{ duration: 0.2, ease: "easeInOut" }}
                       className="overflow-hidden"
                     >
-                      <div className="px-4 pb-4 space-y-1 border-t border-border pt-2">
+                      <div
+                        className="px-4 pb-4 space-y-1 border-t pt-2"
+                        style={{ borderColor: "var(--app-soft-card-border)" }}
+                      >
                         {ZEE_AVATAR_PRESET_OPTIONS.map((option) => (
                           <button
                             key={option.id}
@@ -1262,11 +1422,19 @@ const ProfileView = ({
                               setSaveSuccess(null);
                             }}
                             className={cn(
-                              "flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left transition-all",
+                              "flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left transition-all border",
                               zeeAvatarPreset === option.id && !hasCustomZeeAvatar
-                                ? "bg-[#DAA112]/10 ring-1 ring-[#DAA112]/40"
-                                : "hover:bg-muted/40",
+                                ? ""
+                                : "hover:opacity-95",
                             )}
+                            style={
+                              zeeAvatarPreset === option.id && !hasCustomZeeAvatar
+                                ? {
+                                    backgroundColor: "var(--app-soft-card-bg)",
+                                    borderColor: "var(--app-soft-card-border)",
+                                  }
+                                : { borderColor: "transparent" }
+                            }
                             data-testid={`button-zee-avatar-preset-${option.id}`}
                           >
                             <Avatar className="h-9 w-9 shrink-0">
@@ -1274,26 +1442,39 @@ const ProfileView = ({
                               <AvatarFallback>Z</AvatarFallback>
                             </Avatar>
                             <div className="min-w-0 flex-1">
-                              <p className="text-sm font-medium text-foreground">{option.label}</p>
-                              <p className="text-[11px] text-muted-foreground uppercase tracking-wide">
+                              <p className="text-sm font-medium" style={{ color: "var(--app-on-dark)" }}>
+                                {option.label}
+                              </p>
+                              <p
+                                className="text-[11px] uppercase tracking-wide"
+                                style={{ color: "var(--app-on-dark-muted)" }}
+                              >
                                 {option.styleLabel}
                               </p>
                             </div>
                             {zeeAvatarPreset === option.id && !hasCustomZeeAvatar && (
-                              <div className="w-2 h-2 rounded-full bg-[#DAA112] shrink-0" />
+                              <div
+                                className="w-2 h-2 rounded-full shrink-0"
+                                style={{ backgroundColor: "var(--app-accent)" }}
+                              />
                             )}
                           </button>
                         ))}
 
                         <label
                           htmlFor={zeeAvatarInputId}
-                          className="flex w-full cursor-pointer items-center gap-3 rounded-lg px-3 py-2 text-left transition-colors hover:bg-muted/40"
+                          className="flex w-full cursor-pointer items-center gap-3 rounded-lg px-3 py-2 text-left transition-opacity hover:opacity-95"
                           data-testid="button-upload-zee-avatar"
                         >
-                          <div className="h-9 w-9 rounded-full bg-muted/50 flex items-center justify-center shrink-0">
-                            <Camera className="w-4 h-4 text-muted-foreground" />
+                          <div
+                            className="h-9 w-9 rounded-full flex items-center justify-center shrink-0"
+                            style={{ backgroundColor: "var(--app-input-bg)" }}
+                          >
+                            <Camera className="w-4 h-4" style={{ color: "var(--app-on-dark-muted)" }} />
                           </div>
-                          <p className="text-sm font-medium text-foreground">Upload custom avatar</p>
+                          <p className="text-sm font-medium" style={{ color: "var(--app-on-dark)" }}>
+                            Upload custom avatar
+                          </p>
                         </label>
                         <input
                           id={zeeAvatarInputId}
@@ -1324,25 +1505,117 @@ const ProfileView = ({
             </section>
 
             <section>
-              <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3">
+              <h3
+                className="text-sm font-semibold uppercase tracking-wider mb-3"
+                style={{ color: "var(--app-on-dark-muted)" }}
+              >
+                Appearance
+              </h3>
+              <div className="rounded-xl shadow-sm border overflow-hidden" style={themedCardStyle}>
+                <button
+                  type="button"
+                  onClick={() => setThemeOpen((prev) => !prev)}
+                  className="flex w-full items-center gap-3 p-4 text-left transition-opacity hover:opacity-95"
+                  data-testid="button-theme-toggle"
+                >
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-semibold" style={{ color: "var(--app-on-dark)" }}>
+                      {getAppTheme(themeChoice).label}
+                    </p>
+                    <p className="text-xs" style={{ color: "var(--app-on-dark-muted)" }}>
+                      {getAppTheme(themeChoice).description}
+                    </p>
+                  </div>
+                  <ChevronDown
+                    className={cn("w-4 h-4 transition-transform shrink-0", themeOpen && "rotate-180")}
+                    style={{ color: "var(--app-on-dark-muted)" }}
+                  />
+                </button>
+
+                <AnimatePresence initial={false}>
+                  {themeOpen && (
+                    <motion.div
+                      initial={{ height: 0, opacity: 0 }}
+                      animate={{ height: "auto", opacity: 1 }}
+                      exit={{ height: 0, opacity: 0 }}
+                      transition={{ duration: 0.2, ease: "easeInOut" }}
+                      className="overflow-hidden"
+                    >
+                      <div
+                        className="px-4 pb-4 space-y-2 border-t pt-3"
+                        style={{ borderColor: "var(--app-soft-card-border)" }}
+                      >
+                        {APP_THEME_OPTIONS.map((themeOption) => (
+                          <button
+                            key={themeOption.id}
+                            type="button"
+                            onClick={() => setThemeChoice(themeOption.id)}
+                            className={cn(
+                              "flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left transition-all border",
+                              themeChoice === themeOption.id ? "" : "hover:opacity-95",
+                            )}
+                            style={
+                              themeChoice === themeOption.id
+                                ? {
+                                    backgroundColor: "var(--app-soft-card-bg)",
+                                    borderColor: "var(--app-soft-card-border)",
+                                  }
+                                : { borderColor: "transparent" }
+                            }
+                            data-testid={`button-theme-${themeOption.id}`}
+                          >
+                            <div className="min-w-0 flex-1">
+                              <p className="text-sm font-medium" style={{ color: "var(--app-on-dark)" }}>
+                                {themeOption.label}
+                              </p>
+                              <p className="text-[11px]" style={{ color: "var(--app-on-dark-muted)" }}>
+                                {themeOption.description}
+                              </p>
+                            </div>
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              {themeOption.palette.map((color) => (
+                                <span
+                                  key={`${themeOption.id}-${color}`}
+                                  className="h-3.5 w-3.5 rounded-full border border-black/10"
+                                  style={{ backgroundColor: color }}
+                                />
+                              ))}
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
+            </section>
+
+            <section>
+              <h3
+                className="text-sm font-semibold uppercase tracking-wider mb-3"
+                style={{ color: "var(--app-on-dark-muted)" }}
+              >
                 Personalization
               </h3>
-              <div className="bg-card rounded-xl shadow-sm border overflow-hidden">
+              <div className="rounded-xl shadow-sm border overflow-hidden" style={themedCardStyle}>
                 <button
                   type="button"
                   onClick={() => setPersonalizationOpen((prev) => !prev)}
-                  className="flex w-full items-center gap-3 p-4 text-left transition-colors hover:bg-muted/30"
+                  className="flex w-full items-center gap-3 p-4 text-left transition-opacity hover:opacity-95"
                   data-testid="button-personalization-toggle"
                 >
                   <div className="min-w-0 flex-1">
-                    <p className="text-sm font-semibold text-foreground">
+                    <p className="text-sm font-semibold" style={{ color: "var(--app-on-dark)" }}>
                       {displayName || "Set up your profile"}
                     </p>
-                    <p className="text-xs text-muted-foreground">
+                    <p className="text-xs" style={{ color: "var(--app-on-dark-muted)" }}>
                       {[profession, location].filter(Boolean).join(" · ") || "Name, bio, location & more"}
                     </p>
                   </div>
-                  <ChevronDown className={cn("w-4 h-4 text-muted-foreground transition-transform shrink-0", personalizationOpen && "rotate-180")} />
+                  <ChevronDown
+                    className={cn("w-4 h-4 transition-transform shrink-0", personalizationOpen && "rotate-180")}
+                    style={{ color: "var(--app-on-dark-muted)" }}
+                  />
                 </button>
 
                 <AnimatePresence initial={false}>
@@ -1354,7 +1627,10 @@ const ProfileView = ({
                       transition={{ duration: 0.2, ease: "easeInOut" }}
                       className="overflow-hidden"
                     >
-                      <div className="px-4 pb-4 space-y-4 border-t border-border pt-3">
+                      <div
+                        className="px-4 pb-4 space-y-4 border-t pt-3"
+                        style={{ borderColor: "var(--app-soft-card-border)" }}
+                      >
                         <div className="space-y-1.5">
                           <label className="text-sm font-medium" htmlFor="profile-display-name">
                             Preferred name
@@ -1364,7 +1640,7 @@ const ProfileView = ({
                             value={displayName}
                             onChange={(event) => setDisplayName(event.target.value)}
                             maxLength={120}
-                            className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm outline-none focus:border-[#DAA112]"
+                            className={themedInputClass}
                             placeholder="How should Zee address you?"
                             data-testid="input-profile-display-name"
                           />
@@ -1379,11 +1655,14 @@ const ProfileView = ({
                             value={bio}
                             onChange={(event) => setBio(event.target.value.slice(0, approxBioCharLimit))}
                             rows={4}
-                            className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm outline-none focus:border-[#DAA112]"
+                            className={themedInputClass}
                             placeholder="Share what matters to you, your goals, and your vibe."
                             data-testid="input-profile-bio"
                           />
-                          <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+                          <div
+                            className="flex items-center justify-between text-[11px]"
+                            style={{ color: "var(--app-on-dark-muted)" }}
+                          >
                             <span>{bioWordCount}/{bioWordLimit} words</span>
                             <span>{bio.length}/{approxBioCharLimit} chars</span>
                           </div>
@@ -1399,7 +1678,7 @@ const ProfileView = ({
                               value={location}
                               onChange={(event) => setLocation(event.target.value)}
                               maxLength={120}
-                              className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm outline-none focus:border-[#DAA112]"
+                              className={themedInputClass}
                               placeholder="City, country"
                               data-testid="input-profile-location"
                             />
@@ -1414,7 +1693,7 @@ const ProfileView = ({
                               onChange={(event) =>
                                 setAgeInput(event.target.value.replace(/[^0-9]/g, ""))
                               }
-                              className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm outline-none focus:border-[#DAA112]"
+                              className={themedInputClass}
                               placeholder="Optional"
                               inputMode="numeric"
                               data-testid="input-profile-age"
@@ -1431,7 +1710,7 @@ const ProfileView = ({
                             value={profession}
                             onChange={(event) => setProfession(event.target.value)}
                             maxLength={120}
-                            className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm outline-none focus:border-[#DAA112]"
+                            className={themedInputClass}
                             placeholder="What do you do?"
                             data-testid="input-profile-profession"
                           />
@@ -1445,7 +1724,7 @@ const ProfileView = ({
                             id="profile-gender"
                             value={gender}
                             onChange={(event) => setGender(event.target.value as GenderOption | "")}
-                            className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm outline-none focus:border-[#DAA112]"
+                            className={themedInputClass}
                             data-testid="select-profile-gender"
                           >
                             <option value="">Not specified</option>
@@ -1467,7 +1746,7 @@ const ProfileView = ({
                               value={genderOther}
                               onChange={(event) => setGenderOther(event.target.value)}
                               maxLength={80}
-                              className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm outline-none focus:border-[#DAA112]"
+                              className={themedInputClass}
                               placeholder="Share if you'd like"
                               data-testid="input-profile-gender-other"
                             />
@@ -1481,25 +1760,31 @@ const ProfileView = ({
             </section>
 
             <section>
-              <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3">
+              <h3
+                className="text-sm font-semibold uppercase tracking-wider mb-3"
+                style={{ color: "var(--app-on-dark-muted)" }}
+              >
                 Response Style
               </h3>
-              <div className="bg-card rounded-xl shadow-sm border overflow-hidden">
+              <div className="rounded-xl shadow-sm border overflow-hidden" style={themedCardStyle}>
                 <button
                   type="button"
                   onClick={() => setResponseStyleOpen((prev) => !prev)}
-                  className="flex w-full items-center gap-3 p-4 text-left transition-colors hover:bg-muted/30"
+                  className="flex w-full items-center gap-3 p-4 text-left transition-opacity hover:opacity-95"
                   data-testid="button-response-style-toggle"
                 >
                   <div className="min-w-0 flex-1">
-                    <p className="text-sm font-semibold text-foreground">
+                    <p className="text-sm font-semibold" style={{ color: "var(--app-on-dark)" }}>
                       {RESPONSE_STYLE_OPTIONS.find((o) => o.value === stylePreset)?.label ?? "Balanced"}
                     </p>
-                    <p className="text-xs text-muted-foreground">
+                    <p className="text-xs" style={{ color: "var(--app-on-dark-muted)" }}>
                       {RESPONSE_STYLE_OPTIONS.find((o) => o.value === stylePreset)?.description ?? "Adjust how Zee responds"}
                     </p>
                   </div>
-                  <ChevronDown className={cn("w-4 h-4 text-muted-foreground transition-transform shrink-0", responseStyleOpen && "rotate-180")} />
+                  <ChevronDown
+                    className={cn("w-4 h-4 transition-transform shrink-0", responseStyleOpen && "rotate-180")}
+                    style={{ color: "var(--app-on-dark-muted)" }}
+                  />
                 </button>
 
                 <AnimatePresence initial={false}>
@@ -1511,7 +1796,10 @@ const ProfileView = ({
                       transition={{ duration: 0.2, ease: "easeInOut" }}
                       className="overflow-hidden"
                     >
-                      <div className="px-4 pb-4 space-y-4 border-t border-border pt-3">
+                      <div
+                        className="px-4 pb-4 space-y-4 border-t pt-3"
+                        style={{ borderColor: "var(--app-soft-card-border)" }}
+                      >
                         <div className="space-y-1.5">
                           <label className="text-sm font-medium" htmlFor="profile-style-preset">
                             Preset
@@ -1522,7 +1810,7 @@ const ProfileView = ({
                             onChange={(event) =>
                               setStylePreset(event.target.value as ResponseStylePreset)
                             }
-                            className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm outline-none focus:border-[#DAA112]"
+                            className={themedInputClass}
                             data-testid="select-profile-style-preset"
                           >
                             {RESPONSE_STYLE_OPTIONS.map((option) => (
@@ -1541,7 +1829,7 @@ const ProfileView = ({
                             value={styleNote}
                             onChange={(event) => setStyleNote(event.target.value.slice(0, 600))}
                             rows={3}
-                            className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm outline-none focus:border-[#DAA112]"
+                            className={themedInputClass}
                             placeholder='Example: "Use more humor and quick punchy replies."'
                             data-testid="input-profile-style-note"
                           />
@@ -1554,8 +1842,10 @@ const ProfileView = ({
             </section>
 
             {(saveError || saveSuccess || isProfileLoading) && (
-              <div className="rounded-xl border border-border bg-card px-3 py-2 text-xs">
-                {isProfileLoading && <p className="text-muted-foreground">Loading profile...</p>}
+              <div className="rounded-xl border px-3 py-2 text-xs" style={themedCardStyle}>
+                {isProfileLoading && (
+                  <p style={{ color: "var(--app-on-dark-muted)" }}>Loading profile...</p>
+                )}
                 {saveError && <p className="text-red-500">{saveError}</p>}
                 {saveSuccess && <p className="text-emerald-600">{saveSuccess}</p>}
               </div>
@@ -1564,7 +1854,11 @@ const ProfileView = ({
             <section className="space-y-3 pb-4">
               <Button
                 type="submit"
-                className="w-full h-12 rounded-xl gap-2 bg-[#10383A] text-white hover:bg-[#10383A]/90"
+                className="w-full h-12 rounded-xl gap-2"
+                style={{
+                  backgroundColor: "var(--app-shell-bg)",
+                  color: "var(--app-on-dark)",
+                }}
                 disabled={isSaving || isProfileLoading}
                 data-testid="button-save-profile"
               >
@@ -1618,38 +1912,67 @@ const SharedHeader = ({
       <div className="pointer-events-auto">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <button className="flex items-center gap-2 bg-[#10383A] border border-white/10 px-4 py-2 rounded-2xl shadow-sm hover:bg-[#10383A]/80 transition-colors focus:outline-none" data-testid="button-persona-selector">
+            <button
+              className="flex items-center gap-2 border px-4 py-2 rounded-2xl shadow-sm transition-colors focus:outline-none"
+              style={{
+                backgroundColor: "var(--app-header-bg)",
+                borderColor: "var(--app-soft-card-border)",
+              }}
+              data-testid="button-persona-selector"
+            >
               <div className="flex flex-col items-start leading-tight">
-                <span className="font-bold text-lg text-white">{assistantName}</span>
-                <span className="text-[10px] uppercase tracking-wide text-white/60">
+                <span className="font-bold text-lg" style={{ color: "var(--app-on-dark)" }}>
+                  {assistantName}
+                </span>
+                <span
+                  className="text-[10px] uppercase tracking-wide"
+                  style={{ color: "var(--app-on-dark-muted)" }}
+                >
                   Voice: {selectedVoice}
                 </span>
               </div>
-              <ChevronRight className="w-4 h-4 rotate-90 text-white/70" />
+              <ChevronRight
+                className="w-4 h-4 rotate-90"
+                style={{ color: "var(--app-on-dark-muted)" }}
+              />
             </button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="w-56 rounded-xl bg-[#10383A] border-white/10 text-white">
+          <DropdownMenuContent
+            align="start"
+            className="w-56 rounded-xl"
+            style={{
+              backgroundColor: "var(--app-header-bg)",
+              borderColor: "var(--app-soft-card-border)",
+              color: "var(--app-on-dark)",
+            }}
+          >
             {LIVE_VOICE_OPTIONS.map((voice) => (
               <DropdownMenuItem
                 key={voice.id}
                 onClick={() => setSelectedVoice(voice.id)}
-                className="gap-2 p-3 font-medium cursor-pointer focus:bg-white/10 focus:text-white"
+                className="gap-2 p-3 font-medium cursor-pointer"
                 data-testid={`button-voice-${voice.id.toLowerCase()}`}
               >
                 <div
-                  className={cn(
-                    "w-7 h-7 rounded-full flex items-center justify-center text-[10px] font-bold border",
-                    voice.style === "feminine"
-                      ? "bg-[#DAA112]/15 text-[#DAA112] border-[#DAA112]/30"
-                      : "bg-[#809276]/15 text-[#809276] border-[#809276]/30",
-                    selectedVoice === voice.id && "ring-1 ring-white/30",
-                  )}
+                  className="w-7 h-7 rounded-full flex items-center justify-center text-[10px] font-bold border"
+                  style={{
+                    backgroundColor: "var(--app-soft-card-bg)",
+                    color: voice.style === "feminine" ? "var(--app-accent)" : "var(--app-muted)",
+                    borderColor: "var(--app-soft-card-border)",
+                    boxShadow:
+                      selectedVoice === voice.id
+                        ? "0 0 0 1px var(--app-soft-card-border)"
+                        : undefined,
+                  }}
                 >
                   {voice.id.slice(0, 1)}
                 </div>
                 <div className="flex items-center gap-2">
                   <span>{voice.label}</span>
-                  <span className="text-[10px] uppercase tracking-wide text-white/60">
+                  <span
+                    className="text-[10px] uppercase tracking-wide"
+                    style={{ color: "var(--app-on-dark-muted)" }}
+                  >
                     {voice.style === "feminine" ? "Woman" : "Man"}
                   </span>
                 </div>
@@ -1665,7 +1988,12 @@ const SharedHeader = ({
             initial={{ opacity: 0, y: -10 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -10 }}
-            className="absolute left-1/2 -translate-x-1/2 font-mono text-sm font-medium text-white/70 bg-black/20 px-3 py-1 rounded-full backdrop-blur-sm"
+            className="absolute left-1/2 -translate-x-1/2 font-mono text-sm font-medium px-3 py-1 rounded-full backdrop-blur-sm"
+            style={{
+              color: "var(--app-on-dark)",
+              backgroundColor: "var(--app-soft-card-bg)",
+              border: "1px solid var(--app-soft-card-border)",
+            }}
           >
             {formatTime(duration)}
           </motion.div>
@@ -1674,10 +2002,21 @@ const SharedHeader = ({
 
       <div className="pointer-events-auto">
         <Button variant="ghost" size="icon" className="rounded-full w-12 h-12" onClick={onProfile} data-testid="button-profile">
-          <div className="w-full h-full rounded-full border border-white/20 bg-white/10 overflow-hidden p-0.5">
-              <Avatar className="w-full h-full">
+          <div
+            className="w-full h-full rounded-full overflow-hidden p-0.5"
+            style={{
+              border: "1px solid var(--app-soft-card-border)",
+              backgroundColor: "var(--app-soft-card-bg)",
+            }}
+          >
+                <Avatar className="w-full h-full">
                 <AvatarImage src={userProfileImage} className="object-cover" />
-                <AvatarFallback className="bg-[#809276] text-white text-sm">U</AvatarFallback>
+                <AvatarFallback
+                  className="text-sm"
+                  style={{ backgroundColor: "var(--app-muted)" }}
+                >
+                  U
+                </AvatarFallback>
               </Avatar>
           </div>
         </Button>
@@ -1714,7 +2053,8 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onProfile, assistantName
 
   return (
     <motion.div 
-      className="absolute top-0 left-0 right-0 z-40 bg-[#10383A] rounded-b-[2.5rem] shadow-2xl overflow-hidden"
+      className="absolute top-0 left-0 right-0 z-40 rounded-b-[2.5rem] shadow-2xl overflow-hidden"
+      style={{ backgroundColor: "var(--app-header-bg)" }}
       initial={false}
       animate={{ height: mode === "voice" ? "100%" : "110px" }}
       transition={{ type: "spring", stiffness: 200, damping: 25 }}
@@ -1819,7 +2159,11 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onProfile, assistantName
                         )}
                         animate={{
                           height: ["20%", "80%", "20%"],
-                          backgroundColor: ["#DAA112", "#FFF", "#DAA112"]
+                          backgroundColor: [
+                            "var(--app-accent)",
+                            "var(--app-assistant-bubble-bg)",
+                            "var(--app-accent)",
+                          ],
                         }}
                         transition={{
                           duration: 1 + Math.random() * 0.5,
@@ -1845,6 +2189,7 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onProfile, assistantName
                    aria-label={isConnecting ? "Connecting voice session" : `Start voice call with ${assistantName}`}
                    data-testid="button-start-call"
                  >
+<<<<<<< HEAD
                    {[0, 1, 2].map((i) => (
                      <motion.div
                        key={`ring-${i}`}
@@ -1896,6 +2241,27 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onProfile, assistantName
                    animate={isConnecting ? { opacity: [0.5, 1, 0.5] } : { opacity: 1 }}
                    transition={isConnecting ? { duration: 1.5, repeat: Infinity, ease: "easeInOut" } : {}}
                  >
+=======
+                   <div
+                     className="absolute inset-0 rounded-full animate-ping opacity-20 duration-3000"
+                     style={{ backgroundColor: "var(--app-accent)" }}
+                   />
+                   <div
+                     className="absolute -inset-4 rounded-full animate-pulse opacity-30"
+                     style={{ backgroundColor: "var(--app-accent)" }}
+                   />
+                   
+                   <div className={cn(
+                     "w-32 h-32 rounded-full flex items-center justify-center shadow-[0_0_40px_rgba(218,161,18,0.3)] transform transition-transform",
+                     !isConnecting && "group-hover:scale-105 active:scale-95",
+                   )}
+                   style={{ backgroundColor: "var(--app-accent)" }}
+                   >
+                      <Mic className="w-12 h-12" style={{ color: "var(--app-accent-text)" }} />
+                   </div>
+                 </button>
+                 <p className="font-medium tracking-wide" style={{ color: "var(--app-on-dark-muted)" }}>
+>>>>>>> cfb9e5c (feat: Add application theming with server preference storage and client-side CSS variables.)
                    {isConnecting ? `Connecting to ${assistantName}...` : `Tap to speak to ${assistantName}`}
                  </motion.p>
               </div>
@@ -1905,15 +2271,22 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onProfile, assistantName
           <div className="px-6 space-y-6 pb-24">
             {isActive && (
               <div className="flex items-center justify-center gap-8 mb-4">
-                  <Button 
+                 <Button 
                     variant="outline" 
                     size="icon" 
                     className={cn(
-                      "w-14 h-14 rounded-full border-2 border-white/10 transition-colors text-white",
+                      "w-14 h-14 rounded-full border-2 transition-colors",
                       isVideoEnabled
-                        ? "bg-[#DAA112]/30 border-[#DAA112]/70"
-                        : "bg-white/5 hover:bg-white/10",
+                        ? ""
+                        : "hover:opacity-90",
                     )}
+                    style={{
+                      backgroundColor: "var(--app-soft-card-bg)",
+                      borderColor: isVideoEnabled
+                        ? "var(--app-accent)"
+                        : "var(--app-soft-card-border)",
+                      color: "var(--app-on-dark)",
+                    }}
                     onClick={onToggleVideo}
                     disabled={isVideoTransitioning}
                     data-testid="button-toggle-video"
@@ -1923,7 +2296,8 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onProfile, assistantName
                   <Button 
                     variant="destructive" 
                     size="icon" 
-                    className="w-20 h-20 rounded-full shadow-2xl hover:scale-105 transition-transform bg-red-500 hover:bg-red-600 text-white border-4 border-[#10383A]"
+                    className="w-20 h-20 rounded-full shadow-2xl hover:scale-105 transition-transform bg-red-500 hover:bg-red-600 text-white border-4"
+                    style={{ borderColor: "var(--app-shell-bg)" }}
                     onClick={onEndCall}
                     data-testid="button-end-call"
                   >
@@ -1932,7 +2306,12 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onProfile, assistantName
                   <Button 
                     variant="outline" 
                     size="icon" 
-                    className="w-14 h-14 rounded-full border-2 border-white/10 bg-white/5 hover:bg-white/10 transition-colors text-white"
+                    className="w-14 h-14 rounded-full border-2 transition-colors hover:opacity-90"
+                    style={{
+                      borderColor: "var(--app-soft-card-border)",
+                      backgroundColor: "var(--app-soft-card-bg)",
+                      color: "var(--app-on-dark)",
+                    }}
                     onClick={onFlipCamera}
                     disabled={!isVideoEnabled || isVideoTransitioning}
                     data-testid="button-flip-camera"
@@ -1942,8 +2321,11 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onProfile, assistantName
               </div>
             )}
 
-            <div className="flex flex-col items-center justify-center gap-2 py-3 pb-6 text-white/30 cursor-grab active:cursor-grabbing">
-               <div className="w-12 h-1.5 bg-white/30 rounded-full" />
+            <div
+              className="flex flex-col items-center justify-center gap-2 py-3 pb-6 cursor-grab active:cursor-grabbing"
+              style={{ color: "var(--app-on-dark-muted)" }}
+            >
+               <div className="w-12 h-1.5 rounded-full" style={{ backgroundColor: "var(--app-on-dark-muted)" }} />
                <span className="text-xs font-medium uppercase tracking-wider">Swipe up to chat</span>
             </div>
           </div>
@@ -1955,9 +2337,9 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onProfile, assistantName
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              className="absolute bottom-2 left-0 right-0 flex justify-center pb-2 pointer-events-none"
+               className="absolute bottom-2 left-0 right-0 flex justify-center pb-2 pointer-events-none"
             >
-               <div className="w-12 h-1.5 bg-white/20 rounded-full" />
+               <div className="w-12 h-1.5 rounded-full" style={{ backgroundColor: "var(--app-on-dark-muted)" }} />
             </motion.div>
           )}
         </AnimatePresence>
@@ -2020,7 +2402,10 @@ const TextView = ({
       ?.text ?? "";
 
   return (
-    <div className="h-full flex flex-col bg-[#0D2E30] pt-40 pb-24 relative">
+    <div
+      className="h-full flex flex-col pt-40 pb-24 relative"
+      style={{ backgroundColor: "var(--app-panel-bg)" }}
+    >
       <div className="sr-only" aria-live="polite">
         {isStreamingReply && !latestAssistantText
           ? `${persona} is typing`
@@ -2052,7 +2437,10 @@ const TextView = ({
             >
               <div className="flex items-end gap-2 max-w-[80%]">
                 {msg.sender !== "user" && (
-                  <Avatar className="w-8 h-8 mb-1 shrink-0 ring-2 ring-white/10">
+                  <Avatar
+                    className="w-8 h-8 mb-1 shrink-0 ring-2"
+                    style={{ boxShadow: "0 0 0 2px var(--app-soft-card-border)" }}
+                  >
                     <AvatarImage src={assistantAvatarSrc} className="object-cover" />
                     <AvatarFallback>{persona[0]}</AvatarFallback>
                   </Avatar>
@@ -2061,9 +2449,20 @@ const TextView = ({
                   className={cn(
                     "rounded-2xl text-sm leading-relaxed shadow-sm",
                     msg.sender === "user"
-                      ? "bg-[#DAA112] text-[#10383A] font-medium rounded-br-none"
-                      : "bg-white text-[#10383A] rounded-bl-none",
+                      ? "font-medium rounded-br-none"
+                      : "rounded-bl-none",
                   )}
+                  style={
+                    msg.sender === "user"
+                      ? {
+                          backgroundColor: "var(--app-user-bubble-bg)",
+                          color: "var(--app-user-bubble-text)",
+                        }
+                      : {
+                          backgroundColor: "var(--app-assistant-bubble-bg)",
+                          color: "var(--app-assistant-bubble-text)",
+                        }
+                  }
                 >
                   {(msg.attachments ?? []).length > 0 && (
                     <div className="grid gap-2 p-2">
@@ -2079,6 +2478,7 @@ const TextView = ({
                   )}
                   <div className="px-5 py-3">
                     {msg.isTyping ? (
+<<<<<<< HEAD
                       <div className="flex items-center gap-1.5 py-1">
                         <motion.span
                           className="h-1.5 w-1.5 rounded-full bg-[#10383A]/60"
@@ -2094,6 +2494,20 @@ const TextView = ({
                           className="h-1.5 w-1.5 rounded-full bg-[#10383A]/60"
                           animate={{ y: [0, -4, 0], opacity: [0.4, 1, 0.4] }}
                           transition={{ duration: 0.8, repeat: Infinity, ease: "easeInOut", delay: 0.3 }}
+=======
+                      <div className="flex items-center gap-1.5">
+                        <span
+                          className="h-2 w-2 animate-bounce rounded-full"
+                          style={{ backgroundColor: "var(--app-assistant-bubble-text)" }}
+                        />
+                        <span
+                          className="h-2 w-2 animate-bounce rounded-full [animation-delay:120ms]"
+                          style={{ backgroundColor: "var(--app-assistant-bubble-text)" }}
+                        />
+                        <span
+                          className="h-2 w-2 animate-bounce rounded-full [animation-delay:220ms]"
+                          style={{ backgroundColor: "var(--app-assistant-bubble-text)" }}
+>>>>>>> cfb9e5c (feat: Add application theming with server preference storage and client-side CSS variables.)
                         />
                       </div>
                     ) : (
@@ -2102,7 +2516,14 @@ const TextView = ({
                   </div>
                 </div>
                 {msg.sender === "user" && (
-                  <div className="w-8 h-8 rounded-full bg-[#DAA112]/20 border border-[#DAA112]/30 flex items-center justify-center mb-1 text-xs font-bold text-[#DAA112]">
+                  <div
+                    className="w-8 h-8 rounded-full border flex items-center justify-center mb-1 text-xs font-bold"
+                    style={{
+                      backgroundColor: "var(--app-soft-card-bg)",
+                      borderColor: "var(--app-accent)",
+                      color: "var(--app-accent)",
+                    }}
+                  >
                     U
                   </div>
                 )}
@@ -2119,7 +2540,12 @@ const TextView = ({
             scrollToBottom(true);
             setShowJumpToNewest(false);
           }}
-          className="absolute bottom-28 left-1/2 -translate-x-1/2 rounded-full border border-white/30 bg-black/40 px-3 py-1 text-xs text-white backdrop-blur-sm"
+          className="absolute bottom-28 left-1/2 -translate-x-1/2 rounded-full border px-3 py-1 text-xs backdrop-blur-sm"
+          style={{
+            borderColor: "var(--app-soft-card-border)",
+            backgroundColor: "var(--app-soft-card-bg)",
+            color: "var(--app-on-dark)",
+          }}
         >
           Jump to newest
         </button>
@@ -2276,6 +2702,7 @@ function App() {
   const cameraFacingModeRef = useRef<CameraFacingMode>("environment");
   const pendingAttachmentsRef = useRef<PendingImageAttachment[]>([]);
   const selectedVoiceRef = useRef<LiveVoiceName>(DEFAULT_LIVE_VOICE);
+  const selectedThemeRef = useRef<AppThemeId>(DEFAULT_APP_THEME_ID);
 
   const logLiveTrace = (
     event: string,
@@ -2300,6 +2727,7 @@ function App() {
   const { data: preferences } = useQuery<{
     selectedPersona?: string;
     selectedVoice?: string;
+    selectedTheme?: string;
     onboardingCompleted?: boolean;
   }>({
     queryKey: ["/api/preferences"],
@@ -2315,6 +2743,8 @@ function App() {
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [selectedVoice, setSelectedVoice] =
     useState<LiveVoiceName>(DEFAULT_LIVE_VOICE);
+  const [selectedTheme, setSelectedTheme] =
+    useState<AppThemeId>(DEFAULT_APP_THEME_ID);
   const persona: Persona = ASSISTANT_NAME;
 
   useEffect(() => {
@@ -2322,6 +2752,9 @@ function App() {
       setShowOnboarding(!preferences.onboardingCompleted);
       if (isLiveVoiceName(preferences.selectedVoice)) {
         setSelectedVoice(preferences.selectedVoice);
+      }
+      if (isAppThemeId(preferences.selectedTheme)) {
+        setSelectedTheme(preferences.selectedTheme);
       }
     }
   }, [preferences]);
@@ -2343,6 +2776,11 @@ function App() {
   }, [selectedVoice]);
 
   useEffect(() => {
+    selectedThemeRef.current = selectedTheme;
+    applyAppTheme(selectedTheme);
+  }, [selectedTheme]);
+
+  useEffect(() => {
     return () => {
       for (const attachment of pendingAttachmentsRef.current) {
         URL.revokeObjectURL(attachment.previewUrl);
@@ -2354,6 +2792,7 @@ function App() {
     mutationFn: async (data: {
       selectedPersona?: Persona;
       selectedVoice?: LiveVoiceName;
+      selectedTheme?: AppThemeId;
       onboardingCompleted?: boolean;
     }) => {
       const res = await apiRequest("PUT", "/api/preferences", data);
@@ -2443,6 +2882,7 @@ function App() {
     updatePreferencesMutation.mutate({
       selectedPersona: persona,
       selectedVoice,
+      selectedTheme: selectedThemeRef.current,
       onboardingCompleted: true,
     });
   };
@@ -2452,8 +2892,19 @@ function App() {
     updatePreferencesMutation.mutate({
       selectedPersona: persona,
       selectedVoice: voice,
+      selectedTheme: selectedThemeRef.current,
       onboardingCompleted: preferences?.onboardingCompleted ?? true,
     });
+  };
+
+  const handleSaveTheme = async (themeId: AppThemeId) => {
+    await updatePreferencesMutation.mutateAsync({
+      selectedPersona: persona,
+      selectedVoice: selectedVoiceRef.current,
+      selectedTheme: themeId,
+      onboardingCompleted: preferences?.onboardingCompleted ?? true,
+    });
+    setSelectedTheme(themeId);
   };
 
   const handleSaveProfile = async (payload: {
@@ -3449,11 +3900,19 @@ function App() {
 
   if (authLoading) {
     return (
-      <div className="w-full h-screen bg-[#10383A] flex items-center justify-center" data-testid="loading-screen">
+      <div
+        className="w-full h-screen flex items-center justify-center"
+        style={{ backgroundColor: "var(--app-shell-bg)" }}
+        data-testid="loading-screen"
+      >
         <motion.div
           animate={{ rotate: 360 }}
           transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
-          className="w-10 h-10 border-4 border-white/20 border-t-[#DAA112] rounded-full"
+          className="w-10 h-10 border-4 rounded-full"
+          style={{
+            borderColor: "var(--app-soft-card-border)",
+            borderTopColor: "var(--app-accent)",
+          }}
         />
       </div>
     );
@@ -3473,7 +3932,10 @@ function App() {
   }
 
   return (
-    <div className="w-full h-screen bg-neutral-100 flex items-center justify-center overflow-hidden">
+    <div
+      className="w-full h-screen flex items-center justify-center overflow-hidden"
+      style={{ backgroundColor: "var(--app-panel-bg)" }}
+    >
       <div className="w-full h-full md:max-w-[400px] md:h-[850px] bg-background md:rounded-[2.5rem] shadow-2xl overflow-hidden relative">
         
         <AnimatePresence>
@@ -3530,9 +3992,11 @@ function App() {
               user={user}
               profile={userProfile}
               isProfileLoading={isProfileLoading}
-              isSaving={updateProfileMutation.isPending}
+              isSaving={updateProfileMutation.isPending || updatePreferencesMutation.isPending}
               isUploadingAvatar={uploadProfileAvatarMutation.isPending}
+              selectedTheme={selectedTheme}
               onSaveProfile={handleSaveProfile}
+              onSaveTheme={handleSaveTheme}
               onUploadAvatar={handleUploadProfileAvatar}
               onUploadZeeAvatar={handleUploadZeeAvatar}
               onLogout={logout}
@@ -3546,7 +4010,14 @@ function App() {
           </div>
         )}
         {!liveError && isLiveConnecting && (
-          <div className="absolute bottom-24 left-1/2 -translate-x-1/2 z-[90] max-w-[85%] rounded-xl border border-white/20 bg-black/30 px-3 py-2 text-xs text-white/90 backdrop-blur-sm">
+          <div
+            className="absolute bottom-24 left-1/2 -translate-x-1/2 z-[90] max-w-[85%] rounded-xl border px-3 py-2 text-xs backdrop-blur-sm"
+            style={{
+              borderColor: "var(--app-soft-card-border)",
+              backgroundColor: "var(--app-soft-card-bg)",
+              color: "var(--app-on-dark)",
+            }}
+          >
             Connecting voice session...
           </div>
         )}

@@ -82,6 +82,12 @@ const responseStylePresetSchema = z.enum([
   "expressive",
   "playful",
 ]);
+const appThemeSchema = z.enum([
+  "classic_teal",
+  "sunset_path",
+  "violet_city",
+  "crimson_noir",
+]);
 const zeeAvatarPresetSchema = z.enum(["woman_1", "woman_2", "man_1", "man_2"]);
 
 const genderSchema = z.enum([
@@ -1409,6 +1415,7 @@ export async function registerRoutes(
         prefs || {
           selectedPersona: DEFAULT_PERSONA,
           selectedVoice: DEFAULT_LIVE_VOICE,
+          selectedTheme: "classic_teal",
           onboardingCompleted: false,
         },
       );
@@ -1420,6 +1427,10 @@ export async function registerRoutes(
   app.put("/api/preferences", isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.session.userId;
+      const rawTheme = req.body?.selectedTheme;
+      if (rawTheme !== undefined && !appThemeSchema.safeParse(rawTheme).success) {
+        return res.status(400).json({ message: "Invalid preferences data" });
+      }
       const data = insertUserPreferencesSchema.parse({ ...req.body, userId });
       const prefs = await storage.upsertUserPreferences(data);
       res.json(prefs);

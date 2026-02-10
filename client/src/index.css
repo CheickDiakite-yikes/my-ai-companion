@@ -51,6 +51,31 @@
 }
 
 @layer base {
+  :root {
+    --app-shell-bg: #10383a;
+    --app-panel-bg: #0d2e30;
+    --app-header-bg: #10383a;
+    --app-footer-bg: rgba(16, 56, 58, 0.9);
+    --app-accent: #daa112;
+    --app-accent-text: #10383a;
+    --app-muted: #809276;
+    --app-on-dark: #e8e8e8;
+    --app-on-dark-muted: rgba(232, 232, 232, 0.68);
+    --app-input-bg: rgba(0, 0, 0, 0.22);
+    --app-input-border: rgba(255, 255, 255, 0.1);
+    --app-input-text: #e8e8e8;
+    --app-input-placeholder: rgba(232, 232, 232, 0.42);
+    --app-user-bubble-bg: #daa112;
+    --app-user-bubble-text: #10383a;
+    --app-assistant-bubble-bg: #ffffff;
+    --app-assistant-bubble-text: #10383a;
+    --app-media-tray-from: #10383a;
+    --app-media-tray-to: #0d2e30;
+    --app-media-tray-border: rgba(218, 161, 18, 0.24);
+    --app-soft-card-bg: rgba(255, 255, 255, 0.06);
+    --app-soft-card-border: rgba(255, 255, 255, 0.12);
+  }
+
   * {
     @apply border-border;
   }
@@ -60,6 +85,16 @@
   h1, h2, h3, h4, h5, h6 {
     @apply font-heading font-semibold;
   }
+}
+
+.app-input-theme {
+  background-color: var(--app-input-bg);
+  border-color: var(--app-input-border);
+  color: var(--app-input-text);
+}
+
+.app-input-theme::placeholder {
+  color: var(--app-input-placeholder);
 }
 
 /* Custom scrollbar for chat */

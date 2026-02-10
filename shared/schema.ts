@@ -74,6 +74,7 @@ export const userPreferences = pgTable("user_preferences", {
   userId: varchar("user_id").notNull().unique(),
   selectedPersona: varchar("selected_persona").notNull().default("Zee"),
   selectedVoice: varchar("selected_voice").notNull().default("Aoede"),
+  selectedTheme: varchar("selected_theme").notNull().default("classic_teal"),
   onboardingCompleted: boolean("onboarding_completed").notNull().default(false),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
