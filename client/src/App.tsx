@@ -11,8 +11,8 @@ import onboarding3 from "@/assets/onboarding-3-v2.png";
 import mayaAvatar from "@/assets/maya-avatar.png";
 import zarraAvatar from "@/assets/zarra-avatar.png";
 import zeeAvatar from "@/assets/zee-avatar.png";
-import zeeAvatarMan1 from "@/assets/zee-avatar-man-1.svg";
-import zeeAvatarMan2 from "@/assets/zee-avatar-man-2.svg";
+import zeeAvatarMan1 from "@/assets/zee-avatar-man-1.png";
+import zeeAvatarMan2 from "@/assets/zee-avatar-man-2.png";
 import leafBg from "@/assets/leaf-bg.png";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/use-auth";
@@ -172,10 +172,10 @@ const ZEE_AVATAR_PRESET_OPTIONS: Array<{
   styleLabel: string;
   src: string;
 }> = [
-  { id: "woman_1", label: "Radiant", styleLabel: "Woman", src: zeeAvatar },
-  { id: "woman_2", label: "Bold", styleLabel: "Woman", src: zarraAvatar },
-  { id: "man_1", label: "Anchor", styleLabel: "Man", src: zeeAvatarMan1 },
-  { id: "man_2", label: "Nova", styleLabel: "Man", src: zeeAvatarMan2 },
+  { id: "woman_1", label: "Sage", styleLabel: "Woman", src: zeeAvatar },
+  { id: "woman_2", label: "Ember", styleLabel: "Woman", src: zarraAvatar },
+  { id: "man_1", label: "Atlas", styleLabel: "Man", src: zeeAvatarMan1 },
+  { id: "man_2", label: "Kai", styleLabel: "Man", src: zeeAvatarMan2 },
 ];
 
 function getZeeAvatarPresetSrc(preset: ZeeAvatarPreset | null | undefined): string {
