@@ -5,9 +5,6 @@ import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Switch } from "@/components/ui/switch";
-import onboarding1 from "@/assets/onboarding-1-v2.png";
-import onboarding2 from "@/assets/onboarding-2-v2.png";
-import onboarding3 from "@/assets/onboarding-3-v2.png";
 import mayaAvatar from "@/assets/maya-avatar.png";
 import zarraAvatar from "@/assets/zarra-avatar.png";
 import zeeAvatar from "@/assets/zee-avatar.png";
@@ -248,27 +245,33 @@ function extractTraceId(
 const ONBOARDING_STEPS = [
   {
     id: 1,
-    title: "Welcome, Friend!",
-    description: "You're now part of our incredible and caring community. Let's get started!",
-    image: onboarding1,
-    color: "bg-[#10383A]",
-    textColor: "text-[#E8E8E8]"
+    title: "Welcome, Friend.",
+    description: "I'm here with you.",
+    orbColor: "#5CE0D8",
+    orbGlow: "rgba(92, 224, 216, 0.4)",
+    bgGradient: "radial-gradient(ellipse at 50% 40%, rgba(16,56,58,0.95) 0%, #080E10 70%)",
+    accentRing: "rgba(92, 224, 216, 0.25)",
+    particleColor: "rgba(92, 224, 216, 0.6)",
   },
   {
     id: 2,
-    title: "Discover Balance",
-    description: "Find peace and mindfulness with personalized guidance every day.",
-    image: onboarding2,
-    color: "bg-[#809276]",
-    textColor: "text-[#10383A]"
+    title: "I listen.",
+    description: "Always here, always present.",
+    orbColor: "#E8834A",
+    orbGlow: "rgba(232, 131, 74, 0.45)",
+    bgGradient: "radial-gradient(ellipse at 50% 40%, rgba(80,25,10,0.95) 0%, #0A0604 70%)",
+    accentRing: "rgba(232, 131, 74, 0.25)",
+    particleColor: "rgba(232, 131, 74, 0.6)",
   },
   {
     id: 3,
-    title: "Grow Together",
-    description: "Connect with your personal AI companion anytime, anywhere.",
-    image: onboarding3,
-    color: "bg-[#DAA112]",
-    textColor: "text-[#10383A]"
+    title: "We grow together.",
+    description: "Your journey, our bond.",
+    orbColor: "#A855F7",
+    orbGlow: "rgba(168, 85, 247, 0.45)",
+    bgGradient: "radial-gradient(ellipse at 50% 40%, rgba(45,15,80,0.95) 0%, #06030D 70%)",
+    accentRing: "rgba(168, 85, 247, 0.25)",
+    particleColor: "rgba(168, 85, 247, 0.6)",
   }
 ];
 
@@ -399,6 +402,93 @@ const REFERRAL_OPTIONS = [
   "Other",
 ];
 
+const OnboardingOrb = ({ slide }: { slide: typeof ONBOARDING_STEPS[number] }) => {
+  const particles = Array.from({ length: 12 }, (_, i) => ({
+    id: i,
+    left: `${20 + Math.random() * 60}%`,
+    top: `${10 + Math.random() * 60}%`,
+    size: 2 + Math.random() * 3,
+    delay: `${Math.random() * 4}s`,
+    duration: `${3 + Math.random() * 3}s`,
+  }));
+
+  return (
+    <div className="relative w-64 h-64 flex items-center justify-center">
+      {particles.map((p) => (
+        <div
+          key={p.id}
+          className="absolute rounded-full onb-particle"
+          style={{
+            left: p.left,
+            top: p.top,
+            width: p.size,
+            height: p.size,
+            backgroundColor: slide.particleColor,
+            animationDelay: p.delay,
+            animationDuration: p.duration,
+          }}
+        />
+      ))}
+
+      <div
+        className="absolute w-56 h-56 rounded-full onb-ring-delayed-2"
+        style={{ border: `1px solid ${slide.accentRing}` }}
+      />
+      <div
+        className="absolute w-44 h-44 rounded-full onb-ring-delayed"
+        style={{ border: `1px solid ${slide.accentRing}` }}
+      />
+      <div
+        className="absolute w-36 h-36 rounded-full onb-ring"
+        style={{ border: `1.5px solid ${slide.accentRing}` }}
+      />
+
+      <div
+        className="absolute w-40 h-40 rounded-full onb-orb-glow"
+        style={{
+          background: `radial-gradient(circle, ${slide.orbGlow} 0%, transparent 70%)`,
+        }}
+      />
+
+      <div
+        className="relative w-28 h-28 rounded-full onb-orb-core"
+        style={{
+          background: `radial-gradient(circle at 35% 35%, ${slide.orbColor}, ${slide.orbColor}88 50%, ${slide.orbColor}33 100%)`,
+          boxShadow: `0 0 60px ${slide.orbGlow}, 0 0 120px ${slide.orbGlow}, inset 0 -10px 30px rgba(0,0,0,0.3)`,
+        }}
+      >
+        <div
+          className="absolute inset-0 rounded-full"
+          style={{
+            background: "radial-gradient(circle at 30% 30%, rgba(255,255,255,0.4) 0%, transparent 50%)",
+          }}
+        />
+      </div>
+
+      {slide.id === 2 && (
+        <>
+          <svg className="absolute w-72 h-16 onb-wave" style={{ top: "48%", opacity: 0.4 }} viewBox="0 0 300 40" fill="none">
+            <path d="M0 20 Q 30 5, 60 20 T 120 20 T 180 20 T 240 20 T 300 20" stroke={slide.orbColor} strokeWidth="1.5" fill="none" />
+          </svg>
+          <svg className="absolute w-72 h-16 onb-wave-delayed" style={{ top: "52%", opacity: 0.3 }} viewBox="0 0 300 40" fill="none">
+            <path d="M0 20 Q 30 35, 60 20 T 120 20 T 180 20 T 240 20 T 300 20" stroke={slide.orbColor} strokeWidth="1" fill="none" />
+          </svg>
+        </>
+      )}
+      {slide.id === 3 && (
+        <>
+          <svg className="absolute w-80 h-20 onb-wave" style={{ top: "42%", opacity: 0.5 }} viewBox="0 0 320 50" fill="none">
+            <path d="M0 25 C 40 10, 80 40, 120 25 S 200 10, 240 25 S 300 40, 320 25" stroke={slide.orbColor} strokeWidth="1.5" fill="none" />
+          </svg>
+          <svg className="absolute w-80 h-20 onb-wave-delayed" style={{ top: "54%", opacity: 0.35 }} viewBox="0 0 320 50" fill="none">
+            <path d="M0 25 C 40 40, 80 10, 120 25 S 200 40, 240 25 S 300 10, 320 25" stroke={slide.orbColor} strokeWidth="1" fill="none" />
+          </svg>
+        </>
+      )}
+    </div>
+  );
+};
+
 const AuthPage = ({ onLogin, onRegister, loginError, registerError, isLoggingIn, isRegistering }: {
   onLogin: (data: { email: string; password: string }) => Promise<any>;
   onRegister: (data: { email: string; password: string; confirmPassword?: string; firstName: string; lastName: string; profession?: string; referralSource?: string }) => Promise<any>;
@@ -459,29 +549,30 @@ const AuthPage = ({ onLogin, onRegister, loginError, registerError, isLoggingIn,
   const inputClass = "w-full h-12 px-4 rounded-xl bg-white/10 border border-white/20 text-white placeholder:text-white/40 focus:outline-none focus:border-[var(--app-accent)] focus:ring-1 focus:ring-[var(--app-accent)] transition-colors";
 
   if (authMode === "welcome") {
+    const landingSlide = ONBOARDING_STEPS[0];
     return (
-      <div className="w-full h-screen bg-[#10383A] flex items-center justify-center overflow-hidden" data-testid="landing-page">
-        <div className="w-full h-full md:max-w-[400px] md:h-[850px] md:rounded-[2.5rem] shadow-2xl overflow-hidden relative flex flex-col items-center justify-between p-8 bg-[#10383A]">
+      <div className="w-full h-screen flex items-center justify-center overflow-hidden" style={{ background: landingSlide.bgGradient }} data-testid="landing-page">
+        <div className="w-full h-full md:max-w-[400px] md:h-[850px] md:rounded-[2.5rem] shadow-2xl overflow-hidden relative flex flex-col items-center justify-between p-8" style={{ background: landingSlide.bgGradient }}>
           <div className="flex-1 flex flex-col items-center justify-center w-full">
-            <motion.img
-              src={onboarding1}
-              alt="Welcome"
-              initial={{ opacity: 0, scale: 0.9, y: 20 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              transition={{ delay: 0.2, type: "spring", stiffness: 200, damping: 20 }}
-              className="w-full max-w-[280px] object-contain drop-shadow-2xl mb-8"
-            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.8 }}
+              animate={{ opacity: 1, scale: 1 }}
+              transition={{ delay: 0.2, type: "spring", stiffness: 150, damping: 20 }}
+              className="mb-8"
+            >
+              <OnboardingOrb slide={landingSlide} />
+            </motion.div>
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.4, duration: 0.5 }}
               className="text-center space-y-4"
             >
-              <h1 className="text-4xl font-serif font-bold text-[#E8E8E8] tracking-tight">
+              <h1 className="text-4xl font-serif font-bold text-white tracking-tight">
                 Welcome
               </h1>
-              <p className="text-lg leading-relaxed font-medium text-white/70">
-                Your personal AI companion for mindfulness and balance.
+              <p className="text-lg leading-relaxed font-medium text-white/60">
+                Your personal AI companion, always here.
               </p>
             </motion.div>
           </div>
@@ -492,8 +583,9 @@ const AuthPage = ({ onLogin, onRegister, loginError, registerError, isLoggingIn,
             transition={{ delay: 0.6, duration: 0.5 }}
             className="w-full space-y-3 mb-8"
           >
-            <Button 
-              className="w-full h-14 text-lg rounded-2xl shadow-xl bg-[#DAA112] text-[#10383A] hover:bg-[#DAA112]/90 transition-transform active:scale-95 font-bold" 
+            <Button
+              className="w-full h-14 text-lg rounded-2xl shadow-xl transition-transform active:scale-95 font-bold"
+              style={{ backgroundColor: landingSlide.orbColor, color: "#0A0A0A" }}
               onClick={() => setAuthMode("register")}
               data-testid="button-get-started"
             >
@@ -501,7 +593,7 @@ const AuthPage = ({ onLogin, onRegister, loginError, registerError, isLoggingIn,
             </Button>
             <Button 
               variant="ghost"
-              className="w-full h-12 text-base text-white/70 hover:text-white hover:bg-white/10 rounded-2xl"
+              className="w-full h-12 text-base text-white/50 hover:text-white hover:bg-white/10 rounded-2xl"
               onClick={() => setAuthMode("login")}
               data-testid="button-sign-in"
             >
@@ -2510,7 +2602,7 @@ const OnboardingView = ({ onComplete }: { onComplete: () => void }) => {
   };
 
   return (
-    <div className="absolute inset-0 z-[100] overflow-hidden bg-background">
+    <div className="absolute inset-0 z-[100] overflow-hidden">
       <AnimatePresence mode="popLayout" initial={false}>
         {ONBOARDING_STEPS.map((slide, idx) => (
           idx === step && (
@@ -2520,7 +2612,8 @@ const OnboardingView = ({ onComplete }: { onComplete: () => void }) => {
               animate={{ opacity: 1 }}
               exit={{ opacity: 0, zIndex: -1 }}
               transition={{ duration: 0.6, ease: "easeInOut" }}
-              className={`absolute inset-0 flex flex-col items-center justify-between p-8 ${slide.color}`}
+              className="absolute inset-0 flex flex-col items-center justify-between p-8"
+              style={{ background: slide.bgGradient }}
               drag="x"
               dragConstraints={{ left: 0, right: 0 }}
               dragElastic={0.2}
@@ -2533,56 +2626,59 @@ const OnboardingView = ({ onComplete }: { onComplete: () => void }) => {
               }}
             >
               <div className="flex-1 flex items-center justify-center w-full relative">
-                 <motion.img 
-                   src={slide.image} 
-                   alt={slide.title}
-                   initial={{ opacity: 0, scale: 0.9, y: 20 }}
-                   animate={{ opacity: 1, scale: 1, y: 0 }}
-                   transition={{ delay: 0.2, type: "spring", stiffness: 200, damping: 20 }}
-                   className="w-full max-w-[320px] object-contain drop-shadow-2xl mix-blend-normal"
-                 />
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.8 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  transition={{ delay: 0.2, type: "spring", stiffness: 150, damping: 20 }}
+                >
+                  <OnboardingOrb slide={slide} />
+                </motion.div>
               </div>
 
-              <div className="w-full space-y-10 mb-8 z-10">
-                <div className="text-center space-y-4">
+              <div className="w-full space-y-8 mb-8 z-10">
+                <div className="text-center space-y-3">
                   <motion.div
                     initial={{ opacity: 0, y: 20 }}
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ delay: 0.3, duration: 0.5 }}
                   >
-                    <h1 className={`text-4xl font-serif font-bold mb-4 ${slide.textColor} tracking-tight`}>
+                    <h1 className="text-3xl font-serif font-bold mb-3 text-white tracking-tight">
                       {slide.title}
                     </h1>
-                    <p className={`text-lg leading-relaxed font-medium ${step === 0 ? "text-white/90" : "text-black/70"}`}>
+                    <p className="text-base leading-relaxed text-white/60">
                       {slide.description}
                     </p>
                   </motion.div>
                 </div>
 
                 <div className="flex justify-center gap-3">
-                  {ONBOARDING_STEPS.map((_, dotIdx) => (
-                    <div 
-                      key={dotIdx} 
-                      className={`h-2.5 rounded-full transition-all duration-500 ease-out ${
-                        dotIdx === step 
-                          ? `w-10 ${step === 0 ? "bg-white" : "bg-[#10383A]"}` 
-                          : `w-2.5 ${step === 0 ? "bg-white/30" : "bg-black/10"}`
-                      }`} 
+                  {ONBOARDING_STEPS.map((s, dotIdx) => (
+                    <div
+                      key={dotIdx}
+                      className="h-2.5 rounded-full transition-all duration-500 ease-out"
+                      style={{
+                        width: dotIdx === step ? 40 : 10,
+                        backgroundColor: dotIdx === step ? slide.orbColor : "rgba(255,255,255,0.2)",
+                      }}
                     />
                   ))}
                 </div>
 
                 <div className="flex items-center gap-4 pt-2">
-                  <Button 
-                    variant="ghost" 
-                    className={`flex-1 h-14 text-base font-medium transition-colors ${step === 0 ? "text-white/70 hover:text-white hover:bg-white/10" : "text-black/60 hover:text-black hover:bg-black/5"}`}
+                  <Button
+                    variant="ghost"
+                    className="flex-1 h-14 text-base font-medium text-white/50 hover:text-white hover:bg-white/10"
                     onClick={onComplete}
                     data-testid="button-skip-onboarding"
                   >
                     Skip
                   </Button>
-                  <Button 
-                    className={`flex-[2] h-14 text-lg rounded-2xl shadow-xl transition-transform active:scale-95 ${step === 0 ? "bg-white text-[#10383A] hover:bg-white/90" : "bg-[#10383A] text-white hover:bg-[#10383A]/90"}`}
+                  <Button
+                    className="flex-[2] h-14 text-lg rounded-2xl shadow-xl transition-transform active:scale-95 font-semibold"
+                    style={{
+                      backgroundColor: slide.orbColor,
+                      color: "#0A0A0A",
+                    }}
                     onClick={handleNext}
                     data-testid="button-next-onboarding"
                   >

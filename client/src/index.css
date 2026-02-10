@@ -127,3 +127,79 @@
   0%, 100% { height: 10%; }
   50% { height: 100%; }
 }
+
+@keyframes orbPulse {
+  0%, 100% { transform: scale(1); opacity: 0.9; }
+  50% { transform: scale(1.06); opacity: 1; }
+}
+
+@keyframes orbGlow {
+  0%, 100% { opacity: 0.5; transform: scale(1); }
+  50% { opacity: 0.85; transform: scale(1.12); }
+}
+
+@keyframes ringExpand {
+  0% { transform: scale(0.8); opacity: 0.6; }
+  50% { transform: scale(1.15); opacity: 0.2; }
+  100% { transform: scale(0.8); opacity: 0.6; }
+}
+
+@keyframes waveFloat {
+  0% { transform: translateX(0) translateY(0); }
+  25% { transform: translateX(8px) translateY(-4px); }
+  50% { transform: translateX(0) translateY(2px); }
+  75% { transform: translateX(-8px) translateY(-2px); }
+  100% { transform: translateX(0) translateY(0); }
+}
+
+@keyframes particleDrift {
+  0% { transform: translateY(0) scale(1); opacity: 0; }
+  20% { opacity: 1; }
+  80% { opacity: 0.6; }
+  100% { transform: translateY(-80px) scale(0.3); opacity: 0; }
+}
+
+@keyframes shimmer {
+  0% { opacity: 0.3; }
+  50% { opacity: 0.7; }
+  100% { opacity: 0.3; }
+}
+
+.onb-orb-core {
+  animation: orbPulse 4s ease-in-out infinite;
+}
+
+.onb-orb-glow {
+  animation: orbGlow 4s ease-in-out infinite;
+}
+
+.onb-ring {
+  animation: ringExpand 5s ease-in-out infinite;
+}
+
+.onb-ring-delayed {
+  animation: ringExpand 5s ease-in-out infinite;
+  animation-delay: 1.5s;
+}
+
+.onb-ring-delayed-2 {
+  animation: ringExpand 5s ease-in-out infinite;
+  animation-delay: 3s;
+}
+
+.onb-wave {
+  animation: waveFloat 6s ease-in-out infinite;
+}
+
+.onb-wave-delayed {
+  animation: waveFloat 6s ease-in-out infinite;
+  animation-delay: 2s;
+}
+
+.onb-particle {
+  animation: particleDrift 4s ease-in-out infinite;
+}
+
+.onb-shimmer {
+  animation: shimmer 3s ease-in-out infinite;
+}
