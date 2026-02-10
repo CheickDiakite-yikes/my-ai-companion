@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useId } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Mic, Video, PhoneOff, MessageSquare, Menu, Settings, ChevronRight, ChevronDown, X, ArrowLeft, Camera, LogOut, Eye, EyeOff, ImageIcon } from "lucide-react";
+import { Mic, Video, PhoneOff, MessageSquare, Menu, Settings, ChevronRight, ChevronDown, X, ArrowLeft, Camera, LogOut, Eye, EyeOff, ImageIcon, Pencil } from "lucide-react";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -1141,8 +1141,12 @@ const ProfileView = ({
                 {user?.lastName?.[0] || ""}
               </AvatarFallback>
             </Avatar>
-            <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 rounded-full bg-black/65 px-2 py-0.5 text-[10px] text-white">
-              {isUploadingAvatar ? "Uploading..." : "Edit photo"}
+            <div className="absolute bottom-0 right-0 w-7 h-7 rounded-full bg-[#10383A] border-2 border-background flex items-center justify-center shadow-md">
+              {isUploadingAvatar ? (
+                <motion.div animate={{ rotate: 360 }} transition={{ duration: 1, repeat: Infinity, ease: "linear" }} className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full" />
+              ) : (
+                <Pencil className="w-3 h-3 text-white" />
+              )}
             </div>
           </label>
           <input
