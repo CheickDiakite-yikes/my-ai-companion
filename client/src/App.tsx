@@ -1179,14 +1179,14 @@ const ProfileView = ({
               <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3">
                 Account
               </h3>
-              <div className="bg-card rounded-xl p-4 shadow-sm border space-y-3">
+              <div className="bg-card rounded-xl p-4 shadow-sm border space-y-2">
                 <div className="flex items-center justify-between">
-                  <span className="font-medium">Email</span>
-                  <span className="text-muted-foreground text-sm" data-testid="text-user-email">
+                  <span className="text-sm font-medium">Email</span>
+                  <span className="text-muted-foreground text-sm truncate ml-4" data-testid="text-user-email">
                     {user?.email || "Not set"}
                   </span>
                 </div>
-                <p className="text-xs text-muted-foreground">
+                <p className="text-xs text-muted-foreground text-center pt-1">
                   Optional profile fields help Zee personalize better.
                 </p>
               </div>
