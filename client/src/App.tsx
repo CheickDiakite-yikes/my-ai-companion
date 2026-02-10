@@ -1850,8 +1850,8 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onProfile, assistantName
               </div>
             )}
 
-            <div className="flex flex-col items-center justify-center gap-2 py-2 text-white/30 cursor-grab active:cursor-grabbing">
-               <div className="w-12 h-1.5 bg-white/20 rounded-full" />
+            <div className="flex flex-col items-center justify-center gap-2 py-3 pb-6 text-white/30 cursor-grab active:cursor-grabbing">
+               <div className="w-12 h-1.5 bg-white/30 rounded-full" />
                <span className="text-xs font-medium uppercase tracking-wider">Swipe up to chat</span>
             </div>
           </div>
