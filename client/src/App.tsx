@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useId } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Mic, Video, PhoneOff, MessageSquare, Menu, Settings, ChevronRight, X, ArrowLeft, Camera, LogOut, Eye, EyeOff, ImageIcon } from "lucide-react";
+import { Mic, Video, PhoneOff, MessageSquare, Menu, Settings, ChevronRight, ChevronDown, X, ArrowLeft, Camera, LogOut, Eye, EyeOff, ImageIcon } from "lucide-react";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -1022,6 +1022,7 @@ const ProfileView = ({
   const [styleNote, setStyleNote] = useState("");
   const [zeeAvatarPreset, setZeeAvatarPreset] = useState<ZeeAvatarPreset>("woman_1");
   const [clearZeeAvatarAttachment, setClearZeeAvatarAttachment] = useState(false);
+  const [zeeAvatarOpen, setZeeAvatarOpen] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveSuccess, setSaveSuccess] = useState<string | null>(null);
 
@@ -1193,17 +1194,22 @@ const ProfileView = ({
               <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3">
                 Zee Avatar
               </h3>
-              <div className="bg-card rounded-xl p-4 shadow-sm border space-y-4">
-                <div className="flex items-center gap-3 rounded-xl border border-border bg-background p-3">
-                  <Avatar className="h-14 w-14 ring-2 ring-[#DAA112]/30">
+              <div className="bg-card rounded-xl shadow-sm border overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => setZeeAvatarOpen((prev) => !prev)}
+                  className="flex w-full items-center gap-3 p-4 text-left transition-colors hover:bg-muted/30"
+                  data-testid="button-zee-avatar-toggle"
+                >
+                  <Avatar className="h-10 w-10 ring-2 ring-[#DAA112]/30 shrink-0">
                     <AvatarImage src={zeeAvatarPreviewSrc} className="object-cover" />
                     <AvatarFallback>Z</AvatarFallback>
                   </Avatar>
-                  <div className="min-w-0">
+                  <div className="min-w-0 flex-1">
                     <p className="text-sm font-semibold text-foreground">Current Zee look</p>
                     <p className="text-xs text-muted-foreground">
                       {hasCustomZeeAvatar
-                        ? "Custom image (upload)"
+                        ? "Custom image"
                         : `Preset: ${
                             ZEE_AVATAR_PRESET_OPTIONS.find(
                               (option) => option.id === zeeAvatarPreset,
@@ -1211,71 +1217,81 @@ const ProfileView = ({
                           }`}
                     </p>
                   </div>
-                </div>
+                  <ChevronDown className={cn("w-4 h-4 text-muted-foreground transition-transform shrink-0", zeeAvatarOpen && "rotate-180")} />
+                </button>
 
-                <div className="grid grid-cols-2 gap-3">
-                  {ZEE_AVATAR_PRESET_OPTIONS.map((option) => (
-                    <button
-                      key={option.id}
-                      type="button"
-                      onClick={() => {
-                        setZeeAvatarPreset(option.id);
-                        setClearZeeAvatarAttachment(true);
-                        setSaveSuccess(null);
-                      }}
-                      className={cn(
-                        "rounded-xl border p-2 text-left transition-all",
-                        zeeAvatarPreset === option.id && !hasCustomZeeAvatar
-                          ? "border-[#DAA112]/70 ring-1 ring-[#DAA112]/40 bg-[#DAA112]/10"
-                          : "border-border bg-background hover:border-[#DAA112]/40",
-                      )}
-                      data-testid={`button-zee-avatar-preset-${option.id}`}
+                <AnimatePresence initial={false}>
+                  {zeeAvatarOpen && (
+                    <motion.div
+                      initial={{ height: 0, opacity: 0 }}
+                      animate={{ height: "auto", opacity: 1 }}
+                      exit={{ height: 0, opacity: 0 }}
+                      transition={{ duration: 0.2, ease: "easeInOut" }}
+                      className="overflow-hidden"
                     >
-                      <Avatar className="h-12 w-12 mb-2">
-                        <AvatarImage src={option.src} className="object-cover" />
-                        <AvatarFallback>Z</AvatarFallback>
-                      </Avatar>
-                      <p className="text-xs font-medium text-foreground">{option.label}</p>
-                      <p className="text-[11px] text-muted-foreground uppercase tracking-wide">
-                        {option.styleLabel}
-                      </p>
-                    </button>
-                  ))}
-                </div>
+                      <div className="px-4 pb-4 space-y-3 border-t border-border pt-3">
+                        <div className="grid grid-cols-2 gap-3">
+                          {ZEE_AVATAR_PRESET_OPTIONS.map((option) => (
+                            <button
+                              key={option.id}
+                              type="button"
+                              onClick={() => {
+                                setZeeAvatarPreset(option.id);
+                                setClearZeeAvatarAttachment(true);
+                                setSaveSuccess(null);
+                              }}
+                              className={cn(
+                                "rounded-xl border p-2 text-left transition-all",
+                                zeeAvatarPreset === option.id && !hasCustomZeeAvatar
+                                  ? "border-[#DAA112]/70 ring-1 ring-[#DAA112]/40 bg-[#DAA112]/10"
+                                  : "border-border bg-background hover:border-[#DAA112]/40",
+                              )}
+                              data-testid={`button-zee-avatar-preset-${option.id}`}
+                            >
+                              <Avatar className="h-12 w-12 mb-2">
+                                <AvatarImage src={option.src} className="object-cover" />
+                                <AvatarFallback>Z</AvatarFallback>
+                              </Avatar>
+                              <p className="text-xs font-medium text-foreground">{option.label}</p>
+                              <p className="text-[11px] text-muted-foreground uppercase tracking-wide">
+                                {option.styleLabel}
+                              </p>
+                            </button>
+                          ))}
+                        </div>
 
-                <div className="space-y-2">
-                  <label
-                    htmlFor={zeeAvatarInputId}
-                    className="inline-flex cursor-pointer items-center rounded-lg border border-border px-3 py-2 text-sm font-medium text-foreground transition-colors hover:border-[#DAA112]/50 hover:bg-[#DAA112]/10"
-                    data-testid="button-upload-zee-avatar"
-                  >
-                    Upload custom Zee avatar
-                  </label>
-                  <input
-                    id={zeeAvatarInputId}
-                    type="file"
-                    accept="image/jpeg,image/png,image/webp"
-                    className="sr-only"
-                    onChange={(event) => {
-                      const file = event.target.files?.[0];
-                      if (file) {
-                        setSaveError(null);
-                        void onUploadZeeAvatar(file)
-                          .then(() => {
-                            setClearZeeAvatarAttachment(false);
-                            setSaveSuccess("Zee avatar updated.");
-                          })
-                          .catch((error) => {
-                            setSaveError(getErrorMessage(error));
-                          });
-                      }
-                      event.currentTarget.value = "";
-                    }}
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    Choose one of the presets or upload your own image.
-                  </p>
-                </div>
+                        <label
+                          htmlFor={zeeAvatarInputId}
+                          className="inline-flex cursor-pointer items-center rounded-lg border border-border px-3 py-2 text-sm font-medium text-foreground transition-colors hover:border-[#DAA112]/50 hover:bg-[#DAA112]/10"
+                          data-testid="button-upload-zee-avatar"
+                        >
+                          Upload custom Zee avatar
+                        </label>
+                        <input
+                          id={zeeAvatarInputId}
+                          type="file"
+                          accept="image/jpeg,image/png,image/webp"
+                          className="sr-only"
+                          onChange={(event) => {
+                            const file = event.target.files?.[0];
+                            if (file) {
+                              setSaveError(null);
+                              void onUploadZeeAvatar(file)
+                                .then(() => {
+                                  setClearZeeAvatarAttachment(false);
+                                  setSaveSuccess("Zee avatar updated.");
+                                })
+                                .catch((error) => {
+                                  setSaveError(getErrorMessage(error));
+                                });
+                            }
+                            event.currentTarget.value = "";
+                          }}
+                        />
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
               </div>
             </section>
 
