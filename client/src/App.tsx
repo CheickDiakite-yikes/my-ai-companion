@@ -2566,21 +2566,6 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onProfile, assistantName
                   >
                     <PhoneOff className="w-8 h-8" />
                   </Button>
-                  <Button 
-                    variant="outline" 
-                    size="icon" 
-                    className="w-14 h-14 rounded-full border-2 transition-colors hover:opacity-90"
-                    style={{
-                      borderColor: "var(--app-soft-card-border)",
-                      backgroundColor: "var(--app-soft-card-bg)",
-                      color: "var(--app-on-dark)",
-                    }}
-                    onClick={onFlipCamera}
-                    disabled={!isVideoEnabled || isVideoTransitioning}
-                    data-testid="button-flip-camera"
-                  >
-                    <Camera className="w-6 h-6" />
-                  </Button>
               </div>
             )}
 
