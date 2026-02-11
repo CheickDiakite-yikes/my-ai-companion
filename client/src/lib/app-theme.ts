@@ -35,7 +35,7 @@ export interface AppThemeOption {
   };
 }
 
-export const DEFAULT_APP_THEME_ID: AppThemeId = "classic_teal";
+export const DEFAULT_APP_THEME_ID: AppThemeId = "sunset_path";
 
 export const APP_THEME_OPTIONS: AppThemeOption[] = [
   {

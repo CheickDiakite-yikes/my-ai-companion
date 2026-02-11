@@ -1628,7 +1628,7 @@ export async function registerRoutes(
         prefs || {
           selectedPersona: DEFAULT_PERSONA,
           selectedVoice: DEFAULT_LIVE_VOICE,
-          selectedTheme: "classic_teal",
+          selectedTheme: "sunset_path",
           onboardingCompleted: false,
         },
       );
