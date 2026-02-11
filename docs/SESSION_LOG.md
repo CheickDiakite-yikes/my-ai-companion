@@ -126,3 +126,37 @@ Use this file as a chronological handoff record so any new session can resume wo
   - Root cause: n/a.
   - Fix: n/a.
   - Guardrail: keep local and global skill copies synchronized after updates.
+
+## 2026-02-11 15:03:47 EST - Added zeeme-testflight-release and zeeme-remotion-campaign-pipeline skills; fixed OG metadata rewrite mismatch; added llms/robots/sitemap SEO updates and canonical OG image fallback.
+- Completed:
+  - Added and validated two new high-impact skills:
+    - `/Users/cheickdiakite/Codex/my-ai-companion/skills/zeeme-testflight-release`
+    - `/Users/cheickdiakite/Codex/my-ai-companion/skills/zeeme-remotion-campaign-pipeline`
+  - Implemented scripts and references for both skills:
+    - TestFlight readiness audit + release prompt generator
+    - Remotion master/preview rendering + social cut generation playbook
+  - Synced both new skills to global Codex directory:
+    - `/Users/cheickdiakite/.codex/skills/zeeme-testflight-release`
+    - `/Users/cheickdiakite/.codex/skills/zeeme-remotion-campaign-pipeline`
+  - Fixed OG metadata inconsistency by removing Vite `metaImagesPlugin` from build pipeline in:
+    - `/Users/cheickdiakite/Codex/my-ai-companion/vite.config.ts`
+  - Updated canonical SEO/OG tags and structured metadata in:
+    - `/Users/cheickdiakite/Codex/my-ai-companion/client/index.html`
+  - Added crawler-oriented discovery files:
+    - `/Users/cheickdiakite/Codex/my-ai-companion/client/public/llms.txt`
+    - updated `/Users/cheickdiakite/Codex/my-ai-companion/client/public/robots.txt`
+    - updated `/Users/cheickdiakite/Codex/my-ai-companion/client/public/sitemap.xml` with image sitemap entry
+  - Replaced `/Users/cheickdiakite/Codex/my-ai-companion/client/public/opengraph.jpg` with a converted version of the intended OG artwork to preserve compatibility with any cached legacy URL consumers.
+- Current state:
+  - Build now emits consistent OG/Twitter meta tags targeting `zeeme-og.png` with cache-bust query param.
+  - Legacy `/opengraph.jpg` fallback now matches ZeeMe brand artwork instead of the old screenshot-like image.
+  - New TestFlight and Remotion campaign skills are usable locally and globally.
+- Next actions:
+  - Redeploy app so production HTML/meta files reflect this fix.
+  - Trigger re-scrape in social debuggers (Facebook Sharing Debugger, LinkedIn Post Inspector, X Card Validator equivalent flows).
+  - Optional: add Search Console property and submit sitemap for faster re-indexing.
+- Errors and fixes:
+  - Error: Deployed OG preview selected wrong image (`/opengraph.jpg`) and produced mismatch with width/type tags.
+  - Root cause: Build plugin rewrote only `og:image` and `twitter:image` while other OG fields still referenced `zeeme-og.png`.
+  - Fix: Removed rewrite plugin usage and normalized all meta tags to one canonical OG asset.
+  - Guardrail: Keep a single canonical OG source in `client/index.html`; avoid partial meta rewriting at build time.

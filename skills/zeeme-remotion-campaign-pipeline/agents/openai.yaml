@@ -1,0 +1,4 @@
+interface:
+  display_name: "ZeeMe Remotion Campaign Pipeline"
+  short_description: "Produce promo renders and social cutdowns fast"
+  default_prompt: "Use $zeeme-remotion-campaign-pipeline to render campaign masters, previews, and social snippets for ZeeMe."
