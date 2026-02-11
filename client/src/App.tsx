@@ -1268,6 +1268,7 @@ const ProfileView = ({
   const [personalizationOpen, setPersonalizationOpen] = useState(false);
   const [responseStyleOpen, setResponseStyleOpen] = useState(false);
   const [themeOpen, setThemeOpen] = useState(false);
+  const [quotaOpen, setQuotaOpen] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveSuccess, setSaveSuccess] = useState<string | null>(null);
 
@@ -1492,51 +1493,77 @@ const ProfileView = ({
             </section>
 
             <section>
-              <h3
-                className="text-sm font-semibold uppercase tracking-wider mb-3"
-                style={{ color: "var(--app-on-dark-muted)" }}
+              <button
+                type="button"
+                className="flex items-center justify-between w-full mb-3"
+                onClick={() => setQuotaOpen((v) => !v)}
+                data-testid="button-toggle-quota"
               >
-                Beta Quota
-              </h3>
-              <div className="rounded-xl p-4 shadow-sm border space-y-2.5" style={themedCardStyle}>
-                {isQuotaLoading && (
-                  <p className="text-xs" style={{ color: "var(--app-on-dark-muted)" }}>
-                    Loading quota...
-                  </p>
-                )}
-                {!isQuotaLoading && quotaSummary && (
-                  <>
-                    <p className="text-xs" style={{ color: "var(--app-on-dark-muted)" }}>
-                      Rolling {quotaSummary.windowDays}-day limits reset automatically as older usage expires.
-                    </p>
-                    <div className="grid grid-cols-1 gap-2 text-sm">
-                      <div className="flex items-center justify-between">
-                        <span style={{ color: "var(--app-on-dark-muted)" }}>Texts</span>
-                        <span style={{ color: "var(--app-on-dark)" }}>
-                          {quotaSummary.remaining.text} left / {quotaSummary.limits.text}
-                        </span>
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <span style={{ color: "var(--app-on-dark-muted)" }}>Voice minutes</span>
-                        <span style={{ color: "var(--app-on-dark)" }}>
-                          {formatMinutesFromSeconds(quotaSummary.remaining.voiceSeconds)} left / {formatMinutesFromSeconds(quotaSummary.limits.voiceSeconds)}
-                        </span>
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <span style={{ color: "var(--app-on-dark-muted)" }}>Camera minutes</span>
-                        <span style={{ color: "var(--app-on-dark)" }}>
-                          {formatMinutesFromSeconds(quotaSummary.remaining.cameraSeconds)} left / {formatMinutesFromSeconds(quotaSummary.limits.cameraSeconds)}
-                        </span>
-                      </div>
+                <h3
+                  className="text-sm font-semibold uppercase tracking-wider"
+                  style={{ color: "var(--app-on-dark-muted)" }}
+                >
+                  Beta Quota
+                </h3>
+                <motion.span
+                  animate={{ rotate: quotaOpen ? 180 : 0 }}
+                  transition={{ duration: 0.2 }}
+                  style={{ color: "var(--app-on-dark-muted)" }}
+                >
+                  <ChevronDown size={16} />
+                </motion.span>
+              </button>
+              <AnimatePresence initial={false}>
+                {quotaOpen && (
+                  <motion.div
+                    initial={{ height: 0, opacity: 0 }}
+                    animate={{ height: "auto", opacity: 1 }}
+                    exit={{ height: 0, opacity: 0 }}
+                    transition={{ duration: 0.25, ease: "easeInOut" }}
+                    className="overflow-hidden"
+                  >
+                    <div className="rounded-xl p-4 shadow-sm border space-y-2.5" style={themedCardStyle}>
+                      {isQuotaLoading && (
+                        <p className="text-xs" style={{ color: "var(--app-on-dark-muted)" }}>
+                          Loading quota...
+                        </p>
+                      )}
+                      {!isQuotaLoading && quotaSummary && (
+                        <>
+                          <p className="text-xs" style={{ color: "var(--app-on-dark-muted)" }}>
+                            Rolling {quotaSummary.windowDays}-day limits reset automatically as older usage expires.
+                          </p>
+                          <div className="grid grid-cols-1 gap-2 text-sm">
+                            <div className="flex items-center justify-between">
+                              <span style={{ color: "var(--app-on-dark-muted)" }}>Texts</span>
+                              <span style={{ color: "var(--app-on-dark)" }}>
+                                {quotaSummary.remaining.text} left / {quotaSummary.limits.text}
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-between">
+                              <span style={{ color: "var(--app-on-dark-muted)" }}>Voice minutes</span>
+                              <span style={{ color: "var(--app-on-dark)" }}>
+                                {formatMinutesFromSeconds(quotaSummary.remaining.voiceSeconds)} left / {formatMinutesFromSeconds(quotaSummary.limits.voiceSeconds)}
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-between">
+                              <span style={{ color: "var(--app-on-dark-muted)" }}>Camera minutes</span>
+                              <span style={{ color: "var(--app-on-dark)" }}>
+                                {formatMinutesFromSeconds(quotaSummary.remaining.cameraSeconds)} left / {formatMinutesFromSeconds(quotaSummary.limits.cameraSeconds)}
+                              </span>
+                            </div>
+                          </div>
+                        </>
+                      )}
+                      {!isQuotaLoading && !quotaSummary && (
+                        <p className="text-xs" style={{ color: "var(--app-on-dark-muted)" }}>
+                          Quota details are currently unavailable.
+                        </p>
+                      )}
                     </div>
-                  </>
+                  </motion.div>
                 )}
-                {!isQuotaLoading && !quotaSummary && (
-                  <p className="text-xs" style={{ color: "var(--app-on-dark-muted)" }}>
-                    Quota details are currently unavailable.
-                  </p>
-                )}
-              </div>
+              </AnimatePresence>
             </section>
 
             <section>
