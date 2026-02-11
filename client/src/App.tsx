@@ -601,7 +601,7 @@ const AuthPage = ({ onLogin, onRegister, loginError, registerError, isLoggingIn,
     const landingSlide = {
       id: 1,
       title: "Welcome",
-      description: "Your personal AI companion, always here.",
+      description: "I can't wait to meet you :)",
       orbColor: "#EBBA62",
       orbGlow: "rgba(235, 186, 98, 0.45)",
       bgGradient: "radial-gradient(ellipse at 50% 40%, rgba(83,52,30,0.95) 0%, #1A1010 70%)",
