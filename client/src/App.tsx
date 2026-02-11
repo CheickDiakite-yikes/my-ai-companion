@@ -1761,6 +1761,15 @@ const ProfileView = ({
                       {getAppTheme(themeChoice).description}
                     </p>
                   </div>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    {getAppTheme(themeChoice).palette.map((color) => (
+                      <span
+                        key={`header-${color}`}
+                        className="h-3.5 w-3.5 rounded-full border border-black/10"
+                        style={{ backgroundColor: color }}
+                      />
+                    ))}
+                  </div>
                   <ChevronDown
                     className={cn("w-4 h-4 transition-transform shrink-0", themeOpen && "rotate-180")}
                     style={{ color: "var(--app-on-dark-muted)" }}
