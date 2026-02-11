@@ -665,8 +665,8 @@ const AuthPage = ({ onLogin, onRegister, loginError, registerError, isLoggingIn,
 
   if (authMode === "login") {
     return (
-      <div className="w-full h-[100dvh] min-h-[100dvh] bg-[#10383A] flex items-center justify-center overflow-hidden" data-testid="login-page">
-        <div className="w-full h-full md:max-w-[400px] md:h-[850px] md:rounded-[2.5rem] shadow-2xl overflow-hidden relative flex flex-col bg-[#10383A]">
+      <div className="w-full h-[100dvh] min-h-[100dvh] flex items-center justify-center overflow-hidden" style={{ background: "var(--app-shell-bg)" }} data-testid="login-page">
+        <div className="w-full h-full md:max-w-[400px] md:h-[850px] md:rounded-[2.5rem] shadow-2xl overflow-hidden relative flex flex-col" style={{ background: "var(--app-shell-bg)" }}>
           <div className="p-6">
             <button onClick={() => setAuthMode("welcome")} className="text-white/70 hover:text-white transition-colors" data-testid="button-back-to-welcome">
               <ArrowLeft className="w-6 h-6" />
@@ -756,8 +756,8 @@ const AuthPage = ({ onLogin, onRegister, loginError, registerError, isLoggingIn,
   }
 
   return (
-    <div className="w-full h-[100dvh] min-h-[100dvh] bg-[#10383A] flex items-center justify-center overflow-hidden" data-testid="register-page">
-      <div className="w-full h-full md:max-w-[400px] md:h-[850px] md:rounded-[2.5rem] shadow-2xl overflow-hidden relative flex flex-col bg-[#10383A]">
+    <div className="w-full h-[100dvh] min-h-[100dvh] flex items-center justify-center overflow-hidden" style={{ background: "var(--app-shell-bg)" }} data-testid="register-page">
+      <div className="w-full h-full md:max-w-[400px] md:h-[850px] md:rounded-[2.5rem] shadow-2xl overflow-hidden relative flex flex-col" style={{ background: "var(--app-shell-bg)" }}>
         <div className="p-6">
           <button onClick={() => setAuthMode("welcome")} className="text-white/70 hover:text-white transition-colors" data-testid="button-back-to-welcome-register">
             <ArrowLeft className="w-6 h-6" />
