@@ -1,12 +1,14 @@
 import { sql, relations } from "drizzle-orm";
 import {
   pgTable,
+  pgEnum,
   text,
   varchar,
   timestamp,
   integer,
   boolean,
   index,
+  jsonb,
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
@@ -110,8 +112,36 @@ export const voiceSessions = pgTable("voice_sessions", {
   userId: varchar("user_id").notNull(),
   persona: varchar("persona").notNull(),
   duration: integer("duration").notNull().default(0),
+  cameraDuration: integer("camera_duration").notNull().default(0),
   createdAt: timestamp("created_at").defaultNow(),
 });
+
+export const usageEventMetricEnum = pgEnum("usage_event_metric", [
+  "text_message",
+  "voice_second",
+  "camera_second",
+]);
+
+export const usageEvents = pgTable(
+  "usage_events",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    userId: varchar("user_id").notNull(),
+    metric: usageEventMetricEnum("metric").notNull(),
+    units: integer("units").notNull().default(1),
+    conversationId: varchar("conversation_id"),
+    meta: jsonb("meta"),
+    createdAt: timestamp("created_at").defaultNow(),
+  },
+  (table) => [
+    index("usage_events_user_metric_created_idx").on(
+      table.userId,
+      table.metric,
+      table.createdAt,
+    ),
+    index("usage_events_user_created_idx").on(table.userId, table.createdAt),
+  ],
+);
 
 export const conversationsRelations = relations(conversations, ({ many }) => ({
   messages: many(messages),
@@ -189,6 +219,11 @@ export const insertVoiceSessionSchema = createInsertSchema(voiceSessions).omit({
   createdAt: true,
 });
 
+export const insertUsageEventSchema = createInsertSchema(usageEvents).omit({
+  id: true,
+  createdAt: true,
+});
+
 export type InsertConversation = z.infer<typeof insertConversationSchema>;
 export type Conversation = typeof conversations.$inferSelect;
 export type InsertMessage = z.infer<typeof insertMessageSchema>;
@@ -201,3 +236,6 @@ export type InsertUserProfile = z.infer<typeof insertUserProfileSchema>;
 export type UserProfile = typeof userProfiles.$inferSelect;
 export type InsertVoiceSession = z.infer<typeof insertVoiceSessionSchema>;
 export type VoiceSession = typeof voiceSessions.$inferSelect;
+export type InsertUsageEvent = z.infer<typeof insertUsageEventSchema>;
+export type UsageEvent = typeof usageEvents.$inferSelect;
+export type UsageEventMetric = typeof usageEventMetricEnum.enumValues[number];

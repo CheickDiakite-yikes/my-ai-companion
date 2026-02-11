@@ -172,6 +172,77 @@ interface UserProfileData {
   updatedAt: string | null;
 }
 
+interface QuotaMetricData {
+  used: number;
+  limit: number;
+  remaining: number;
+  oldestInWindowAt: string | null;
+  nextUnlockAt: string | null;
+}
+
+interface QuotaSummaryData {
+  window: "rolling_30_days";
+  windowDays: number;
+  limits: {
+    text: number;
+    voiceSeconds: number;
+    cameraSeconds: number;
+  };
+  used: {
+    text: number;
+    voiceSeconds: number;
+    cameraSeconds: number;
+  };
+  remaining: {
+    text: number;
+    voiceSeconds: number;
+    cameraSeconds: number;
+  };
+  nextUnlockAt: {
+    text: string | null;
+    voiceSeconds: string | null;
+    cameraSeconds: string | null;
+  };
+  metrics: {
+    text: QuotaMetricData;
+    voiceSeconds: QuotaMetricData;
+    cameraSeconds: QuotaMetricData;
+  };
+}
+
+interface QuotaSummaryResponse {
+  traceId?: string;
+  quota: QuotaSummaryData;
+}
+
+interface QuotaErrorPayload {
+  message?: string;
+  reason?: string;
+  traceId?: string;
+  quota?: {
+    text?: number;
+    voiceSeconds?: number;
+    cameraSeconds?: number;
+    window?: string;
+    windowDays?: number;
+    limits?: {
+      text?: number;
+      voiceSeconds?: number;
+      cameraSeconds?: number;
+    };
+    used?: {
+      text?: number;
+      voiceSeconds?: number;
+      cameraSeconds?: number;
+    };
+    nextUnlockAt?: {
+      text?: string | null;
+      voiceSeconds?: string | null;
+      cameraSeconds?: string | null;
+    };
+  };
+}
+
 const ZEE_AVATAR_PRESET_OPTIONS: Array<{
   id: ZeeAvatarPreset;
   label: string;
@@ -211,6 +282,28 @@ function getErrorMessage(error: unknown): string {
     return error.message;
   }
   return String(error);
+}
+
+function safeParseJson<T>(value: string): T | null {
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return null;
+  }
+}
+
+function parseQuotaError(error: unknown): QuotaErrorPayload | null {
+  const message = getErrorMessage(error);
+  const [statusText, ...rest] = message.split(": ");
+  const status = Number.parseInt(statusText, 10);
+  if (status !== 429 || rest.length === 0) return null;
+  const payloadText = rest.join(": ").trim();
+  if (!payloadText.startsWith("{")) return null;
+  return safeParseJson<QuotaErrorPayload>(payloadText);
+}
+
+function formatMinutesFromSeconds(seconds: number): string {
+  return `${Math.max(0, Math.floor(seconds / 60))}`;
 }
 
 function toUserFacingCameraError(error: unknown, fallback: string): string {
@@ -819,6 +912,8 @@ const SharedFooter = ({
   pendingAttachments,
   isSending,
   uploadError,
+  quotaSummary,
+  quotaLoading,
 }: { 
   persona: Persona, 
   onSendMessage: (text: string) => void,
@@ -828,6 +923,8 @@ const SharedFooter = ({
   pendingAttachments: PendingImageAttachment[];
   isSending: boolean;
   uploadError: string | null;
+  quotaSummary?: QuotaSummaryData;
+  quotaLoading?: boolean;
 }) => {
   const [inputValue, setInputValue] = useState("");
   const [isMediaTrayOpen, setIsMediaTrayOpen] = useState(false);
@@ -867,6 +964,13 @@ const SharedFooter = ({
         paddingBottom: "max(0.65rem, env(safe-area-inset-bottom))",
       }}
     >
+      <div className="mb-2 text-[11px]" style={{ color: "var(--app-on-dark-muted)" }}>
+        {quotaLoading
+          ? "Checking beta quota..."
+          : quotaSummary
+            ? `Beta quota: ${quotaSummary.remaining.text} texts left · ${formatMinutesFromSeconds(quotaSummary.remaining.voiceSeconds)} voice min left · ${formatMinutesFromSeconds(quotaSummary.remaining.cameraSeconds)} camera min left`
+            : "Beta quota unavailable right now."}
+      </div>
       {pendingAttachments.length > 0 && (
         <div className="mb-2 flex items-center gap-2 overflow-x-auto pb-1">
           {pendingAttachments.map((attachment) => (
@@ -1115,6 +1219,8 @@ const ProfileView = ({
   onUploadZeeAvatar,
   onReplayOnboarding,
   onLogout,
+  quotaSummary,
+  isQuotaLoading,
 }: {
   onClose: () => void;
   user: any;
@@ -1141,6 +1247,8 @@ const ProfileView = ({
   onUploadZeeAvatar: (file: File) => Promise<void>;
   onReplayOnboarding: () => void;
   onLogout: () => void;
+  quotaSummary?: QuotaSummaryData;
+  isQuotaLoading: boolean;
 }) => {
   const avatarInputId = useId();
   const zeeAvatarInputId = useId();
@@ -1380,6 +1488,54 @@ const ProfileView = ({
                 >
                   Replay onboarding
                 </button>
+              </div>
+            </section>
+
+            <section>
+              <h3
+                className="text-sm font-semibold uppercase tracking-wider mb-3"
+                style={{ color: "var(--app-on-dark-muted)" }}
+              >
+                Beta Quota
+              </h3>
+              <div className="rounded-xl p-4 shadow-sm border space-y-2.5" style={themedCardStyle}>
+                {isQuotaLoading && (
+                  <p className="text-xs" style={{ color: "var(--app-on-dark-muted)" }}>
+                    Loading quota...
+                  </p>
+                )}
+                {!isQuotaLoading && quotaSummary && (
+                  <>
+                    <p className="text-xs" style={{ color: "var(--app-on-dark-muted)" }}>
+                      Rolling {quotaSummary.windowDays}-day limits reset automatically as older usage expires.
+                    </p>
+                    <div className="grid grid-cols-1 gap-2 text-sm">
+                      <div className="flex items-center justify-between">
+                        <span style={{ color: "var(--app-on-dark-muted)" }}>Texts</span>
+                        <span style={{ color: "var(--app-on-dark)" }}>
+                          {quotaSummary.remaining.text} left / {quotaSummary.limits.text}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span style={{ color: "var(--app-on-dark-muted)" }}>Voice minutes</span>
+                        <span style={{ color: "var(--app-on-dark)" }}>
+                          {formatMinutesFromSeconds(quotaSummary.remaining.voiceSeconds)} left / {formatMinutesFromSeconds(quotaSummary.limits.voiceSeconds)}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span style={{ color: "var(--app-on-dark-muted)" }}>Camera minutes</span>
+                        <span style={{ color: "var(--app-on-dark)" }}>
+                          {formatMinutesFromSeconds(quotaSummary.remaining.cameraSeconds)} left / {formatMinutesFromSeconds(quotaSummary.limits.cameraSeconds)}
+                        </span>
+                      </div>
+                    </div>
+                  </>
+                )}
+                {!isQuotaLoading && !quotaSummary && (
+                  <p className="text-xs" style={{ color: "var(--app-on-dark-muted)" }}>
+                    Quota details are currently unavailable.
+                  </p>
+                )}
               </div>
             </section>
 
@@ -3008,6 +3164,13 @@ function App() {
   const pendingAttachmentsRef = useRef<PendingImageAttachment[]>([]);
   const selectedVoiceRef = useRef<LiveVoiceName>(DEFAULT_LIVE_VOICE);
   const selectedThemeRef = useRef<AppThemeId>(DEFAULT_APP_THEME_ID);
+  const quotaAutoStopReasonRef = useRef<"voice" | "camera" | null>(null);
+  const liveQuotaBudgetRef = useRef<{
+    voiceSeconds: number;
+    cameraSeconds: number;
+  } | null>(null);
+  const cameraAccumulatedSecondsRef = useRef(0);
+  const cameraActiveStartedAtRef = useRef<number | null>(null);
   const forceOnboardingRef = useRef<boolean>(
     typeof window !== "undefined" &&
       new URLSearchParams(window.location.search).get("onboarding") === "1",
@@ -3022,6 +3185,37 @@ function App() {
 
   const getConversationMessagesKey = (conversationId: string) =>
     [`/api/conversations/${conversationId}/messages`];
+
+  const resetCallUsageTracking = () => {
+    cameraAccumulatedSecondsRef.current = 0;
+    cameraActiveStartedAtRef.current = null;
+  };
+
+  const beginCameraUsageTracking = () => {
+    if (cameraActiveStartedAtRef.current !== null) return;
+    cameraActiveStartedAtRef.current = Date.now();
+  };
+
+  const pauseCameraUsageTracking = () => {
+    if (cameraActiveStartedAtRef.current === null) return;
+    const elapsed = Math.max(
+      0,
+      Math.floor((Date.now() - cameraActiveStartedAtRef.current) / 1000),
+    );
+    cameraAccumulatedSecondsRef.current += elapsed;
+    cameraActiveStartedAtRef.current = null;
+  };
+
+  const getCurrentCameraUsageSeconds = () => {
+    const activeElapsed =
+      cameraActiveStartedAtRef.current === null
+        ? 0
+        : Math.max(
+            0,
+            Math.floor((Date.now() - cameraActiveStartedAtRef.current) / 1000),
+          );
+    return cameraAccumulatedSecondsRef.current + activeElapsed;
+  };
 
   const updateConversationMessages = (
     conversationId: string,
@@ -3042,6 +3236,14 @@ function App() {
     queryKey: ["/api/preferences"],
     enabled: isAuthenticated,
   });
+
+  const { data: quotaResponse, isLoading: isQuotaLoading } =
+    useQuery<QuotaSummaryResponse>({
+      queryKey: ["/api/quota/summary"],
+      enabled: isAuthenticated,
+      refetchInterval: 15000,
+    });
+  const quotaSummary = quotaResponse?.quota;
 
   const { data: userProfile, isLoading: isProfileLoading } =
     useQuery<UserProfileData>({
@@ -3313,9 +3515,16 @@ function App() {
   });
 
   const saveVoiceSessionMutation = useMutation({
-    mutationFn: async (data: { persona: string; duration: number }) => {
+    mutationFn: async (data: {
+      persona: string;
+      duration: number;
+      cameraDuration: number;
+    }) => {
       const res = await apiRequest("POST", "/api/voice-sessions", data);
       return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/quota/summary"] });
     },
   });
 
@@ -3455,7 +3664,7 @@ function App() {
 
     if (!response.ok) {
       const text = (await response.text()) || response.statusText;
-      throw new Error(text);
+      throw new Error(`${response.status}: ${text}`);
     }
 
     const payload = (await response.json()) as {
@@ -3806,6 +4015,13 @@ function App() {
     const trimmed = text.trim();
     if (isSendingMessage) return;
 
+    if (quotaSummary && quotaSummary.remaining.text <= 0) {
+      setComposerError(
+        "You reached your beta text limit for now. More texts unlock automatically on a rolling basis.",
+      );
+      return;
+    }
+
     const readyAttachments = pendingAttachments.filter(
       (item) => item.status === "ready" && item.attachmentId && item.attachment,
     );
@@ -3879,8 +4095,28 @@ function App() {
           optimisticAssistantTurnId,
         });
         removePendingAttachmentsByLocalId(readyAttachments.map((item) => item.localId));
+        queryClient.invalidateQueries({ queryKey: ["/api/quota/summary"] });
       } catch (streamError) {
         console.error("chat.stream.failed", streamError);
+        const quotaError = parseQuotaError(streamError);
+        if (quotaError) {
+          updateConversationMessages(resolvedConversationId, (current) =>
+            current.filter(
+              (message) =>
+                message.id !== optimisticUserId &&
+                !isOptimisticAssistantPart(
+                  message.id,
+                  optimisticAssistantTurnId,
+                ),
+            ),
+          );
+          setComposerError(
+            quotaError.message ??
+              "You reached your beta text limit for now. More texts unlock automatically on a rolling basis.",
+          );
+          queryClient.invalidateQueries({ queryKey: ["/api/quota/summary"] });
+          return;
+        }
         try {
           await fallbackChatResponse({
             conversationId: resolvedConversationId,
@@ -3892,7 +4128,27 @@ function App() {
           removePendingAttachmentsByLocalId(
             readyAttachments.map((item) => item.localId),
           );
+          queryClient.invalidateQueries({ queryKey: ["/api/quota/summary"] });
         } catch (fallbackError) {
+          const quotaError = parseQuotaError(fallbackError);
+          if (quotaError) {
+            updateConversationMessages(resolvedConversationId, (current) =>
+              current.filter(
+                (message) =>
+                  message.id !== optimisticUserId &&
+                  !isOptimisticAssistantPart(
+                    message.id,
+                    optimisticAssistantTurnId,
+                  ),
+              ),
+            );
+            setComposerError(
+              quotaError.message ??
+                "You reached your beta text limit for now. More texts unlock automatically on a rolling basis.",
+            );
+            queryClient.invalidateQueries({ queryKey: ["/api/quota/summary"] });
+            return;
+          }
           updateConversationMessages(resolvedConversationId, (current) =>
             current.filter(
               (message) =>
@@ -3910,7 +4166,16 @@ function App() {
         }
       }
     } catch (error) {
-      setComposerError("Message failed to send. Please try again.");
+      const quotaError = parseQuotaError(error);
+      if (quotaError) {
+        setComposerError(
+          quotaError.message ??
+            "You reached your beta text limit for now. More texts unlock automatically on a rolling basis.",
+        );
+        queryClient.invalidateQueries({ queryKey: ["/api/quota/summary"] });
+      } else {
+        setComposerError("Message failed to send. Please try again.");
+      }
       console.error("chat.send.failed", error);
     } finally {
       setIsSendingMessage(false);
@@ -3926,6 +4191,7 @@ function App() {
     manualLiveStopRef.current = true;
     liveStartNonceRef.current += 1;
     const runId = liveRunIdRef.current;
+    pauseCameraUsageTracking();
 
     logLiveTrace("live.stop.requested", {
       runId,
@@ -3955,6 +4221,9 @@ function App() {
     setIsVideoEnabled(false);
     setVideoStream(null);
     setIsVideoTransitioning(false);
+    quotaAutoStopReasonRef.current = null;
+    liveQuotaBudgetRef.current = null;
+    resetCallUsageTracking();
     logLiveTrace("live.stop.completed", {
       runId,
     });
@@ -3964,6 +4233,24 @@ function App() {
     autoResumed?: boolean;
     restoreVideo?: boolean;
   }) => {
+    if (!options?.autoResumed) {
+      if (quotaSummary && quotaSummary.remaining.voiceSeconds <= 0) {
+        setLiveError(
+          "You reached your beta voice minutes for now. Voice minutes unlock automatically on a rolling basis.",
+        );
+        queryClient.invalidateQueries({ queryKey: ["/api/quota/summary"] });
+        return;
+      }
+      liveQuotaBudgetRef.current = quotaSummary
+        ? {
+            voiceSeconds: quotaSummary.remaining.voiceSeconds,
+            cameraSeconds: quotaSummary.remaining.cameraSeconds,
+          }
+        : null;
+      quotaAutoStopReasonRef.current = null;
+      resetCallUsageTracking();
+    }
+
     const startNonce = liveStartNonceRef.current + 1;
     liveStartNonceRef.current = startNonce;
     const runId = createLocalId("live");
@@ -4030,6 +4317,7 @@ function App() {
           setLiveError(error.message);
         },
         onClosed: (reason) => {
+          pauseCameraUsageTracking();
           logLiveTrace("live.video.session_closed", {
             runId,
             reason: reason ?? "unknown",
@@ -4086,6 +4374,7 @@ function App() {
         });
         setVideoStream(stream);
         setIsVideoEnabled(true);
+        beginCameraUsageTracking();
         logLiveTrace("live.video.auto_resumed", {
           runId,
           facingMode: cameraFacingModeRef.current,
@@ -4100,10 +4389,19 @@ function App() {
       });
     } catch (error: any) {
       console.error("Failed to start Gemini Live session:", error);
-      setLiveError(
-        error?.message ??
-          "We could not start the live voice session. Please try again.",
-      );
+      const quotaError = parseQuotaError(error);
+      if (quotaError) {
+        setLiveError(
+          quotaError.message ??
+            "You reached your beta voice minutes for now. Voice minutes unlock automatically on a rolling basis.",
+        );
+        queryClient.invalidateQueries({ queryKey: ["/api/quota/summary"] });
+      } else {
+        setLiveError(
+          error?.message ??
+            "We could not start the live voice session. Please try again.",
+        );
+      }
 
       if (liveSession) {
         await liveSession.stop().catch(() => undefined);
@@ -4117,6 +4415,8 @@ function App() {
       liveConversationRef.current = null;
       setIsVideoEnabled(false);
       setVideoStream(null);
+      liveQuotaBudgetRef.current = null;
+      resetCallUsageTracking();
       logLiveTrace("live.start.failed", {
         runId,
         conversationId,
@@ -4134,20 +4434,35 @@ function App() {
       return;
     }
 
+    const cameraBudgetRemaining =
+      liveQuotaBudgetRef.current?.cameraSeconds ?? quotaSummary?.remaining.cameraSeconds;
+
     setLiveError(null);
     setIsVideoTransitioning(true);
     try {
       if (liveSessionRef.current.isVideoEnabled()) {
+        pauseCameraUsageTracking();
         await liveSessionRef.current.stopVideo();
         setIsVideoEnabled(false);
         setVideoStream(null);
         logLiveTrace("live.video.stopped", { runId: liveRunIdRef.current });
       } else {
+        if (
+          typeof cameraBudgetRemaining === "number" &&
+          getCurrentCameraUsageSeconds() >= cameraBudgetRemaining
+        ) {
+          setLiveError(
+            "You reached your beta camera minutes for now. Camera minutes unlock automatically on a rolling basis.",
+          );
+          queryClient.invalidateQueries({ queryKey: ["/api/quota/summary"] });
+          return;
+        }
         const stream = await liveSessionRef.current.startVideo({
           facingMode: cameraFacingModeRef.current,
         });
         setVideoStream(stream);
         setIsVideoEnabled(true);
+        beginCameraUsageTracking();
         logLiveTrace("live.video.started", {
           runId: liveRunIdRef.current,
           facingMode: cameraFacingModeRef.current,
@@ -4192,7 +4507,25 @@ function App() {
   const handleEndCall = () => {
     if (isCalling || isLiveConnecting || liveSessionRef.current) {
       if (isCalling) {
-        saveVoiceSessionMutation.mutate({ persona, duration });
+        pauseCameraUsageTracking();
+        const cameraDuration = Math.min(duration, getCurrentCameraUsageSeconds());
+        saveVoiceSessionMutation.mutate(
+          { persona, duration, cameraDuration },
+          {
+            onError: (error) => {
+              const quotaError = parseQuotaError(error);
+              if (quotaError) {
+                setLiveError(
+                  quotaError.message ??
+                    "You reached your beta live quota for now. Limits unlock automatically on a rolling basis.",
+                );
+                queryClient.invalidateQueries({ queryKey: ["/api/quota/summary"] });
+                return;
+              }
+              console.error("voice.session.save.failed", error);
+            },
+          },
+        );
       }
       void stopLiveSession();
     } else {
@@ -4227,6 +4560,60 @@ function App() {
     }
     return () => clearInterval(interval);
   }, [isCalling]);
+
+  useEffect(() => {
+    if (!isCalling) return;
+
+    const voiceBudget = liveQuotaBudgetRef.current?.voiceSeconds;
+    if (
+      typeof voiceBudget === "number" &&
+      voiceBudget > 0 &&
+      duration >= voiceBudget &&
+      quotaAutoStopReasonRef.current !== "voice"
+    ) {
+      quotaAutoStopReasonRef.current = "voice";
+      setLiveError(
+        "You reached your beta voice minutes for now. Voice minutes unlock automatically on a rolling basis.",
+      );
+      queryClient.invalidateQueries({ queryKey: ["/api/quota/summary"] });
+      handleEndCall();
+      return;
+    }
+
+    const cameraBudget = liveQuotaBudgetRef.current?.cameraSeconds;
+    if (
+      typeof cameraBudget === "number" &&
+      cameraBudget > 0 &&
+      isVideoEnabled &&
+      !isVideoTransitioning &&
+      getCurrentCameraUsageSeconds() >= cameraBudget &&
+      quotaAutoStopReasonRef.current !== "camera"
+    ) {
+      quotaAutoStopReasonRef.current = "camera";
+      setLiveError(
+        "You reached your beta camera minutes for now. Camera sharing has been stopped.",
+      );
+      queryClient.invalidateQueries({ queryKey: ["/api/quota/summary"] });
+      void (async () => {
+        pauseCameraUsageTracking();
+        try {
+          await liveSessionRef.current?.stopVideo();
+        } catch (error) {
+          console.error("live.video.auto_stop.failed", error);
+        } finally {
+          setIsVideoEnabled(false);
+          setVideoStream(null);
+          setIsVideoTransitioning(false);
+        }
+      })();
+    }
+  }, [
+    duration,
+    isCalling,
+    isVideoEnabled,
+    isVideoTransitioning,
+    queryClient,
+  ]);
 
   const resolvedProfileImage =
     userProfile?.avatarUrl || user?.profileImageUrl || undefined;
@@ -4291,6 +4678,8 @@ function App() {
             pendingAttachments={pendingAttachments}
             isSending={isSendingMessage}
             uploadError={composerError}
+            quotaSummary={quotaSummary}
+            quotaLoading={isQuotaLoading}
           />
 
           <div className="absolute inset-0 z-0">
@@ -4343,6 +4732,8 @@ function App() {
                 onUploadZeeAvatar={handleUploadZeeAvatar}
                 onReplayOnboarding={handleReplayOnboarding}
                 onLogout={logout}
+                quotaSummary={quotaSummary}
+                isQuotaLoading={isQuotaLoading}
               />
             )}
           </AnimatePresence>

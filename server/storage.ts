@@ -6,6 +6,7 @@ import {
   userPreferences,
   userProfiles,
   voiceSessions,
+  usageEvents,
   type Conversation,
   type InsertConversation,
   type Message,
@@ -18,12 +19,43 @@ import {
   type InsertVoiceSession,
   type InsertUserProfile,
   type UserProfile,
+  type UsageEventMetric,
 } from "@shared/schema";
 import { db } from "./db";
-import { and, asc, desc, eq, inArray, isNull } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNull, sql } from "drizzle-orm";
 
 export interface MessageWithAttachments extends Message {
   attachments: MessageAttachment[];
+}
+
+export interface QuotaMetricSnapshot {
+  used: number;
+  oldestInWindowAt: Date | null;
+}
+
+export interface QuotaSummary {
+  windowStart: Date;
+  textMessages: QuotaMetricSnapshot;
+  voiceSeconds: QuotaMetricSnapshot;
+  cameraSeconds: QuotaMetricSnapshot;
+}
+
+export interface QuotaConsumeResult {
+  allowed: boolean;
+  metric: UsageEventMetric;
+  units: number;
+  limit: number;
+  used: number;
+  remaining: number;
+  oldestInWindowAt: Date | null;
+  reason?: "quota_exceeded";
+}
+
+export interface LiveQuotaConsumeResult {
+  allowed: boolean;
+  voice: QuotaConsumeResult;
+  camera: QuotaConsumeResult;
+  reason?: "voice_quota_exceeded" | "camera_quota_exceeded";
 }
 
 export interface IStorage {
@@ -74,9 +106,92 @@ export interface IStorage {
 
   createVoiceSession(data: InsertVoiceSession): Promise<VoiceSession>;
   getVoiceSessions(userId: string): Promise<VoiceSession[]>;
+  getQuotaSummary(userId: string): Promise<QuotaSummary>;
+  consumeQuota(params: {
+    userId: string;
+    metric: UsageEventMetric;
+    units: number;
+    limit: number;
+    conversationId?: string | null;
+    meta?: Record<string, unknown> | null;
+  }): Promise<QuotaConsumeResult>;
+  consumeLiveQuota(params: {
+    userId: string;
+    voiceSeconds: number;
+    cameraSeconds: number;
+    voiceLimit: number;
+    cameraLimit: number;
+    conversationId?: string | null;
+    meta?: Record<string, unknown> | null;
+  }): Promise<LiveQuotaConsumeResult>;
 }
 
 export class DatabaseStorage implements IStorage {
+  private static readonly QUOTA_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
+
+  private getQuotaWindowStart(): Date {
+    return new Date(Date.now() - DatabaseStorage.QUOTA_WINDOW_MS);
+  }
+
+  private normalizeQuotaUnits(units: number): number {
+    if (!Number.isFinite(units)) return 0;
+    return Math.max(0, Math.floor(units));
+  }
+
+  private async withUserQuotaLock<T>(
+    userId: string,
+    run: (tx: Parameters<Parameters<typeof db.transaction>[0]>[0]) => Promise<T>,
+  ): Promise<T> {
+    return db.transaction(async (tx) => {
+      await tx.execute(
+        sql`SELECT pg_advisory_xact_lock(hashtext(${`quota:${userId}`}))`,
+      );
+      return run(tx);
+    });
+  }
+
+  private async getMetricUsageInWindow(
+    executor: Parameters<Parameters<typeof db.transaction>[0]>[0] | typeof db,
+    params: {
+      userId: string;
+      metric: UsageEventMetric;
+      windowStart: Date;
+    },
+  ): Promise<QuotaMetricSnapshot> {
+    const sumRows = await executor
+      .select({
+        total: sql<number>`COALESCE(SUM(${usageEvents.units}), 0)`,
+      })
+      .from(usageEvents)
+      .where(
+        and(
+          eq(usageEvents.userId, params.userId),
+          eq(usageEvents.metric, params.metric),
+          gte(usageEvents.createdAt, params.windowStart),
+        ),
+      );
+
+    const oldestRows = await executor
+      .select({
+        createdAt: usageEvents.createdAt,
+      })
+      .from(usageEvents)
+      .where(
+        and(
+          eq(usageEvents.userId, params.userId),
+          eq(usageEvents.metric, params.metric),
+          gte(usageEvents.createdAt, params.windowStart),
+        ),
+      )
+      .orderBy(asc(usageEvents.createdAt))
+      .limit(1);
+
+    return {
+      used: Number(sumRows[0]?.total ?? 0),
+      oldestInWindowAt: oldestRows[0]?.createdAt ?? null,
+    };
+  }
+
   async getConversations(userId: string): Promise<Conversation[]> {
     return db
       .select()
@@ -404,6 +519,272 @@ export class DatabaseStorage implements IStorage {
       .from(voiceSessions)
       .where(eq(voiceSessions.userId, userId))
       .orderBy(desc(voiceSessions.createdAt));
+  }
+
+  async getQuotaSummary(userId: string): Promise<QuotaSummary> {
+    const windowStart = this.getQuotaWindowStart();
+    const rows = await db
+      .select({
+        metric: usageEvents.metric,
+        units: usageEvents.units,
+        createdAt: usageEvents.createdAt,
+      })
+      .from(usageEvents)
+      .where(
+        and(
+          eq(usageEvents.userId, userId),
+          gte(usageEvents.createdAt, windowStart),
+        ),
+      );
+
+    const summary: QuotaSummary = {
+      windowStart,
+      textMessages: { used: 0, oldestInWindowAt: null },
+      voiceSeconds: { used: 0, oldestInWindowAt: null },
+      cameraSeconds: { used: 0, oldestInWindowAt: null },
+    };
+
+    for (const row of rows) {
+      if (row.metric === "text_message") {
+        summary.textMessages.used += row.units;
+        if (
+          !summary.textMessages.oldestInWindowAt ||
+          (row.createdAt &&
+            row.createdAt < summary.textMessages.oldestInWindowAt)
+        ) {
+          summary.textMessages.oldestInWindowAt = row.createdAt ?? null;
+        }
+        continue;
+      }
+      if (row.metric === "voice_second") {
+        summary.voiceSeconds.used += row.units;
+        if (
+          !summary.voiceSeconds.oldestInWindowAt ||
+          (row.createdAt &&
+            row.createdAt < summary.voiceSeconds.oldestInWindowAt)
+        ) {
+          summary.voiceSeconds.oldestInWindowAt = row.createdAt ?? null;
+        }
+        continue;
+      }
+      if (row.metric === "camera_second") {
+        summary.cameraSeconds.used += row.units;
+        if (
+          !summary.cameraSeconds.oldestInWindowAt ||
+          (row.createdAt &&
+            row.createdAt < summary.cameraSeconds.oldestInWindowAt)
+        ) {
+          summary.cameraSeconds.oldestInWindowAt = row.createdAt ?? null;
+        }
+      }
+    }
+
+    return summary;
+  }
+
+  async consumeQuota(params: {
+    userId: string;
+    metric: UsageEventMetric;
+    units: number;
+    limit: number;
+    conversationId?: string | null;
+    meta?: Record<string, unknown> | null;
+  }): Promise<QuotaConsumeResult> {
+    const units = this.normalizeQuotaUnits(params.units);
+    const limit = this.normalizeQuotaUnits(params.limit);
+    const windowStart = this.getQuotaWindowStart();
+
+    if (units <= 0) {
+      const current = await this.getMetricUsageInWindow(db, {
+        userId: params.userId,
+        metric: params.metric,
+        windowStart,
+      });
+      return {
+        allowed: true,
+        metric: params.metric,
+        units: 0,
+        limit,
+        used: current.used,
+        remaining: Math.max(0, limit - current.used),
+        oldestInWindowAt: current.oldestInWindowAt,
+      };
+    }
+
+    return this.withUserQuotaLock(params.userId, async (tx) => {
+      const current = await this.getMetricUsageInWindow(tx, {
+        userId: params.userId,
+        metric: params.metric,
+        windowStart,
+      });
+      const nextUsed = current.used + units;
+
+      if (nextUsed > limit) {
+        return {
+          allowed: false,
+          metric: params.metric,
+          units,
+          limit,
+          used: current.used,
+          remaining: Math.max(0, limit - current.used),
+          oldestInWindowAt: current.oldestInWindowAt,
+          reason: "quota_exceeded",
+        } satisfies QuotaConsumeResult;
+      }
+
+      const now = new Date();
+      await tx.insert(usageEvents).values({
+        userId: params.userId,
+        metric: params.metric,
+        units,
+        conversationId: params.conversationId ?? null,
+        meta: params.meta ?? null,
+        createdAt: now,
+      });
+
+      return {
+        allowed: true,
+        metric: params.metric,
+        units,
+        limit,
+        used: nextUsed,
+        remaining: Math.max(0, limit - nextUsed),
+        oldestInWindowAt: current.oldestInWindowAt ?? now,
+      } satisfies QuotaConsumeResult;
+    });
+  }
+
+  async consumeLiveQuota(params: {
+    userId: string;
+    voiceSeconds: number;
+    cameraSeconds: number;
+    voiceLimit: number;
+    cameraLimit: number;
+    conversationId?: string | null;
+    meta?: Record<string, unknown> | null;
+  }): Promise<LiveQuotaConsumeResult> {
+    const voiceUnits = this.normalizeQuotaUnits(params.voiceSeconds);
+    const cameraUnits = this.normalizeQuotaUnits(params.cameraSeconds);
+    const voiceLimit = this.normalizeQuotaUnits(params.voiceLimit);
+    const cameraLimit = this.normalizeQuotaUnits(params.cameraLimit);
+    const windowStart = this.getQuotaWindowStart();
+
+    return this.withUserQuotaLock(params.userId, async (tx) => {
+      const [voiceCurrent, cameraCurrent] = await Promise.all([
+        this.getMetricUsageInWindow(tx, {
+          userId: params.userId,
+          metric: "voice_second",
+          windowStart,
+        }),
+        this.getMetricUsageInWindow(tx, {
+          userId: params.userId,
+          metric: "camera_second",
+          windowStart,
+        }),
+      ]);
+
+      const nextVoiceUsed = voiceCurrent.used + voiceUnits;
+      const nextCameraUsed = cameraCurrent.used + cameraUnits;
+
+      if (nextVoiceUsed > voiceLimit) {
+        return {
+          allowed: false,
+          reason: "voice_quota_exceeded",
+          voice: {
+            allowed: false,
+            metric: "voice_second",
+            units: voiceUnits,
+            limit: voiceLimit,
+            used: voiceCurrent.used,
+            remaining: Math.max(0, voiceLimit - voiceCurrent.used),
+            oldestInWindowAt: voiceCurrent.oldestInWindowAt,
+            reason: "quota_exceeded",
+          },
+          camera: {
+            allowed: cameraUnits === 0,
+            metric: "camera_second",
+            units: cameraUnits,
+            limit: cameraLimit,
+            used: cameraCurrent.used,
+            remaining: Math.max(0, cameraLimit - cameraCurrent.used),
+            oldestInWindowAt: cameraCurrent.oldestInWindowAt,
+            reason: cameraUnits > 0 ? "quota_exceeded" : undefined,
+          },
+        } satisfies LiveQuotaConsumeResult;
+      }
+
+      if (nextCameraUsed > cameraLimit) {
+        return {
+          allowed: false,
+          reason: "camera_quota_exceeded",
+          voice: {
+            allowed: voiceUnits === 0,
+            metric: "voice_second",
+            units: voiceUnits,
+            limit: voiceLimit,
+            used: voiceCurrent.used,
+            remaining: Math.max(0, voiceLimit - voiceCurrent.used),
+            oldestInWindowAt: voiceCurrent.oldestInWindowAt,
+            reason: voiceUnits > 0 ? "quota_exceeded" : undefined,
+          },
+          camera: {
+            allowed: false,
+            metric: "camera_second",
+            units: cameraUnits,
+            limit: cameraLimit,
+            used: cameraCurrent.used,
+            remaining: Math.max(0, cameraLimit - cameraCurrent.used),
+            oldestInWindowAt: cameraCurrent.oldestInWindowAt,
+            reason: "quota_exceeded",
+          },
+        } satisfies LiveQuotaConsumeResult;
+      }
+
+      const now = new Date();
+      if (voiceUnits > 0) {
+        await tx.insert(usageEvents).values({
+          userId: params.userId,
+          metric: "voice_second",
+          units: voiceUnits,
+          conversationId: params.conversationId ?? null,
+          meta: params.meta ?? null,
+          createdAt: now,
+        });
+      }
+      if (cameraUnits > 0) {
+        await tx.insert(usageEvents).values({
+          userId: params.userId,
+          metric: "camera_second",
+          units: cameraUnits,
+          conversationId: params.conversationId ?? null,
+          meta: params.meta ?? null,
+          createdAt: now,
+        });
+      }
+
+      return {
+        allowed: true,
+        voice: {
+          allowed: true,
+          metric: "voice_second",
+          units: voiceUnits,
+          limit: voiceLimit,
+          used: nextVoiceUsed,
+          remaining: Math.max(0, voiceLimit - nextVoiceUsed),
+          oldestInWindowAt: voiceCurrent.oldestInWindowAt ?? (voiceUnits > 0 ? now : null),
+        },
+        camera: {
+          allowed: true,
+          metric: "camera_second",
+          units: cameraUnits,
+          limit: cameraLimit,
+          used: nextCameraUsed,
+          remaining: Math.max(0, cameraLimit - nextCameraUsed),
+          oldestInWindowAt:
+            cameraCurrent.oldestInWindowAt ?? (cameraUnits > 0 ? now : null),
+        },
+      } satisfies LiveQuotaConsumeResult;
+    });
   }
 }
 

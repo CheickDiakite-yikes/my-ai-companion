@@ -3,13 +3,17 @@ import type { Express } from "express";
 import multer, { MulterError } from "multer";
 import { type Server } from "http";
 import { z } from "zod";
-import { storage, type MessageWithAttachments } from "./storage";
+import {
+  storage,
+  type MessageWithAttachments,
+  type QuotaMetricSnapshot,
+  type QuotaSummary,
+} from "./storage";
 import { setupAuth, registerAuthRoutes, isAuthenticated } from "./auth";
 import {
   insertConversationSchema,
   insertMessageSchema,
   insertUserPreferencesSchema,
-  insertVoiceSessionSchema,
   type MessageAttachment,
   type UserProfile,
 } from "@shared/schema";
@@ -65,6 +69,12 @@ const voiceTranscriptSchema = z.object({
     .trim()
     .min(1, "Transcript text is required")
     .max(8000, "Transcript text is too long"),
+});
+
+const voiceSessionCreateSchema = z.object({
+  persona: personaInputSchema.optional(),
+  duration: z.coerce.number().int().min(0).default(0),
+  cameraDuration: z.coerce.number().int().min(0).optional().default(0),
 });
 
 const deleteAttachmentSchema = z.object({
@@ -165,6 +175,185 @@ const ENABLE_PROFILE_PERSONALIZATION = parseBooleanFlag(
   process.env.ENABLE_PROFILE_PERSONALIZATION,
   true,
 );
+
+const ENABLE_BETA_QUOTAS = parseBooleanFlag(
+  process.env.ENABLE_BETA_QUOTAS,
+  true,
+);
+const BETA_TEXT_QUOTA_30D = parsePositiveInt(process.env.BETA_TEXT_QUOTA_30D, 200);
+const BETA_VOICE_QUOTA_SECONDS_30D = parsePositiveInt(
+  process.env.BETA_VOICE_QUOTA_SECONDS_30D,
+  10 * 60,
+);
+const BETA_CAMERA_QUOTA_SECONDS_30D = parsePositiveInt(
+  process.env.BETA_CAMERA_QUOTA_SECONDS_30D,
+  10 * 60,
+);
+const QUOTA_WINDOW_DAYS = 30;
+const QUOTA_WINDOW_MS = QUOTA_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+
+type QuotaMetricResponse = {
+  used: number;
+  limit: number;
+  remaining: number;
+  oldestInWindowAt: string | null;
+  nextUnlockAt: string | null;
+};
+
+type QuotaSummaryResponse = {
+  window: "rolling_30_days";
+  windowDays: number;
+  limits: {
+    text: number;
+    voiceSeconds: number;
+    cameraSeconds: number;
+  };
+  used: {
+    text: number;
+    voiceSeconds: number;
+    cameraSeconds: number;
+  };
+  remaining: {
+    text: number;
+    voiceSeconds: number;
+    cameraSeconds: number;
+  };
+  nextUnlockAt: {
+    text: string | null;
+    voiceSeconds: string | null;
+    cameraSeconds: string | null;
+  };
+  metrics: {
+    text: QuotaMetricResponse;
+    voiceSeconds: QuotaMetricResponse;
+    cameraSeconds: QuotaMetricResponse;
+  };
+};
+
+function normalizeNonNegativeInt(value: unknown): number {
+  const parsed =
+    typeof value === "number"
+      ? value
+      : typeof value === "string"
+        ? Number.parseInt(value, 10)
+        : NaN;
+  if (!Number.isFinite(parsed)) return 0;
+  return Math.max(0, Math.floor(parsed));
+}
+
+function toQuotaMetric(
+  snapshot: QuotaMetricSnapshot,
+  limit: number,
+): QuotaMetricResponse {
+  const safeLimit = Math.max(0, limit);
+  const used = Math.max(0, snapshot.used);
+  const remaining = Math.max(0, safeLimit - used);
+  const oldestInWindowAt = snapshot.oldestInWindowAt
+    ? snapshot.oldestInWindowAt.toISOString()
+    : null;
+  const nextUnlockAt = snapshot.oldestInWindowAt
+    ? new Date(snapshot.oldestInWindowAt.getTime() + QUOTA_WINDOW_MS).toISOString()
+    : null;
+
+  return {
+    used,
+    limit: safeLimit,
+    remaining,
+    oldestInWindowAt,
+    nextUnlockAt,
+  };
+}
+
+function toQuotaSummaryResponse(summary: QuotaSummary): QuotaSummaryResponse {
+  const text = toQuotaMetric(summary.textMessages, BETA_TEXT_QUOTA_30D);
+  const voiceSeconds = toQuotaMetric(
+    summary.voiceSeconds,
+    BETA_VOICE_QUOTA_SECONDS_30D,
+  );
+  const cameraSeconds = toQuotaMetric(
+    summary.cameraSeconds,
+    BETA_CAMERA_QUOTA_SECONDS_30D,
+  );
+
+  return {
+    window: "rolling_30_days",
+    windowDays: QUOTA_WINDOW_DAYS,
+    limits: {
+      text: text.limit,
+      voiceSeconds: voiceSeconds.limit,
+      cameraSeconds: cameraSeconds.limit,
+    },
+    used: {
+      text: text.used,
+      voiceSeconds: voiceSeconds.used,
+      cameraSeconds: cameraSeconds.used,
+    },
+    remaining: {
+      text: text.remaining,
+      voiceSeconds: voiceSeconds.remaining,
+      cameraSeconds: cameraSeconds.remaining,
+    },
+    nextUnlockAt: {
+      text: text.nextUnlockAt,
+      voiceSeconds: voiceSeconds.nextUnlockAt,
+      cameraSeconds: cameraSeconds.nextUnlockAt,
+    },
+    metrics: {
+      text,
+      voiceSeconds,
+      cameraSeconds,
+    },
+  };
+}
+
+async function getQuotaSummaryResponseForUser(userId: string) {
+  const summary = await storage.getQuotaSummary(userId);
+  return toQuotaSummaryResponse(summary);
+}
+
+function quotaBlockedMessage(reason: string): string {
+  if (reason === "text_quota_exceeded") {
+    return "You reached your beta text limit for now. More texts unlock automatically on a rolling basis.";
+  }
+  if (reason === "voice_quota_exceeded") {
+    return "You reached your beta voice minutes for now. Voice minutes unlock automatically on a rolling basis.";
+  }
+  if (reason === "camera_quota_exceeded") {
+    return "You reached your beta camera minutes for now. Camera minutes unlock automatically on a rolling basis.";
+  }
+  return "You reached your beta usage limit for now. Quota unlocks automatically on a rolling basis.";
+}
+
+function sendQuotaBlocked(
+  req: any,
+  res: any,
+  params: {
+    reason: "text_quota_exceeded" | "voice_quota_exceeded" | "camera_quota_exceeded";
+    quota: QuotaSummaryResponse;
+  },
+) {
+  trace(req, "quota.route.blocked", {
+    reason: params.reason,
+    remaining: params.quota.remaining,
+  });
+
+  return res.status(429).json({
+    message: quotaBlockedMessage(params.reason),
+    reason: params.reason,
+    traceId: getTraceId(req),
+    quota: {
+      text: params.quota.remaining.text,
+      voiceSeconds: params.quota.remaining.voiceSeconds,
+      cameraSeconds: params.quota.remaining.cameraSeconds,
+      window: params.quota.window,
+      windowDays: params.quota.windowDays,
+      limits: params.quota.limits,
+      used: params.quota.used,
+      nextUnlockAt: params.quota.nextUnlockAt,
+    },
+  });
+}
+
 
 function truncateReason(input: string, maxLen = 180): string {
   if (input.length <= maxLen) return input;
@@ -1407,6 +1596,30 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/quota/summary", isAuthenticated, async (req: any, res) => {
+    const startedAt = Date.now();
+    try {
+      const quota = await getQuotaSummaryResponseForUser(req.session.userId);
+      trace(req, "quota.summary.read", {
+        elapsedMs: elapsedMs(startedAt),
+        used: quota.used,
+        remaining: quota.remaining,
+      });
+      res.status(200).json({
+        traceId: getTraceId(req),
+        quota,
+      });
+    } catch (error) {
+      traceError(req, "quota.summary.failed", error, {
+        elapsedMs: elapsedMs(startedAt),
+      });
+      res.status(500).json({
+        message: "Failed to load quota summary",
+        traceId: getTraceId(req),
+      });
+    }
+  });
+
   app.get("/api/preferences", isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.session.userId;
@@ -1440,13 +1653,104 @@ export async function registerRoutes(
   });
 
   app.post("/api/voice-sessions", isAuthenticated, async (req: any, res) => {
+    const startedAt = Date.now();
     try {
       const userId = req.session.userId;
-      const data = insertVoiceSessionSchema.parse({ ...req.body, userId });
-      const session = await storage.createVoiceSession(data);
+      const parsed = voiceSessionCreateSchema.parse(req.body ?? {});
+      const persona = normalizePersona(parsed.persona);
+      const duration = normalizeNonNegativeInt(parsed.duration);
+      const cameraDuration = Math.min(
+        duration,
+        normalizeNonNegativeInt(parsed.cameraDuration),
+      );
+
+      if (ENABLE_BETA_QUOTAS && (duration > 0 || cameraDuration > 0)) {
+        const consumeResult = await storage.consumeLiveQuota({
+          userId,
+          voiceSeconds: duration,
+          cameraSeconds: cameraDuration,
+          voiceLimit: BETA_VOICE_QUOTA_SECONDS_30D,
+          cameraLimit: BETA_CAMERA_QUOTA_SECONDS_30D,
+          conversationId: null,
+          meta: {
+            source: "voice_session",
+            persona,
+          },
+        });
+
+        if (!consumeResult.allowed) {
+          if (consumeResult.reason === "voice_quota_exceeded") {
+            trace(req, "quota.consume.voice.blocked", {
+              userId,
+              units: duration,
+              remaining: consumeResult.voice.remaining,
+              limit: BETA_VOICE_QUOTA_SECONDS_30D,
+            });
+          } else {
+            trace(req, "quota.consume.camera.blocked", {
+              userId,
+              units: cameraDuration,
+              remaining: consumeResult.camera.remaining,
+              limit: BETA_CAMERA_QUOTA_SECONDS_30D,
+            });
+          }
+
+          const quota = await getQuotaSummaryResponseForUser(userId);
+          return sendQuotaBlocked(req, res, {
+            reason:
+              consumeResult.reason === "camera_quota_exceeded"
+                ? "camera_quota_exceeded"
+                : "voice_quota_exceeded",
+            quota,
+          });
+        }
+
+        trace(req, "quota.consume.voice.allowed", {
+          userId,
+          units: duration,
+          remaining: consumeResult.voice.remaining,
+          limit: BETA_VOICE_QUOTA_SECONDS_30D,
+        });
+        if (cameraDuration > 0) {
+          trace(req, "quota.consume.camera.allowed", {
+            userId,
+            units: cameraDuration,
+            remaining: consumeResult.camera.remaining,
+            limit: BETA_CAMERA_QUOTA_SECONDS_30D,
+          });
+        }
+      }
+
+      const session = await storage.createVoiceSession({
+        userId,
+        persona,
+        duration,
+        cameraDuration,
+      });
+
+      trace(req, "voice.session.created", {
+        userId,
+        persona,
+        duration,
+        cameraDuration,
+        elapsedMs: elapsedMs(startedAt),
+      });
+
       res.status(201).json(session);
     } catch (error) {
-      res.status(400).json({ message: "Invalid voice session data" });
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({
+          message: error.errors[0]?.message ?? "Invalid voice session data",
+          traceId: getTraceId(req),
+        });
+      }
+      traceError(req, "voice.session.create.failed", error, {
+        elapsedMs: elapsedMs(startedAt),
+      });
+      res.status(500).json({
+        message: "Failed to save voice session",
+        traceId: getTraceId(req),
+      });
     }
   });
 
@@ -1467,6 +1771,30 @@ export async function registerRoutes(
       const prefs = await storage.getUserPreferences(req.session.userId);
       const persona = normalizePersona(parsed.persona ?? prefs?.selectedPersona);
       const voice = resolveLiveVoice(parsed.voice ?? prefs?.selectedVoice);
+
+      if (ENABLE_BETA_QUOTAS) {
+        const quota = await getQuotaSummaryResponseForUser(req.session.userId);
+        if (quota.remaining.voiceSeconds <= 0) {
+          trace(req, "quota.consume.voice.blocked", {
+            userId: req.session.userId,
+            units: 0,
+            remaining: quota.remaining.voiceSeconds,
+            limit: BETA_VOICE_QUOTA_SECONDS_30D,
+            source: "live_token_gate",
+          });
+          return sendQuotaBlocked(req, res, {
+            reason: "voice_quota_exceeded",
+            quota,
+          });
+        }
+        trace(req, "quota.consume.voice.allowed", {
+          userId: req.session.userId,
+          units: 0,
+          remaining: quota.remaining.voiceSeconds,
+          limit: BETA_VOICE_QUOTA_SECONDS_30D,
+          source: "live_token_gate",
+        });
+      }
 
       trace(req, "live.token.requested", {
         persona,
@@ -1561,6 +1889,42 @@ export async function registerRoutes(
         return res.status(400).json({
           message: "One or more attachments are invalid or expired",
           traceId: getTraceId(req),
+        });
+      }
+
+      if (ENABLE_BETA_QUOTAS) {
+        const textQuota = await storage.consumeQuota({
+          userId: req.session.userId,
+          metric: "text_message",
+          units: 1,
+          limit: BETA_TEXT_QUOTA_30D,
+          conversationId: conversation.id,
+          meta: {
+            source: "chat.respond",
+          },
+        });
+
+        if (!textQuota.allowed) {
+          trace(req, "quota.consume.text.blocked", {
+            userId: req.session.userId,
+            units: 1,
+            remaining: textQuota.remaining,
+            limit: BETA_TEXT_QUOTA_30D,
+            conversationId: conversation.id,
+          });
+          const quota = await getQuotaSummaryResponseForUser(req.session.userId);
+          return sendQuotaBlocked(req, res, {
+            reason: "text_quota_exceeded",
+            quota,
+          });
+        }
+
+        trace(req, "quota.consume.text.allowed", {
+          userId: req.session.userId,
+          units: 1,
+          remaining: textQuota.remaining,
+          limit: BETA_TEXT_QUOTA_30D,
+          conversationId: conversation.id,
         });
       }
 
@@ -1794,6 +2158,42 @@ export async function registerRoutes(
         return res.status(400).json({
           message: "One or more attachments are invalid or expired",
           traceId: getTraceId(req),
+        });
+      }
+
+      if (ENABLE_BETA_QUOTAS) {
+        const textQuota = await storage.consumeQuota({
+          userId: req.session.userId,
+          metric: "text_message",
+          units: 1,
+          limit: BETA_TEXT_QUOTA_30D,
+          conversationId: conversation.id,
+          meta: {
+            source: "chat.respond.stream",
+          },
+        });
+
+        if (!textQuota.allowed) {
+          trace(req, "quota.consume.text.blocked", {
+            userId: req.session.userId,
+            units: 1,
+            remaining: textQuota.remaining,
+            limit: BETA_TEXT_QUOTA_30D,
+            conversationId: conversation.id,
+          });
+          const quota = await getQuotaSummaryResponseForUser(req.session.userId);
+          return sendQuotaBlocked(req, res, {
+            reason: "text_quota_exceeded",
+            quota,
+          });
+        }
+
+        trace(req, "quota.consume.text.allowed", {
+          userId: req.session.userId,
+          units: 1,
+          remaining: textQuota.remaining,
+          limit: BETA_TEXT_QUOTA_30D,
+          conversationId: conversation.id,
         });
       }
 
