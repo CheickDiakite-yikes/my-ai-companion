@@ -964,7 +964,7 @@ const SharedFooter = ({
         paddingBottom: "max(0.65rem, env(safe-area-inset-bottom))",
       }}
     >
-      <div className="mb-2 text-[11px]" style={{ color: "var(--app-on-dark-muted)" }}>
+      <div className="mb-2 text-[11px] text-center" style={{ color: "var(--app-on-dark-muted)" }}>
         {quotaLoading
           ? "Checking beta quota..."
           : quotaSummary
