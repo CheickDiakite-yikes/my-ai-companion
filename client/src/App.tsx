@@ -1269,6 +1269,7 @@ const ProfileView = ({
   const [responseStyleOpen, setResponseStyleOpen] = useState(false);
   const [themeOpen, setThemeOpen] = useState(false);
   const [quotaOpen, setQuotaOpen] = useState(false);
+  const [accountOpen, setAccountOpen] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveSuccess, setSaveSuccess] = useState<string | null>(null);
 
@@ -1454,42 +1455,68 @@ const ProfileView = ({
         <ScrollArea className="flex-1 min-h-0 -mx-4 px-4 pb-6 sm:-mx-6 sm:px-6">
           <form onSubmit={onSubmit} className="space-y-6">
             <section>
-              <h3
-                className="text-sm font-semibold uppercase tracking-wider mb-3"
-                style={{ color: "var(--app-on-dark-muted)" }}
+              <button
+                type="button"
+                className="flex items-center justify-between w-full mb-3"
+                onClick={() => setAccountOpen((v) => !v)}
+                data-testid="button-toggle-account"
               >
-                Account
-              </h3>
-              <div className="rounded-xl p-4 shadow-sm border space-y-3" style={themedCardStyle}>
-                <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between">
-                  <span className="font-medium" style={{ color: "var(--app-on-dark)" }}>
-                    Email
-                  </span>
-                  <span
-                    className="text-sm break-all sm:text-right"
-                    style={{ color: "var(--app-on-dark-muted)" }}
-                    data-testid="text-user-email"
-                  >
-                    {user?.email || "Not set"}
-                  </span>
-                </div>
-                <p className="text-xs" style={{ color: "var(--app-on-dark-muted)" }}>
-                  Optional profile fields help Zee personalize better.
-                </p>
-                <button
-                  type="button"
-                  onClick={onReplayOnboarding}
-                  className="w-full rounded-xl border px-3 py-2 text-sm font-medium transition-colors hover:opacity-95"
-                  style={{
-                    borderColor: "var(--app-soft-card-border)",
-                    backgroundColor: "var(--app-input-bg)",
-                    color: "var(--app-on-dark)",
-                  }}
-                  data-testid="button-replay-onboarding"
+                <h3
+                  className="text-sm font-semibold uppercase tracking-wider"
+                  style={{ color: "var(--app-on-dark-muted)" }}
                 >
-                  Replay onboarding
-                </button>
-              </div>
+                  Account
+                </h3>
+                <motion.span
+                  animate={{ rotate: accountOpen ? 180 : 0 }}
+                  transition={{ duration: 0.2 }}
+                  style={{ color: "var(--app-on-dark-muted)" }}
+                >
+                  <ChevronDown size={16} />
+                </motion.span>
+              </button>
+              <AnimatePresence initial={false}>
+                {accountOpen && (
+                  <motion.div
+                    initial={{ height: 0, opacity: 0 }}
+                    animate={{ height: "auto", opacity: 1 }}
+                    exit={{ height: 0, opacity: 0 }}
+                    transition={{ duration: 0.25, ease: "easeInOut" }}
+                    className="overflow-hidden"
+                  >
+                    <div className="rounded-xl p-4 shadow-sm border space-y-3" style={themedCardStyle}>
+                      <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between">
+                        <span className="font-medium" style={{ color: "var(--app-on-dark)" }}>
+                          Email
+                        </span>
+                        <span
+                          className="text-sm break-all sm:text-right"
+                          style={{ color: "var(--app-on-dark-muted)" }}
+                          data-testid="text-user-email"
+                        >
+                          {user?.email || "Not set"}
+                        </span>
+                      </div>
+                      <p className="text-xs" style={{ color: "var(--app-on-dark-muted)" }}>
+                        Optional profile fields help Zee personalize better.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={onReplayOnboarding}
+                        className="w-full rounded-xl border px-3 py-2 text-sm font-medium transition-colors hover:opacity-95"
+                        style={{
+                          borderColor: "var(--app-soft-card-border)",
+                          backgroundColor: "var(--app-input-bg)",
+                          color: "var(--app-on-dark)",
+                        }}
+                        data-testid="button-replay-onboarding"
+                      >
+                        Replay onboarding
+                      </button>
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </section>
 
             <section>
