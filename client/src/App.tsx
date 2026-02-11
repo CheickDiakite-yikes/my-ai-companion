@@ -607,6 +607,13 @@ const AuthPage = ({ onLogin, onRegister, loginError, registerError, isLoggingIn,
       bgGradient: "radial-gradient(ellipse at 50% 40%, rgba(83,52,30,0.95) 0%, #1A1010 70%)",
       accentRing: "rgba(235, 186, 98, 0.25)",
       particleColor: "rgba(235, 186, 98, 0.6)",
+      headlineColor: "#FFE3C8",
+      bodyColor: "rgba(255, 216, 185, 0.86)",
+      skipColor: "rgba(255, 206, 162, 0.72)",
+      dotInactive: "rgba(255, 203, 160, 0.2)",
+      ctaText: "#FFF2E4",
+      ctaBackground: "linear-gradient(135deg, rgba(255,255,255,0.15), rgba(255,196,141,0.12))",
+      ctaBorder: "rgba(255, 191, 144, 0.5)",
     };
     return (
       <div className="w-full h-[100dvh] min-h-[100dvh] flex items-center justify-center overflow-hidden" style={{ background: landingSlide.bgGradient }} data-testid="landing-page">
