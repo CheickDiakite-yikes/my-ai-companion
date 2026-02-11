@@ -3189,6 +3189,10 @@ function App() {
   } = useAuth();
   const queryClient = useQueryClient();
 
+  useEffect(() => {
+    applyAppTheme(DEFAULT_APP_THEME_ID);
+  }, []);
+
   const [mode, setMode] = useState<Mode>("voice");
   const [isCalling, setIsCalling] = useState(false);
   const [isLiveConnecting, setIsLiveConnecting] = useState(false);
