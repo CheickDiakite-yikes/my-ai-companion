@@ -1,0 +1,4 @@
+interface:
+  display_name: "ZeeMe Session Continuity"
+  short_description: "Preserve project memory and handoff continuity"
+  default_prompt: "Use $zeeme-session-continuity to resume this repo safely and append a complete handoff entry."

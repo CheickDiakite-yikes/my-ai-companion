@@ -88,3 +88,41 @@ Use this file as a chronological handoff record so any new session can resume wo
   - Root cause: current execution environment restriction on listening sockets.
   - Fix: validated integration through typecheck + direct real API smoke tests.
   - Guardrail: keep backend services independently testable from webserver startup path.
+
+## 2026-02-11 10:19 EST - Created reusable skill pack + refreshed project memory
+- Completed:
+  - Created four new reusable skills under `/Users/cheickdiakite/Codex/my-ai-companion/skills`:
+    - `zeeme-session-continuity`
+    - `zeeme-release-guardrails`
+    - `zeeme-replit-schema-sync`
+    - `zeeme-gemini-forensics`
+  - Added executable scripts and references in each skill for deterministic workflows.
+  - Validated all new skills using `quick_validate.py` with pass status.
+  - Rewrote `/Users/cheickdiakite/Codex/my-ai-companion/docs/PROJECT_STATE.md` to current architecture/status.
+  - Confirmed Remotion promo render artifacts exist in `/Users/cheickdiakite/Codex/my-ai-companion/output/remotion`.
+- Current state:
+  - Skill pack now captures critical processes for memory continuity, release safety, schema sync prompts, and Gemini forensics.
+  - Project memory docs are now aligned with current app capabilities and known failure patterns.
+  - App remains deployable and typed (`npm run check` passes from prior verification).
+- Next actions:
+  - Optionally copy or install these skills into global Codex skills path for automatic availability across all repos.
+  - Add CI automation hooks for schema sync verification and release gates.
+  - Continue transcript quality/latency tuning work as top product priority.
+- Errors and fixes:
+  - Error: `ModuleNotFoundError: No module named 'yaml'` while running skill initializer.
+  - Root cause: `PyYAML` dependency missing in current Python environment.
+  - Fix: Installed dependency with `uv pip install pyyaml` and reran initializer.
+  - Guardrail: Validate skill-creator tool dependencies before batch skill generation.
+
+## 2026-02-11 11:39 EST - Installed ZeeMe skill pack globally
+- Completed:
+  - Copied local skill folders to `/Users/cheickdiakite/.codex/skills` for cross-workspace availability.
+- Current state:
+  - New skills are available in both repo-local `skills/` and global Codex skill path.
+- Next actions:
+  - Verify next session discovers skills in the available-skills list.
+- Errors and fixes:
+  - Error: none.
+  - Root cause: n/a.
+  - Fix: n/a.
+  - Guardrail: keep local and global skill copies synchronized after updates.

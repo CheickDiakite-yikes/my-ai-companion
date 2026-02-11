@@ -1,0 +1,4 @@
+interface:
+  display_name: "ZeeMe Release Guardrails"
+  short_description: "Run deployment gates before push or publish"
+  default_prompt: "Use $zeeme-release-guardrails to run secrets, typecheck, and local E2E gates before deploy."

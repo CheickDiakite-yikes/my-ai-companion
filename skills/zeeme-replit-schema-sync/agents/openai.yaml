@@ -1,0 +1,4 @@
+interface:
+  display_name: "ZeeMe Replit Schema Sync"
+  short_description: "Generate exact schema-apply prompts for Replit"
+  default_prompt: "Use $zeeme-replit-schema-sync to generate a Replit-agent prompt that applies and verifies DB schema updates."
