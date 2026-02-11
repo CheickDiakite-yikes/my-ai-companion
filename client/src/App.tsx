@@ -630,7 +630,7 @@ const AuthPage = ({ onLogin, onRegister, loginError, registerError, isLoggingIn,
                 Welcome
               </h1>
               <p className="text-lg leading-relaxed font-medium text-white/60">
-                Your personal AI companion, always here.
+                {landingSlide.description}
               </p>
             </motion.div>
           </div>
