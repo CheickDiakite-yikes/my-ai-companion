@@ -598,7 +598,16 @@ const AuthPage = ({ onLogin, onRegister, loginError, registerError, isLoggingIn,
   const inputClass = "w-full h-12 px-4 rounded-xl bg-white/10 border border-white/20 text-white placeholder:text-white/40 focus:outline-none focus:border-[var(--app-accent)] focus:ring-1 focus:ring-[var(--app-accent)] transition-colors";
 
   if (authMode === "welcome") {
-    const landingSlide = ONBOARDING_STEPS[0];
+    const landingSlide = {
+      id: 1,
+      title: "Welcome",
+      description: "Your personal AI companion, always here.",
+      orbColor: "#EBBA62",
+      orbGlow: "rgba(235, 186, 98, 0.45)",
+      bgGradient: "radial-gradient(ellipse at 50% 40%, rgba(83,52,30,0.95) 0%, #1A1010 70%)",
+      accentRing: "rgba(235, 186, 98, 0.25)",
+      particleColor: "rgba(235, 186, 98, 0.6)",
+    };
     return (
       <div className="w-full h-[100dvh] min-h-[100dvh] flex items-center justify-center overflow-hidden" style={{ background: landingSlide.bgGradient }} data-testid="landing-page">
         <div className="w-full h-full md:max-w-[400px] md:h-[850px] md:rounded-[2.5rem] shadow-2xl overflow-hidden relative flex flex-col items-center justify-between p-8" style={{ background: landingSlide.bgGradient }}>
