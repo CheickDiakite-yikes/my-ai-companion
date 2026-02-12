@@ -2720,7 +2720,7 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onProfile, assistantName
 
             <button
               type="button"
-              className="flex flex-col items-center justify-center gap-2 py-3 pb-6 cursor-grab active:cursor-grabbing"
+              className="w-full flex flex-col items-center justify-center gap-2 py-3 pb-6 cursor-grab active:cursor-grabbing"
               style={{ color: "var(--app-on-dark-muted)" }}
               onClick={() => setMode("text")}
               aria-label="Switch to text chat"
