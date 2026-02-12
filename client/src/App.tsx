@@ -3745,13 +3745,13 @@ const UnifiedAgentTaskCard = ({
                           </div>
                           <div className="min-w-0 flex-1 pb-2">
                             <div className="flex items-start justify-between gap-2">
-                              <p className="text-xs font-semibold leading-tight">{item.title}</p>
-                              <span className="shrink-0 text-[10px] opacity-40">
+                              <p className="text-xs font-semibold leading-tight" style={{ color: "var(--app-on-dark)" }}>{item.title}</p>
+                              <span className="shrink-0 text-[10px]" style={{ color: "var(--app-on-dark-muted)" }}>
                                 {formatTimelineTimeLabel(item.createdAt)}
                               </span>
                             </div>
                             {item.detail && (
-                              <p className="mt-0.5 text-[11px] leading-relaxed opacity-65">
+                              <p className="mt-0.5 text-[11px] leading-relaxed" style={{ color: "var(--app-on-dark-muted)" }}>
                                 {item.detail}
                               </p>
                             )}
@@ -3775,7 +3775,7 @@ const UnifiedAgentTaskCard = ({
 
                 {detailTools.length > 0 && (
                   <div className="mt-2 space-y-1.5 border-t pt-2" style={{ borderColor: "var(--app-soft-card-border)" }}>
-                    <p className="text-[10px] font-bold uppercase tracking-widest opacity-40">
+                    <p className="text-[10px] font-bold uppercase tracking-widest" style={{ color: "var(--app-on-dark-muted)" }}>
                       Services Used
                     </p>
                     <div className="flex flex-wrap gap-1.5">
