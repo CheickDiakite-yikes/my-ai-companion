@@ -3227,6 +3227,7 @@ const UnifiedAgentTaskCard = ({
   const [isInfoOpen, setIsInfoOpen] = useState(false);
   const [isResolvingApproval, setIsResolvingApproval] = useState(false);
   const [inlineIframeKey, setInlineIframeKey] = useState(0);
+  const [hasRevealedIframe, setHasRevealedIframe] = useState(false);
 
   const taskDetailQuery = useQuery<AgentTaskResponse>({
     queryKey: [`/api/agent/tasks/${card.taskId}`],
@@ -3514,12 +3515,48 @@ const UnifiedAgentTaskCard = ({
                 {canRenderInline && inlineIframeSrc ? (
                   <div className="space-y-2">
                     <div
-                      className="relative overflow-hidden rounded-xl border"
+                      className="relative overflow-hidden rounded-xl border group cursor-pointer"
                       style={{
                         borderColor: "var(--app-soft-card-border)",
                         boxShadow: "inset 0 1px 8px color-mix(in srgb, var(--app-accent) 12%, transparent)",
                       }}
+                      onClick={() => !hasRevealedIframe && setHasRevealedIframe(true)}
                     >
+                      <AnimatePresence>
+                        {!hasRevealedIframe && (
+                          <motion.div
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            exit={{ opacity: 0, scale: 1.05 }}
+                            transition={{ duration: 0.4, ease: "easeOut" }}
+                            className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-4 text-center p-6"
+                            style={{
+                              background: "linear-gradient(135deg, color-mix(in srgb, var(--app-accent) 25%, #0a0a0a), #0a0a0a)",
+                            }}
+                          >
+                            <div 
+                              className="flex h-16 w-16 items-center justify-center rounded-full border-2 border-dashed transition-transform duration-500 group-hover:scale-110"
+                              style={{ borderColor: "color-mix(in srgb, var(--app-accent) 40%, transparent)" }}
+                            >
+                              <Play className="ml-1 h-6 w-6" style={{ color: "var(--app-accent)" }} />
+                            </div>
+                            <div className="space-y-1">
+                              <p className="text-sm font-bold tracking-tight" style={{ color: "var(--app-on-dark)" }}>
+                                Tap to Launch
+                              </p>
+                              <p className="text-[11px] font-medium opacity-60" style={{ color: "var(--app-on-dark-muted)" }}>
+                                {card.artifact?.title ?? "Mini Game"}
+                              </p>
+                            </div>
+                            <div 
+                              className="absolute inset-0 opacity-20 group-hover:opacity-30 transition-opacity duration-500"
+                              style={{
+                                background: "radial-gradient(circle at center, var(--app-accent) 0%, transparent 70%)"
+                              }}
+                            />
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
                       <iframe
                         key={inlineIframeKey}
                         title={card.artifact?.title ?? "Output"}
