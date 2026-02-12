@@ -3416,16 +3416,6 @@ const UnifiedAgentTaskCard = ({
             >
               Agent Task
             </span>
-            <span
-              className="rounded-full border px-2 py-px text-[9px] font-bold uppercase tracking-wide"
-              style={{
-                borderColor: "color-mix(in srgb, var(--app-soft-card-border) 75%, transparent)",
-                backgroundColor: "color-mix(in srgb, var(--app-soft-card-bg) 65%, transparent)",
-                color: statusTone,
-              }}
-            >
-              {statusLabel}
-            </span>
             <span className="h-1 w-1 rounded-full opacity-30" style={{ backgroundColor: "var(--app-on-dark-muted)" }} />
             <span className="text-[10px] uppercase tracking-wide font-medium" style={{ color: "var(--app-on-dark-muted)" }}>{kindLabel}</span>
             {isRunning && (
@@ -3437,7 +3427,19 @@ const UnifiedAgentTaskCard = ({
               />
             )}
           </div>
-          <p className="line-clamp-2 text-sm font-semibold leading-snug" style={{ color: "var(--app-on-dark)" }}>{card.title}</p>
+          <div className="flex items-center justify-between gap-2">
+            <p className="line-clamp-2 text-sm font-semibold leading-snug" style={{ color: "var(--app-on-dark)" }}>{card.title}</p>
+            <span
+              className="shrink-0 rounded-full border px-2 py-px text-[9px] font-bold uppercase tracking-wide"
+              style={{
+                borderColor: "color-mix(in srgb, var(--app-soft-card-border) 75%, transparent)",
+                backgroundColor: "color-mix(in srgb, var(--app-soft-card-bg) 65%, transparent)",
+                color: statusTone,
+              }}
+            >
+              {statusLabel}
+            </span>
+          </div>
         </div>
         <div className="flex items-center gap-1.5">
           <TooltipProvider delayDuration={200}>
