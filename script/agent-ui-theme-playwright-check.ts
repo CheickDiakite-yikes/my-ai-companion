@@ -157,20 +157,88 @@ async function runUiAssertions(params: {
 
   await page.waitForFunction(
     () =>
-      document.querySelectorAll('[data-testid="agent-task-status-card"]').length >
-        0 &&
-      document.querySelectorAll('[data-testid="agent-artifact-card"]').length > 0,
+      document.querySelectorAll('[data-testid="agent-unified-task-card"]').length >
+      0,
     { timeout: 25_000 },
   );
 
-  const statusCardCount = await page
-    .locator('[data-testid="agent-task-status-card"]')
+  const unifiedCardCount = await page
+    .locator('[data-testid="agent-unified-task-card"]')
     .count();
-  const artifactCardCount = await page
-    .locator('[data-testid="agent-artifact-card"]')
+  assert.ok(unifiedCardCount >= 1, "Expected at least one unified agent task card");
+
+  const taskIds = await page
+    .locator('[data-testid="agent-unified-task-card"]')
+    .evaluateAll((elements) =>
+      elements
+        .map((element) => element.getAttribute("data-agent-task-id"))
+        .filter((value): value is string => Boolean(value)),
+    );
+  const uniqueTaskIds = new Set(taskIds);
+  assert.equal(
+    uniqueTaskIds.size,
+    taskIds.length,
+    "Expected one unified card per task id",
+  );
+
+  await page.evaluate(() => {
+    const triggers = Array.from(
+      document.querySelectorAll('[data-testid="agent-task-tab-process"]'),
+    );
+    if (triggers.length === 0) {
+      throw new Error("Process tab trigger missing");
+    }
+    for (const trigger of triggers) {
+      if (trigger instanceof HTMLElement) {
+        trigger.click();
+      }
+    }
+  });
+  await page
+    .waitForFunction(
+      () =>
+        document.querySelectorAll('[data-testid="agent-task-process-timeline"]')
+          .length > 0,
+      { timeout: 10_000 },
+    )
+    .catch(() => undefined);
+  const processTabCount = await page
+    .locator('[data-testid="agent-task-tab-process"]')
     .count();
-  assert.ok(statusCardCount >= 1, "Expected at least one agent task status card");
-  assert.ok(artifactCardCount >= 1, "Expected at least one agent artifact card");
+  assert.ok(processTabCount >= 1, "Expected at least one process tab trigger");
+  await page.evaluate(() => {
+    const trigger = document.querySelector('[data-testid="agent-task-tab-output"]');
+    if (!(trigger instanceof HTMLElement)) {
+      throw new Error("Output tab trigger missing");
+    }
+    trigger.click();
+  });
+  await page.waitForSelector('[data-testid="button-open-agent-artifact"]', {
+    timeout: 10_000,
+  });
+
+  await page.evaluate(() => {
+    const trigger = document.querySelector('[data-testid="agent-task-info-button"]');
+    if (!(trigger instanceof HTMLElement)) {
+      throw new Error("Task info button missing");
+    }
+    trigger.click();
+  });
+  await page.waitForSelector('[data-testid="agent-task-info-dialog"]', {
+    timeout: 10_000,
+  });
+  await page
+    .waitForSelector('[data-testid="agent-task-timeline-row"]', {
+      timeout: 10_000,
+    })
+    .catch(() => undefined);
+  await page.keyboard.press("Escape");
+  await page
+    .waitForSelector('[data-testid="agent-task-info-dialog"]', {
+      state: "hidden",
+      timeout: 10_000,
+    })
+    .catch(() => undefined);
 
   await openProfilePanel(page);
   await ensureSectionOpen({
@@ -244,7 +312,7 @@ async function runUiAssertions(params: {
     });
 
     await closeProfilePanel(page);
-    await page.waitForSelector('[data-testid="agent-artifact-card"]', {
+    await page.waitForSelector('[data-testid="agent-unified-task-card"]', {
       state: "attached",
       timeout: 20_000,
     });

@@ -1,6 +1,7 @@
 import type {
   AgentApproval,
   AgentArtifact,
+  AgentToolCall,
   AgentStep,
   AgentTask,
   TaskRiskLevel,
@@ -56,6 +57,46 @@ export interface AgentArtifactSummary {
   metadata: unknown;
   createdAt: Date | null;
   updatedAt: Date | null;
+}
+
+export interface AgentToolCallSummary {
+  id: string;
+  taskId: string;
+  stepId: string | null;
+  toolName: string;
+  riskLevel: TaskRiskLevel;
+  status: AgentToolCall["status"];
+  outputSummary: string | null;
+  createdAt: Date | null;
+}
+
+export interface AgentTaskDetailResponse {
+  traceId?: string;
+  task: AgentTaskSummary;
+  steps: AgentStepSummary[];
+  approvals: AgentApprovalSummary[];
+  artifacts: AgentArtifactSummary[];
+  toolCalls?: AgentToolCallSummary[];
+}
+
+export interface UnifiedAgentTaskTimelineItem {
+  id: string;
+  title: string;
+  detail: string | null;
+  status: AgentStep["status"] | "info";
+  createdAt: string | null;
+}
+
+export interface UnifiedAgentTaskCardModel {
+  taskId: string;
+  title: string;
+  prompt: string;
+  taskKind: string;
+  status: AgentTask["status"];
+  latestStep: AgentStepSummary | null;
+  approval: AgentApprovalSummary | null;
+  artifact: AgentArtifactSummary | null;
+  timeline: UnifiedAgentTaskTimelineItem[];
 }
 
 export type AgentTaskEvent =

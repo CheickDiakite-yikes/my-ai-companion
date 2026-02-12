@@ -16,6 +16,7 @@ import {
   insertUserPreferencesSchema,
   type AgentArtifact,
   type AgentApproval,
+  type AgentToolCall,
   type AgentStep,
   type AgentTask,
   type Message,
@@ -29,6 +30,7 @@ import type {
   AgentTaskKind,
   AgentTaskEvent,
   AgentTaskSummary,
+  AgentToolCallSummary,
 } from "@shared/agent";
 import {
   createLiveToken,
@@ -555,6 +557,19 @@ function toAgentArtifactSummary(artifact: AgentArtifact): AgentArtifactSummary {
     metadata: artifact.metadata,
     createdAt: artifact.createdAt,
     updatedAt: artifact.updatedAt,
+  };
+}
+
+function toAgentToolCallSummary(toolCall: AgentToolCall): AgentToolCallSummary {
+  return {
+    id: toolCall.id,
+    taskId: toolCall.taskId,
+    stepId: toolCall.stepId ?? null,
+    toolName: toolCall.toolName,
+    riskLevel: toolCall.riskLevel,
+    status: toolCall.status,
+    outputSummary: toolCall.outputSummary ?? null,
+    createdAt: toolCall.createdAt,
   };
 }
 
@@ -1932,6 +1947,7 @@ export async function registerRoutes(
         status: task.status,
         stepCount: task.steps.length,
         artifactCount: task.artifacts.length,
+        toolCallCount: task.toolCalls.length,
         elapsedMs: elapsedMs(startedAt),
       });
 
@@ -1944,6 +1960,9 @@ export async function registerRoutes(
         ),
         artifacts: task.artifacts.map((artifact) =>
           toAgentArtifactSummary(artifact),
+        ),
+        toolCalls: task.toolCalls.map((toolCall) =>
+          toAgentToolCallSummary(toolCall),
         ),
       });
     } catch (error) {

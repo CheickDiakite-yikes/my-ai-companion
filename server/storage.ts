@@ -79,6 +79,7 @@ export interface AgentTaskWithDetails extends AgentTask {
   steps: AgentStep[];
   approvals: AgentApproval[];
   artifacts: AgentArtifact[];
+  toolCalls: AgentToolCall[];
 }
 
 export interface IStorage {
@@ -151,6 +152,7 @@ export interface IStorage {
   createAgentTask(data: InsertAgentTask): Promise<AgentTask>;
   getAgentTaskById(taskId: string): Promise<AgentTask | undefined>;
   getAgentTaskWithDetails(taskId: string): Promise<AgentTaskWithDetails | undefined>;
+  getAgentToolCalls(taskId: string): Promise<AgentToolCall[]>;
   updateAgentTaskStatus(params: {
     taskId: string;
     status: AgentTaskStatus;
@@ -609,7 +611,7 @@ export class DatabaseStorage implements IStorage {
     const task = await this.getAgentTaskById(taskId);
     if (!task) return undefined;
 
-    const [steps, approvals, artifacts] = await Promise.all([
+    const [steps, approvals, artifacts, toolCalls] = await Promise.all([
       this.getAgentSteps(taskId),
       db
         .select()
@@ -621,6 +623,7 @@ export class DatabaseStorage implements IStorage {
         .from(agentArtifacts)
         .where(eq(agentArtifacts.taskId, taskId))
         .orderBy(asc(agentArtifacts.createdAt)),
+      this.getAgentToolCalls(taskId),
     ]);
 
     return {
@@ -628,7 +631,16 @@ export class DatabaseStorage implements IStorage {
       steps,
       approvals,
       artifacts,
+      toolCalls,
     };
+  }
+
+  async getAgentToolCalls(taskId: string): Promise<AgentToolCall[]> {
+    return db
+      .select()
+      .from(agentToolCalls)
+      .where(eq(agentToolCalls.taskId, taskId))
+      .orderBy(asc(agentToolCalls.createdAt), asc(agentToolCalls.id));
   }
 
   async updateAgentTaskStatus(params: {

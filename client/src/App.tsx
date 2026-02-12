@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useId, useMemo } from "react";
+import { useState, useEffect, useRef, useId, useMemo, type ReactNode } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Mic,
@@ -22,6 +22,12 @@ import {
   Play,
   FileText,
   AlertTriangle,
+  CheckCircle2,
+  CircleDot,
+  Clock3,
+  Info,
+  Loader2,
+  Sparkles,
 } from "lucide-react";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -50,9 +56,12 @@ import {
 import type {
   AgentArtifactSummary,
   AgentApprovalSummary,
+  AgentToolCallSummary,
   AgentMessageUiPayload,
   AgentStepSummary,
   AgentTaskSummary,
+  UnifiedAgentTaskCardModel,
+  UnifiedAgentTaskTimelineItem,
 } from "@shared/agent";
 
 import {
@@ -61,6 +70,25 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/tabs";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 // --- Types ---
 type Mode = "voice" | "text" | "profile";
@@ -323,7 +351,28 @@ interface AgentTaskResponse {
   steps?: AgentStepSummary[];
   approvals?: AgentApprovalSummary[];
   artifacts?: AgentArtifactSummary[];
+  toolCalls?: AgentToolCallSummary[];
 }
+
+interface LiveTaskSnapshot {
+  task: AgentTaskSummary;
+  latestStep: AgentStepSummary | null;
+  approval: AgentApprovalSummary | null;
+  artifact: AgentArtifactSummary | null;
+  timeline: UnifiedAgentTaskTimelineItem[];
+  updatedAtIso: string;
+}
+
+type TextRenderItem =
+  | {
+      kind: "message";
+      message: MessageData;
+    }
+  | {
+      kind: "agent_unified_task";
+      message: MessageData;
+      card: UnifiedAgentTaskCardModel;
+    };
 
 const ZEE_AVATAR_PRESET_OPTIONS: Array<{
   id: ZeeAvatarPreset;
@@ -409,6 +458,331 @@ function toTaskStatusLabel(status: AgentTaskSummary["status"]): string {
   if (status === "failed") return "Failed";
   if (status === "cancelled") return "Canceled";
   return "Queued";
+}
+
+function parseClientBooleanFlag(value: unknown, fallback: boolean): boolean {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value !== "string") {
+    return fallback;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "off"].includes(normalized)) return false;
+  return fallback;
+}
+
+const ENABLE_UNIFIED_AGENT_TASK_CARD = parseClientBooleanFlag(
+  (import.meta.env as Record<string, unknown>).VITE_ENABLE_UNIFIED_AGENT_TASK_CARD ??
+    (import.meta.env as Record<string, unknown>).ENABLE_UNIFIED_AGENT_TASK_CARD,
+  true,
+);
+
+const TASK_STATUS_PRECEDENCE: Record<AgentTaskSummary["status"], number> = {
+  queued: 1,
+  completed: 2,
+  in_progress: 3,
+  approval_required: 4,
+  failed: 5,
+  cancelled: 5,
+};
+
+function toIsoString(value: string | Date | null | undefined): string | null {
+  if (!value) return null;
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value.toISOString();
+  }
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+}
+
+function toEpochMs(value: string | Date | null | undefined): number {
+  const iso = toIsoString(value);
+  if (!iso) return 0;
+  const parsed = new Date(iso).getTime();
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function extractAgentTaskIdFromPayload(
+  payload: MessageData["uiPayload"],
+): string | null {
+  if (!payload) return null;
+  if (payload.kind === "agent_task_status") {
+    return payload.task.id;
+  }
+  if (payload.kind === "agent_approval" || payload.kind === "agent_artifact") {
+    return payload.taskId;
+  }
+  return null;
+}
+
+function pickLatestTaskSummary(
+  existingTask: AgentTaskSummary | null,
+  incomingTask: AgentTaskSummary | null,
+): AgentTaskSummary | null {
+  if (!incomingTask) return existingTask;
+  if (!existingTask) return incomingTask;
+  const existingUpdatedMs = Math.max(
+    toEpochMs(existingTask.updatedAt),
+    toEpochMs(existingTask.completedAt),
+    toEpochMs(existingTask.createdAt),
+  );
+  const incomingUpdatedMs = Math.max(
+    toEpochMs(incomingTask.updatedAt),
+    toEpochMs(incomingTask.completedAt),
+    toEpochMs(incomingTask.createdAt),
+  );
+  return incomingUpdatedMs >= existingUpdatedMs ? incomingTask : existingTask;
+}
+
+function resolveTaskStatus(
+  statuses: Array<AgentTaskSummary["status"] | null | undefined>,
+): AgentTaskSummary["status"] {
+  let resolved: AgentTaskSummary["status"] = "queued";
+  let bestRank = TASK_STATUS_PRECEDENCE[resolved];
+  for (const status of statuses) {
+    if (!status) continue;
+    const rank = TASK_STATUS_PRECEDENCE[status];
+    if (rank > bestRank) {
+      resolved = status;
+      bestRank = rank;
+    }
+  }
+  return resolved;
+}
+
+function upsertTimelineItem(
+  timeline: UnifiedAgentTaskTimelineItem[],
+  item: UnifiedAgentTaskTimelineItem,
+) {
+  const existingIndex = timeline.findIndex((entry) => entry.id === item.id);
+  if (existingIndex >= 0) {
+    timeline[existingIndex] = item;
+  } else {
+    timeline.push(item);
+  }
+}
+
+function toTaskKindLabel(taskKind: string): string {
+  if (taskKind === "mini_game") return "Mini game";
+  if (taskKind === "doc_markdown") return "Document";
+  if (taskKind === "mixed") return "Mixed";
+  return "Agent task";
+}
+
+function toDefaultTaskTitle(params: {
+  task: AgentTaskSummary | null;
+  artifact: AgentArtifactSummary | null;
+  taskId: string;
+}): string {
+  if (params.artifact?.title) return params.artifact.title;
+  if (params.task?.prompt?.trim()) {
+    return params.task.prompt.trim().slice(0, 72);
+  }
+  return `Task ${params.taskId.slice(0, 8)}`;
+}
+
+function normalizeTimeline(
+  timeline: UnifiedAgentTaskTimelineItem[],
+): UnifiedAgentTaskTimelineItem[] {
+  return [...timeline].sort((a, b) => {
+    const aRank = toEpochMs(a.createdAt);
+    const bRank = toEpochMs(b.createdAt);
+    if (aRank !== bRank) return aRank - bRank;
+    return a.id.localeCompare(b.id);
+  });
+}
+
+function buildUnifiedAgentTaskCards(
+  messages: MessageData[],
+  liveTaskSnapshots: Record<string, LiveTaskSnapshot>,
+): TextRenderItem[] {
+  if (!ENABLE_UNIFIED_AGENT_TASK_CARD) {
+    return messages.map((message) => ({ kind: "message", message }));
+  }
+
+  interface AgentTaskAggregate {
+    taskId: string;
+    firstMessageId: string;
+    task: AgentTaskSummary | null;
+    latestStep: AgentStepSummary | null;
+    approval: AgentApprovalSummary | null;
+    artifact: AgentArtifactSummary | null;
+    timeline: UnifiedAgentTaskTimelineItem[];
+    summaryText: string | null;
+  }
+
+  const taskAggregates = new Map<string, AgentTaskAggregate>();
+  const hiddenMessageIds = new Set<string>();
+
+  for (const message of messages) {
+    if (message.sender !== "assistant") continue;
+    const taskId = extractAgentTaskIdFromPayload(message.uiPayload);
+    if (!taskId) continue;
+
+    const existingAggregate = taskAggregates.get(taskId);
+    if (!existingAggregate) {
+      taskAggregates.set(taskId, {
+        taskId,
+        firstMessageId: message.id,
+        task: null,
+        latestStep: null,
+        approval: null,
+        artifact: null,
+        timeline: [],
+        summaryText: null,
+      });
+    } else {
+      hiddenMessageIds.add(message.id);
+    }
+
+    const aggregate = taskAggregates.get(taskId);
+    if (!aggregate) continue;
+
+    if (message.text.trim().length > 0) {
+      aggregate.summaryText = message.text.trim();
+    }
+
+    if (isAgentTaskStatusPayload(message.uiPayload)) {
+      aggregate.task = pickLatestTaskSummary(aggregate.task, message.uiPayload.task);
+      if (message.uiPayload.latestStep) {
+        aggregate.latestStep = message.uiPayload.latestStep;
+        upsertTimelineItem(aggregate.timeline, {
+          id: `step-${message.uiPayload.latestStep.id}`,
+          title: message.uiPayload.latestStep.title,
+          detail: message.uiPayload.latestStep.detail ?? null,
+          status: message.uiPayload.latestStep.status,
+          createdAt: toIsoString(message.uiPayload.latestStep.updatedAt),
+        });
+      } else {
+        upsertTimelineItem(aggregate.timeline, {
+          id: `status-${message.uiPayload.task.status}`,
+          title: toTaskStatusLabel(message.uiPayload.task.status),
+          detail: message.uiPayload.text ?? null,
+          status:
+            message.uiPayload.task.status === "completed"
+              ? "completed"
+              : message.uiPayload.task.status === "failed"
+                ? "failed"
+                : message.uiPayload.task.status === "approval_required"
+                  ? "blocked"
+                  : "in_progress",
+          createdAt: toIsoString(message.createdAt),
+        });
+      }
+    }
+
+    if (isAgentApprovalPayload(message.uiPayload)) {
+      aggregate.approval = message.uiPayload.approval;
+      upsertTimelineItem(aggregate.timeline, {
+        id: `approval-${message.uiPayload.approval.id}`,
+        title:
+          message.uiPayload.approval.status === "pending"
+            ? "Approval required"
+            : `Approval ${message.uiPayload.approval.status}`,
+        detail: message.uiPayload.approval.requestedAction,
+        status:
+          message.uiPayload.approval.status === "denied" ? "failed" : "blocked",
+        createdAt: toIsoString(message.uiPayload.approval.createdAt),
+      });
+    }
+
+    if (isAgentArtifactPayload(message.uiPayload)) {
+      aggregate.artifact = message.uiPayload.artifact;
+      upsertTimelineItem(aggregate.timeline, {
+        id: `artifact-${message.uiPayload.artifact.id}`,
+        title: "Artifact ready",
+        detail: message.uiPayload.artifact.title,
+        status: "completed",
+        createdAt: toIsoString(message.uiPayload.artifact.updatedAt),
+      });
+    }
+  }
+
+  for (const [taskId, snapshot] of Object.entries(liveTaskSnapshots)) {
+    const aggregate = taskAggregates.get(taskId);
+    if (!aggregate) continue;
+
+    aggregate.task = pickLatestTaskSummary(aggregate.task, snapshot.task);
+    if (snapshot.latestStep) {
+      aggregate.latestStep = snapshot.latestStep;
+    }
+    if (snapshot.approval) {
+      aggregate.approval = snapshot.approval;
+    }
+    if (snapshot.artifact) {
+      aggregate.artifact = snapshot.artifact;
+    }
+    for (const timelineItem of snapshot.timeline) {
+      upsertTimelineItem(aggregate.timeline, timelineItem);
+    }
+  }
+
+  return messages.flatMap((message): TextRenderItem[] => {
+    const taskId =
+      message.sender === "assistant"
+        ? extractAgentTaskIdFromPayload(message.uiPayload)
+        : null;
+    if (!taskId) {
+      return [{ kind: "message", message }];
+    }
+    if (hiddenMessageIds.has(message.id)) {
+      return [];
+    }
+
+    const aggregate = taskAggregates.get(taskId);
+    if (!aggregate || aggregate.firstMessageId !== message.id) {
+      return [{ kind: "message", message }];
+    }
+
+    const inferredStatusFromApproval =
+      aggregate.approval?.status === "pending"
+        ? "approval_required"
+        : aggregate.approval?.status === "denied"
+          ? "failed"
+          : null;
+    const inferredStatusFromArtifact = aggregate.artifact ? "completed" : null;
+    const resolvedStatus = resolveTaskStatus([
+      aggregate.task?.status,
+      inferredStatusFromApproval,
+      inferredStatusFromArtifact,
+    ]);
+
+    const resolvedTask =
+      aggregate.task ??
+      ({
+        id: taskId,
+        conversationId: message.conversationId,
+        status: resolvedStatus,
+        riskLevel: "low",
+        taskKind:
+          aggregate.artifact?.type === "mini_game" ? "mini_game" : "doc_markdown",
+        prompt: message.text,
+        createdAt: message.createdAt ? new Date(message.createdAt) : null,
+        updatedAt: message.createdAt ? new Date(message.createdAt) : null,
+        completedAt: null,
+      } satisfies AgentTaskSummary);
+
+    const timeline = normalizeTimeline(aggregate.timeline);
+    const card: UnifiedAgentTaskCardModel = {
+      taskId,
+      title: toDefaultTaskTitle({
+        task: resolvedTask,
+        artifact: aggregate.artifact,
+        taskId,
+      }),
+      prompt: resolvedTask.prompt,
+      taskKind: resolvedTask.taskKind,
+      status: resolvedStatus,
+      latestStep: aggregate.latestStep,
+      approval: aggregate.approval,
+      artifact: aggregate.artifact,
+      timeline,
+    };
+
+    return [{ kind: "agent_unified_task", message, card }];
+  });
 }
 
 function formatMinutesFromSeconds(seconds: number): string {
@@ -2750,6 +3124,504 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onProfile, assistantName
   );
 };
 
+function formatTimelineTimeLabel(value: string | null): string {
+  if (!value) return "";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "";
+  return parsed.toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function toTimelineVisual(status: UnifiedAgentTaskTimelineItem["status"]): {
+  label: string;
+  icon: ReactNode;
+  color: string;
+} {
+  if (status === "completed") {
+    return {
+      label: "Completed",
+      icon: <CheckCircle2 className="h-3.5 w-3.5" />,
+      color: "color-mix(in srgb, var(--app-accent) 75%, #22c55e)",
+    };
+  }
+  if (status === "failed") {
+    return {
+      label: "Failed",
+      icon: <AlertTriangle className="h-3.5 w-3.5" />,
+      color: "color-mix(in srgb, var(--app-accent) 38%, #ef4444)",
+    };
+  }
+  if (status === "blocked") {
+    return {
+      label: "Blocked",
+      icon: <AlertTriangle className="h-3.5 w-3.5" />,
+      color: "color-mix(in srgb, var(--app-accent) 65%, #f59e0b)",
+    };
+  }
+  if (status === "in_progress") {
+    return {
+      label: "In progress",
+      icon: <Loader2 className="h-3.5 w-3.5 animate-spin" />,
+      color: "var(--app-accent)",
+    };
+  }
+  if (status === "queued") {
+    return {
+      label: "Queued",
+      icon: <Clock3 className="h-3.5 w-3.5" />,
+      color: "var(--app-on-dark-muted)",
+    };
+  }
+  return {
+    label: "Info",
+    icon: <CircleDot className="h-3.5 w-3.5" />,
+    color: "var(--app-on-dark-muted)",
+  };
+}
+
+const UnifiedAgentTaskCard = ({
+  card,
+  messageText,
+  onOpenArtifact,
+  onResolveApproval,
+}: {
+  card: UnifiedAgentTaskCardModel;
+  messageText: string;
+  onOpenArtifact: (artifactId: string) => void;
+  onResolveApproval: (
+    taskId: string,
+    approve: boolean,
+    reason?: string,
+  ) => Promise<void>;
+}) => {
+  const [activeTab, setActiveTab] = useState("output");
+  const [isInfoOpen, setIsInfoOpen] = useState(false);
+  const [isResolvingApproval, setIsResolvingApproval] = useState(false);
+
+  const taskDetailQuery = useQuery<AgentTaskResponse>({
+    queryKey: [`/api/agent/tasks/${card.taskId}`],
+    enabled: isInfoOpen,
+    staleTime: 0,
+    retry: 2,
+  });
+
+  const detailTimeline = useMemo(() => {
+    const details = taskDetailQuery.data;
+    if (!details) return [] as UnifiedAgentTaskTimelineItem[];
+    const rows: UnifiedAgentTaskTimelineItem[] = [];
+
+    for (const step of details.steps ?? []) {
+      rows.push({
+        id: `detail-step-${step.id}`,
+        title: step.title,
+        detail: step.detail ?? null,
+        status: step.status,
+        createdAt: toIsoString(step.updatedAt) ?? toIsoString(step.createdAt),
+      });
+    }
+
+    for (const approval of details.approvals ?? []) {
+      rows.push({
+        id: `detail-approval-${approval.id}`,
+        title:
+          approval.status === "pending"
+            ? "Approval required"
+            : `Approval ${approval.status}`,
+        detail: approval.requestedAction,
+        status: approval.status === "denied" ? "failed" : "blocked",
+        createdAt: toIsoString(approval.respondedAt) ?? toIsoString(approval.createdAt),
+      });
+    }
+
+    for (const artifact of details.artifacts ?? []) {
+      rows.push({
+        id: `detail-artifact-${artifact.id}`,
+        title: "Artifact published",
+        detail: artifact.title,
+        status: "completed",
+        createdAt: toIsoString(artifact.updatedAt) ?? toIsoString(artifact.createdAt),
+      });
+    }
+
+    for (const toolCall of details.toolCalls ?? []) {
+      rows.push({
+        id: `detail-tool-${toolCall.id}`,
+        title: `Tool: ${toolCall.toolName}`,
+        detail: toolCall.outputSummary ?? null,
+        status:
+          toolCall.status === "completed"
+            ? "completed"
+            : toolCall.status === "failed"
+              ? "failed"
+              : toolCall.status === "started"
+                ? "in_progress"
+                : "info",
+        createdAt: toIsoString(toolCall.createdAt),
+      });
+    }
+
+    return normalizeTimeline(rows);
+  }, [taskDetailQuery.data]);
+
+  const timeline = detailTimeline.length > 0 ? detailTimeline : card.timeline;
+  const timelinePreview = timeline.slice(-4);
+  const hasArtifact = Boolean(card.artifact);
+  const approvalPending = card.approval?.status === "pending";
+  const isRunning = card.status === "queued" || card.status === "in_progress";
+  const statusLabel = toTaskStatusLabel(card.status);
+  const kindLabel = toTaskKindLabel(card.taskKind);
+  const detailTools = taskDetailQuery.data?.toolCalls ?? [];
+
+  const statusTone =
+    card.status === "failed"
+      ? "color-mix(in srgb, var(--app-accent) 40%, #ef4444)"
+      : card.status === "approval_required"
+        ? "color-mix(in srgb, var(--app-accent) 70%, #f59e0b)"
+        : card.status === "completed"
+          ? "color-mix(in srgb, var(--app-accent) 85%, #22c55e)"
+          : "var(--app-accent)";
+
+  const handleApproval = async (approve: boolean) => {
+    setIsResolvingApproval(true);
+    try {
+      await onResolveApproval(
+        card.taskId,
+        approve,
+        approve ? undefined : "Denied from unified task card",
+      );
+    } finally {
+      setIsResolvingApproval(false);
+    }
+  };
+
+  return (
+    <div
+      className="space-y-3"
+      data-testid="agent-unified-task-card"
+      data-agent-task-id={card.taskId}
+      data-agent-task-status={card.status}
+    >
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0 space-y-1">
+          <div className="flex items-center gap-2">
+            <span className="text-[11px] font-semibold uppercase tracking-[0.16em] opacity-70">
+              Agent Task
+            </span>
+            {isRunning && (
+              <span
+                className="inline-flex h-1.5 w-1.5 rounded-full"
+                style={{ backgroundColor: "var(--app-accent)" }}
+              />
+            )}
+          </div>
+          <p className="line-clamp-2 text-sm font-semibold">{card.title}</p>
+          <p className="text-[11px] uppercase tracking-wide opacity-70">{kindLabel}</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <span
+            className="rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
+            style={{
+              borderColor: "color-mix(in srgb, var(--app-soft-card-border) 75%, transparent)",
+              backgroundColor: "color-mix(in srgb, var(--app-soft-card-bg) 65%, transparent)",
+              color: statusTone,
+            }}
+          >
+            {statusLabel}
+          </span>
+          <TooltipProvider delayDuration={200}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  onClick={() => setIsInfoOpen(true)}
+                  className="rounded-md border p-1.5 transition-colors hover:opacity-90"
+                  style={{
+                    borderColor: "var(--app-soft-card-border)",
+                    backgroundColor: "var(--app-soft-card-bg)",
+                  }}
+                  data-testid="agent-task-info-button"
+                >
+                  <Info className="h-3.5 w-3.5" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent>View full activity</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        </div>
+      </div>
+
+      <Tabs
+        value={activeTab}
+        onValueChange={setActiveTab}
+        className="space-y-3"
+        data-testid="agent-task-tabs"
+      >
+        <TabsList
+          className="w-full rounded-xl p-1"
+          style={{
+            backgroundColor: "color-mix(in srgb, var(--app-soft-card-bg) 72%, transparent)",
+            color: "var(--app-on-dark-muted)",
+          }}
+        >
+          <TabsTrigger
+            value="output"
+            className="flex-1 rounded-lg text-xs font-semibold"
+            data-testid="agent-task-tab-output"
+          >
+            Output
+          </TabsTrigger>
+          <TabsTrigger
+            value="process"
+            className="flex-1 rounded-lg text-xs font-semibold"
+            data-testid="agent-task-tab-process"
+          >
+            Process
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="output" className="mt-0">
+          <div
+            className="relative overflow-hidden rounded-xl border p-3"
+            style={{
+              borderColor: "var(--app-soft-card-border)",
+              background:
+                "radial-gradient(120% 100% at 12% 10%, color-mix(in srgb, var(--app-accent) 18%, transparent) 0%, transparent 56%), color-mix(in srgb, var(--app-soft-card-bg) 88%, transparent)",
+            }}
+          >
+            <motion.div
+              className="pointer-events-none absolute inset-0 opacity-40"
+              aria-hidden="true"
+              animate={{
+                backgroundPosition: ["0% 50%", "100% 50%", "0% 50%"],
+              }}
+              transition={{
+                duration: 12,
+                ease: "linear",
+                repeat: Infinity,
+              }}
+              style={{
+                backgroundImage:
+                  "linear-gradient(120deg, transparent 0%, color-mix(in srgb, var(--app-accent) 35%, transparent) 35%, transparent 70%)",
+                backgroundSize: "180% 180%",
+              }}
+            />
+            <div className="relative z-[1] space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <div className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide opacity-80">
+                  <Sparkles className="h-3 w-3" />
+                  Portal
+                </div>
+                <span className="text-[11px] opacity-75">
+                  {hasArtifact ? "Ready" : isRunning ? "Crafting..." : statusLabel}
+                </span>
+              </div>
+              <p className="text-sm font-semibold">
+                {card.artifact?.title ?? `${kindLabel} in progress`}
+              </p>
+              <p className="text-xs opacity-80">
+                {hasArtifact
+                  ? messageText
+                  : card.latestStep?.detail ?? "Zee is working through your request."}
+              </p>
+              {hasArtifact && card.artifact ? (
+                <button
+                  type="button"
+                  onClick={() => onOpenArtifact(card.artifact!.id)}
+                  className="rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors hover:opacity-95"
+                  style={{
+                    borderColor: "var(--app-soft-card-border)",
+                    backgroundColor: "var(--app-soft-card-bg)",
+                  }}
+                  data-testid="button-open-agent-artifact"
+                >
+                  {card.artifact.type === "mini_game" ? "View / Play" : "View"}
+                </button>
+              ) : (
+                <div className="inline-flex items-center gap-2 text-xs opacity-75">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  Generating output
+                </div>
+              )}
+            </div>
+          </div>
+
+          {approvalPending && card.approval && (
+            <div
+              className="space-y-2 rounded-xl border p-3"
+              style={{
+                borderColor: "var(--app-soft-card-border)",
+                backgroundColor: "color-mix(in srgb, var(--app-soft-card-bg) 82%, transparent)",
+              }}
+            >
+              <div className="flex items-center gap-2">
+                <AlertTriangle className="h-4 w-4" />
+                <p className="text-xs font-semibold uppercase tracking-wide">
+                  Approval required
+                </p>
+              </div>
+              <p className="text-xs opacity-80">{card.approval.requestedAction}</p>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => void handleApproval(true)}
+                  disabled={isResolvingApproval}
+                  className="rounded-lg border px-2.5 py-1.5 text-xs font-semibold disabled:opacity-60"
+                  style={{
+                    borderColor: "var(--app-soft-card-border)",
+                    backgroundColor: "var(--app-soft-card-bg)",
+                  }}
+                  data-testid="button-agent-approve"
+                >
+                  Approve
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleApproval(false)}
+                  disabled={isResolvingApproval}
+                  className="rounded-lg border px-2.5 py-1.5 text-xs font-semibold disabled:opacity-60"
+                  style={{
+                    borderColor: "var(--app-soft-card-border)",
+                    backgroundColor: "transparent",
+                  }}
+                  data-testid="button-agent-deny"
+                >
+                  Deny
+                </button>
+              </div>
+            </div>
+          )}
+        </TabsContent>
+
+        <TabsContent value="process" className="mt-0">
+          <div
+            className="space-y-2 rounded-xl border px-3 py-2.5"
+            style={{
+              borderColor: "var(--app-soft-card-border)",
+              backgroundColor: "color-mix(in srgb, var(--app-soft-card-bg) 84%, transparent)",
+            }}
+            data-testid="agent-task-process-timeline"
+          >
+            {timelinePreview.length === 0 ? (
+              <p className="text-xs opacity-70">
+                Activity will appear here as Zee works.
+              </p>
+            ) : (
+              timelinePreview.map((item) => {
+                const visual = toTimelineVisual(item.status);
+                return (
+                  <div key={item.id} className="flex gap-2.5">
+                    <div className="pt-0.5" style={{ color: visual.color }}>
+                      {visual.icon}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs font-semibold leading-tight">{item.title}</p>
+                      {item.detail && (
+                        <p className="line-clamp-2 text-[11px] opacity-75">{item.detail}</p>
+                      )}
+                    </div>
+                    <span className="shrink-0 text-[10px] opacity-60">
+                      {formatTimelineTimeLabel(item.createdAt)}
+                    </span>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </TabsContent>
+      </Tabs>
+
+      <Dialog open={isInfoOpen} onOpenChange={setIsInfoOpen}>
+        <DialogContent
+          className="left-1/2 top-auto w-[calc(100%-1rem)] max-w-none -translate-x-1/2 translate-y-0 rounded-2xl border px-4 pb-4 pt-3 data-[state=open]:slide-in-from-bottom-4 data-[state=closed]:slide-out-to-bottom-4 sm:top-[50%] sm:max-w-xl sm:-translate-y-1/2 sm:rounded-2xl"
+          style={{
+            borderColor: "var(--app-soft-card-border)",
+            backgroundColor: "var(--app-panel-bg)",
+            color: "var(--app-on-dark)",
+          }}
+          data-testid="agent-task-info-dialog"
+        >
+          <DialogHeader className="space-y-1 text-left">
+            <DialogTitle className="text-base">Activity</DialogTitle>
+            <DialogDescription className="text-xs opacity-75">
+              {card.title}
+            </DialogDescription>
+          </DialogHeader>
+
+          {taskDetailQuery.isLoading ? (
+            <div className="flex items-center gap-2 py-4 text-xs opacity-75">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Loading task timeline...
+            </div>
+          ) : (
+            <div className="max-h-[58dvh] space-y-3 overflow-y-auto pr-1">
+              {timeline.length === 0 ? (
+                <p className="text-xs opacity-75">No activity logged yet.</p>
+              ) : (
+                timeline.map((item) => {
+                  const visual = toTimelineVisual(item.status);
+                  return (
+                    <div
+                      key={`timeline-dialog-${item.id}`}
+                      className="rounded-xl border px-3 py-2"
+                      style={{
+                        borderColor: "var(--app-soft-card-border)",
+                        backgroundColor: "var(--app-soft-card-bg)",
+                      }}
+                      data-testid="agent-task-timeline-row"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div
+                          className="inline-flex items-center gap-2 text-xs font-semibold"
+                          style={{ color: visual.color }}
+                        >
+                          {visual.icon}
+                          <span>{item.title}</span>
+                        </div>
+                        <span className="text-[10px] opacity-65">
+                          {formatTimelineTimeLabel(item.createdAt)}
+                        </span>
+                      </div>
+                      {item.detail && (
+                        <p className="mt-1 text-xs leading-relaxed opacity-80">
+                          {item.detail}
+                        </p>
+                      )}
+                    </div>
+                  );
+                })
+              )}
+
+              {detailTools.length > 0 && (
+                <div className="space-y-2">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide opacity-70">
+                    Tools
+                  </p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {detailTools.map((toolCall) => (
+                      <span
+                        key={`tool-chip-${toolCall.id}`}
+                        className="rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide"
+                        style={{
+                          borderColor: "var(--app-soft-card-border)",
+                          backgroundColor: "var(--app-soft-card-bg)",
+                        }}
+                      >
+                        {toolCall.toolName}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+};
+
 const TextView = ({
   messages,
   isStreamingReply,
@@ -2759,6 +3631,7 @@ const TextView = ({
   userProfileImage,
   onOpenArtifact,
   onResolveApproval,
+  liveTaskSnapshots,
 }: {
   messages: MessageData[];
   isStreamingReply: boolean;
@@ -2772,6 +3645,7 @@ const TextView = ({
     approve: boolean,
     reason?: string,
   ) => Promise<void>;
+  liveTaskSnapshots: Record<string, LiveTaskSnapshot>;
 }) => {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const [showJumpToNewest, setShowJumpToNewest] = useState(false);
@@ -2812,6 +3686,11 @@ const TextView = ({
       .find((msg) => msg.sender === "assistant")
       ?.text ?? "";
 
+  const renderItems = useMemo(
+    () => buildUnifiedAgentTaskCards(messages, liveTaskSnapshots),
+    [messages, liveTaskSnapshots],
+  );
+
   return (
     <div
       className="h-full relative flex flex-col"
@@ -2837,9 +3716,16 @@ const TextView = ({
         }}
       >
         <div className="space-y-4 pb-8">
-          {messages.map((msg, idx) => (
+          {renderItems.map((item, idx) => {
+            const msg = item.message;
+            const isUnifiedTaskCard = item.kind === "agent_unified_task";
+            return (
             <motion.div
-              key={msg.id}
+              key={
+                isUnifiedTaskCard
+                  ? `agent-card-${item.card.taskId}-${msg.id}`
+                  : msg.id
+              }
               initial={{ opacity: 0, y: 16, scale: 0.97 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
               transition={{
@@ -2918,6 +3804,13 @@ const TextView = ({
                           transition={{ duration: 0.8, repeat: Infinity, ease: "easeInOut", delay: 0.3 }}
                         />
                       </div>
+                    ) : isUnifiedTaskCard ? (
+                      <UnifiedAgentTaskCard
+                        card={item.card}
+                        messageText={msg.text}
+                        onOpenArtifact={onOpenArtifact}
+                        onResolveApproval={onResolveApproval}
+                      />
                     ) : isAgentTaskStatusPayload(msg.uiPayload) ? (
                       <div
                         className="space-y-2"
@@ -3066,7 +3959,8 @@ const TextView = ({
                 )}
               </div>
             </motion.div>
-          ))}
+            );
+          })}
         </div>
       </div>
       {mode === "text" && showJumpToNewest && (
@@ -3747,6 +4641,9 @@ function App() {
   const [showProfile, setShowProfile] = useState(false);
   const [showOutputsHistory, setShowOutputsHistory] = useState(false);
   const [activeArtifactId, setActiveArtifactId] = useState<string | null>(null);
+  const [liveTaskSnapshots, setLiveTaskSnapshots] = useState<
+    Record<string, LiveTaskSnapshot>
+  >({});
   const [duration, setDuration] = useState(0);
   const [callStartTime, setCallStartTime] = useState<number | null>(null);
   const [liveError, setLiveError] = useState<string | null>(null);
@@ -4223,6 +5120,10 @@ function App() {
     }
   }, [conversations, isAuthenticated, showOnboarding]);
 
+  useEffect(() => {
+    setLiveTaskSnapshots({});
+  }, [activeConversationId]);
+
   const ensureActiveConversationId = async (): Promise<string> => {
     if (activeConversationId) {
       return activeConversationId;
@@ -4531,6 +5432,63 @@ function App() {
     return next;
   };
 
+  const createFallbackLiveTaskSnapshot = (params: {
+    taskId: string;
+    conversationId: string;
+  }): LiveTaskSnapshot => {
+    const nowIso = new Date().toISOString();
+    return {
+      task: {
+        id: params.taskId,
+        conversationId: params.conversationId,
+        status: "queued",
+        riskLevel: "low",
+        taskKind: "mixed",
+        prompt: "",
+        createdAt: new Date(nowIso),
+        updatedAt: new Date(nowIso),
+        completedAt: null,
+      },
+      latestStep: null,
+      approval: null,
+      artifact: null,
+      timeline: [],
+      updatedAtIso: nowIso,
+    };
+  };
+
+  const upsertLiveTaskSnapshot = (params: {
+    taskId: string;
+    conversationId: string;
+    updater: (current: LiveTaskSnapshot) => LiveTaskSnapshot;
+  }) => {
+    setLiveTaskSnapshots((current) => {
+      const existing =
+        current[params.taskId] ??
+        createFallbackLiveTaskSnapshot({
+          taskId: params.taskId,
+          conversationId: params.conversationId,
+        });
+      const updated = params.updater(existing);
+      return {
+        ...current,
+        [params.taskId]: {
+          ...updated,
+          updatedAtIso: new Date().toISOString(),
+        },
+      };
+    });
+  };
+
+  const appendLiveTimelineItem = (
+    timeline: UnifiedAgentTaskTimelineItem[],
+    item: UnifiedAgentTaskTimelineItem,
+  ): UnifiedAgentTaskTimelineItem[] => {
+    const next = [...timeline];
+    upsertTimelineItem(next, item);
+    return normalizeTimeline(next);
+  };
+
   const streamChatResponse = async (params: {
     conversationId: string;
     text: string;
@@ -4678,6 +5636,21 @@ function App() {
 
       if (event.type === "task_created") {
         activeTaskSummary = event.task;
+        upsertLiveTaskSnapshot({
+          taskId: event.task.id,
+          conversationId: params.conversationId,
+          updater: (snapshot) => ({
+            ...snapshot,
+            task: pickLatestTaskSummary(snapshot.task, event.task) ?? event.task,
+            timeline: appendLiveTimelineItem(snapshot.timeline, {
+              id: `task-created-${event.task.id}`,
+              title: "Task started",
+              detail: "Zee started crafting your request.",
+              status: "queued",
+              createdAt: new Date().toISOString(),
+            }),
+          }),
+        });
         updatePrimaryOptimisticMessage((message) => ({
           ...message,
           isTyping: false,
@@ -4712,10 +5685,57 @@ function App() {
               : message.uiPayload,
           };
         });
+        upsertLiveTaskSnapshot({
+          taskId: event.taskId,
+          conversationId: params.conversationId,
+          updater: (snapshot) => {
+            const nextTask: AgentTaskSummary = {
+              ...snapshot.task,
+              status:
+                snapshot.task.status === "approval_required"
+                  ? "approval_required"
+                  : "in_progress",
+              updatedAt: new Date(),
+            };
+            return {
+              ...snapshot,
+              task: nextTask,
+              latestStep: event.step,
+              timeline: appendLiveTimelineItem(snapshot.timeline, {
+                id: `step-${event.step.id}`,
+                title: event.step.title,
+                detail: event.step.detail ?? null,
+                status: event.step.status,
+                createdAt: toIsoString(event.step.updatedAt) ?? new Date().toISOString(),
+              }),
+            };
+          },
+        });
         return;
       }
 
       if (event.type === "task_approval_required") {
+        upsertLiveTaskSnapshot({
+          taskId: event.taskId,
+          conversationId: params.conversationId,
+          updater: (snapshot) => ({
+            ...snapshot,
+            task: {
+              ...snapshot.task,
+              status: "approval_required",
+              updatedAt: new Date(),
+            },
+            approval: event.approval,
+            timeline: appendLiveTimelineItem(snapshot.timeline, {
+              id: `approval-${event.approval.id}`,
+              title: "Approval required",
+              detail: event.approval.requestedAction,
+              status: "blocked",
+              createdAt:
+                toIsoString(event.approval.createdAt) ?? new Date().toISOString(),
+            }),
+          }),
+        });
         updatePrimaryOptimisticMessage((message) => ({
           ...message,
           isTyping: false,
@@ -4731,6 +5751,22 @@ function App() {
       }
 
       if (event.type === "task_artifact_ready") {
+        upsertLiveTaskSnapshot({
+          taskId: event.taskId,
+          conversationId: params.conversationId,
+          updater: (snapshot) => ({
+            ...snapshot,
+            artifact: event.artifact,
+            timeline: appendLiveTimelineItem(snapshot.timeline, {
+              id: `artifact-${event.artifact.id}`,
+              title: "Artifact ready",
+              detail: event.artifact.title,
+              status: "completed",
+              createdAt:
+                toIsoString(event.artifact.updatedAt) ?? new Date().toISOString(),
+            }),
+          }),
+        });
         updatePrimaryOptimisticMessage((message) => ({
           ...message,
           isTyping: false,
@@ -4746,6 +5782,26 @@ function App() {
       }
 
       if (event.type === "task_failed") {
+        upsertLiveTaskSnapshot({
+          taskId: event.taskId,
+          conversationId: params.conversationId,
+          updater: (snapshot) => ({
+            ...snapshot,
+            task: {
+              ...snapshot.task,
+              status: "failed",
+              updatedAt: new Date(),
+              completedAt: new Date(),
+            },
+            timeline: appendLiveTimelineItem(snapshot.timeline, {
+              id: `failed-${event.taskId}`,
+              title: "Task failed",
+              detail: event.message,
+              status: "failed",
+              createdAt: new Date().toISOString(),
+            }),
+          }),
+        });
         updatePrimaryOptimisticMessage((message) => ({
           ...message,
           isTyping: false,
@@ -4778,6 +5834,89 @@ function App() {
             assistantMessages,
           ),
         );
+        for (const assistantMessage of assistantMessages) {
+          const payload = assistantMessage.uiPayload ?? null;
+          if (!payload) continue;
+
+          if (isAgentTaskStatusPayload(payload)) {
+            upsertLiveTaskSnapshot({
+              taskId: payload.task.id,
+              conversationId: params.conversationId,
+              updater: (snapshot) => ({
+                ...snapshot,
+                task: pickLatestTaskSummary(snapshot.task, payload.task) ?? payload.task,
+                latestStep: payload.latestStep ?? snapshot.latestStep,
+                timeline: appendLiveTimelineItem(snapshot.timeline, {
+                  id: `final-status-${payload.task.status}`,
+                  title: toTaskStatusLabel(payload.task.status),
+                  detail: payload.text ?? assistantMessage.text,
+                  status:
+                    payload.task.status === "completed"
+                      ? "completed"
+                      : payload.task.status === "failed"
+                        ? "failed"
+                        : payload.task.status === "approval_required"
+                          ? "blocked"
+                          : payload.task.status === "queued"
+                            ? "queued"
+                            : "in_progress",
+                  createdAt:
+                    toIsoString(payload.task.updatedAt) ??
+                    toIsoString(assistantMessage.createdAt) ??
+                    new Date().toISOString(),
+                }),
+              }),
+            });
+            continue;
+          }
+
+          if (isAgentApprovalPayload(payload)) {
+            upsertLiveTaskSnapshot({
+              taskId: payload.taskId,
+              conversationId: params.conversationId,
+              updater: (snapshot) => ({
+                ...snapshot,
+                approval: payload.approval,
+                timeline: appendLiveTimelineItem(snapshot.timeline, {
+                  id: `approval-${payload.approval.id}`,
+                  title:
+                    payload.approval.status === "pending"
+                      ? "Approval required"
+                      : `Approval ${payload.approval.status}`,
+                  detail: payload.approval.requestedAction,
+                  status:
+                    payload.approval.status === "denied" ? "failed" : "blocked",
+                  createdAt:
+                    toIsoString(payload.approval.respondedAt) ??
+                    toIsoString(payload.approval.createdAt) ??
+                    new Date().toISOString(),
+                }),
+              }),
+            });
+            continue;
+          }
+
+          if (isAgentArtifactPayload(payload)) {
+            upsertLiveTaskSnapshot({
+              taskId: payload.taskId,
+              conversationId: params.conversationId,
+              updater: (snapshot) => ({
+                ...snapshot,
+                artifact: payload.artifact,
+                timeline: appendLiveTimelineItem(snapshot.timeline, {
+                  id: `artifact-${payload.artifact.id}`,
+                  title: "Artifact ready",
+                  detail: payload.artifact.title,
+                  status: "completed",
+                  createdAt:
+                    toIsoString(payload.artifact.updatedAt) ??
+                    toIsoString(payload.artifact.createdAt) ??
+                    new Date().toISOString(),
+                }),
+              }),
+            });
+          }
+        }
         return;
       }
 
@@ -5533,6 +6672,7 @@ function App() {
               userProfileImage={resolvedProfileImage}
               onOpenArtifact={handleOpenArtifact}
               onResolveApproval={handleResolveTaskApproval}
+              liveTaskSnapshots={liveTaskSnapshots}
             />
           </div>
 
