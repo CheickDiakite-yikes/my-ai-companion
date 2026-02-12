@@ -3407,38 +3407,36 @@ const UnifiedAgentTaskCard = ({
       data-agent-task-id={card.taskId}
       data-agent-task-status={card.status}
     >
-      <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0 flex-1 space-y-1">
-          <div className="flex items-center gap-2">
-            <span
-              className="text-[10px] font-bold uppercase tracking-[0.18em]"
-              style={{ color: "var(--app-on-dark-muted)" }}
-            >
-              Agent Task
-            </span>
-            <span className="h-1 w-1 rounded-full opacity-30" style={{ backgroundColor: "var(--app-on-dark-muted)" }} />
-            <span className="text-[10px] uppercase tracking-wide font-medium" style={{ color: "var(--app-on-dark-muted)" }}>{kindLabel}</span>
-            {isRunning && (
-              <motion.span
-                className="inline-flex h-1.5 w-1.5 rounded-full"
-                style={{ backgroundColor: "var(--app-accent)" }}
-                animate={{ opacity: [1, 0.3, 1] }}
-                transition={{ duration: 1.5, repeat: Infinity }}
-              />
-            )}
-          </div>
-          <div className="flex items-center justify-between gap-2">
-            <p className="line-clamp-2 text-sm font-semibold leading-snug" style={{ color: "var(--app-on-dark)" }}>{card.title}</p>
-            <span
-              className="shrink-0 rounded-full border px-2 py-px text-[9px] font-bold uppercase tracking-wide"
-              style={{
-                borderColor: "color-mix(in srgb, var(--app-soft-card-border) 75%, transparent)",
-                backgroundColor: "color-mix(in srgb, var(--app-soft-card-bg) 65%, transparent)",
-                color: statusTone,
-              }}
-            >
-              {statusLabel}
-            </span>
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2 min-w-0">
+          <div className="min-w-0">
+            <p className="line-clamp-1 text-sm font-semibold leading-snug" style={{ color: "var(--app-on-dark)" }}>{card.title}</p>
+            <div className="flex items-center gap-1.5 mt-0.5">
+              <span
+                className="text-[10px] font-bold uppercase tracking-[0.14em]"
+                style={{ color: "var(--app-on-dark-muted)" }}
+              >
+                {kindLabel}
+              </span>
+              <span
+                className="rounded-full border px-2 py-px text-[9px] font-bold uppercase tracking-wide"
+                style={{
+                  borderColor: "color-mix(in srgb, var(--app-soft-card-border) 75%, transparent)",
+                  backgroundColor: "color-mix(in srgb, var(--app-soft-card-bg) 65%, transparent)",
+                  color: statusTone,
+                }}
+              >
+                {statusLabel}
+              </span>
+              {isRunning && (
+                <motion.span
+                  className="inline-flex h-1.5 w-1.5 rounded-full"
+                  style={{ backgroundColor: "var(--app-accent)" }}
+                  animate={{ opacity: [1, 0.3, 1] }}
+                  transition={{ duration: 1.5, repeat: Infinity }}
+                />
+              )}
+            </div>
           </div>
         </div>
         <div className="flex items-center gap-1.5">
