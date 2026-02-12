@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useId } from "react";
+import { useState, useEffect, useRef, useId, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Mic,
@@ -3102,7 +3102,18 @@ const ArtifactViewer = ({
   const canRenderIframe =
     typeof artifact.htmlContent === "string" && artifact.htmlContent.trim().length > 0;
   const markdown = artifact.markdownContent ?? "";
-  const iframeSandbox = isGame ? "allow-scripts allow-same-origin" : undefined;
+
+  const blobUrl = useMemo(() => {
+    if (!canRenderIframe || !artifact.htmlContent) return null;
+    const blob = new Blob([artifact.htmlContent], { type: "text/html;charset=utf-8" });
+    return URL.createObjectURL(blob);
+  }, [canRenderIframe, artifact.htmlContent]);
+
+  useEffect(() => {
+    return () => {
+      if (blobUrl) URL.revokeObjectURL(blobUrl);
+    };
+  }, [blobUrl]);
 
   const downloadDoc = () => {
     const blob = new Blob([markdown], { type: "text/markdown;charset=utf-8" });
@@ -3160,15 +3171,15 @@ const ArtifactViewer = ({
         </div>
       </div>
       <div className="flex-1 overflow-hidden p-3">
-        {canRenderIframe ? (
+        {canRenderIframe && blobUrl ? (
           <iframe
             title={artifact.title}
-            sandbox={iframeSandbox}
-            srcDoc={artifact.htmlContent ?? ""}
+            sandbox={isGame ? "allow-scripts" : undefined}
+            src={blobUrl}
             className="h-full w-full rounded-xl border"
             style={{
               borderColor: "var(--app-soft-card-border)",
-              backgroundColor: "white",
+              backgroundColor: "#0a0a0a",
             }}
           />
         ) : (
