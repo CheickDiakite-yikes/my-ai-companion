@@ -571,6 +571,34 @@ function toTaskKindLabel(taskKind: string): string {
   return "Agent task";
 }
 
+function toUnifiedTaskOutputSummary(card: UnifiedAgentTaskCardModel): string {
+  const summary = card.summaryText?.trim() ?? "";
+  if (card.status === "failed") {
+    return summary || "This task failed before publishing an output.";
+  }
+  if (card.approval?.status === "pending") {
+    return card.approval.requestedAction;
+  }
+  if (card.artifact) {
+    const summaryLower = summary.toLowerCase();
+    const isStaleCraftingCopy =
+      summaryLower.includes("crafting") ||
+      summaryLower.includes("task started") ||
+      summaryLower.includes("queued");
+    if (summary.length > 0 && !isStaleCraftingCopy) {
+      return summary;
+    }
+    if (card.artifact.type === "mini_game") {
+      return "Open View / Play to launch the game and see controls in the full viewer.";
+    }
+    return "Your output is ready to open.";
+  }
+  if (summary.length > 0) {
+    return summary;
+  }
+  return card.latestStep?.detail ?? "Zee is working through your request.";
+}
+
 function toDefaultTaskTitle(params: {
   task: AgentTaskSummary | null;
   artifact: AgentArtifactSummary | null;
@@ -765,6 +793,9 @@ function buildUnifiedAgentTaskCards(
       } satisfies AgentTaskSummary);
 
     const timeline = normalizeTimeline(aggregate.timeline);
+    const summaryText = aggregate.summaryText?.trim()
+      ? aggregate.summaryText.trim()
+      : null;
     const card: UnifiedAgentTaskCardModel = {
       taskId,
       title: toDefaultTaskTitle({
@@ -773,6 +804,7 @@ function buildUnifiedAgentTaskCards(
         taskId,
       }),
       prompt: resolvedTask.prompt,
+      summaryText,
       taskKind: resolvedTask.taskKind,
       status: resolvedStatus,
       latestStep: aggregate.latestStep,
@@ -3183,12 +3215,10 @@ function toTimelineVisual(status: UnifiedAgentTaskTimelineItem["status"]): {
 
 const UnifiedAgentTaskCard = ({
   card,
-  messageText,
   onOpenArtifact,
   onResolveApproval,
 }: {
   card: UnifiedAgentTaskCardModel;
-  messageText: string;
   onOpenArtifact: (artifactId: string) => void;
   onResolveApproval: (
     taskId: string,
@@ -3272,6 +3302,7 @@ const UnifiedAgentTaskCard = ({
   const isRunning = card.status === "queued" || card.status === "in_progress";
   const statusLabel = toTaskStatusLabel(card.status);
   const kindLabel = toTaskKindLabel(card.taskKind);
+  const outputSummary = toUnifiedTaskOutputSummary(card);
   const detailTools = taskDetailQuery.data?.toolCalls ?? [];
 
   const statusTone =
@@ -3420,11 +3451,7 @@ const UnifiedAgentTaskCard = ({
               <p className="text-sm font-semibold">
                 {card.artifact?.title ?? `${kindLabel} in progress`}
               </p>
-              <p className="text-xs opacity-80">
-                {hasArtifact
-                  ? messageText
-                  : card.latestStep?.detail ?? "Zee is working through your request."}
-              </p>
+              <p className="text-xs opacity-80">{outputSummary}</p>
               {hasArtifact && card.artifact ? (
                 <button
                   type="button"
@@ -3741,7 +3768,12 @@ const TextView = ({
                 msg.sender === "user" ? "justify-end" : "justify-start",
               )}
             >
-              <div className="flex items-end gap-2 max-w-[80%]">
+              <div
+                className={cn(
+                  "flex items-end gap-2",
+                  isUnifiedTaskCard ? "max-w-[88%]" : "max-w-[80%]",
+                )}
+              >
                 {msg.sender !== "user" && (
                   <Avatar
                     className="w-8 h-8 mb-1 shrink-0 ring-2"
@@ -3753,13 +3785,17 @@ const TextView = ({
                 )}
                 <div
                   className={cn(
-                    "rounded-2xl text-sm leading-relaxed shadow-sm",
-                    msg.sender === "user"
-                      ? "font-medium rounded-br-none"
-                      : "rounded-bl-none",
+                    "text-sm leading-relaxed",
+                    !isUnifiedTaskCard && "rounded-2xl shadow-sm",
+                    !isUnifiedTaskCard &&
+                      (msg.sender === "user"
+                        ? "font-medium rounded-br-none"
+                        : "rounded-bl-none"),
                   )}
                   style={
-                    msg.sender === "user"
+                    isUnifiedTaskCard
+                      ? undefined
+                      : msg.sender === "user"
                       ? {
                           backgroundColor: "var(--app-user-bubble-bg)",
                           color: "var(--app-user-bubble-text)",
@@ -3770,7 +3806,7 @@ const TextView = ({
                         }
                   }
                 >
-                  {(msg.attachments ?? []).length > 0 && (
+                  {!isUnifiedTaskCard && (msg.attachments ?? []).length > 0 && (
                     <div className="grid gap-2 p-2">
                       {(msg.attachments ?? []).map((attachment) => (
                         <img
@@ -3782,7 +3818,7 @@ const TextView = ({
                       ))}
                     </div>
                   )}
-                  <div className="px-5 py-3">
+                  <div className={isUnifiedTaskCard ? "" : "px-5 py-3"}>
                     {msg.isTyping ? (
                       <div className="flex items-center gap-1.5 py-1">
                         <motion.span
@@ -3807,7 +3843,6 @@ const TextView = ({
                     ) : isUnifiedTaskCard ? (
                       <UnifiedAgentTaskCard
                         card={item.card}
-                        messageText={msg.text}
                         onOpenArtifact={onOpenArtifact}
                         onResolveApproval={onResolveApproval}
                       />

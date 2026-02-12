@@ -91,6 +91,7 @@ export interface UnifiedAgentTaskCardModel {
   taskId: string;
   title: string;
   prompt: string;
+  summaryText: string | null;
   taskKind: string;
   status: AgentTask["status"];
   latestStep: AgentStepSummary | null;
