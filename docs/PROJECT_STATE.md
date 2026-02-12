@@ -13,6 +13,7 @@ Last Updated: 2026-02-11
 Ship a production-grade multimodal AI companion where voice and text share one memory thread, with reliable personalization, image/camera context, quota safety, and App Store-ready UX quality.
 
 ## Current Focus
+- Execute agentic expansion roadmap tracked in `/Users/cheickdiakite/Codex/my-ai-companion/docs/AGENTIC_ROADMAP_V1.md`.
 - Prepare iOS/TestFlight readiness from the deployed web app baseline.
 - Improve live voice transcript quality and reduce pause latency without breaking stability.
 - Keep Replit and local schema/runtime behavior strictly synchronized.

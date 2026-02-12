@@ -18,6 +18,13 @@
     "build": "tsx script/build.ts",
     "start": "NODE_ENV=production node dist/index.cjs",
     "check": "tsc",
+    "test:agent:smoke": "tsx script/agent-runtime-smoke.ts",
+    "test:agent:flow": "tsx script/agent-runtime-flow-smoke.ts",
+    "test:agent:sandbox": "tsx script/agent-sandbox-policy-smoke.ts",
+    "test:agent:theme": "tsx script/agent-theme-contract-smoke.ts",
+    "test:agent": "npm run test:agent:smoke && npm run test:agent:flow && npm run test:agent:sandbox && npm run test:agent:theme",
+    "test:agent:contract": "bash script/agent-stream-contract-e2e.sh",
+    "test:agent:ui": "bash script/agent-ui-theme-playwright-e2e.sh",
     "db:push": "drizzle-kit push"
   },
   "dependencies": {
@@ -119,6 +126,7 @@
     "drizzle-kit": "^0.31.4",
     "esbuild": "^0.25.0",
     "postcss": "^8.5.6",
+    "playwright": "^1.56.1",
     "tailwindcss": "^4.1.14",
     "tsx": "^4.20.5",
     "typescript": "5.6.3",

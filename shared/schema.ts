@@ -34,6 +34,7 @@ export const messages = pgTable(
     turnId: varchar("turn_id").notNull().default(sql`gen_random_uuid()`),
     partIndex: integer("part_index").notNull().default(0),
     text: text("text").notNull(),
+    uiPayload: jsonb("ui_payload"),
     createdAt: timestamp("created_at").defaultNow(),
   },
   (table) => [
@@ -122,6 +123,158 @@ export const usageEventMetricEnum = pgEnum("usage_event_metric", [
   "camera_second",
 ]);
 
+export const agentTaskStatusEnum = pgEnum("agent_task_status", [
+  "queued",
+  "in_progress",
+  "approval_required",
+  "completed",
+  "failed",
+  "cancelled",
+]);
+
+export const taskRiskLevelEnum = pgEnum("task_risk_level", ["low", "high"]);
+
+export const agentStepStatusEnum = pgEnum("agent_step_status", [
+  "queued",
+  "in_progress",
+  "completed",
+  "failed",
+  "blocked",
+]);
+
+export const agentApprovalStatusEnum = pgEnum("agent_approval_status", [
+  "pending",
+  "approved",
+  "denied",
+]);
+
+export const agentArtifactTypeEnum = pgEnum("agent_artifact_type", [
+  "mini_game",
+  "doc_markdown",
+]);
+
+export const agentArtifactStatusEnum = pgEnum("agent_artifact_status", [
+  "active",
+  "archived",
+  "deleted",
+]);
+
+export const agentToolCallStatusEnum = pgEnum("agent_tool_call_status", [
+  "started",
+  "completed",
+  "failed",
+  "skipped",
+]);
+
+export const agentTasks = pgTable(
+  "agent_tasks",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    userId: varchar("user_id").notNull(),
+    conversationId: varchar("conversation_id").notNull(),
+    status: agentTaskStatusEnum("status").notNull().default("queued"),
+    riskLevel: taskRiskLevelEnum("risk_level").notNull().default("low"),
+    taskKind: varchar("task_kind").notNull(),
+    prompt: text("prompt").notNull(),
+    requestedByMessageId: varchar("requested_by_message_id"),
+    plan: jsonb("plan"),
+    errorMessage: text("error_message"),
+    createdAt: timestamp("created_at").defaultNow(),
+    updatedAt: timestamp("updated_at").defaultNow(),
+    completedAt: timestamp("completed_at"),
+  },
+  (table) => [
+    index("agent_tasks_user_created_idx").on(table.userId, table.createdAt),
+    index("agent_tasks_conversation_created_idx").on(
+      table.conversationId,
+      table.createdAt,
+    ),
+    index("agent_tasks_status_idx").on(table.status),
+  ],
+);
+
+export const agentSteps = pgTable(
+  "agent_steps",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    taskId: varchar("task_id").notNull(),
+    stepKey: varchar("step_key").notNull(),
+    title: varchar("title").notNull(),
+    detail: text("detail"),
+    status: agentStepStatusEnum("status").notNull().default("queued"),
+    orderIndex: integer("order_index").notNull().default(0),
+    createdAt: timestamp("created_at").defaultNow(),
+    updatedAt: timestamp("updated_at").defaultNow(),
+  },
+  (table) => [
+    index("agent_steps_task_order_idx").on(table.taskId, table.orderIndex),
+    index("agent_steps_task_status_idx").on(table.taskId, table.status),
+  ],
+);
+
+export const agentApprovals = pgTable(
+  "agent_approvals",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    taskId: varchar("task_id").notNull(),
+    status: agentApprovalStatusEnum("status").notNull().default("pending"),
+    reason: text("reason"),
+    requestedAction: text("requested_action").notNull(),
+    createdAt: timestamp("created_at").defaultNow(),
+    respondedAt: timestamp("responded_at"),
+  },
+  (table) => [
+    index("agent_approvals_task_created_idx").on(table.taskId, table.createdAt),
+    index("agent_approvals_task_status_idx").on(table.taskId, table.status),
+  ],
+);
+
+export const agentArtifacts = pgTable(
+  "agent_artifacts",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    taskId: varchar("task_id").notNull(),
+    conversationId: varchar("conversation_id").notNull(),
+    userId: varchar("user_id").notNull(),
+    type: agentArtifactTypeEnum("type").notNull(),
+    status: agentArtifactStatusEnum("status").notNull().default("active"),
+    title: varchar("title").notNull(),
+    markdownContent: text("markdown_content"),
+    htmlContent: text("html_content"),
+    metadata: jsonb("metadata"),
+    createdAt: timestamp("created_at").defaultNow(),
+    updatedAt: timestamp("updated_at").defaultNow(),
+  },
+  (table) => [
+    index("agent_artifacts_user_created_idx").on(table.userId, table.createdAt),
+    index("agent_artifacts_conversation_created_idx").on(
+      table.conversationId,
+      table.createdAt,
+    ),
+    index("agent_artifacts_task_created_idx").on(table.taskId, table.createdAt),
+    index("agent_artifacts_status_idx").on(table.status),
+  ],
+);
+
+export const agentToolCalls = pgTable(
+  "agent_tool_calls",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    taskId: varchar("task_id").notNull(),
+    stepId: varchar("step_id"),
+    toolName: varchar("tool_name").notNull(),
+    riskLevel: taskRiskLevelEnum("risk_level").notNull().default("low"),
+    argsRedacted: jsonb("args_redacted"),
+    outputSummary: text("output_summary"),
+    status: agentToolCallStatusEnum("status").notNull().default("started"),
+    createdAt: timestamp("created_at").defaultNow(),
+  },
+  (table) => [
+    index("agent_tool_calls_task_created_idx").on(table.taskId, table.createdAt),
+    index("agent_tool_calls_status_idx").on(table.status),
+  ],
+);
+
 export const usageEvents = pgTable(
   "usage_events",
   {
@@ -184,6 +337,45 @@ export const userProfilesRelations = relations(userProfiles, ({ one }) => ({
   }),
 }));
 
+export const agentTasksRelations = relations(agentTasks, ({ many }) => ({
+  steps: many(agentSteps),
+  approvals: many(agentApprovals),
+  artifacts: many(agentArtifacts),
+  toolCalls: many(agentToolCalls),
+}));
+
+export const agentStepsRelations = relations(agentSteps, ({ one }) => ({
+  task: one(agentTasks, {
+    fields: [agentSteps.taskId],
+    references: [agentTasks.id],
+  }),
+}));
+
+export const agentApprovalsRelations = relations(agentApprovals, ({ one }) => ({
+  task: one(agentTasks, {
+    fields: [agentApprovals.taskId],
+    references: [agentTasks.id],
+  }),
+}));
+
+export const agentArtifactsRelations = relations(agentArtifacts, ({ one }) => ({
+  task: one(agentTasks, {
+    fields: [agentArtifacts.taskId],
+    references: [agentTasks.id],
+  }),
+}));
+
+export const agentToolCallsRelations = relations(agentToolCalls, ({ one }) => ({
+  task: one(agentTasks, {
+    fields: [agentToolCalls.taskId],
+    references: [agentTasks.id],
+  }),
+  step: one(agentSteps, {
+    fields: [agentToolCalls.stepId],
+    references: [agentSteps.id],
+  }),
+}));
+
 export const insertConversationSchema = createInsertSchema(conversations).omit({
   id: true,
   createdAt: true,
@@ -224,6 +416,36 @@ export const insertUsageEventSchema = createInsertSchema(usageEvents).omit({
   createdAt: true,
 });
 
+export const insertAgentTaskSchema = createInsertSchema(agentTasks).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+  completedAt: true,
+});
+
+export const insertAgentStepSchema = createInsertSchema(agentSteps).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertAgentApprovalSchema = createInsertSchema(agentApprovals).omit({
+  id: true,
+  createdAt: true,
+  respondedAt: true,
+});
+
+export const insertAgentArtifactSchema = createInsertSchema(agentArtifacts).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export const insertAgentToolCallSchema = createInsertSchema(agentToolCalls).omit({
+  id: true,
+  createdAt: true,
+});
+
 export type InsertConversation = z.infer<typeof insertConversationSchema>;
 export type Conversation = typeof conversations.$inferSelect;
 export type InsertMessage = z.infer<typeof insertMessageSchema>;
@@ -239,3 +461,20 @@ export type VoiceSession = typeof voiceSessions.$inferSelect;
 export type InsertUsageEvent = z.infer<typeof insertUsageEventSchema>;
 export type UsageEvent = typeof usageEvents.$inferSelect;
 export type UsageEventMetric = typeof usageEventMetricEnum.enumValues[number];
+export type InsertAgentTask = z.infer<typeof insertAgentTaskSchema>;
+export type AgentTask = typeof agentTasks.$inferSelect;
+export type InsertAgentStep = z.infer<typeof insertAgentStepSchema>;
+export type AgentStep = typeof agentSteps.$inferSelect;
+export type InsertAgentApproval = z.infer<typeof insertAgentApprovalSchema>;
+export type AgentApproval = typeof agentApprovals.$inferSelect;
+export type InsertAgentArtifact = z.infer<typeof insertAgentArtifactSchema>;
+export type AgentArtifact = typeof agentArtifacts.$inferSelect;
+export type InsertAgentToolCall = z.infer<typeof insertAgentToolCallSchema>;
+export type AgentToolCall = typeof agentToolCalls.$inferSelect;
+export type AgentTaskStatus = typeof agentTaskStatusEnum.enumValues[number];
+export type AgentStepStatus = typeof agentStepStatusEnum.enumValues[number];
+export type AgentApprovalStatus = typeof agentApprovalStatusEnum.enumValues[number];
+export type AgentArtifactType = typeof agentArtifactTypeEnum.enumValues[number];
+export type AgentArtifactStatus = typeof agentArtifactStatusEnum.enumValues[number];
+export type AgentToolCallStatus = typeof agentToolCallStatusEnum.enumValues[number];
+export type TaskRiskLevel = typeof taskRiskLevelEnum.enumValues[number];

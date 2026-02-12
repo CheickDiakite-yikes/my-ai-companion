@@ -6,8 +6,12 @@ import {
   StartSensitivity,
   type GenerateContentResponseUsageMetadata,
 } from "@google/genai";
+import { execFile } from "child_process";
 import { readFile } from "fs/promises";
 import { resolve } from "path";
+import { promisify } from "util";
+
+const execFileAsync = promisify(execFile);
 
 type Persona = "Zee";
 export type LiveVoiceName = "Aoede" | "Kore" | "Charon" | "Fenrir";
@@ -60,6 +64,7 @@ interface TokenUsageSnapshot {
 
 const DEFAULT_TEXT_MODEL = "gemini-3-flash-preview";
 const DEFAULT_LIVE_MODEL = "gemini-2.5-flash-native-audio-preview-12-2025";
+const DEFAULT_AGENT_GAME_MODEL = "gemini-3-flash-preview";
 const DEFAULT_ZEE_PROMPT_FALLBACK = [
   "You are Zee, a warm, emotionally intelligent AI companion.",
   "Stay helpful, grounded, and conversational.",
@@ -106,6 +111,12 @@ function resolveTextModel(): string {
 
 function resolveLiveModel(): string {
   return normalizeModelId(process.env.GEMINI_LIVE_MODEL ?? DEFAULT_LIVE_MODEL);
+}
+
+function resolveAgentGameModel(): string {
+  return normalizeModelId(
+    process.env.AGENT_GAME_MODEL ?? DEFAULT_AGENT_GAME_MODEL,
+  );
 }
 
 function resolveLiveModelCandidates(): string[] {
@@ -907,6 +918,391 @@ export interface GenerateTextReplyStreamResult {
   stream: AsyncGenerator<GenerateTextReplyStreamChunk>;
 }
 
+export interface GenerateAgentPlannerDraftInput {
+  prompt: string;
+  hasImage: boolean;
+  inferredTaskKind: "mini_game" | "doc_markdown" | "mixed";
+  inferredRiskLevel: "low" | "high";
+}
+
+export interface GenerateAgentPlannerDraftResult {
+  model: string;
+  rawJson: string;
+  responseId?: string;
+  usage?: TokenUsageSnapshot;
+}
+
+export type GameProjectFormat = "single_file" | "multi_file";
+export type GameProjectEngine = "canvas_dom" | "threejs_light";
+
+export interface GeneratedGameProjectFile {
+  path: string;
+  content: string;
+}
+
+export interface GeneratedGameProjectDraft {
+  title: string;
+  summary: string;
+  format: GameProjectFormat;
+  engine: GameProjectEngine;
+  mechanics: string[];
+  entryPath: string;
+  files: GeneratedGameProjectFile[];
+}
+
+export interface GenerateGameProjectDraftInput {
+  prompt: string;
+  imageHints: string[];
+  preferredFormat: GameProjectFormat;
+  allowLight3d: boolean;
+}
+
+export interface RepairGameProjectDraftInput {
+  prompt: string;
+  imageHints: string[];
+  preferredFormat: GameProjectFormat;
+  allowLight3d: boolean;
+  previousDraft: GeneratedGameProjectDraft;
+  qaFailures: string[];
+  attempt: number;
+}
+
+export interface GenerateGameProjectDraftResult {
+  model: string;
+  draft: GeneratedGameProjectDraft;
+  rawJson: string;
+  responseId?: string;
+  usage?: TokenUsageSnapshot;
+}
+
+export async function generateAgentPlannerDraft(
+  input: GenerateAgentPlannerDraftInput,
+): Promise<GenerateAgentPlannerDraftResult> {
+  const ai = getGeminiClient();
+  const model = resolveTextModel();
+
+  const prompt = [
+    "Build an execution plan for an AI companion task.",
+    "Return JSON only with this exact schema:",
+    "{",
+    '  "title": string,',
+    '  "taskKind": "mini_game" | "doc_markdown" | "mixed",',
+    '  "riskLevel": "low" | "high",',
+    '  "steps": [',
+    '    { "key": string, "title": string, "detail": string }',
+    "  ]",
+    "}",
+    "Rules:",
+    "- Produce 3-6 steps in chronological order.",
+    '- Keys must be short snake_case identifiers (for example: "plan", "build", "qa", "publish").',
+    "- Keep details concise and implementation-oriented.",
+    "- If uncertain, prefer conservative low-risk build/test workflow without external side effects.",
+    "",
+    "Task input:",
+    `- Prompt: ${input.prompt}`,
+    `- Has image input: ${input.hasImage ? "yes" : "no"}`,
+    `- Inferred task kind baseline: ${input.inferredTaskKind}`,
+    `- Inferred risk baseline: ${input.inferredRiskLevel}`,
+  ].join("\n");
+
+  const response = await ai.models.generateContent({
+    model,
+    contents: [{ role: "user", parts: [{ text: prompt }] }],
+    config: {
+      systemInstruction:
+        "You are a reliable planning engine for a sandboxed AI runtime. Output valid JSON only.",
+      temperature: 0.2,
+      maxOutputTokens: 600,
+      responseMimeType: "application/json",
+    },
+  });
+
+  const rawJson = stripJsonCodeFence((response.text ?? "").trim());
+  if (!rawJson) {
+    throw new Error("Gemini returned an empty planner draft");
+  }
+
+  return {
+    model,
+    rawJson,
+    responseId: response.responseId,
+    usage: compactUsage(response.usageMetadata),
+  };
+}
+
+export async function generateGameProjectDraft(
+  input: GenerateGameProjectDraftInput,
+): Promise<GenerateGameProjectDraftResult> {
+  const ai = getGeminiClient();
+  const model = resolveAgentGameModel();
+  const prompt = buildGenerateGameProjectPrompt(input);
+
+  const response = await ai.models.generateContent({
+    model,
+    contents: [{ role: "user", parts: [{ text: prompt }] }],
+    config: {
+      systemInstruction:
+        "You are a deterministic code generator for sandboxed browser mini-games. Output strict JSON only.",
+      temperature: 0.35,
+      maxOutputTokens: 6400,
+      responseMimeType: "application/json",
+    },
+  });
+
+  const rawJson = stripJsonCodeFence((response.text ?? "").trim());
+  if (!rawJson) {
+    throw new Error("Gemini returned an empty game project draft");
+  }
+
+  const draft = parseGameProjectDraft(rawJson, {
+    allowLight3d: input.allowLight3d,
+  });
+
+  return {
+    model,
+    draft,
+    rawJson,
+    responseId: response.responseId,
+    usage: compactUsage(response.usageMetadata),
+  };
+}
+
+export async function generateGameProjectDraftViaGeminiCli(
+  input: GenerateGameProjectDraftInput,
+): Promise<GenerateGameProjectDraftResult> {
+  const model = resolveAgentGameModel();
+  const prompt = buildGenerateGameProjectPrompt(input);
+  const rawOutput = await runGeminiCliJsonPrompt({
+    prompt,
+    model,
+  });
+
+  const rawJson = stripJsonCodeFence(rawOutput);
+  if (!rawJson) {
+    throw new Error("Gemini CLI returned an empty game project draft");
+  }
+
+  const draft = parseGameProjectDraft(rawJson, {
+    allowLight3d: input.allowLight3d,
+  });
+
+  return {
+    model: `${model}:gemini_cli`,
+    draft,
+    rawJson,
+  };
+}
+
+export async function repairGameProjectDraft(
+  input: RepairGameProjectDraftInput,
+): Promise<GenerateGameProjectDraftResult> {
+  const ai = getGeminiClient();
+  const model = resolveAgentGameModel();
+  const prompt = buildRepairGameProjectPrompt(input);
+
+  const response = await ai.models.generateContent({
+    model,
+    contents: [{ role: "user", parts: [{ text: prompt }] }],
+    config: {
+      systemInstruction:
+        "You repair browser game projects for a sandboxed runtime. Output strict JSON only.",
+      temperature: 0.2,
+      maxOutputTokens: 7000,
+      responseMimeType: "application/json",
+    },
+  });
+
+  const rawJson = stripJsonCodeFence((response.text ?? "").trim());
+  if (!rawJson) {
+    throw new Error("Gemini returned an empty repaired game project draft");
+  }
+
+  const draft = parseGameProjectDraft(rawJson, {
+    allowLight3d: input.allowLight3d,
+  });
+
+  return {
+    model,
+    draft,
+    rawJson,
+    responseId: response.responseId,
+    usage: compactUsage(response.usageMetadata),
+  };
+}
+
+export async function repairGameProjectDraftViaGeminiCli(
+  input: RepairGameProjectDraftInput,
+): Promise<GenerateGameProjectDraftResult> {
+  const model = resolveAgentGameModel();
+  const prompt = buildRepairGameProjectPrompt(input);
+  const rawOutput = await runGeminiCliJsonPrompt({
+    prompt,
+    model,
+  });
+
+  const rawJson = stripJsonCodeFence(rawOutput);
+  if (!rawJson) {
+    throw new Error("Gemini CLI returned an empty repaired game project draft");
+  }
+
+  const draft = parseGameProjectDraft(rawJson, {
+    allowLight3d: input.allowLight3d,
+  });
+
+  return {
+    model: `${model}:gemini_cli`,
+    draft,
+    rawJson,
+  };
+}
+
+function buildGenerateGameProjectPrompt(
+  input: GenerateGameProjectDraftInput,
+): string {
+  const imageHints = input.imageHints.length
+    ? input.imageHints.map((hint) => `- ${hint}`).join("\n")
+    : "- none";
+
+  return [
+    "Generate a runnable browser mini-game project.",
+    "Return JSON only, with this exact schema:",
+    "{",
+    '  "title": string,',
+    '  "summary": string,',
+    '  "format": "single_file" | "multi_file",',
+    '  "engine": "canvas_dom" | "threejs_light",',
+    '  "mechanics": string[],',
+    '  "entryPath": string,',
+    '  "files": [{ "path": string, "content": string }]',
+    "}",
+    "",
+    "Hard rules:",
+    "- Files must be self-contained and browser-runnable with no build step.",
+    "- Do not use external CDNs, network fetches, or remote assets.",
+    "- Keep game mechanics clear and playable with keyboard/mouse/touch input.",
+    "- If the prompt explicitly requests a named genre (for example: snake), implement that genre's core mechanics and controls. Do not substitute with a different style of game.",
+    "- Ensure the entry file is HTML and references only files included in files[].",
+    "- Avoid dynamic imports and runtime bundlers.",
+    "- Keep total generated source concise (target <= 80KB total file content).",
+    "",
+    "Task request:",
+    `- Prompt: ${input.prompt}`,
+    `- Preferred format: ${input.preferredFormat}`,
+    `- Light 3D allowed: ${input.allowLight3d ? "yes" : "no"}`,
+    "- Image hints:",
+    imageHints,
+  ].join("\n");
+}
+
+function buildRepairGameProjectPrompt(input: RepairGameProjectDraftInput): string {
+  const imageHints = input.imageHints.length
+    ? input.imageHints.map((hint) => `- ${hint}`).join("\n")
+    : "- none";
+  const qaFailures = input.qaFailures.length
+    ? input.qaFailures.map((failure) => `- ${failure}`).join("\n")
+    : "- unknown";
+
+  return [
+    "Repair the provided game project draft to pass QA.",
+    "Return strict JSON with the exact schema previously defined.",
+    "",
+    `Attempt: ${input.attempt}`,
+    `Preferred format: ${input.preferredFormat}`,
+    `Light 3D allowed: ${input.allowLight3d ? "yes" : "no"}`,
+    "",
+    "Original user prompt:",
+    input.prompt,
+    "",
+    "Image hints:",
+    imageHints,
+    "",
+    "QA failures to fix:",
+    qaFailures,
+    "",
+    "Current project draft JSON:",
+    JSON.stringify(input.previousDraft),
+    "",
+    "Hard rules:",
+    "- Preserve core intent and fun mechanics.",
+    "- If the prompt explicitly requests a named genre (for example: snake), keep that exact genre and repair mechanics to match it.",
+    "- Keep output browser-runnable with no build step.",
+    "- Do not rely on external network assets or CDNs.",
+    "- Keep entryPath present in files[] and valid.",
+  ].join("\n");
+}
+
+async function runGeminiCliJsonPrompt(params: {
+  prompt: string;
+  model: string;
+}): Promise<string> {
+  const cli = resolveGeminiCliCommand();
+  const timeoutMs = resolveGeminiCliTimeoutMs();
+
+  const result = await execFileAsync(cli.command, [
+    ...cli.baseArgs,
+    "--model",
+    params.model,
+    "--prompt",
+    params.prompt,
+  ], {
+    timeout: timeoutMs,
+    maxBuffer: 2 * 1024 * 1024,
+    env: {
+      ...process.env,
+      GEMINI_API_KEY: requireGeminiApiKey(),
+    },
+  });
+
+  const stdout = result.stdout?.toString().trim() ?? "";
+  if (!stdout) {
+    throw new Error("Gemini CLI returned empty output");
+  }
+  return extractLikelyJsonPayload(stdout);
+}
+
+function resolveGeminiCliCommand(): { command: string; baseArgs: string[] } {
+  const raw = (process.env.AGENT_GEMINI_CLI_COMMAND ?? "gemini")
+    .trim()
+    .replace(/\s+/g, " ");
+  if (!raw) {
+    throw new Error("AGENT_GEMINI_CLI_COMMAND is empty");
+  }
+  const [command, ...baseArgs] = raw.split(" ").filter(Boolean);
+  return { command, baseArgs };
+}
+
+function resolveGeminiCliTimeoutMs(): number {
+  const fallback = 75_000;
+  const parsed = Number.parseInt(
+    process.env.AGENT_GEMINI_CLI_TIMEOUT_MS ?? `${fallback}`,
+    10,
+  );
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return Math.min(Math.max(parsed, 5_000), 180_000);
+}
+
+function extractLikelyJsonPayload(raw: string): string {
+  const trimmed = raw.trim();
+  if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+    return trimmed;
+  }
+
+  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+  if (fenced?.[1]) {
+    return fenced[1].trim();
+  }
+
+  const firstBrace = trimmed.indexOf("{");
+  const lastBrace = trimmed.lastIndexOf("}");
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    return trimmed.slice(firstBrace, lastBrace + 1).trim();
+  }
+
+  return trimmed;
+}
+
 function buildTextGenerationConfig(personaPrompt: string) {
   return {
     systemInstruction: personaPrompt,
@@ -956,6 +1352,143 @@ export async function generateTextReply(
     responseId: response.responseId,
     usage: compactUsage(response.usageMetadata),
   };
+}
+
+function stripJsonCodeFence(input: string): string {
+  const trimmed = input.trim();
+  if (!trimmed.startsWith("```")) {
+    return trimmed;
+  }
+
+  const fenceMatch = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  if (!fenceMatch) {
+    return trimmed;
+  }
+
+  return fenceMatch[1].trim();
+}
+
+function parseGameProjectDraft(
+  rawJson: string,
+  options: { allowLight3d: boolean },
+): GeneratedGameProjectDraft {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawJson) as unknown;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Game project JSON parse failed: ${message}`);
+  }
+
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Game project must be a JSON object");
+  }
+
+  const record = parsed as Record<string, unknown>;
+  const title = coerceRequiredString(record.title, "title", 140);
+  const summary = coerceRequiredString(record.summary, "summary", 400);
+  const format = coerceGameProjectFormat(record.format);
+  const engine = coerceGameProjectEngine(record.engine, options.allowLight3d);
+  const mechanics = coerceMechanics(record.mechanics);
+  const entryPath = coerceRequiredString(record.entryPath, "entryPath", 180);
+  const files = coerceFiles(record.files);
+
+  if (!files.some((file) => file.path === entryPath)) {
+    throw new Error("Game project entryPath must match a file path in files[]");
+  }
+  if (!entryPath.toLowerCase().endsWith(".html")) {
+    throw new Error("Game project entryPath must reference an .html file");
+  }
+  if (format === "single_file" && files.length !== 1) {
+    throw new Error("single_file format requires exactly one file");
+  }
+
+  return {
+    title,
+    summary,
+    format,
+    engine,
+    mechanics,
+    entryPath,
+    files,
+  };
+}
+
+function coerceRequiredString(
+  value: unknown,
+  field: string,
+  maxLength: number,
+): string {
+  if (typeof value !== "string") {
+    throw new Error(`Game project field "${field}" must be a string`);
+  }
+  const normalized = value.trim();
+  if (!normalized) {
+    throw new Error(`Game project field "${field}" cannot be empty`);
+  }
+  return normalized.slice(0, maxLength);
+}
+
+function coerceGameProjectFormat(value: unknown): GameProjectFormat {
+  if (value === "single_file" || value === "multi_file") {
+    return value;
+  }
+  throw new Error('Game project field "format" must be "single_file" or "multi_file"');
+}
+
+function coerceGameProjectEngine(
+  value: unknown,
+  allowLight3d: boolean,
+): GameProjectEngine {
+  if (value === "canvas_dom") {
+    return value;
+  }
+  if (value === "threejs_light") {
+    if (!allowLight3d) {
+      throw new Error("threejs_light engine is disabled by runtime policy");
+    }
+    return value;
+  }
+  throw new Error(
+    'Game project field "engine" must be "canvas_dom" or "threejs_light"',
+  );
+}
+
+function coerceMechanics(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    throw new Error('Game project field "mechanics" must be an array of strings');
+  }
+  const mechanics = value
+    .filter((item): item is string => typeof item === "string")
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0)
+    .slice(0, 8);
+  if (mechanics.length === 0) {
+    throw new Error('Game project field "mechanics" must include at least one item');
+  }
+  return mechanics;
+}
+
+function coerceFiles(value: unknown): GeneratedGameProjectFile[] {
+  if (!Array.isArray(value)) {
+    throw new Error('Game project field "files" must be an array');
+  }
+  const files: GeneratedGameProjectFile[] = [];
+
+  for (const item of value) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      continue;
+    }
+    const record = item as Record<string, unknown>;
+    const path = coerceRequiredString(record.path, "files[].path", 220);
+    const content = coerceRequiredString(record.content, "files[].content", 500_000);
+    files.push({ path, content });
+  }
+
+  if (files.length === 0) {
+    throw new Error('Game project field "files" must include at least one file');
+  }
+  return files;
 }
 
 export async function generateTextReplyStream(

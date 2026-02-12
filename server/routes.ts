@@ -14,9 +14,22 @@ import {
   insertConversationSchema,
   insertMessageSchema,
   insertUserPreferencesSchema,
+  type AgentArtifact,
+  type AgentApproval,
+  type AgentStep,
+  type AgentTask,
+  type Message,
   type MessageAttachment,
   type UserProfile,
 } from "@shared/schema";
+import type {
+  AgentArtifactSummary,
+  AgentApprovalSummary,
+  AgentStepSummary,
+  AgentTaskKind,
+  AgentTaskEvent,
+  AgentTaskSummary,
+} from "@shared/agent";
 import {
   createLiveToken,
   DEFAULT_LIVE_VOICE,
@@ -32,6 +45,11 @@ import {
   type TextPersonalizationProfile,
   ZEE_SPLIT_TOKEN,
 } from "./gemini";
+import {
+  approveAndContinueAgentTask,
+  classifyChatTurnIntent,
+  startAgentTaskRun,
+} from "./agent-runtime";
 import { elapsedMs, getTraceId, trace, traceError } from "./observability";
 import { getMediaStore, type StorageProvider } from "./media-store";
 import { createSignedMediaPath, verifyMediaSignature } from "./media-signing";
@@ -61,6 +79,15 @@ const chatRespondSchema = z
       });
     }
   });
+
+const agentApprovalDecisionSchema = z.object({
+  approve: z.boolean(),
+  reason: z.string().trim().max(400).optional().nullable(),
+});
+
+const agentArtifactsQuerySchema = z.object({
+  includeArchived: z.coerce.boolean().optional().default(true),
+});
 
 const voiceTranscriptSchema = z.object({
   sender: z.enum(["user", "assistant"]),
@@ -473,6 +500,131 @@ function mapMessagesWithSignedAttachments(
       .filter((attachment) => attachment.status !== "deleted")
       .map((attachment) => toAttachmentResponse(attachment, userId)),
   }));
+}
+
+function toAgentTaskSummary(task: AgentTask): AgentTaskSummary {
+  return {
+    id: task.id,
+    conversationId: task.conversationId,
+    status: task.status,
+    riskLevel: task.riskLevel,
+    taskKind: task.taskKind,
+    prompt: task.prompt,
+    createdAt: task.createdAt,
+    updatedAt: task.updatedAt,
+    completedAt: task.completedAt,
+  };
+}
+
+function toAgentStepSummary(step: AgentStep): AgentStepSummary {
+  return {
+    id: step.id,
+    taskId: step.taskId,
+    stepKey: step.stepKey,
+    title: step.title,
+    detail: step.detail,
+    status: step.status,
+    orderIndex: step.orderIndex,
+    createdAt: step.createdAt,
+    updatedAt: step.updatedAt,
+  };
+}
+
+function toAgentApprovalSummary(approval: AgentApproval): AgentApprovalSummary {
+  return {
+    id: approval.id,
+    taskId: approval.taskId,
+    status: approval.status,
+    reason: approval.reason,
+    requestedAction: approval.requestedAction,
+    createdAt: approval.createdAt,
+    respondedAt: approval.respondedAt,
+  };
+}
+
+function toAgentArtifactSummary(artifact: AgentArtifact): AgentArtifactSummary {
+  return {
+    id: artifact.id,
+    taskId: artifact.taskId,
+    conversationId: artifact.conversationId,
+    type: artifact.type,
+    status: artifact.status,
+    title: artifact.title,
+    markdownContent: artifact.markdownContent,
+    htmlContent: artifact.htmlContent,
+    metadata: artifact.metadata,
+    createdAt: artifact.createdAt,
+    updatedAt: artifact.updatedAt,
+  };
+}
+
+function isAgentMessageUiPayload(
+  value: unknown,
+): value is { kind: string; [key: string]: unknown } {
+  if (!value || typeof value !== "object") return false;
+  const kind = (value as Record<string, unknown>).kind;
+  return typeof kind === "string" && kind.startsWith("agent_");
+}
+
+const TURN_INTENT_CONTEXT_LOOKBACK = 12;
+
+function toTaskKindOrNull(value: unknown): AgentTaskKind | null {
+  if (value === "mini_game" || value === "doc_markdown" || value === "mixed") {
+    return value;
+  }
+  return null;
+}
+
+function inferRecentAgentIntentContext(messages: Message[], excludeMessageId: string) {
+  let scanned = 0;
+  for (let idx = messages.length - 1; idx >= 0; idx -= 1) {
+    const message = messages[idx];
+    if (message.id === excludeMessageId) continue;
+    scanned += 1;
+    if (scanned > TURN_INTENT_CONTEXT_LOOKBACK) break;
+
+    if (message.sender !== "assistant") continue;
+    if (!isAgentMessageUiPayload(message.uiPayload)) continue;
+
+    const payload = message.uiPayload as Record<string, unknown>;
+    const payloadKind = payload.kind;
+    if (payloadKind === "agent_task_status") {
+      const task =
+        payload.task && typeof payload.task === "object"
+          ? (payload.task as Record<string, unknown>)
+          : null;
+      return {
+        hasRecentAgentActivity: true,
+        recentTaskKind: toTaskKindOrNull(task?.taskKind),
+      };
+    }
+    if (payloadKind === "agent_artifact") {
+      const artifact =
+        payload.artifact && typeof payload.artifact === "object"
+          ? (payload.artifact as Record<string, unknown>)
+          : null;
+      const artifactType = artifact?.type;
+      return {
+        hasRecentAgentActivity: true,
+        recentTaskKind:
+          artifactType === "mini_game"
+            ? ("mini_game" as const)
+            : artifactType === "doc_markdown"
+              ? ("doc_markdown" as const)
+              : null,
+      };
+    }
+
+    return {
+      hasRecentAgentActivity: true,
+      recentTaskKind: null,
+    };
+  }
+
+  return {
+    hasRecentAgentActivity: false,
+    recentTaskKind: null,
+  };
 }
 
 function normalizeOptionalString(value: unknown): string | null | undefined {
@@ -1764,6 +1916,316 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/agent/tasks/:taskId", isAuthenticated, async (req: any, res) => {
+    const startedAt = Date.now();
+    try {
+      const task = await storage.getAgentTaskWithDetails(req.params.taskId);
+      if (!task || task.userId !== req.session.userId) {
+        return res.status(404).json({
+          message: "Task not found",
+          traceId: getTraceId(req),
+        });
+      }
+
+      trace(req, "agent.task.read", {
+        taskId: task.id,
+        status: task.status,
+        stepCount: task.steps.length,
+        artifactCount: task.artifacts.length,
+        elapsedMs: elapsedMs(startedAt),
+      });
+
+      return res.status(200).json({
+        traceId: getTraceId(req),
+        task: toAgentTaskSummary(task),
+        steps: task.steps.map((step) => toAgentStepSummary(step)),
+        approvals: task.approvals.map((approval) =>
+          toAgentApprovalSummary(approval),
+        ),
+        artifacts: task.artifacts.map((artifact) =>
+          toAgentArtifactSummary(artifact),
+        ),
+      });
+    } catch (error) {
+      traceError(req, "agent.task.read.failed", error, {
+        taskId: req.params.taskId,
+        elapsedMs: elapsedMs(startedAt),
+      });
+      return res.status(500).json({
+        message: "Failed to fetch task",
+        traceId: getTraceId(req),
+      });
+    }
+  });
+
+  app.post(
+    "/api/agent/tasks/:taskId/approve",
+    isAuthenticated,
+    async (req: any, res) => {
+      const startedAt = Date.now();
+      try {
+        const parsed = agentApprovalDecisionSchema.parse(req.body ?? {});
+        const task = await storage.getAgentTaskById(req.params.taskId);
+        if (!task || task.userId !== req.session.userId) {
+          return res.status(404).json({
+            message: "Task not found",
+            traceId: getTraceId(req),
+          });
+        }
+
+        const pendingApproval = await storage.getPendingAgentApproval(task.id);
+        if (!pendingApproval) {
+          return res.status(409).json({
+            message: "No pending approval for this task",
+            traceId: getTraceId(req),
+          });
+        }
+
+        if (!parsed.approve) {
+          const reason = parsed.reason?.trim() || "Denied by user";
+          await storage.resolveAgentApproval({
+            approvalId: pendingApproval.id,
+            status: "denied",
+            reason,
+          });
+          const cancelled = await storage.updateAgentTaskStatus({
+            taskId: task.id,
+            status: "cancelled",
+            errorMessage: reason,
+            completedAt: new Date(),
+          });
+
+          await storage.createMessage({
+            conversationId: task.conversationId,
+            sender: "assistant",
+            text: "Understood. I canceled that task.",
+            partIndex: 0,
+            uiPayload: {
+              kind: "agent_task_status",
+              task: toAgentTaskSummary(
+                cancelled ?? {
+                  ...task,
+                  status: "cancelled",
+                  errorMessage: reason,
+                  completedAt: new Date(),
+                  updatedAt: new Date(),
+                },
+              ),
+              text: "Canceled",
+            },
+          });
+
+          trace(req, "agent.task.approval.denied", {
+            taskId: task.id,
+            elapsedMs: elapsedMs(startedAt),
+          });
+
+          return res.status(200).json({
+            traceId: getTraceId(req),
+            approved: false,
+            task: toAgentTaskSummary(
+              cancelled ?? {
+                ...task,
+                status: "cancelled",
+                errorMessage: reason,
+                completedAt: new Date(),
+                updatedAt: new Date(),
+              },
+            ),
+          });
+        }
+
+        const resumed = await approveAndContinueAgentTask({
+          taskId: task.id,
+          userId: req.session.userId,
+        });
+
+        trace(req, "agent.task.approval.approved", {
+          taskId: task.id,
+          status: resumed.status,
+          elapsedMs: elapsedMs(startedAt),
+        });
+
+        return res.status(200).json({
+          traceId: getTraceId(req),
+          approved: true,
+          task: resumed,
+        });
+      } catch (error) {
+        if (error instanceof z.ZodError) {
+          return res.status(400).json({
+            message: error.errors[0]?.message ?? "Invalid approval request",
+            traceId: getTraceId(req),
+          });
+        }
+        traceError(req, "agent.task.approval.failed", error, {
+          taskId: req.params.taskId,
+          elapsedMs: elapsedMs(startedAt),
+        });
+        return res.status(500).json({
+          message: "Failed to process approval",
+          traceId: getTraceId(req),
+        });
+      }
+    },
+  );
+
+  app.get("/api/agent/artifacts", isAuthenticated, async (req: any, res) => {
+    const startedAt = Date.now();
+    try {
+      const parsed = agentArtifactsQuerySchema.parse(req.query ?? {});
+      const artifacts = await storage.getAgentArtifactsForUser({
+        userId: req.session.userId,
+        includeArchived: parsed.includeArchived,
+      });
+
+      trace(req, "agent.artifacts.list", {
+        count: artifacts.length,
+        includeArchived: parsed.includeArchived,
+        elapsedMs: elapsedMs(startedAt),
+      });
+
+      return res.status(200).json({
+        traceId: getTraceId(req),
+        artifacts: artifacts.map((artifact) => toAgentArtifactSummary(artifact)),
+      });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({
+          message: error.errors[0]?.message ?? "Invalid artifacts query",
+          traceId: getTraceId(req),
+        });
+      }
+      traceError(req, "agent.artifacts.list.failed", error, {
+        elapsedMs: elapsedMs(startedAt),
+      });
+      return res.status(500).json({
+        message: "Failed to fetch artifacts",
+        traceId: getTraceId(req),
+      });
+    }
+  });
+
+  app.get(
+    "/api/agent/artifacts/:artifactId",
+    isAuthenticated,
+    async (req: any, res) => {
+      const startedAt = Date.now();
+      try {
+        const artifact = await storage.getAgentArtifactById(req.params.artifactId);
+        if (!artifact || artifact.userId !== req.session.userId) {
+          return res.status(404).json({
+            message: "Artifact not found",
+            traceId: getTraceId(req),
+          });
+        }
+        if (artifact.status === "deleted") {
+          return res.status(404).json({
+            message: "Artifact was deleted",
+            traceId: getTraceId(req),
+          });
+        }
+
+        trace(req, "agent.artifact.read", {
+          artifactId: artifact.id,
+          type: artifact.type,
+          status: artifact.status,
+          elapsedMs: elapsedMs(startedAt),
+        });
+
+        return res.status(200).json({
+          traceId: getTraceId(req),
+          artifact: toAgentArtifactSummary(artifact),
+        });
+      } catch (error) {
+        traceError(req, "agent.artifact.read.failed", error, {
+          artifactId: req.params.artifactId,
+          elapsedMs: elapsedMs(startedAt),
+        });
+        return res.status(500).json({
+          message: "Failed to fetch artifact",
+          traceId: getTraceId(req),
+        });
+      }
+    },
+  );
+
+  app.post(
+    "/api/agent/artifacts/:artifactId/archive",
+    isAuthenticated,
+    async (req: any, res) => {
+      const startedAt = Date.now();
+      try {
+        const artifact = await storage.updateAgentArtifactStatus({
+          artifactId: req.params.artifactId,
+          userId: req.session.userId,
+          status: "archived",
+        });
+        if (!artifact) {
+          return res.status(404).json({
+            message: "Artifact not found",
+            traceId: getTraceId(req),
+          });
+        }
+
+        trace(req, "agent.artifact.archived", {
+          artifactId: artifact.id,
+          elapsedMs: elapsedMs(startedAt),
+        });
+
+        return res.status(200).json({
+          traceId: getTraceId(req),
+          artifact: toAgentArtifactSummary(artifact),
+        });
+      } catch (error) {
+        traceError(req, "agent.artifact.archive.failed", error, {
+          artifactId: req.params.artifactId,
+          elapsedMs: elapsedMs(startedAt),
+        });
+        return res.status(500).json({
+          message: "Failed to archive artifact",
+          traceId: getTraceId(req),
+        });
+      }
+    },
+  );
+
+  app.delete(
+    "/api/agent/artifacts/:artifactId",
+    isAuthenticated,
+    async (req: any, res) => {
+      const startedAt = Date.now();
+      try {
+        const artifact = await storage.updateAgentArtifactStatus({
+          artifactId: req.params.artifactId,
+          userId: req.session.userId,
+          status: "deleted",
+        });
+        if (!artifact) {
+          return res.status(404).json({
+            message: "Artifact not found",
+            traceId: getTraceId(req),
+          });
+        }
+
+        trace(req, "agent.artifact.deleted", {
+          artifactId: artifact.id,
+          elapsedMs: elapsedMs(startedAt),
+        });
+        return res.status(204).end();
+      } catch (error) {
+        traceError(req, "agent.artifact.delete.failed", error, {
+          artifactId: req.params.artifactId,
+          elapsedMs: elapsedMs(startedAt),
+        });
+        return res.status(500).json({
+          message: "Failed to delete artifact",
+          traceId: getTraceId(req),
+        });
+      }
+    },
+  );
+
   app.post("/api/live/token", isAuthenticated, async (req: any, res) => {
     const startedAt = Date.now();
     try {
@@ -1939,6 +2401,98 @@ export async function registerRoutes(
         userMessage.id,
         parsed.attachmentIds,
       );
+
+      const turnIntentContext = inferRecentAgentIntentContext(
+        await storage.getMessages(conversation.id),
+        userMessage.id,
+      );
+      const turnIntent = classifyChatTurnIntent(parsed.text, turnIntentContext);
+      trace(req, "chat.turn.classified", {
+        conversationId: conversation.id,
+        intent: turnIntent,
+        attachmentCount: boundAttachments.length,
+        recentAgentContext: turnIntentContext.hasRecentAgentActivity,
+        recentAgentTaskKind: turnIntentContext.recentTaskKind,
+      });
+
+      if (turnIntent === "agent_task") {
+        const run = await startAgentTaskRun({
+          userId: req.session.userId,
+          conversationId: conversation.id,
+          prompt: parsed.text,
+          requestedByMessageId: userMessage.id,
+          attachments: boundAttachments,
+          intentContext: turnIntentContext,
+        });
+
+        const allMessages = mapMessagesWithSignedAttachments(
+          await storage.getMessagesWithAttachments(conversation.id),
+          req.session.userId,
+        );
+        const userCreatedAtMs = userMessage.createdAt?.getTime() ?? Date.now();
+        const finalizedAssistantMessages = allMessages.filter((message) => {
+          if (message.sender !== "assistant") return false;
+          if (!isAgentMessageUiPayload((message as Record<string, unknown>).uiPayload)) {
+            return false;
+          }
+          const uiPayload = (message as Record<string, unknown>).uiPayload as Record<
+            string,
+            unknown
+          >;
+          const payloadTaskId =
+            typeof uiPayload.taskId === "string"
+              ? uiPayload.taskId
+              : uiPayload.task &&
+                  typeof uiPayload.task === "object" &&
+                  typeof (uiPayload.task as Record<string, unknown>).id === "string"
+                ? ((uiPayload.task as Record<string, unknown>).id as string)
+                : null;
+          if (payloadTaskId !== run.task.id) return false;
+          const createdAtMs =
+            message.createdAt instanceof Date
+              ? message.createdAt.getTime()
+              : message.createdAt
+                ? new Date(message.createdAt).getTime()
+                : 0;
+          return createdAtMs >= userCreatedAtMs - 5_000;
+        });
+
+        const assistantMessages =
+          finalizedAssistantMessages.length > 0
+            ? finalizedAssistantMessages
+            : [
+                {
+                  id: `agent-final-${run.task.id}`,
+                  conversationId: conversation.id,
+                  sender: "assistant",
+                  turnId: randomUUID(),
+                  partIndex: 0,
+                  text: run.awaitingApproval
+                    ? "I started this task and need your approval to continue."
+                    : "I finished this task and posted outputs in chat.",
+                  createdAt: new Date(),
+                  attachments: [],
+                },
+              ];
+
+        const legacyAssistantMessage = makeLegacyAssistantMessage(assistantMessages);
+
+        return res.status(201).json({
+          traceId: getTraceId(req),
+          conversationId: conversation.id,
+          userMessage: {
+            ...userMessage,
+            attachments: boundAttachments.map((attachment) =>
+              toAttachmentResponse(attachment, req.session.userId),
+            ),
+          },
+          assistantMessage: legacyAssistantMessage,
+          assistantMessages,
+          model: "agent_runtime_v1",
+          usage: null,
+          elapsedMs: elapsedMs(startedAt),
+        });
+      }
 
       const modelMessages = await buildModelMessages({
         conversationId: conversation.id,
@@ -2209,6 +2763,134 @@ export async function registerRoutes(
         parsed.attachmentIds,
       );
 
+      const turnIntentContext = inferRecentAgentIntentContext(
+        await storage.getMessages(conversation.id),
+        userMessage.id,
+      );
+      const turnIntent = classifyChatTurnIntent(parsed.text, turnIntentContext);
+      trace(req, "chat.turn.classified", {
+        conversationId: conversation.id,
+        intent: turnIntent,
+        attachmentCount: boundAttachments.length,
+        recentAgentContext: turnIntentContext.hasRecentAgentActivity,
+        recentAgentTaskKind: turnIntentContext.recentTaskKind,
+      });
+
+      res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
+      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("Connection", "keep-alive");
+
+      const writeEvent = (payload: Record<string, unknown>) => {
+        if (disconnected) return;
+        res.write(`${JSON.stringify(payload)}\n`);
+      };
+
+      writeEvent({
+        type: "ack",
+        traceId: getTraceId(req),
+        conversationId: conversation.id,
+        userMessage: {
+          ...userMessage,
+          attachments: boundAttachments.map((attachment) =>
+            toAttachmentResponse(attachment, req.session.userId),
+          ),
+        },
+      });
+
+      if (turnIntent === "agent_task") {
+        trace(req, "chat.stream.agent_task.started", {
+          conversationId: conversation.id,
+          attachmentCount: boundAttachments.length,
+        });
+
+        const run = await startAgentTaskRun({
+          userId: req.session.userId,
+          conversationId: conversation.id,
+          prompt: parsed.text,
+          requestedByMessageId: userMessage.id,
+          attachments: boundAttachments,
+          intentContext: turnIntentContext,
+          onEvent: (event: AgentTaskEvent) => {
+            writeEvent(event as unknown as Record<string, unknown>);
+          },
+        });
+
+        const allMessages = mapMessagesWithSignedAttachments(
+          await storage.getMessagesWithAttachments(conversation.id),
+          req.session.userId,
+        );
+        const userCreatedAtMs = userMessage.createdAt?.getTime() ?? Date.now();
+        const taskAssistantMessages = allMessages.filter((message) => {
+          if (message.sender !== "assistant") return false;
+          if (!isAgentMessageUiPayload((message as Record<string, unknown>).uiPayload)) {
+            return false;
+          }
+          const uiPayload = (message as Record<string, unknown>).uiPayload as Record<
+            string,
+            unknown
+          >;
+          const payloadTaskId =
+            typeof uiPayload.taskId === "string"
+              ? uiPayload.taskId
+              : uiPayload.task &&
+                  typeof uiPayload.task === "object" &&
+                  typeof (uiPayload.task as Record<string, unknown>).id === "string"
+                ? ((uiPayload.task as Record<string, unknown>).id as string)
+                : null;
+          if (payloadTaskId !== run.task.id) return false;
+          const createdAtMs =
+            message.createdAt instanceof Date
+              ? message.createdAt.getTime()
+              : message.createdAt
+                ? new Date(message.createdAt).getTime()
+                : 0;
+          return createdAtMs >= userCreatedAtMs - 5_000;
+        });
+
+        const finalAssistantMessages =
+          taskAssistantMessages.length > 0
+            ? taskAssistantMessages
+            : [
+                {
+                  id: `agent-final-${run.task.id}`,
+                  conversationId: conversation.id,
+                  sender: "assistant",
+                  turnId: randomUUID(),
+                  partIndex: 0,
+                  text: run.awaitingApproval
+                    ? "I started the task and I need your approval to continue."
+                    : "I finished that task and posted outputs in this chat.",
+                  createdAt: new Date(),
+                  attachments: [],
+                },
+              ];
+
+        const legacyAssistantMessage = makeLegacyAssistantMessage(
+          finalAssistantMessages,
+        );
+
+        writeEvent({
+          type: "final",
+          assistantMessage: legacyAssistantMessage,
+          assistantMessages: finalAssistantMessages,
+          model: "agent_runtime_v1",
+          usage: null,
+          elapsedMs: elapsedMs(startedAt),
+        });
+
+        trace(req, "chat.stream.agent_task.completed", {
+          conversationId: conversation.id,
+          taskId: run.task.id,
+          taskStatus: run.task.status,
+          awaitingApproval: run.awaitingApproval,
+          emittedAssistantMessages: finalAssistantMessages.length,
+          elapsedMs: elapsedMs(startedAt),
+        });
+
+        res.end();
+        return;
+      }
+
       const modelMessages = await buildModelMessages({
         conversationId: conversation.id,
         boundAttachments,
@@ -2234,27 +2916,6 @@ export async function registerRoutes(
             : "feature_disabled",
         });
       }
-
-      res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
-      res.setHeader("Cache-Control", "no-cache");
-      res.setHeader("Connection", "keep-alive");
-
-      const writeEvent = (payload: Record<string, unknown>) => {
-        if (disconnected) return;
-        res.write(`${JSON.stringify(payload)}\n`);
-      };
-
-      writeEvent({
-        type: "ack",
-        traceId: getTraceId(req),
-        conversationId: conversation.id,
-        userMessage: {
-          ...userMessage,
-          attachments: boundAttachments.map((attachment) =>
-            toAttachmentResponse(attachment, req.session.userId),
-          ),
-        },
-      });
 
       trace(req, "chat.stream.started", {
         conversationId: conversation.id,

@@ -7,6 +7,11 @@ import {
   userProfiles,
   voiceSessions,
   usageEvents,
+  agentTasks,
+  agentSteps,
+  agentApprovals,
+  agentArtifacts,
+  agentToolCalls,
   type Conversation,
   type InsertConversation,
   type Message,
@@ -20,6 +25,18 @@ import {
   type InsertUserProfile,
   type UserProfile,
   type UsageEventMetric,
+  type AgentTask,
+  type InsertAgentTask,
+  type AgentStep,
+  type InsertAgentStep,
+  type AgentApproval,
+  type InsertAgentApproval,
+  type AgentArtifact,
+  type InsertAgentArtifact,
+  type AgentToolCall,
+  type InsertAgentToolCall,
+  type AgentTaskStatus,
+  type AgentArtifactStatus,
 } from "@shared/schema";
 import { db } from "./db";
 import { and, asc, desc, eq, gte, inArray, isNull, sql } from "drizzle-orm";
@@ -56,6 +73,12 @@ export interface LiveQuotaConsumeResult {
   voice: QuotaConsumeResult;
   camera: QuotaConsumeResult;
   reason?: "voice_quota_exceeded" | "camera_quota_exceeded";
+}
+
+export interface AgentTaskWithDetails extends AgentTask {
+  steps: AgentStep[];
+  approvals: AgentApproval[];
+  artifacts: AgentArtifact[];
 }
 
 export interface IStorage {
@@ -124,6 +147,48 @@ export interface IStorage {
     conversationId?: string | null;
     meta?: Record<string, unknown> | null;
   }): Promise<LiveQuotaConsumeResult>;
+
+  createAgentTask(data: InsertAgentTask): Promise<AgentTask>;
+  getAgentTaskById(taskId: string): Promise<AgentTask | undefined>;
+  getAgentTaskWithDetails(taskId: string): Promise<AgentTaskWithDetails | undefined>;
+  updateAgentTaskStatus(params: {
+    taskId: string;
+    status: AgentTaskStatus;
+    plan?: unknown;
+    errorMessage?: string | null;
+    completedAt?: Date | null;
+  }): Promise<AgentTask | undefined>;
+  createAgentStep(data: InsertAgentStep): Promise<AgentStep>;
+  updateAgentStep(params: {
+    stepId: string;
+    status?: AgentStep["status"];
+    detail?: string | null;
+  }): Promise<AgentStep | undefined>;
+  getAgentSteps(taskId: string): Promise<AgentStep[]>;
+  createAgentApproval(data: InsertAgentApproval): Promise<AgentApproval>;
+  getPendingAgentApproval(taskId: string): Promise<AgentApproval | undefined>;
+  resolveAgentApproval(params: {
+    approvalId: string;
+    status: "approved" | "denied";
+    reason?: string | null;
+  }): Promise<AgentApproval | undefined>;
+  createAgentArtifact(data: InsertAgentArtifact): Promise<AgentArtifact>;
+  getAgentArtifactById(artifactId: string): Promise<AgentArtifact | undefined>;
+  getAgentArtifactsForUser(params: {
+    userId: string;
+    includeArchived?: boolean;
+  }): Promise<AgentArtifact[]>;
+  updateAgentArtifactStatus(params: {
+    artifactId: string;
+    userId: string;
+    status: AgentArtifactStatus;
+  }): Promise<AgentArtifact | undefined>;
+  createAgentToolCall(data: InsertAgentToolCall): Promise<AgentToolCall>;
+  updateAgentToolCall(params: {
+    toolCallId: string;
+    status?: AgentToolCall["status"];
+    outputSummary?: string | null;
+  }): Promise<AgentToolCall | undefined>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -519,6 +584,246 @@ export class DatabaseStorage implements IStorage {
       .from(voiceSessions)
       .where(eq(voiceSessions.userId, userId))
       .orderBy(desc(voiceSessions.createdAt));
+  }
+
+  async createAgentTask(data: InsertAgentTask): Promise<AgentTask> {
+    const [task] = await db.insert(agentTasks).values(data).returning();
+    await db
+      .update(conversations)
+      .set({ updatedAt: new Date() })
+      .where(eq(conversations.id, data.conversationId));
+    return task;
+  }
+
+  async getAgentTaskById(taskId: string): Promise<AgentTask | undefined> {
+    const [task] = await db
+      .select()
+      .from(agentTasks)
+      .where(eq(agentTasks.id, taskId));
+    return task;
+  }
+
+  async getAgentTaskWithDetails(
+    taskId: string,
+  ): Promise<AgentTaskWithDetails | undefined> {
+    const task = await this.getAgentTaskById(taskId);
+    if (!task) return undefined;
+
+    const [steps, approvals, artifacts] = await Promise.all([
+      this.getAgentSteps(taskId),
+      db
+        .select()
+        .from(agentApprovals)
+        .where(eq(agentApprovals.taskId, taskId))
+        .orderBy(asc(agentApprovals.createdAt)),
+      db
+        .select()
+        .from(agentArtifacts)
+        .where(eq(agentArtifacts.taskId, taskId))
+        .orderBy(asc(agentArtifacts.createdAt)),
+    ]);
+
+    return {
+      ...task,
+      steps,
+      approvals,
+      artifacts,
+    };
+  }
+
+  async updateAgentTaskStatus(params: {
+    taskId: string;
+    status: AgentTaskStatus;
+    plan?: unknown;
+    errorMessage?: string | null;
+    completedAt?: Date | null;
+  }): Promise<AgentTask | undefined> {
+    const updates: Partial<typeof agentTasks.$inferInsert> = {
+      status: params.status,
+      updatedAt: new Date(),
+    };
+    if (params.plan !== undefined) {
+      updates.plan = params.plan;
+    }
+    if (params.errorMessage !== undefined) {
+      updates.errorMessage = params.errorMessage;
+    }
+    if (params.completedAt !== undefined) {
+      updates.completedAt = params.completedAt;
+    }
+
+    const [task] = await db
+      .update(agentTasks)
+      .set(updates)
+      .where(eq(agentTasks.id, params.taskId))
+      .returning();
+    return task;
+  }
+
+  async createAgentStep(data: InsertAgentStep): Promise<AgentStep> {
+    const [step] = await db.insert(agentSteps).values(data).returning();
+    return step;
+  }
+
+  async updateAgentStep(params: {
+    stepId: string;
+    status?: AgentStep["status"];
+    detail?: string | null;
+  }): Promise<AgentStep | undefined> {
+    const updates: Partial<typeof agentSteps.$inferInsert> = {
+      updatedAt: new Date(),
+    };
+    if (params.status !== undefined) {
+      updates.status = params.status;
+    }
+    if (params.detail !== undefined) {
+      updates.detail = params.detail;
+    }
+
+    const [step] = await db
+      .update(agentSteps)
+      .set(updates)
+      .where(eq(agentSteps.id, params.stepId))
+      .returning();
+    return step;
+  }
+
+  async getAgentSteps(taskId: string): Promise<AgentStep[]> {
+    return db
+      .select()
+      .from(agentSteps)
+      .where(eq(agentSteps.taskId, taskId))
+      .orderBy(asc(agentSteps.orderIndex), asc(agentSteps.createdAt));
+  }
+
+  async createAgentApproval(data: InsertAgentApproval): Promise<AgentApproval> {
+    const [approval] = await db.insert(agentApprovals).values(data).returning();
+    return approval;
+  }
+
+  async getPendingAgentApproval(taskId: string): Promise<AgentApproval | undefined> {
+    const [approval] = await db
+      .select()
+      .from(agentApprovals)
+      .where(
+        and(
+          eq(agentApprovals.taskId, taskId),
+          eq(agentApprovals.status, "pending"),
+        ),
+      )
+      .orderBy(desc(agentApprovals.createdAt))
+      .limit(1);
+    return approval;
+  }
+
+  async resolveAgentApproval(params: {
+    approvalId: string;
+    status: "approved" | "denied";
+    reason?: string | null;
+  }): Promise<AgentApproval | undefined> {
+    const [approval] = await db
+      .update(agentApprovals)
+      .set({
+        status: params.status,
+        reason: params.reason ?? null,
+        respondedAt: new Date(),
+      })
+      .where(eq(agentApprovals.id, params.approvalId))
+      .returning();
+    return approval;
+  }
+
+  async createAgentArtifact(data: InsertAgentArtifact): Promise<AgentArtifact> {
+    const [artifact] = await db.insert(agentArtifacts).values(data).returning();
+    await db
+      .update(conversations)
+      .set({ updatedAt: new Date() })
+      .where(eq(conversations.id, data.conversationId));
+    return artifact;
+  }
+
+  async getAgentArtifactById(
+    artifactId: string,
+  ): Promise<AgentArtifact | undefined> {
+    const [artifact] = await db
+      .select()
+      .from(agentArtifacts)
+      .where(eq(agentArtifacts.id, artifactId));
+    return artifact;
+  }
+
+  async getAgentArtifactsForUser(params: {
+    userId: string;
+    includeArchived?: boolean;
+  }): Promise<AgentArtifact[]> {
+    return db
+      .select()
+      .from(agentArtifacts)
+      .where(
+        and(
+          eq(agentArtifacts.userId, params.userId),
+          params.includeArchived
+            ? inArray(agentArtifacts.status, ["active", "archived"])
+            : eq(agentArtifacts.status, "active"),
+        ),
+      )
+      .orderBy(desc(agentArtifacts.createdAt));
+  }
+
+  async updateAgentArtifactStatus(params: {
+    artifactId: string;
+    userId: string;
+    status: AgentArtifactStatus;
+  }): Promise<AgentArtifact | undefined> {
+    const [artifact] = await db
+      .update(agentArtifacts)
+      .set({
+        status: params.status,
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(agentArtifacts.id, params.artifactId),
+          eq(agentArtifacts.userId, params.userId),
+        ),
+      )
+      .returning();
+    return artifact;
+  }
+
+  async createAgentToolCall(data: InsertAgentToolCall): Promise<AgentToolCall> {
+    const [toolCall] = await db.insert(agentToolCalls).values(data).returning();
+    return toolCall;
+  }
+
+  async updateAgentToolCall(params: {
+    toolCallId: string;
+    status?: AgentToolCall["status"];
+    outputSummary?: string | null;
+  }): Promise<AgentToolCall | undefined> {
+    if (params.status === undefined && params.outputSummary === undefined) {
+      const [existing] = await db
+        .select()
+        .from(agentToolCalls)
+        .where(eq(agentToolCalls.id, params.toolCallId))
+        .limit(1);
+      return existing;
+    }
+
+    const updates: Partial<typeof agentToolCalls.$inferInsert> = {};
+    if (params.status !== undefined) {
+      updates.status = params.status;
+    }
+    if (params.outputSummary !== undefined) {
+      updates.outputSummary = params.outputSummary;
+    }
+
+    const [toolCall] = await db
+      .update(agentToolCalls)
+      .set(updates)
+      .where(eq(agentToolCalls.id, params.toolCallId))
+      .returning();
+    return toolCall;
   }
 
   async getQuotaSummary(userId: string): Promise<QuotaSummary> {

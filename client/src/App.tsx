@@ -1,6 +1,28 @@
 import { useState, useEffect, useRef, useId } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Mic, Video, PhoneOff, MessageSquare, Menu, Settings, ChevronRight, ChevronDown, X, ArrowLeft, Camera, LogOut, Eye, EyeOff, ImageIcon, Pencil } from "lucide-react";
+import {
+  Mic,
+  Video,
+  PhoneOff,
+  MessageSquare,
+  Menu,
+  Settings,
+  ChevronRight,
+  ChevronDown,
+  X,
+  ArrowLeft,
+  Camera,
+  LogOut,
+  Eye,
+  EyeOff,
+  ImageIcon,
+  Pencil,
+  Archive,
+  Trash2,
+  Play,
+  FileText,
+  AlertTriangle,
+} from "lucide-react";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -25,6 +47,13 @@ import {
   isAppThemeId,
   type AppThemeId,
 } from "@/lib/app-theme";
+import type {
+  AgentArtifactSummary,
+  AgentApprovalSummary,
+  AgentMessageUiPayload,
+  AgentStepSummary,
+  AgentTaskSummary,
+} from "@shared/agent";
 
 import {
   DropdownMenu,
@@ -81,6 +110,7 @@ interface MessageData {
   text: string;
   createdAt: string | null;
   attachments?: MessageAttachmentData[];
+  uiPayload?: AgentMessageUiPayload | null;
   isTyping?: boolean;
   localOnly?: boolean;
 }
@@ -135,12 +165,46 @@ interface ChatStreamErrorEvent {
   traceId?: string;
 }
 
+interface ChatStreamTaskCreatedEvent {
+  type: "task_created";
+  task: AgentTaskSummary;
+}
+
+interface ChatStreamTaskStepEvent {
+  type: "task_step";
+  taskId: string;
+  step: AgentStepSummary;
+}
+
+interface ChatStreamTaskApprovalRequiredEvent {
+  type: "task_approval_required";
+  taskId: string;
+  approval: AgentApprovalSummary;
+}
+
+interface ChatStreamTaskArtifactReadyEvent {
+  type: "task_artifact_ready";
+  taskId: string;
+  artifact: AgentArtifactSummary;
+}
+
+interface ChatStreamTaskFailedEvent {
+  type: "task_failed";
+  taskId: string;
+  message: string;
+}
+
 type ChatStreamEvent =
   | ChatStreamAckEvent
   | ChatStreamDeltaEvent
   | ChatStreamPartFinalEvent
   | ChatStreamFinalEvent
-  | ChatStreamErrorEvent;
+  | ChatStreamErrorEvent
+  | ChatStreamTaskCreatedEvent
+  | ChatStreamTaskStepEvent
+  | ChatStreamTaskApprovalRequiredEvent
+  | ChatStreamTaskArtifactReadyEvent
+  | ChatStreamTaskFailedEvent;
 
 type ResponseStylePreset = "concise" | "balanced" | "expressive" | "playful";
 type GenderOption =
@@ -243,6 +307,24 @@ interface QuotaErrorPayload {
   };
 }
 
+interface AgentArtifactsResponse {
+  traceId?: string;
+  artifacts: AgentArtifactSummary[];
+}
+
+interface AgentArtifactResponse {
+  traceId?: string;
+  artifact: AgentArtifactSummary;
+}
+
+interface AgentTaskResponse {
+  traceId?: string;
+  task: AgentTaskSummary;
+  steps?: AgentStepSummary[];
+  approvals?: AgentApprovalSummary[];
+  artifacts?: AgentArtifactSummary[];
+}
+
 const ZEE_AVATAR_PRESET_OPTIONS: Array<{
   id: ZeeAvatarPreset;
   label: string;
@@ -300,6 +382,33 @@ function parseQuotaError(error: unknown): QuotaErrorPayload | null {
   const payloadText = rest.join(": ").trim();
   if (!payloadText.startsWith("{")) return null;
   return safeParseJson<QuotaErrorPayload>(payloadText);
+}
+
+function isAgentTaskStatusPayload(
+  payload: MessageData["uiPayload"],
+): payload is Extract<AgentMessageUiPayload, { kind: "agent_task_status" }> {
+  return Boolean(payload && payload.kind === "agent_task_status");
+}
+
+function isAgentApprovalPayload(
+  payload: MessageData["uiPayload"],
+): payload is Extract<AgentMessageUiPayload, { kind: "agent_approval" }> {
+  return Boolean(payload && payload.kind === "agent_approval");
+}
+
+function isAgentArtifactPayload(
+  payload: MessageData["uiPayload"],
+): payload is Extract<AgentMessageUiPayload, { kind: "agent_artifact" }> {
+  return Boolean(payload && payload.kind === "agent_artifact");
+}
+
+function toTaskStatusLabel(status: AgentTaskSummary["status"]): string {
+  if (status === "in_progress") return "In progress";
+  if (status === "approval_required") return "Needs approval";
+  if (status === "completed") return "Completed";
+  if (status === "failed") return "Failed";
+  if (status === "cancelled") return "Canceled";
+  return "Queued";
 }
 
 function formatMinutesFromSeconds(seconds: number): string {
@@ -1234,6 +1343,7 @@ const ProfileView = ({
   onUploadAvatar,
   onUploadZeeAvatar,
   onReplayOnboarding,
+  onOpenOutputsHistory,
   onLogout,
   quotaSummary,
   isQuotaLoading,
@@ -1262,6 +1372,7 @@ const ProfileView = ({
   onUploadAvatar: (file: File) => Promise<void>;
   onUploadZeeAvatar: (file: File) => Promise<void>;
   onReplayOnboarding: () => void;
+  onOpenOutputsHistory: () => void;
   onLogout: () => void;
   quotaSummary?: QuotaSummaryData;
   isQuotaLoading: boolean;
@@ -1528,6 +1639,19 @@ const ProfileView = ({
                         data-testid="button-replay-onboarding"
                       >
                         Replay onboarding
+                      </button>
+                      <button
+                        type="button"
+                        onClick={onOpenOutputsHistory}
+                        className="w-full rounded-xl border px-3 py-2 text-sm font-medium transition-colors hover:opacity-95"
+                        style={{
+                          borderColor: "var(--app-soft-card-border)",
+                          backgroundColor: "var(--app-soft-card-bg)",
+                          color: "var(--app-on-dark)",
+                        }}
+                        data-testid="button-open-outputs-history"
+                      >
+                        Outputs history
                       </button>
                     </div>
                   </motion.div>
@@ -2594,13 +2718,17 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onProfile, assistantName
               </div>
             )}
 
-            <div
+            <button
+              type="button"
               className="flex flex-col items-center justify-center gap-2 py-3 pb-6 cursor-grab active:cursor-grabbing"
               style={{ color: "var(--app-on-dark-muted)" }}
+              onClick={() => setMode("text")}
+              aria-label="Switch to text chat"
+              data-testid="button-open-text-chat"
             >
                <div className="w-12 h-1.5 rounded-full" style={{ backgroundColor: "var(--app-on-dark-muted)" }} />
                <span className="text-xs font-medium uppercase tracking-wider">Swipe up to chat</span>
-            </div>
+            </button>
           </div>
         </motion.div>
         
@@ -2629,6 +2757,8 @@ const TextView = ({
   assistantAvatarSrc,
   mode,
   userProfileImage,
+  onOpenArtifact,
+  onResolveApproval,
 }: {
   messages: MessageData[];
   isStreamingReply: boolean;
@@ -2636,6 +2766,12 @@ const TextView = ({
   assistantAvatarSrc: string;
   mode: Mode;
   userProfileImage?: string;
+  onOpenArtifact: (artifactId: string) => void;
+  onResolveApproval: (
+    taskId: string,
+    approve: boolean,
+    reason?: string,
+  ) => Promise<void>;
 }) => {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const [showJumpToNewest, setShowJumpToNewest] = useState(false);
@@ -2782,6 +2918,131 @@ const TextView = ({
                           transition={{ duration: 0.8, repeat: Infinity, ease: "easeInOut", delay: 0.3 }}
                         />
                       </div>
+                    ) : isAgentTaskStatusPayload(msg.uiPayload) ? (
+                      <div
+                        className="space-y-2"
+                        data-testid="agent-task-status-card"
+                        data-agent-task-id={msg.uiPayload.task.id}
+                        data-agent-task-status={msg.uiPayload.task.status}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-[11px] font-semibold uppercase tracking-wide opacity-75">
+                            Agent task
+                          </span>
+                          <span className="text-[11px] font-semibold">
+                            {toTaskStatusLabel(msg.uiPayload.task.status)}
+                          </span>
+                        </div>
+                        <p className="text-sm font-medium">{msg.uiPayload.text}</p>
+                        {msg.uiPayload.latestStep && (
+                          <div className="rounded-lg border border-black/10 bg-black/5 px-3 py-2 text-xs">
+                            <p className="font-semibold">{msg.uiPayload.latestStep.title}</p>
+                            <p className="opacity-80">{msg.uiPayload.latestStep.detail}</p>
+                          </div>
+                        )}
+                      </div>
+                    ) : isAgentApprovalPayload(msg.uiPayload) ? (
+                      <div
+                        className="space-y-2"
+                        data-testid="agent-approval-card"
+                        data-agent-task-id={msg.uiPayload.taskId}
+                      >
+                        <div className="flex items-center gap-2">
+                          <AlertTriangle className="h-4 w-4" />
+                          <p className="text-sm font-semibold">Approval required</p>
+                        </div>
+                        <p className="text-xs opacity-85">
+                          {msg.uiPayload.approval.requestedAction}
+                        </p>
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const approvalPayload = msg.uiPayload as Extract<
+                                AgentMessageUiPayload,
+                                { kind: "agent_approval" }
+                              >;
+                              void onResolveApproval(approvalPayload.taskId, true);
+                            }}
+                            className="rounded-lg border px-2.5 py-1.5 text-xs font-semibold"
+                            style={{
+                              borderColor: "var(--app-soft-card-border)",
+                              backgroundColor: "var(--app-soft-card-bg)",
+                            }}
+                            data-testid="button-agent-approve"
+                          >
+                            Approve
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const approvalPayload = msg.uiPayload as Extract<
+                                AgentMessageUiPayload,
+                                { kind: "agent_approval" }
+                              >;
+                              void onResolveApproval(
+                                approvalPayload.taskId,
+                                false,
+                                "Denied from chat card",
+                              );
+                            }}
+                            className="rounded-lg border px-2.5 py-1.5 text-xs font-semibold"
+                            style={{
+                              borderColor: "var(--app-soft-card-border)",
+                              backgroundColor: "transparent",
+                            }}
+                            data-testid="button-agent-deny"
+                          >
+                            Deny
+                          </button>
+                        </div>
+                      </div>
+                    ) : isAgentArtifactPayload(msg.uiPayload) ? (
+                      <div
+                        className="space-y-2"
+                        data-testid="agent-artifact-card"
+                        data-agent-artifact-id={msg.uiPayload.artifact.id}
+                        data-agent-artifact-type={msg.uiPayload.artifact.type}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-1.5">
+                            {msg.uiPayload.artifact.type === "mini_game" ? (
+                              <Play className="h-4 w-4" />
+                            ) : (
+                              <FileText className="h-4 w-4" />
+                            )}
+                            <p className="text-sm font-semibold">
+                              {msg.uiPayload.artifact.title}
+                            </p>
+                          </div>
+                          <span className="text-[11px] uppercase tracking-wide opacity-70">
+                            {msg.uiPayload.artifact.type === "mini_game"
+                              ? "Game"
+                              : "Doc"}
+                          </span>
+                        </div>
+                        <p className="text-xs opacity-80">{msg.text}</p>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const artifactPayload = msg.uiPayload as Extract<
+                              AgentMessageUiPayload,
+                              { kind: "agent_artifact" }
+                            >;
+                            onOpenArtifact(artifactPayload.artifact.id);
+                          }}
+                          className="rounded-lg border px-2.5 py-1.5 text-xs font-semibold"
+                          style={{
+                            borderColor: "var(--app-soft-card-border)",
+                            backgroundColor: "var(--app-soft-card-bg)",
+                          }}
+                          data-testid="button-open-agent-artifact"
+                        >
+                          {msg.uiPayload.artifact.type === "mini_game"
+                            ? "View / Play"
+                            : "View"}
+                        </button>
+                      </div>
                     ) : (
                       msg.text
                     )}
@@ -2827,6 +3088,216 @@ const TextView = ({
         </button>
       )}
     </div>
+  );
+};
+
+const ArtifactViewer = ({
+  artifact,
+  onClose,
+}: {
+  artifact: AgentArtifactSummary;
+  onClose: () => void;
+}) => {
+  const isGame = artifact.type === "mini_game";
+  const canRenderIframe =
+    typeof artifact.htmlContent === "string" && artifact.htmlContent.trim().length > 0;
+  const markdown = artifact.markdownContent ?? "";
+  const iframeSandbox = isGame ? "allow-scripts allow-same-origin" : undefined;
+
+  const downloadDoc = () => {
+    const blob = new Blob([markdown], { type: "text/markdown;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `${artifact.title.replace(/\\s+/g, "-").toLowerCase()}.md`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  };
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="absolute inset-0 z-[95] flex flex-col"
+      style={{
+        backgroundColor: "var(--app-panel-bg)",
+        color: "var(--app-on-dark)",
+      }}
+    >
+      <div
+        className="flex items-center justify-between border-b px-4 py-3"
+        style={{ borderColor: "var(--app-soft-card-border)" }}
+      >
+        <div>
+          <p className="text-xs uppercase tracking-wide opacity-70">
+            {isGame ? "Mini Game" : "Document"}
+          </p>
+          <h3 className="text-base font-semibold">{artifact.title}</h3>
+        </div>
+        <div className="flex items-center gap-2">
+          {!isGame && (
+            <button
+              type="button"
+              onClick={downloadDoc}
+              className="rounded-lg border px-3 py-1.5 text-xs font-semibold"
+              style={{
+                borderColor: "var(--app-soft-card-border)",
+                backgroundColor: "var(--app-soft-card-bg)",
+              }}
+            >
+              Download
+            </button>
+          )}
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={onClose}
+            data-testid="button-close-artifact-viewer"
+          >
+            <X className="h-5 w-5" />
+          </Button>
+        </div>
+      </div>
+      <div className="flex-1 overflow-hidden p-3">
+        {canRenderIframe ? (
+          <iframe
+            title={artifact.title}
+            sandbox={iframeSandbox}
+            srcDoc={artifact.htmlContent ?? ""}
+            className="h-full w-full rounded-xl border"
+            style={{
+              borderColor: "var(--app-soft-card-border)",
+              backgroundColor: "white",
+            }}
+          />
+        ) : (
+          <div
+            className="h-full overflow-auto rounded-xl border p-4 text-sm leading-relaxed"
+            style={{
+              borderColor: "var(--app-soft-card-border)",
+              backgroundColor: "var(--app-soft-card-bg)",
+            }}
+          >
+            <pre className="whitespace-pre-wrap font-sans">{markdown || "No content."}</pre>
+          </div>
+        )}
+      </div>
+    </motion.div>
+  );
+};
+
+const OutputsHistoryView = ({
+  artifacts,
+  isLoading,
+  onClose,
+  onOpenArtifact,
+  onArchiveArtifact,
+  onDeleteArtifact,
+}: {
+  artifacts: AgentArtifactSummary[];
+  isLoading: boolean;
+  onClose: () => void;
+  onOpenArtifact: (artifactId: string) => void;
+  onArchiveArtifact: (artifactId: string) => void;
+  onDeleteArtifact: (artifactId: string) => void;
+}) => {
+  return (
+    <motion.div
+      initial={{ x: "100%" }}
+      animate={{ x: 0 }}
+      exit={{ x: "100%" }}
+      transition={{ type: "spring", damping: 28, stiffness: 220 }}
+      className="absolute inset-0 z-[92] flex flex-col"
+      style={{
+        backgroundColor: "var(--app-panel-bg)",
+        color: "var(--app-on-dark)",
+      }}
+    >
+      <div
+        className="flex items-center justify-between border-b px-4 py-3"
+        style={{ borderColor: "var(--app-soft-card-border)" }}
+      >
+        <div>
+          <p className="text-xs uppercase tracking-wide opacity-70">History</p>
+          <h3 className="text-base font-semibold">Outputs</h3>
+        </div>
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={onClose}
+          data-testid="button-close-outputs-history"
+        >
+          <X className="h-5 w-5" />
+        </Button>
+      </div>
+      <ScrollArea className="flex-1 px-4 py-4">
+        {isLoading ? (
+          <p className="text-sm opacity-70">Loading outputs...</p>
+        ) : artifacts.length === 0 ? (
+          <p className="text-sm opacity-70">No outputs yet. Ask Zee to craft something.</p>
+        ) : (
+          <div className="space-y-3 pb-6">
+            {artifacts.map((artifact) => (
+              <div
+                key={artifact.id}
+                className="rounded-xl border p-3"
+                style={{
+                  borderColor: "var(--app-soft-card-border)",
+                  backgroundColor: "var(--app-soft-card-bg)",
+                }}
+                data-testid="outputs-history-artifact-card"
+                data-agent-artifact-id={artifact.id}
+                data-agent-artifact-type={artifact.type}
+                data-agent-artifact-status={artifact.status}
+              >
+                <div className="mb-2 flex items-start justify-between gap-2">
+                  <div>
+                    <p className="text-sm font-semibold">{artifact.title}</p>
+                    <p className="text-[11px] uppercase tracking-wide opacity-70">
+                      {artifact.type === "mini_game" ? "Game" : "Doc"} · {artifact.status}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    className="rounded-md border px-2 py-1 text-[11px] font-semibold"
+                    style={{ borderColor: "var(--app-soft-card-border)" }}
+                    onClick={() => onOpenArtifact(artifact.id)}
+                    data-testid="button-open-history-artifact"
+                  >
+                    {artifact.type === "mini_game" ? "View/Play" : "View"}
+                  </button>
+                </div>
+                <div className="flex gap-2">
+                  {artifact.status !== "archived" && (
+                    <button
+                      type="button"
+                      className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] font-semibold"
+                      style={{ borderColor: "var(--app-soft-card-border)" }}
+                      onClick={() => onArchiveArtifact(artifact.id)}
+                      data-testid="button-archive-history-artifact"
+                    >
+                      <Archive className="h-3.5 w-3.5" />
+                      Archive
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] font-semibold"
+                    style={{ borderColor: "var(--app-soft-card-border)" }}
+                    onClick={() => onDeleteArtifact(artifact.id)}
+                    data-testid="button-delete-history-artifact"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    Delete
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </ScrollArea>
+    </motion.div>
   );
 };
 
@@ -3204,6 +3675,8 @@ function App() {
   const [isCalling, setIsCalling] = useState(false);
   const [isLiveConnecting, setIsLiveConnecting] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
+  const [showOutputsHistory, setShowOutputsHistory] = useState(false);
+  const [activeArtifactId, setActiveArtifactId] = useState<string | null>(null);
   const [duration, setDuration] = useState(0);
   const [callStartTime, setCallStartTime] = useState<number | null>(null);
   const [liveError, setLiveError] = useState<string | null>(null);
@@ -3318,6 +3791,23 @@ function App() {
       queryKey: ["/api/profile/me"],
       enabled: isAuthenticated,
     });
+
+  const {
+    data: artifactsResponse,
+    isLoading: isArtifactsLoading,
+  } = useQuery<AgentArtifactsResponse>({
+    queryKey: ["/api/agent/artifacts?includeArchived=1"],
+    enabled: isAuthenticated,
+    refetchInterval: 15000,
+  });
+  const artifacts = artifactsResponse?.artifacts ?? [];
+
+  const { data: activeArtifactResponse } = useQuery<AgentArtifactResponse>({
+    queryKey: activeArtifactId
+      ? [`/api/agent/artifacts/${activeArtifactId}`]
+      : ["/api/agent/artifacts/none"],
+    enabled: Boolean(activeArtifactId),
+  });
 
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [selectedVoice, setSelectedVoice] =
@@ -3456,6 +3946,64 @@ function App() {
     },
   });
 
+  const resolveTaskApprovalMutation = useMutation({
+    mutationFn: async (params: {
+      taskId: string;
+      approve: boolean;
+      reason?: string;
+    }) => {
+      const response = await apiRequest(
+        "POST",
+        `/api/agent/tasks/${params.taskId}/approve`,
+        {
+          approve: params.approve,
+          reason: params.reason ?? null,
+        },
+      );
+      return (await response.json()) as AgentTaskResponse;
+    },
+    onSuccess: () => {
+      if (activeConversationId) {
+        queryClient.invalidateQueries({
+          queryKey: getConversationMessagesKey(activeConversationId),
+        });
+      }
+      queryClient.invalidateQueries({
+        queryKey: ["/api/agent/artifacts?includeArchived=1"],
+      });
+    },
+  });
+
+  const archiveArtifactMutation = useMutation({
+    mutationFn: async (artifactId: string) => {
+      const response = await apiRequest(
+        "POST",
+        `/api/agent/artifacts/${artifactId}/archive`,
+      );
+      return (await response.json()) as AgentArtifactResponse;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: ["/api/agent/artifacts?includeArchived=1"],
+      });
+    },
+  });
+
+  const deleteArtifactMutation = useMutation({
+    mutationFn: async (artifactId: string) => {
+      await apiRequest("DELETE", `/api/agent/artifacts/${artifactId}`);
+      return artifactId;
+    },
+    onSuccess: (artifactId) => {
+      if (activeArtifactId === artifactId) {
+        setActiveArtifactId(null);
+      }
+      queryClient.invalidateQueries({
+        queryKey: ["/api/agent/artifacts?includeArchived=1"],
+      });
+    },
+  });
+
   const handleOnboardingComplete = () => {
     forceOnboardingRef.current = false;
     if (typeof window !== "undefined") {
@@ -3482,6 +4030,7 @@ function App() {
       window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
     }
     setShowProfile(false);
+    setShowOutputsHistory(false);
     setShowOnboarding(true);
     updatePreferencesMutation.mutate({
       selectedPersona: persona,
@@ -3533,6 +4082,41 @@ function App() {
 
   const handleUploadZeeAvatar = async (file: File) => {
     await uploadZeeAvatarMutation.mutateAsync(file);
+  };
+
+  const handleResolveTaskApproval = async (
+    taskId: string,
+    approve: boolean,
+    reason?: string,
+  ) => {
+    try {
+      await resolveTaskApprovalMutation.mutateAsync({
+        taskId,
+        approve,
+        reason,
+      });
+      if (activeConversationId) {
+        queryClient.invalidateQueries({
+          queryKey: getConversationMessagesKey(activeConversationId),
+        });
+      }
+    } catch (error) {
+      setComposerError(
+        getErrorMessage(error) || "Failed to process approval decision.",
+      );
+    }
+  };
+
+  const handleOpenArtifact = (artifactId: string) => {
+    setActiveArtifactId(artifactId);
+  };
+
+  const handleArchiveArtifact = (artifactId: string) => {
+    archiveArtifactMutation.mutate(artifactId);
+  };
+
+  const handleDeleteArtifact = (artifactId: string) => {
+    deleteArtifactMutation.mutate(artifactId);
   };
 
   const { data: conversations } = useQuery<any[]>({
@@ -3906,6 +4490,22 @@ function App() {
     const decoder = new TextDecoder();
     let buffer = "";
     let finalized = false;
+    let activeTaskSummary: AgentTaskSummary | null = null;
+
+    const primaryPartId = buildOptimisticAssistantPartId(
+      params.optimisticAssistantTurnId,
+      0,
+    );
+
+    const updatePrimaryOptimisticMessage = (updater: (message: MessageData) => MessageData) => {
+      updateConversationMessages(params.conversationId, (current) => {
+        const next = [...current];
+        const index = next.findIndex((message) => message.id === primaryPartId);
+        if (index < 0) return next;
+        next[index] = updater(next[index]);
+        return next;
+      });
+    };
 
     const applyEvent = (event: ChatStreamEvent) => {
       if (event.type === "ack") {
@@ -3997,6 +4597,95 @@ function App() {
           }
           return next;
         });
+        return;
+      }
+
+      if (event.type === "task_created") {
+        activeTaskSummary = event.task;
+        updatePrimaryOptimisticMessage((message) => ({
+          ...message,
+          isTyping: false,
+          text: "Zee is crafting your request...",
+          uiPayload: {
+            kind: "agent_task_status",
+            task: event.task,
+            text: "Task started",
+          },
+        }));
+        return;
+      }
+
+      if (event.type === "task_step") {
+        updatePrimaryOptimisticMessage((message) => {
+          const task =
+            activeTaskSummary ??
+            (isAgentTaskStatusPayload(message.uiPayload)
+              ? message.uiPayload.task
+              : null);
+          return {
+            ...message,
+            isTyping: false,
+            text: event.step.detail ?? message.text,
+            uiPayload: task
+              ? {
+                  kind: "agent_task_status",
+                  task,
+                  latestStep: event.step,
+                  text: event.step.detail ?? event.step.title,
+                }
+              : message.uiPayload,
+          };
+        });
+        return;
+      }
+
+      if (event.type === "task_approval_required") {
+        updatePrimaryOptimisticMessage((message) => ({
+          ...message,
+          isTyping: false,
+          text: "Approval required before continuing.",
+          uiPayload: {
+            kind: "agent_approval",
+            taskId: event.taskId,
+            approval: event.approval,
+            text: "Approval needed",
+          },
+        }));
+        return;
+      }
+
+      if (event.type === "task_artifact_ready") {
+        updatePrimaryOptimisticMessage((message) => ({
+          ...message,
+          isTyping: false,
+          text: `Artifact ready: ${event.artifact.title}`,
+          uiPayload: {
+            kind: "agent_artifact",
+            taskId: event.taskId,
+            artifact: event.artifact,
+            text: "View/Play",
+          },
+        }));
+        return;
+      }
+
+      if (event.type === "task_failed") {
+        updatePrimaryOptimisticMessage((message) => ({
+          ...message,
+          isTyping: false,
+          text: event.message,
+          uiPayload:
+            activeTaskSummary
+              ? {
+                  kind: "agent_task_status",
+                  task: {
+                    ...activeTaskSummary,
+                    status: "failed",
+                  },
+                  text: "Failed",
+                }
+              : message.uiPayload,
+        }));
         return;
       }
 
@@ -4252,6 +4941,9 @@ function App() {
           queryKey: getConversationMessagesKey(conversationId),
         });
       }
+      queryClient.invalidateQueries({
+        queryKey: ["/api/agent/artifacts?includeArchived=1"],
+      });
     }
   };
 
@@ -4686,6 +5378,11 @@ function App() {
   const resolvedProfileImage =
     userProfile?.avatarUrl || user?.profileImageUrl || undefined;
   const resolvedAssistantAvatar = getPersonaAvatar(persona, userProfile);
+  const activeArtifact =
+    activeArtifactResponse?.artifact ??
+    (activeArtifactId
+      ? artifacts.find((artifact) => artifact.id === activeArtifactId) ?? null
+      : null);
 
   if (authLoading) {
     return (
@@ -4758,6 +5455,8 @@ function App() {
               assistantAvatarSrc={resolvedAssistantAvatar}
               mode={mode}
               userProfileImage={resolvedProfileImage}
+              onOpenArtifact={handleOpenArtifact}
+              onResolveApproval={handleResolveTaskApproval}
             />
           </div>
 
@@ -4765,7 +5464,10 @@ function App() {
             isActive={isCalling} 
             isConnecting={isLiveConnecting}
             onEndCall={handleEndCall}
-            onProfile={() => setShowProfile(true)}
+            onProfile={() => {
+              setShowOutputsHistory(false);
+              setShowProfile(true);
+            }}
             assistantName={persona}
             assistantAvatar={resolvedAssistantAvatar}
             selectedVoice={selectedVoice}
@@ -4799,9 +5501,37 @@ function App() {
                 onUploadAvatar={handleUploadProfileAvatar}
                 onUploadZeeAvatar={handleUploadZeeAvatar}
                 onReplayOnboarding={handleReplayOnboarding}
+                onOpenOutputsHistory={() => {
+                  setShowProfile(false);
+                  setShowOutputsHistory(true);
+                }}
                 onLogout={logout}
                 quotaSummary={quotaSummary}
                 isQuotaLoading={isQuotaLoading}
+              />
+            )}
+          </AnimatePresence>
+
+          <AnimatePresence>
+            {showOutputsHistory && (
+              <OutputsHistoryView
+                artifacts={artifacts}
+                isLoading={isArtifactsLoading}
+                onClose={() => setShowOutputsHistory(false)}
+                onOpenArtifact={(artifactId) => {
+                  setActiveArtifactId(artifactId);
+                }}
+                onArchiveArtifact={handleArchiveArtifact}
+                onDeleteArtifact={handleDeleteArtifact}
+              />
+            )}
+          </AnimatePresence>
+
+          <AnimatePresence>
+            {activeArtifact && (
+              <ArtifactViewer
+                artifact={activeArtifact}
+                onClose={() => setActiveArtifactId(null)}
               />
             )}
           </AnimatePresence>
