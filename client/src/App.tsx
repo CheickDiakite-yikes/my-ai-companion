@@ -3228,6 +3228,7 @@ const UnifiedAgentTaskCard = ({
   const [isResolvingApproval, setIsResolvingApproval] = useState(false);
   const [inlineIframeKey, setInlineIframeKey] = useState(0);
   const [hasRevealedIframe, setHasRevealedIframe] = useState(false);
+  const [isOutputCollapsed, setIsOutputCollapsed] = useState(false);
 
   const taskDetailQuery = useQuery<AgentTaskResponse>({
     queryKey: [`/api/agent/tasks/${card.taskId}`],
@@ -3499,10 +3500,29 @@ const UnifiedAgentTaskCard = ({
               )}
             </button>
           ))}
+          {activeTab === "output" && (hasArtifact || canRenderInline) && (
+            <button
+              type="button"
+              onClick={() => setIsOutputCollapsed(!isOutputCollapsed)}
+              className="px-3 py-2 opacity-50 hover:opacity-100 transition-opacity"
+              title={isOutputCollapsed ? "Expand output" : "Collapse output"}
+            >
+              <ChevronDown 
+                className={cn("h-3.5 w-3.5 transition-transform duration-200", isOutputCollapsed && "-rotate-180")} 
+                style={{ color: "var(--app-on-dark)" }}
+              />
+            </button>
+          )}
         </div>
 
-        <div className="relative min-h-[200px]">
-          <AnimatePresence mode="wait">
+        <motion.div 
+          className="relative overflow-hidden"
+          initial={false}
+          animate={{ height: isOutputCollapsed && activeTab === "output" ? 0 : "auto" }}
+          transition={{ duration: 0.3, ease: "easeInOut" }}
+        >
+          <div className={cn("relative min-h-[200px]", isOutputCollapsed && activeTab === "output" && "min-h-0")}>
+            <AnimatePresence mode="wait">
             {activeTab === "output" && (
               <motion.div
                 key="tab-output"
@@ -3911,7 +3931,7 @@ const UnifiedAgentTaskCard = ({
               </motion.div>
             )}
           </AnimatePresence>
-        </div>
+        </motion.div>
       </div>
 
       <Dialog open={isInfoOpen} onOpenChange={setIsInfoOpen}>
