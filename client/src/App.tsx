@@ -3956,7 +3956,7 @@ const UnifiedAgentTaskCard = ({
 
       <Dialog open={isInfoOpen} onOpenChange={setIsInfoOpen}>
         <DialogContent
-          className="left-1/2 top-auto w-[calc(100%-1rem)] max-w-none -translate-x-1/2 translate-y-0 rounded-2xl border px-4 pb-4 pt-3 data-[state=open]:slide-in-from-bottom-4 data-[state=closed]:slide-out-to-bottom-4 sm:top-[50%] sm:max-w-xl sm:-translate-y-1/2 sm:rounded-2xl"
+          className="fixed left-1/2 top-1/2 w-[calc(100%-1rem)] max-w-md -translate-x-1/2 -translate-y-1/2 rounded-2xl border px-4 pb-4 pt-3 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95"
           style={{
             borderColor: "var(--app-soft-card-border)",
             backgroundColor: "var(--app-panel-bg)",
