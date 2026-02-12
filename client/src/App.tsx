@@ -3449,7 +3449,7 @@ const UnifiedAgentTaskCard = ({
                 }}
                 data-testid="agent-task-info-button"
               >
-                <Info className="h-3.5 w-3.5 opacity-60" />
+                <Info className="h-3.5 w-3.5" style={{ color: "var(--app-on-dark)" }} />
               </button>
             </TooltipTrigger>
             <TooltipContent>View full activity</TooltipContent>
