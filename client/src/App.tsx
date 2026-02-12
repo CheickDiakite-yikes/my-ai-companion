@@ -3228,6 +3228,7 @@ const UnifiedAgentTaskCard = ({
   const [isResolvingApproval, setIsResolvingApproval] = useState(false);
   const [inlineIframeKey, setInlineIframeKey] = useState(0);
   const [hasRevealedIframe, setHasRevealedIframe] = useState(false);
+  const [isCollapsed, setIsCollapsed] = useState(false);
 
   const taskDetailQuery = useQuery<AgentTaskResponse>({
     queryKey: [`/api/agent/tasks/${card.taskId}`],
@@ -3438,34 +3439,70 @@ const UnifiedAgentTaskCard = ({
           </div>
           <p className="line-clamp-2 text-sm font-semibold leading-snug" style={{ color: "var(--app-on-dark)" }}>{card.title}</p>
         </div>
-        <TooltipProvider delayDuration={200}>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                type="button"
-                onClick={() => setIsInfoOpen(true)}
-                className="mt-0.5 rounded-lg border p-1.5 transition-all hover:opacity-90"
-                style={{
-                  borderColor: "var(--app-soft-card-border)",
-                  backgroundColor: "var(--app-soft-card-bg)",
-                }}
-                data-testid="agent-task-info-button"
-              >
-                <Info className="h-3.5 w-3.5" style={{ color: "var(--app-on-dark)" }} />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent>View full activity</TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
+        <div className="flex items-center gap-1.5">
+          <TooltipProvider delayDuration={200}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  onClick={() => setIsCollapsed((c) => !c)}
+                  className="mt-0.5 rounded-lg border p-1.5 transition-all hover:opacity-90"
+                  style={{
+                    borderColor: "var(--app-soft-card-border)",
+                    backgroundColor: "var(--app-soft-card-bg)",
+                  }}
+                  data-testid="agent-task-collapse-button"
+                >
+                  <motion.div
+                    animate={{ rotate: isCollapsed ? 0 : 180 }}
+                    transition={{ duration: 0.25 }}
+                  >
+                    <ChevronDown className="h-3.5 w-3.5" style={{ color: "var(--app-on-dark)" }} />
+                  </motion.div>
+                </button>
+              </TooltipTrigger>
+              <TooltipContent>{isCollapsed ? "Expand" : "Collapse"}</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+          <TooltipProvider delayDuration={200}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  onClick={() => setIsInfoOpen(true)}
+                  className="mt-0.5 rounded-lg border p-1.5 transition-all hover:opacity-90"
+                  style={{
+                    borderColor: "var(--app-soft-card-border)",
+                    backgroundColor: "var(--app-soft-card-bg)",
+                  }}
+                  data-testid="agent-task-info-button"
+                >
+                  <Info className="h-3.5 w-3.5" style={{ color: "var(--app-on-dark)" }} />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent>View full activity</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        </div>
       </div>
 
-      <div
-        className="overflow-hidden rounded-2xl border"
-        style={{
-          borderColor: "var(--app-soft-card-border)",
-          backgroundColor: "var(--app-soft-card-bg)",
-        }}
-      >
+      <AnimatePresence initial={false}>
+        {!isCollapsed && (
+          <motion.div
+            key="card-panel"
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.3, ease: "easeInOut" }}
+            className="overflow-hidden"
+          >
+            <div
+              className="overflow-hidden rounded-2xl border"
+              style={{
+                borderColor: "var(--app-soft-card-border)",
+                backgroundColor: "var(--app-soft-card-bg)",
+              }}
+            >
         <div
           className="flex border-b"
           style={{ borderColor: "var(--app-soft-card-border)" }}
@@ -3912,7 +3949,10 @@ const UnifiedAgentTaskCard = ({
             )}
           </AnimatePresence>
         </div>
-      </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <Dialog open={isInfoOpen} onOpenChange={setIsInfoOpen}>
         <DialogContent
