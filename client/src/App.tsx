@@ -28,6 +28,9 @@ import {
   Info,
   Loader2,
   Sparkles,
+  Terminal,
+  Maximize2,
+  Globe,
 } from "lucide-react";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -70,12 +73,6 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import {
-  Tabs,
-  TabsContent,
-  TabsList,
-  TabsTrigger,
-} from "@/components/ui/tabs";
 import {
   Dialog,
   DialogContent,
@@ -3229,10 +3226,11 @@ const UnifiedAgentTaskCard = ({
   const [activeTab, setActiveTab] = useState("output");
   const [isInfoOpen, setIsInfoOpen] = useState(false);
   const [isResolvingApproval, setIsResolvingApproval] = useState(false);
+  const [inlineIframeKey, setInlineIframeKey] = useState(0);
 
   const taskDetailQuery = useQuery<AgentTaskResponse>({
     queryKey: [`/api/agent/tasks/${card.taskId}`],
-    enabled: isInfoOpen,
+    enabled: isInfoOpen || activeTab === "process" || activeTab === "terminal",
     staleTime: 0,
     retry: 2,
   });
@@ -3296,7 +3294,6 @@ const UnifiedAgentTaskCard = ({
   }, [taskDetailQuery.data]);
 
   const timeline = detailTimeline.length > 0 ? detailTimeline : card.timeline;
-  const timelinePreview = timeline.slice(-4);
   const hasArtifact = Boolean(card.artifact);
   const approvalPending = card.approval?.status === "pending";
   const isRunning = card.status === "queued" || card.status === "in_progress";
@@ -3327,237 +3324,551 @@ const UnifiedAgentTaskCard = ({
     }
   };
 
+  const canRenderInline =
+    hasArtifact &&
+    card.artifact?.htmlContent &&
+    card.artifact.htmlContent.trim().length > 0;
+
+  const inlineIframeSrc = useMemo(() => {
+    if (!canRenderInline || !card.artifact?.id) return null;
+    return `/api/agent/artifacts/${card.artifact.id}/render?v=${inlineIframeKey}`;
+  }, [canRenderInline, card.artifact?.id, inlineIframeKey]);
+
+  const terminalLines = useMemo(() => {
+    const lines: { text: string; type: "info" | "success" | "warn" | "cmd" }[] = [];
+    const meta = card.artifact?.metadata as Record<string, unknown> | undefined;
+    const gen = meta?.generation as Record<string, unknown> | undefined;
+    const qa = meta?.qa as Record<string, unknown> | undefined;
+    const sandbox = meta?.sandbox as Record<string, unknown> | undefined;
+
+    lines.push({ text: `$ zee task init --kind ${card.taskKind}`, type: "cmd" });
+    lines.push({ text: `[task] ${card.taskId.slice(0, 8)}... created`, type: "info" });
+
+    if (gen) {
+      const model = gen.model ?? "unknown";
+      const engine = gen.engine ?? "canvas_dom";
+      const mode = gen.mode ?? "deterministic";
+      const attempts = gen.attempts ?? 1;
+      lines.push({ text: `$ zee generate --model ${model} --engine ${engine}`, type: "cmd" });
+      lines.push({ text: `[gen] mode=${mode} attempts=${attempts}`, type: "info" });
+      if (gen.backendFallbackReason) {
+        lines.push({ text: `[warn] fallback: ${gen.backendFallbackReason}`, type: "warn" });
+      }
+    }
+
+    if (sandbox) {
+      const jobId = String(sandbox.jobId ?? "").slice(0, 8);
+      const output = sandbox.outputPath ?? "index.html";
+      lines.push({ text: `$ zee sandbox run --job ${jobId}...`, type: "cmd" });
+      lines.push({ text: `[sandbox] output: ${output}`, type: "success" });
+    }
+
+    if (qa) {
+      const qaMode = qa.mode ?? "unknown";
+      const passed = qa.passed;
+      lines.push({ text: `$ zee qa check --mode ${qaMode}`, type: "cmd" });
+      if (passed) {
+        lines.push({ text: `[qa] PASSED`, type: "success" });
+      } else {
+        lines.push({ text: `[qa] FAILED`, type: "warn" });
+      }
+      if (qa.warning) {
+        lines.push({ text: `[qa] ${String(qa.warning).slice(0, 80)}...`, type: "warn" });
+      }
+    }
+
+    if (card.artifact) {
+      lines.push({ text: `$ zee artifact publish "${card.artifact.title}"`, type: "cmd" });
+      lines.push({ text: `[done] artifact ${card.artifact.id.slice(0, 8)}... ready`, type: "success" });
+    }
+
+    for (const tc of detailTools) {
+      lines.push({ text: `$ zee tool ${tc.toolName}`, type: "cmd" });
+      if (tc.outputSummary) {
+        lines.push({ text: `  → ${tc.outputSummary.slice(0, 60)}`, type: "info" });
+      }
+    }
+
+    return lines;
+  }, [card.artifact, card.taskId, card.taskKind, detailTools]);
+
+  const tabAnimVariants = {
+    initial: { opacity: 0, y: 6 },
+    animate: { opacity: 1, y: 0 },
+    exit: { opacity: 0, y: -4 },
+  };
+
   return (
     <div
-      className="space-y-3"
+      className="space-y-2.5"
       data-testid="agent-unified-task-card"
       data-agent-task-id={card.taskId}
       data-agent-task-status={card.status}
     >
       <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0 space-y-1">
+        <div className="min-w-0 space-y-0.5">
           <div className="flex items-center gap-2">
-            <span className="text-[11px] font-semibold uppercase tracking-[0.16em] opacity-70">
+            <span className="text-[10px] font-bold uppercase tracking-[0.18em] opacity-60">
               Agent Task
             </span>
+            <span
+              className="rounded-full border px-2 py-px text-[9px] font-bold uppercase tracking-wide"
+              style={{
+                borderColor: "color-mix(in srgb, var(--app-soft-card-border) 75%, transparent)",
+                backgroundColor: "color-mix(in srgb, var(--app-soft-card-bg) 65%, transparent)",
+                color: statusTone,
+              }}
+            >
+              {statusLabel}
+            </span>
             {isRunning && (
-              <span
+              <motion.span
                 className="inline-flex h-1.5 w-1.5 rounded-full"
                 style={{ backgroundColor: "var(--app-accent)" }}
+                animate={{ opacity: [1, 0.3, 1] }}
+                transition={{ duration: 1.5, repeat: Infinity }}
               />
             )}
           </div>
-          <p className="line-clamp-2 text-sm font-semibold">{card.title}</p>
-          <p className="text-[11px] uppercase tracking-wide opacity-70">{kindLabel}</p>
+          <p className="line-clamp-2 text-sm font-semibold leading-snug">{card.title}</p>
+          <p className="text-[10px] uppercase tracking-wide opacity-50">{kindLabel}</p>
         </div>
-        <div className="flex items-center gap-2">
-          <span
-            className="rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
-            style={{
-              borderColor: "color-mix(in srgb, var(--app-soft-card-border) 75%, transparent)",
-              backgroundColor: "color-mix(in srgb, var(--app-soft-card-bg) 65%, transparent)",
-              color: statusTone,
-            }}
-          >
-            {statusLabel}
-          </span>
-          <TooltipProvider delayDuration={200}>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  type="button"
-                  onClick={() => setIsInfoOpen(true)}
-                  className="rounded-md border p-1.5 transition-colors hover:opacity-90"
-                  style={{
-                    borderColor: "var(--app-soft-card-border)",
-                    backgroundColor: "var(--app-soft-card-bg)",
-                  }}
-                  data-testid="agent-task-info-button"
-                >
-                  <Info className="h-3.5 w-3.5" />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent>View full activity</TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-        </div>
+        <TooltipProvider delayDuration={200}>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                onClick={() => setIsInfoOpen(true)}
+                className="mt-0.5 rounded-lg border p-1.5 transition-all hover:opacity-90"
+                style={{
+                  borderColor: "var(--app-soft-card-border)",
+                  backgroundColor: "var(--app-soft-card-bg)",
+                }}
+                data-testid="agent-task-info-button"
+              >
+                <Info className="h-3.5 w-3.5 opacity-60" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent>View full activity</TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
       </div>
 
-      <Tabs
-        value={activeTab}
-        onValueChange={setActiveTab}
-        className="space-y-3"
-        data-testid="agent-task-tabs"
+      <div
+        className="overflow-hidden rounded-2xl border"
+        style={{
+          borderColor: "var(--app-soft-card-border)",
+          backgroundColor: "color-mix(in srgb, var(--app-soft-card-bg) 60%, transparent)",
+        }}
       >
-        <TabsList
-          className="w-full rounded-xl p-1"
-          style={{
-            backgroundColor: "color-mix(in srgb, var(--app-soft-card-bg) 72%, transparent)",
-            color: "var(--app-on-dark-muted)",
-          }}
+        <div
+          className="flex border-b"
+          style={{ borderColor: "var(--app-soft-card-border)" }}
+          data-testid="agent-task-tabs"
         >
-          <TabsTrigger
-            value="output"
-            className="flex-1 rounded-lg text-xs font-semibold"
-            data-testid="agent-task-tab-output"
-          >
-            Output
-          </TabsTrigger>
-          <TabsTrigger
-            value="process"
-            className="flex-1 rounded-lg text-xs font-semibold"
-            data-testid="agent-task-tab-process"
-          >
-            Process
-          </TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="output" className="mt-0">
-          <div
-            className="relative overflow-hidden rounded-xl border p-3"
-            style={{
-              borderColor: "var(--app-soft-card-border)",
-              background:
-                "radial-gradient(120% 100% at 12% 10%, color-mix(in srgb, var(--app-accent) 18%, transparent) 0%, transparent 56%), color-mix(in srgb, var(--app-soft-card-bg) 88%, transparent)",
-            }}
-          >
-            <motion.div
-              className="pointer-events-none absolute inset-0 opacity-40"
-              aria-hidden="true"
-              animate={{
-                backgroundPosition: ["0% 50%", "100% 50%", "0% 50%"],
-              }}
-              transition={{
-                duration: 12,
-                ease: "linear",
-                repeat: Infinity,
-              }}
-              style={{
-                backgroundImage:
-                  "linear-gradient(120deg, transparent 0%, color-mix(in srgb, var(--app-accent) 35%, transparent) 35%, transparent 70%)",
-                backgroundSize: "180% 180%",
-              }}
-            />
-            <div className="relative z-[1] space-y-2">
-              <div className="flex items-center justify-between gap-2">
-                <div className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide opacity-80">
-                  <Sparkles className="h-3 w-3" />
-                  Portal
-                </div>
-                <span className="text-[11px] opacity-75">
-                  {hasArtifact ? "Ready" : isRunning ? "Crafting..." : statusLabel}
-                </span>
-              </div>
-              <p className="text-sm font-semibold">
-                {card.artifact?.title ?? `${kindLabel} in progress`}
-              </p>
-              <p className="text-xs opacity-80">{outputSummary}</p>
-              {hasArtifact && card.artifact ? (
-                <button
-                  type="button"
-                  onClick={() => onOpenArtifact(card.artifact!.id)}
-                  className="rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors hover:opacity-95"
-                  style={{
-                    borderColor: "var(--app-soft-card-border)",
-                    backgroundColor: "var(--app-soft-card-bg)",
-                  }}
-                  data-testid="button-open-agent-artifact"
-                >
-                  {card.artifact.type === "mini_game" ? "View / Play" : "View"}
-                </button>
-              ) : (
-                <div className="inline-flex items-center gap-2 text-xs opacity-75">
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  Generating output
-                </div>
+          {[
+            { key: "output", label: "Output" },
+            { key: "process", label: "Thinking/Process" },
+            { key: "terminal", label: "Terminal/Code" },
+          ].map((tab) => (
+            <button
+              key={tab.key}
+              type="button"
+              onClick={() => setActiveTab(tab.key)}
+              className={cn(
+                "relative flex-1 px-2 py-2.5 text-[11px] font-semibold tracking-wide transition-colors",
+                activeTab === tab.key ? "opacity-100" : "opacity-50 hover:opacity-70",
               )}
-            </div>
-          </div>
-
-          {approvalPending && card.approval && (
-            <div
-              className="space-y-2 rounded-xl border p-3"
-              style={{
-                borderColor: "var(--app-soft-card-border)",
-                backgroundColor: "color-mix(in srgb, var(--app-soft-card-bg) 82%, transparent)",
-              }}
+              data-testid={`agent-task-tab-${tab.key}`}
             >
-              <div className="flex items-center gap-2">
-                <AlertTriangle className="h-4 w-4" />
-                <p className="text-xs font-semibold uppercase tracking-wide">
-                  Approval required
-                </p>
-              </div>
-              <p className="text-xs opacity-80">{card.approval.requestedAction}</p>
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => void handleApproval(true)}
-                  disabled={isResolvingApproval}
-                  className="rounded-lg border px-2.5 py-1.5 text-xs font-semibold disabled:opacity-60"
-                  style={{
-                    borderColor: "var(--app-soft-card-border)",
-                    backgroundColor: "var(--app-soft-card-bg)",
-                  }}
-                  data-testid="button-agent-approve"
-                >
-                  Approve
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void handleApproval(false)}
-                  disabled={isResolvingApproval}
-                  className="rounded-lg border px-2.5 py-1.5 text-xs font-semibold disabled:opacity-60"
-                  style={{
-                    borderColor: "var(--app-soft-card-border)",
-                    backgroundColor: "transparent",
-                  }}
-                  data-testid="button-agent-deny"
-                >
-                  Deny
-                </button>
-              </div>
-            </div>
-          )}
-        </TabsContent>
+              {tab.label}
+              {activeTab === tab.key && (
+                <motion.div
+                  layoutId={`tab-indicator-${card.taskId}`}
+                  className="absolute inset-x-2 bottom-0 h-[2px] rounded-full"
+                  style={{ backgroundColor: "var(--app-accent)" }}
+                  transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                />
+              )}
+            </button>
+          ))}
+        </div>
 
-        <TabsContent value="process" className="mt-0">
-          <div
-            className="space-y-2 rounded-xl border px-3 py-2.5"
-            style={{
-              borderColor: "var(--app-soft-card-border)",
-              backgroundColor: "color-mix(in srgb, var(--app-soft-card-bg) 84%, transparent)",
-            }}
-            data-testid="agent-task-process-timeline"
-          >
-            {timelinePreview.length === 0 ? (
-              <p className="text-xs opacity-70">
-                Activity will appear here as Zee works.
-              </p>
-            ) : (
-              timelinePreview.map((item) => {
-                const visual = toTimelineVisual(item.status);
-                return (
-                  <div key={item.id} className="flex gap-2.5">
-                    <div className="pt-0.5" style={{ color: visual.color }}>
-                      {visual.icon}
+        <div className="relative min-h-[200px]">
+          <AnimatePresence mode="wait">
+            {activeTab === "output" && (
+              <motion.div
+                key="tab-output"
+                variants={tabAnimVariants}
+                initial="initial"
+                animate="animate"
+                exit="exit"
+                transition={{ duration: 0.2 }}
+                className="p-3"
+              >
+                {canRenderInline && inlineIframeSrc ? (
+                  <div className="space-y-2">
+                    <div
+                      className="relative overflow-hidden rounded-xl border"
+                      style={{
+                        borderColor: "var(--app-soft-card-border)",
+                        boxShadow: "inset 0 1px 8px color-mix(in srgb, var(--app-accent) 12%, transparent)",
+                      }}
+                    >
+                      <iframe
+                        key={inlineIframeKey}
+                        title={card.artifact?.title ?? "Output"}
+                        sandbox="allow-scripts"
+                        src={inlineIframeSrc}
+                        className="h-[280px] w-full"
+                        style={{ backgroundColor: "#0a0a0a", border: "none" }}
+                        data-testid="agent-inline-artifact-iframe"
+                      />
                     </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="text-xs font-semibold leading-tight">{item.title}</p>
-                      {item.detail && (
-                        <p className="line-clamp-2 text-[11px] opacity-75">{item.detail}</p>
-                      )}
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => onOpenArtifact(card.artifact!.id)}
+                        className="inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-[11px] font-semibold transition-colors hover:opacity-90"
+                        style={{
+                          borderColor: "var(--app-soft-card-border)",
+                          backgroundColor: "var(--app-soft-card-bg)",
+                          color: "var(--app-accent)",
+                        }}
+                        data-testid="button-fullscreen-inline-artifact"
+                      >
+                        <Maximize2 className="h-3 w-3" />
+                        Full Screen
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setInlineIframeKey((k) => k + 1)}
+                        className="inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-[11px] font-semibold transition-colors hover:opacity-90"
+                        style={{
+                          borderColor: "var(--app-soft-card-border)",
+                          backgroundColor: "var(--app-soft-card-bg)",
+                        }}
+                        data-testid="button-reload-inline-artifact"
+                      >
+                        Reload
+                      </button>
                     </div>
-                    <span className="shrink-0 text-[10px] opacity-60">
-                      {formatTimelineTimeLabel(item.createdAt)}
-                    </span>
                   </div>
-                );
-              })
+                ) : hasArtifact && card.artifact && card.artifact.markdownContent ? (
+                  <div
+                    className="relative overflow-hidden rounded-xl border p-4"
+                    style={{
+                      borderColor: "var(--app-soft-card-border)",
+                      background:
+                        "radial-gradient(120% 100% at 12% 10%, color-mix(in srgb, var(--app-accent) 14%, transparent) 0%, transparent 56%), color-mix(in srgb, var(--app-soft-card-bg) 80%, transparent)",
+                    }}
+                  >
+                    <div className="space-y-2">
+                      <div className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide opacity-70">
+                        <FileText className="h-3 w-3" />
+                        Document
+                      </div>
+                      <p className="text-sm font-semibold">{card.artifact.title}</p>
+                      <div
+                        className="max-h-[200px] overflow-y-auto rounded-lg border p-3 text-xs leading-relaxed opacity-85"
+                        style={{
+                          borderColor: "var(--app-soft-card-border)",
+                          backgroundColor: "color-mix(in srgb, var(--app-soft-card-bg) 70%, transparent)",
+                        }}
+                        data-testid="agent-inline-markdown-preview"
+                      >
+                        <pre className="whitespace-pre-wrap font-sans">{card.artifact.markdownContent}</pre>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => onOpenArtifact(card.artifact!.id)}
+                        className="rounded-lg border px-3 py-1.5 text-[11px] font-semibold transition-colors hover:opacity-95"
+                        style={{
+                          borderColor: "var(--app-soft-card-border)",
+                          backgroundColor: "var(--app-soft-card-bg)",
+                          color: "var(--app-accent)",
+                        }}
+                        data-testid="button-open-agent-artifact"
+                      >
+                        View Full
+                      </button>
+                    </div>
+                  </div>
+                ) : hasArtifact && card.artifact ? (
+                  <div
+                    className="relative overflow-hidden rounded-xl border p-4"
+                    style={{
+                      borderColor: "var(--app-soft-card-border)",
+                      background:
+                        "radial-gradient(120% 100% at 12% 10%, color-mix(in srgb, var(--app-accent) 14%, transparent) 0%, transparent 56%), color-mix(in srgb, var(--app-soft-card-bg) 80%, transparent)",
+                    }}
+                  >
+                    <div className="space-y-2">
+                      <div className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide opacity-70">
+                        <Sparkles className="h-3 w-3" />
+                        Ready
+                      </div>
+                      <p className="text-sm font-semibold">{card.artifact.title}</p>
+                      <p className="text-xs opacity-75">{outputSummary}</p>
+                      <button
+                        type="button"
+                        onClick={() => onOpenArtifact(card.artifact!.id)}
+                        className="rounded-lg border px-3 py-1.5 text-[11px] font-semibold transition-colors hover:opacity-95"
+                        style={{
+                          borderColor: "var(--app-soft-card-border)",
+                          backgroundColor: "var(--app-soft-card-bg)",
+                          color: "var(--app-accent)",
+                        }}
+                        data-testid="button-open-agent-artifact"
+                      >
+                        {card.artifact.type === "mini_game" ? "View / Play" : "View"}
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex h-[200px] flex-col items-center justify-center gap-3 text-center">
+                    <motion.div
+                      animate={{ rotate: 360 }}
+                      transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
+                      className="h-8 w-8 rounded-full border-2"
+                      style={{
+                        borderColor: "color-mix(in srgb, var(--app-soft-card-border) 50%, transparent)",
+                        borderTopColor: "var(--app-accent)",
+                      }}
+                    />
+                    <p className="text-xs opacity-60">Generating output...</p>
+                  </div>
+                )}
+
+                {approvalPending && card.approval && (
+                  <div
+                    className="mt-3 space-y-2 rounded-xl border p-3"
+                    style={{
+                      borderColor: "var(--app-soft-card-border)",
+                      backgroundColor: "color-mix(in srgb, var(--app-soft-card-bg) 82%, transparent)",
+                    }}
+                  >
+                    <div className="flex items-center gap-2">
+                      <AlertTriangle className="h-4 w-4" />
+                      <p className="text-xs font-semibold uppercase tracking-wide">
+                        Approval required
+                      </p>
+                    </div>
+                    <p className="text-xs opacity-80">{card.approval.requestedAction}</p>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => void handleApproval(true)}
+                        disabled={isResolvingApproval}
+                        className="rounded-lg border px-2.5 py-1.5 text-xs font-semibold disabled:opacity-60"
+                        style={{
+                          borderColor: "var(--app-soft-card-border)",
+                          backgroundColor: "var(--app-soft-card-bg)",
+                          color: "var(--app-accent)",
+                        }}
+                        data-testid="button-agent-approve"
+                      >
+                        Approve
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void handleApproval(false)}
+                        disabled={isResolvingApproval}
+                        className="rounded-lg border px-2.5 py-1.5 text-xs font-semibold disabled:opacity-60"
+                        style={{
+                          borderColor: "var(--app-soft-card-border)",
+                          backgroundColor: "transparent",
+                        }}
+                        data-testid="button-agent-deny"
+                      >
+                        Deny
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </motion.div>
             )}
-          </div>
-        </TabsContent>
-      </Tabs>
+
+            {activeTab === "process" && (
+              <motion.div
+                key="tab-process"
+                variants={tabAnimVariants}
+                initial="initial"
+                animate="animate"
+                exit="exit"
+                transition={{ duration: 0.2 }}
+                className="max-h-[320px] overflow-y-auto p-3"
+              >
+                <div className="space-y-1" data-testid="agent-task-process-timeline">
+                  {timeline.length === 0 ? (
+                    <div className="flex h-[160px] items-center justify-center">
+                      <p className="text-xs opacity-50">
+                        Activity will appear here as Zee works.
+                      </p>
+                    </div>
+                  ) : (
+                    timeline.slice(-5).map((item, idx, arr) => {
+                      const visual = toTimelineVisual(item.status);
+                      const isLast = idx === arr.length - 1;
+                      return (
+                        <motion.div
+                          key={item.id}
+                          initial={{ opacity: 0, x: -8 }}
+                          animate={{ opacity: 1, x: 0 }}
+                          transition={{ delay: idx * 0.04, duration: 0.25 }}
+                          className="flex gap-3 py-2"
+                        >
+                          <div className="flex flex-col items-center">
+                            <div
+                              className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full"
+                              style={{
+                                backgroundColor: `color-mix(in srgb, ${visual.color} 18%, transparent)`,
+                                color: visual.color,
+                              }}
+                            >
+                              {visual.icon}
+                            </div>
+                            {!isLast && (
+                              <div
+                                className="mt-1 w-px flex-1"
+                                style={{
+                                  backgroundColor: "color-mix(in srgb, var(--app-soft-card-border) 60%, transparent)",
+                                }}
+                              />
+                            )}
+                          </div>
+                          <div className="min-w-0 flex-1 pb-2">
+                            <div className="flex items-start justify-between gap-2">
+                              <p className="text-xs font-semibold leading-tight">{item.title}</p>
+                              <span className="shrink-0 text-[10px] opacity-40">
+                                {formatTimelineTimeLabel(item.createdAt)}
+                              </span>
+                            </div>
+                            {item.detail && (
+                              <p className="mt-0.5 text-[11px] leading-relaxed opacity-65">
+                                {item.detail}
+                              </p>
+                            )}
+                          </div>
+                        </motion.div>
+                      );
+                    })
+                  )}
+                  {timeline.length > 5 && (
+                    <button
+                      type="button"
+                      onClick={() => setIsInfoOpen(true)}
+                      className="mt-1 w-full text-center text-[11px] font-semibold opacity-50 transition-opacity hover:opacity-80"
+                      style={{ color: "var(--app-accent)" }}
+                      data-testid="agent-task-view-all-activity"
+                    >
+                      View all {timeline.length} steps
+                    </button>
+                  )}
+                </div>
+
+                {detailTools.length > 0 && (
+                  <div className="mt-2 space-y-1.5 border-t pt-2" style={{ borderColor: "var(--app-soft-card-border)" }}>
+                    <p className="text-[10px] font-bold uppercase tracking-widest opacity-40">
+                      Services Used
+                    </p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {detailTools.map((toolCall) => (
+                        <span
+                          key={`tool-chip-${toolCall.id}`}
+                          className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium"
+                          style={{
+                            borderColor: "color-mix(in srgb, var(--app-accent) 30%, var(--app-soft-card-border))",
+                            backgroundColor: "color-mix(in srgb, var(--app-accent) 8%, transparent)",
+                            color: "var(--app-accent)",
+                          }}
+                        >
+                          <Globe className="h-2.5 w-2.5" />
+                          {toolCall.toolName}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </motion.div>
+            )}
+
+            {activeTab === "terminal" && (
+              <motion.div
+                key="tab-terminal"
+                variants={tabAnimVariants}
+                initial="initial"
+                animate="animate"
+                exit="exit"
+                transition={{ duration: 0.2 }}
+                className="flex flex-col"
+              >
+                <div
+                  className="flex items-center gap-2 border-b px-3 py-2"
+                  style={{ borderColor: "var(--app-soft-card-border)" }}
+                >
+                  <Terminal className="h-3.5 w-3.5 opacity-60" />
+                  <span className="text-[11px] font-bold tracking-wide opacity-70">
+                    Zee's Computer & IDE
+                  </span>
+                  <div className="ml-auto flex gap-1">
+                    <span className="h-2 w-2 rounded-full" style={{ backgroundColor: "#ef4444", opacity: 0.6 }} />
+                    <span className="h-2 w-2 rounded-full" style={{ backgroundColor: "#f59e0b", opacity: 0.6 }} />
+                    <span className="h-2 w-2 rounded-full" style={{ backgroundColor: "#22c55e", opacity: 0.6 }} />
+                  </div>
+                </div>
+                <div
+                  className="max-h-[280px] overflow-y-auto px-3 py-2 font-mono text-[11px] leading-[1.7]"
+                  style={{
+                    backgroundColor: "color-mix(in srgb, #000000 80%, var(--app-panel-bg))",
+                    color: "color-mix(in srgb, var(--app-accent) 60%, #a0ffa0)",
+                  }}
+                  data-testid="agent-task-terminal-view"
+                >
+                  {terminalLines.length === 0 ? (
+                    <div className="flex h-[160px] items-center justify-center font-sans">
+                      <p className="text-xs opacity-40">
+                        Terminal output will appear here.
+                      </p>
+                    </div>
+                  ) : (
+                    terminalLines.map((line, idx) => (
+                      <motion.div
+                        key={`term-${idx}`}
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        transition={{ delay: idx * 0.05, duration: 0.2 }}
+                        className={cn(
+                          line.type === "cmd" && "font-semibold",
+                          line.type === "warn" && "opacity-70",
+                        )}
+                        style={{
+                          color:
+                            line.type === "cmd"
+                              ? "color-mix(in srgb, var(--app-accent) 70%, #ffffff)"
+                              : line.type === "success"
+                                ? "#4ade80"
+                                : line.type === "warn"
+                                  ? "#fbbf24"
+                                  : undefined,
+                        }}
+                      >
+                        {line.text}
+                      </motion.div>
+                    ))
+                  )}
+                  <motion.span
+                    className="inline-block h-3 w-1.5 align-middle"
+                    style={{ backgroundColor: "var(--app-accent)" }}
+                    animate={{ opacity: [1, 0, 1] }}
+                    transition={{ duration: 1, repeat: Infinity }}
+                  />
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+      </div>
 
       <Dialog open={isInfoOpen} onOpenChange={setIsInfoOpen}>
         <DialogContent
