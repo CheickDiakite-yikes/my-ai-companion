@@ -3956,7 +3956,7 @@ const UnifiedAgentTaskCard = ({
 
       <Dialog open={isInfoOpen} onOpenChange={setIsInfoOpen}>
         <DialogContent
-          className="fixed left-1/2 top-1/2 w-[calc(100%-1rem)] max-w-md -translate-x-1/2 -translate-y-1/2 rounded-2xl border px-4 pb-4 pt-3 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95"
+          className="fixed left-1/2 top-1/2 w-[calc(100%-1.5rem)] max-w-md -translate-x-1/2 -translate-y-1/2 rounded-2xl border p-0 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95"
           style={{
             borderColor: "var(--app-soft-card-border)",
             backgroundColor: "var(--app-panel-bg)",
@@ -3964,72 +3964,106 @@ const UnifiedAgentTaskCard = ({
           }}
           data-testid="agent-task-info-dialog"
         >
-          <DialogHeader className="space-y-1 text-left">
-            <DialogTitle className="text-base">Activity</DialogTitle>
-            <DialogDescription className="text-xs opacity-75">
-              {card.title}
-            </DialogDescription>
-          </DialogHeader>
+          <div className="flex items-center justify-between gap-3 border-b px-4 pb-3 pt-4" style={{ borderColor: "var(--app-soft-card-border)" }}>
+            <DialogHeader className="space-y-0.5 text-left p-0">
+              <DialogTitle className="text-sm font-bold" style={{ color: "var(--app-on-dark)" }}>
+                Task Timeline
+              </DialogTitle>
+              <DialogDescription className="text-[11px] line-clamp-1" style={{ color: "var(--app-on-dark-muted)" }}>
+                {card.title}
+              </DialogDescription>
+            </DialogHeader>
+            <span
+              className="shrink-0 rounded-full border px-2.5 py-0.5 text-[9px] font-bold uppercase tracking-wide"
+              style={{
+                borderColor: "color-mix(in srgb, var(--app-soft-card-border) 75%, transparent)",
+                backgroundColor: "color-mix(in srgb, var(--app-soft-card-bg) 65%, transparent)",
+                color: statusTone,
+              }}
+            >
+              {statusLabel}
+            </span>
+          </div>
 
           {taskDetailQuery.isLoading ? (
-            <div className="flex items-center gap-2 py-4 text-xs opacity-75">
+            <div className="flex items-center justify-center gap-2 py-10 text-xs" style={{ color: "var(--app-on-dark-muted)" }}>
               <Loader2 className="h-4 w-4 animate-spin" />
-              Loading task timeline...
+              Loading timeline...
             </div>
           ) : (
-            <div className="max-h-[58dvh] space-y-3 overflow-y-auto pr-1">
+            <div className="max-h-[55dvh] overflow-y-auto px-4 py-3">
               {timeline.length === 0 ? (
-                <p className="text-xs opacity-75">No activity logged yet.</p>
+                <p className="py-6 text-center text-xs" style={{ color: "var(--app-on-dark-muted)" }}>No activity logged yet.</p>
               ) : (
-                timeline.map((item) => {
-                  const visual = toTimelineVisual(item.status);
-                  return (
-                    <div
-                      key={`timeline-dialog-${item.id}`}
-                      className="rounded-xl border px-3 py-2"
-                      style={{
-                        borderColor: "var(--app-soft-card-border)",
-                        backgroundColor: "var(--app-soft-card-bg)",
-                      }}
-                      data-testid="agent-task-timeline-row"
-                    >
-                      <div className="flex items-center justify-between gap-2">
+                <div className="relative pl-7">
+                  <div
+                    className="absolute left-[9px] top-3 bottom-3 w-px"
+                    style={{ backgroundColor: "color-mix(in srgb, var(--app-soft-card-border) 80%, transparent)" }}
+                  />
+                  {timeline.map((item, idx) => {
+                    const visual = toTimelineVisual(item.status);
+                    const isLast = idx === timeline.length - 1;
+                    return (
+                      <div
+                        key={`timeline-dialog-${item.id}`}
+                        className={cn("relative", !isLast && "pb-4")}
+                        data-testid="agent-task-timeline-row"
+                      >
                         <div
-                          className="inline-flex items-center gap-2 text-xs font-semibold"
-                          style={{ color: visual.color }}
+                          className="absolute -left-7 flex h-[18px] w-[18px] items-center justify-center rounded-full"
+                          style={{
+                            backgroundColor: `color-mix(in srgb, ${visual.color} 20%, var(--app-panel-bg))`,
+                            color: visual.color,
+                            boxShadow: `0 0 0 3px var(--app-panel-bg)`,
+                          }}
                         >
-                          {visual.icon}
-                          <span>{item.title}</span>
+                          <span className="flex h-2.5 w-2.5 items-center justify-center [&>svg]:h-2.5 [&>svg]:w-2.5">{visual.icon}</span>
                         </div>
-                        <span className="text-[10px] opacity-65">
-                          {formatTimelineTimeLabel(item.createdAt)}
-                        </span>
+                        <div className="min-w-0">
+                          <div className="flex items-start justify-between gap-2">
+                            <p className="text-[12px] font-semibold leading-tight" style={{ color: "var(--app-on-dark)" }}>
+                              {item.title}
+                            </p>
+                            <span className="shrink-0 text-[10px] pt-px" style={{ color: "var(--app-on-dark-muted)" }}>
+                              {formatTimelineTimeLabel(item.createdAt)}
+                            </span>
+                          </div>
+                          {item.detail && (
+                            <p
+                              className="mt-1 rounded-lg border px-2.5 py-1.5 text-[11px] leading-relaxed"
+                              style={{
+                                color: "var(--app-on-dark-muted)",
+                                borderColor: "color-mix(in srgb, var(--app-soft-card-border) 50%, transparent)",
+                                backgroundColor: "color-mix(in srgb, var(--app-soft-card-bg) 40%, transparent)",
+                              }}
+                            >
+                              {item.detail}
+                            </p>
+                          )}
+                        </div>
                       </div>
-                      {item.detail && (
-                        <p className="mt-1 text-xs leading-relaxed opacity-80">
-                          {item.detail}
-                        </p>
-                      )}
-                    </div>
-                  );
-                })
+                    );
+                  })}
+                </div>
               )}
 
               {detailTools.length > 0 && (
-                <div className="space-y-2">
-                  <p className="text-[11px] font-semibold uppercase tracking-wide opacity-70">
-                    Tools
+                <div className="mt-3 border-t pt-3" style={{ borderColor: "var(--app-soft-card-border)" }}>
+                  <p className="mb-2 text-[10px] font-bold uppercase tracking-widest" style={{ color: "var(--app-on-dark-muted)" }}>
+                    Services Used
                   </p>
                   <div className="flex flex-wrap gap-1.5">
                     {detailTools.map((toolCall) => (
                       <span
-                        key={`tool-chip-${toolCall.id}`}
-                        className="rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide"
+                        key={`tool-chip-dialog-${toolCall.id}`}
+                        className="inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[10px] font-medium"
                         style={{
-                          borderColor: "var(--app-soft-card-border)",
-                          backgroundColor: "var(--app-soft-card-bg)",
+                          borderColor: "color-mix(in srgb, var(--app-accent) 30%, var(--app-soft-card-border))",
+                          backgroundColor: "color-mix(in srgb, var(--app-accent) 8%, transparent)",
+                          color: "var(--app-accent)",
                         }}
                       >
+                        <Globe className="h-2.5 w-2.5" />
                         {toolCall.toolName}
                       </span>
                     ))}
