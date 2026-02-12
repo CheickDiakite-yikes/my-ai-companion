@@ -3108,18 +3108,10 @@ const ArtifactViewer = ({
   const markdown = artifact?.markdownContent ?? "";
   const [iframeKey, setIframeKey] = useState(0);
 
-  const blobUrl = useMemo(() => {
-    if (!canRenderIframe || !artifact?.htmlContent) return null;
-    const blob = new Blob([artifact.htmlContent], { type: "text/html;charset=utf-8" });
-    return URL.createObjectURL(blob);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [canRenderIframe, artifact?.htmlContent, iframeKey]);
-
-  useEffect(() => {
-    return () => {
-      if (blobUrl) URL.revokeObjectURL(blobUrl);
-    };
-  }, [blobUrl]);
+  const iframeSrc = useMemo(() => {
+    if (!canRenderIframe || !artifact?.id) return null;
+    return `/api/agent/artifacts/${artifact.id}/render?v=${iframeKey}`;
+  }, [canRenderIframe, artifact?.id, iframeKey]);
 
   const handleReload = () => {
     setIframeKey((k) => k + 1);
@@ -3207,12 +3199,12 @@ const ArtifactViewer = ({
               }}
             />
           </div>
-        ) : canRenderIframe && blobUrl ? (
+        ) : canRenderIframe && iframeSrc ? (
           <iframe
             key={iframeKey}
             title={artifact?.title ?? "Game"}
-            sandbox={isGame ? "allow-scripts" : undefined}
-            src={blobUrl}
+            sandbox="allow-scripts"
+            src={iframeSrc}
             className="h-full w-full rounded-xl border"
             style={{
               borderColor: "var(--app-soft-card-border)",

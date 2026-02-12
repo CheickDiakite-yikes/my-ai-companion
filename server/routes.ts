@@ -2107,6 +2107,39 @@ export async function registerRoutes(
   });
 
   app.get(
+    "/api/agent/artifacts/:artifactId/render",
+    isAuthenticated,
+    async (req: any, res) => {
+      try {
+        const artifact = await storage.getAgentArtifactById(req.params.artifactId);
+        if (!artifact || artifact.userId !== req.session.userId) {
+          return res.status(404).send("Not found");
+        }
+        if (artifact.status === "deleted") {
+          return res.status(404).send("Deleted");
+        }
+        const html = artifact.htmlContent;
+        if (!html || typeof html !== "string" || html.trim().length === 0) {
+          return res.status(404).send("No HTML content");
+        }
+        res.setHeader("Content-Type", "text/html; charset=utf-8");
+        res.setHeader("X-Frame-Options", "SAMEORIGIN");
+        res.setHeader("Cache-Control", "no-store");
+        res.setHeader(
+          "Content-Security-Policy",
+          "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'",
+        );
+        return res.status(200).send(html);
+      } catch (error) {
+        traceError(req, "agent.artifact.render.failed", error, {
+          artifactId: req.params.artifactId,
+        });
+        return res.status(500).send("Failed to render artifact");
+      }
+    },
+  );
+
+  app.get(
     "/api/agent/artifacts/:artifactId",
     isAuthenticated,
     async (req: any, res) => {
