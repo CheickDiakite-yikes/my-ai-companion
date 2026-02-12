@@ -3408,7 +3408,10 @@ const UnifiedAgentTaskCard = ({
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0 space-y-0.5">
           <div className="flex items-center gap-2">
-            <span className="text-[10px] font-bold uppercase tracking-[0.18em] opacity-60">
+            <span
+              className="text-[10px] font-bold uppercase tracking-[0.18em]"
+              style={{ color: "var(--app-on-dark-muted)" }}
+            >
               Agent Task
             </span>
             <span
@@ -3430,8 +3433,8 @@ const UnifiedAgentTaskCard = ({
               />
             )}
           </div>
-          <p className="line-clamp-2 text-sm font-semibold leading-snug">{card.title}</p>
-          <p className="text-[10px] uppercase tracking-wide opacity-50">{kindLabel}</p>
+          <p className="line-clamp-2 text-sm font-semibold leading-snug" style={{ color: "var(--app-on-dark)" }}>{card.title}</p>
+          <p className="text-[10px] uppercase tracking-wide" style={{ color: "var(--app-on-dark-muted)" }}>{kindLabel}</p>
         </div>
         <TooltipProvider delayDuration={200}>
           <Tooltip>
@@ -3458,7 +3461,7 @@ const UnifiedAgentTaskCard = ({
         className="overflow-hidden rounded-2xl border"
         style={{
           borderColor: "var(--app-soft-card-border)",
-          backgroundColor: "color-mix(in srgb, var(--app-soft-card-bg) 60%, transparent)",
+          backgroundColor: "var(--app-soft-card-bg)",
         }}
       >
         <div
@@ -3477,8 +3480,10 @@ const UnifiedAgentTaskCard = ({
               onClick={() => setActiveTab(tab.key)}
               className={cn(
                 "relative flex-1 px-2 py-2.5 text-[11px] font-semibold tracking-wide transition-colors",
-                activeTab === tab.key ? "opacity-100" : "opacity-50 hover:opacity-70",
               )}
+              style={{
+                color: activeTab === tab.key ? "var(--app-on-dark)" : "var(--app-on-dark-muted)",
+              }}
               data-testid={`agent-task-tab-${tab.key}`}
             >
               {tab.label}
@@ -3547,6 +3552,7 @@ const UnifiedAgentTaskCard = ({
                         style={{
                           borderColor: "var(--app-soft-card-border)",
                           backgroundColor: "var(--app-soft-card-bg)",
+                          color: "var(--app-on-dark)",
                         }}
                         data-testid="button-reload-inline-artifact"
                       >
