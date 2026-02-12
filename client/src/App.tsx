@@ -3093,21 +3093,27 @@ const TextView = ({
 
 const ArtifactViewer = ({
   artifact,
+  isLoading,
   onClose,
+  onRetry,
 }: {
-  artifact: AgentArtifactSummary;
+  artifact: AgentArtifactSummary | null;
+  isLoading: boolean;
   onClose: () => void;
+  onRetry: () => void;
 }) => {
-  const isGame = artifact.type === "mini_game";
+  const isGame = artifact?.type === "mini_game";
   const canRenderIframe =
-    typeof artifact.htmlContent === "string" && artifact.htmlContent.trim().length > 0;
-  const markdown = artifact.markdownContent ?? "";
+    typeof artifact?.htmlContent === "string" && artifact.htmlContent.trim().length > 0;
+  const markdown = artifact?.markdownContent ?? "";
+  const [iframeKey, setIframeKey] = useState(0);
 
   const blobUrl = useMemo(() => {
-    if (!canRenderIframe || !artifact.htmlContent) return null;
+    if (!canRenderIframe || !artifact?.htmlContent) return null;
     const blob = new Blob([artifact.htmlContent], { type: "text/html;charset=utf-8" });
     return URL.createObjectURL(blob);
-  }, [canRenderIframe, artifact.htmlContent]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canRenderIframe, artifact?.htmlContent, iframeKey]);
 
   useEffect(() => {
     return () => {
@@ -3115,12 +3121,16 @@ const ArtifactViewer = ({
     };
   }, [blobUrl]);
 
+  const handleReload = () => {
+    setIframeKey((k) => k + 1);
+  };
+
   const downloadDoc = () => {
     const blob = new Blob([markdown], { type: "text/markdown;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;
-    anchor.download = `${artifact.title.replace(/\\s+/g, "-").toLowerCase()}.md`;
+    anchor.download = `${(artifact?.title ?? "document").replace(/\\s+/g, "-").toLowerCase()}.md`;
     anchor.click();
     URL.revokeObjectURL(url);
   };
@@ -3144,10 +3154,24 @@ const ArtifactViewer = ({
           <p className="text-xs uppercase tracking-wide opacity-70">
             {isGame ? "Mini Game" : "Document"}
           </p>
-          <h3 className="text-base font-semibold">{artifact.title}</h3>
+          <h3 className="text-base font-semibold">{artifact?.title ?? "Loading..."}</h3>
         </div>
         <div className="flex items-center gap-2">
-          {!isGame && (
+          {isGame && canRenderIframe && (
+            <button
+              type="button"
+              onClick={handleReload}
+              className="rounded-lg border px-3 py-1.5 text-xs font-semibold"
+              style={{
+                borderColor: "var(--app-soft-card-border)",
+                backgroundColor: "var(--app-soft-card-bg)",
+              }}
+              data-testid="button-reload-game"
+            >
+              Reload
+            </button>
+          )}
+          {!isGame && artifact && (
             <button
               type="button"
               onClick={downloadDoc}
@@ -3171,9 +3195,22 @@ const ArtifactViewer = ({
         </div>
       </div>
       <div className="flex-1 overflow-hidden p-3">
-        {canRenderIframe && blobUrl ? (
+        {isLoading ? (
+          <div className="flex h-full items-center justify-center">
+            <motion.div
+              animate={{ rotate: 360 }}
+              transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
+              className="w-8 h-8 border-4 rounded-full"
+              style={{
+                borderColor: "var(--app-soft-card-border)",
+                borderTopColor: "var(--app-accent)",
+              }}
+            />
+          </div>
+        ) : canRenderIframe && blobUrl ? (
           <iframe
-            title={artifact.title}
+            key={iframeKey}
+            title={artifact?.title ?? "Game"}
             sandbox={isGame ? "allow-scripts" : undefined}
             src={blobUrl}
             className="h-full w-full rounded-xl border"
@@ -3182,6 +3219,36 @@ const ArtifactViewer = ({
               backgroundColor: "#0a0a0a",
             }}
           />
+        ) : !artifact ? (
+          <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
+            <p className="text-sm opacity-70">Could not load this content.</p>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={onRetry}
+                className="rounded-lg border px-3 py-1.5 text-xs font-semibold"
+                style={{
+                  borderColor: "var(--app-soft-card-border)",
+                  backgroundColor: "var(--app-soft-card-bg)",
+                  color: "var(--app-accent)",
+                }}
+                data-testid="button-retry-artifact"
+              >
+                Retry
+              </button>
+              <button
+                type="button"
+                onClick={onClose}
+                className="rounded-lg border px-3 py-1.5 text-xs font-semibold opacity-70"
+                style={{
+                  borderColor: "var(--app-soft-card-border)",
+                  backgroundColor: "var(--app-soft-card-bg)",
+                }}
+              >
+                Close
+              </button>
+            </div>
+          </div>
         ) : (
           <div
             className="h-full overflow-auto rounded-xl border p-4 text-sm leading-relaxed"
@@ -3813,11 +3880,14 @@ function App() {
   });
   const artifacts = artifactsResponse?.artifacts ?? [];
 
-  const { data: activeArtifactResponse } = useQuery<AgentArtifactResponse>({
+  const { data: activeArtifactResponse, isLoading: isActiveArtifactLoading, refetch: refetchActiveArtifact } = useQuery<AgentArtifactResponse>({
     queryKey: activeArtifactId
       ? [`/api/agent/artifacts/${activeArtifactId}`]
       : ["/api/agent/artifacts/none"],
     enabled: Boolean(activeArtifactId),
+    staleTime: 0,
+    retry: 2,
+    refetchOnWindowFocus: true,
   });
 
   const [showOnboarding, setShowOnboarding] = useState(false);
@@ -4119,6 +4189,9 @@ function App() {
   };
 
   const handleOpenArtifact = (artifactId: string) => {
+    queryClient.invalidateQueries({
+      queryKey: [`/api/agent/artifacts/${artifactId}`],
+    });
     setActiveArtifactId(artifactId);
   };
 
@@ -5539,10 +5612,12 @@ function App() {
           </AnimatePresence>
 
           <AnimatePresence>
-            {activeArtifact && (
+            {activeArtifactId && (
               <ArtifactViewer
                 artifact={activeArtifact}
+                isLoading={isActiveArtifactLoading && !activeArtifact}
                 onClose={() => setActiveArtifactId(null)}
+                onRetry={() => refetchActiveArtifact()}
               />
             )}
           </AnimatePresence>
