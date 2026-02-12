@@ -3407,7 +3407,7 @@ const UnifiedAgentTaskCard = ({
       data-agent-task-status={card.status}
     >
       <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0 space-y-0.5">
+        <div className="min-w-0 flex-1 space-y-1">
           <div className="flex items-center gap-2">
             <span
               className="text-[10px] font-bold uppercase tracking-[0.18em]"
@@ -3425,6 +3425,8 @@ const UnifiedAgentTaskCard = ({
             >
               {statusLabel}
             </span>
+            <span className="h-1 w-1 rounded-full opacity-30" style={{ backgroundColor: "var(--app-on-dark-muted)" }} />
+            <span className="text-[10px] uppercase tracking-wide font-medium" style={{ color: "var(--app-on-dark-muted)" }}>{kindLabel}</span>
             {isRunning && (
               <motion.span
                 className="inline-flex h-1.5 w-1.5 rounded-full"
@@ -3435,7 +3437,6 @@ const UnifiedAgentTaskCard = ({
             )}
           </div>
           <p className="line-clamp-2 text-sm font-semibold leading-snug" style={{ color: "var(--app-on-dark)" }}>{card.title}</p>
-          <p className="text-[10px] uppercase tracking-wide" style={{ color: "var(--app-on-dark-muted)" }}>{kindLabel}</p>
         </div>
         <TooltipProvider delayDuration={200}>
           <Tooltip>
