@@ -1,6 +1,6 @@
 # Project State: ZeeMe
 
-Last Updated: 2026-02-11
+Last Updated: 2026-02-12
 
 ## How To Resume Any Session
 1. Run `npm run dev:context`.
@@ -31,6 +31,12 @@ Ship a production-grade multimodal AI companion where voice and text share one m
 - Structured observability with `x-trace-id` and secret-safe redaction.
 - Local isolated E2E flow and deployment guardrails.
 - Remotion promo composition with exported preview/master videos.
+- AI-powered game generation enabled via `ENABLE_AGENT_MODEL_GAME_GENERATOR=true`.
+- Fixed artifact iframe rendering: switched from blob URLs to server `/render` endpoint for mobile Safari canvas compatibility.
+- Added `/api/agent/artifacts/:id/render` with CSP security headers and ownership validation.
+- Artifact query resilience: staleTime 0, retry 2, refetchOnWindowFocus for session recovery.
+- ArtifactViewer error/retry/reload UX for failed loads and game restarts.
+- Created `docs/AGENTIC_ENGINEERING_GUIDE.md` — comprehensive reference for agentic features, Replit-specific concerns, and gotchas.
 
 ## What Works Today
 - Auth, onboarding, conversations, and message persistence.
@@ -69,3 +75,6 @@ Ship a production-grade multimodal AI companion where voice and text share one m
 | 2026-02-10 | Secret scanner flagged local test script | Pattern matched token-like value in script text | Redact or annotate safe placeholders properly | Run `bash script/check-secrets.sh all` before push |
 | 2026-02-10 | Multipart text output leaked split token in UI | Parsing/splitting logic did not fully sanitize delimiters | Harden split parser and fallback behavior | Add parser regression prompts to E2E scenarios |
 | 2026-02-11 | Remotion renders failed in sandbox | Browser process launch blocked under sandbox constraints | Render with approved escalated execution and local headless shell | Document render runtime requirements in handoff notes |
+| 2026-02-12 | Game artifacts show black screen on mobile Safari | Blob URLs in sandboxed iframes break canvas initialization on mobile Safari | Serve game HTML via server `/render` endpoint instead of blob URLs or srcdoc | Never use blob URLs or srcdoc for iframe game rendering; see `docs/AGENTIC_ENGINEERING_GUIDE.md` |
+| 2026-02-12 | Games use template output instead of AI generation | `ENABLE_AGENT_MODEL_GAME_GENERATOR` env var not set to `true` | Set the flag in Replit Secrets | Document required env vars in engineering guide |
+| 2026-02-12 | Artifact viewer fails to load after session timeout | Query cache retained stale/error state with `staleTime: Infinity` | Override with `staleTime: 0`, `retry: 2`, `refetchOnWindowFocus: true` | Do not inherit global infinite stale time for artifact queries |
