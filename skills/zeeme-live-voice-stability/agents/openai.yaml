@@ -1,0 +1,4 @@
+interface:
+  display_name: "ZeeMe Live Voice Stability"
+  short_description: "Stabilize Gemini Live voice quality and interruption flow"
+  default_prompt: "Use $zeeme-live-voice-stability to diagnose voice cutoffs, tune Live API settings, and output a safe Replit secrets profile."

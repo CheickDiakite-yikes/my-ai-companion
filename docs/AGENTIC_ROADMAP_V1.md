@@ -1,11 +1,11 @@
 # Zee Agentic Expansion Roadmap (v1)
 
-Last Updated: 2026-02-11
+Last Updated: 2026-02-13
 Owner: Product + Eng (Zee)
 
 ## 1) Status Snapshot
 
-Overall: **Foundation in progress**
+Overall: **Foundation shipped, expansion in progress**
 
 - Unified chat lane with internal agent branch: **implemented (backend + UI plumbing)**
 - Agent task persistence and audit entities: **implemented**
@@ -15,7 +15,7 @@ Overall: **Foundation in progress**
 - Browser E2E for themes/history/artifacts: **implemented and passing locally**
 - Model-based planner behind feature flag (`ENABLE_AGENT_MODEL_PLANNER`): **implemented with deterministic fallback**
 - Model-based mini-game generation + QA repair loop (`ENABLE_AGENT_MODEL_GAME_GENERATOR`): **implemented**
-- True LLM-driven artifact generation for agent tasks: **partially implemented (mini-game yes, docs pending)**
+- True LLM-driven artifact generation for agent tasks: **partially implemented (mini-game live, docs pending)**
 - Real external connectors (Gmail/Drive/device control): **not implemented yet**
 - Hardened containerized sandbox isolation: **not implemented yet**
 

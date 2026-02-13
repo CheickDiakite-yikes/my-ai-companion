@@ -160,3 +160,36 @@ Use this file as a chronological handoff record so any new session can resume wo
   - Root cause: Build plugin rewrote only `og:image` and `twitter:image` while other OG fields still referenced `zeeme-og.png`.
   - Fix: Removed rewrite plugin usage and normalized all meta tags to one canonical OG asset.
   - Guardrail: Keep a single canonical OG source in `client/index.html`; avoid partial meta rewriting at build time.
+
+## 2026-02-13 14:05 UTC - Voice reliability stabilization + docs refresh + new skill pack
+- Completed:
+  - Hardened live voice turn handling and transcript ingestion:
+    - input suppression while assistant speech window is active
+    - user transcript suppression during assistant speech window
+    - server-content trace diagnostics for interruption/completion analysis
+  - Simplified stable live baseline for deployment:
+    - `NO_INTERRUPTION` activity handling
+    - proactivity disabled by default
+    - noise gate disabled by default for stability profile
+    - high response budget deployed (`GEMINI_LIVE_MAX_OUTPUT_TOKENS=1000`)
+  - Updated documentation:
+    - expanded `README.md` with deeper ASCII architecture diagrams (memory system + agentic runtime)
+    - refreshed `docs/GEMINI_INTEGRATION.md` with live stability and prompt-privacy contract
+    - updated `docs/PROJECT_STATE.md` and `docs/SKILLS_INDEX.md`
+  - Created three new high-value local skills:
+    - `zeeme-live-voice-stability`
+    - `zeeme-agentic-roadmap-delivery`
+    - `zeeme-agentic-gamegen-eval`
+- Current state:
+  - Live voice is significantly more stable and easier to debug via trace signatures.
+  - Agentic mini-games are the currently shipped artifact path in the unified chat lane.
+  - Documentation now reflects current architecture, memory model, and roadmap direction.
+- Next actions:
+  - Run cross-device voice soak tests with current stable profile and collect trace comparisons.
+  - Promote the three new skills to global Codex skills path for cross-workspace reuse.
+  - Continue next roadmap slice after mini-games (docs/presentations or connector pilot behind flags).
+- Errors and fixes:
+  - Error: Newly initialized skill `default_prompt` fields lost `$skill-name` token due shell interpolation.
+  - Root cause: Unescaped `$` in command-line string during initializer execution.
+  - Fix: Rewrote generated `agents/openai.yaml` files with explicit `$skill-name` default prompts.
+  - Guardrail: Use single-quoted heredoc or escaped `$` when setting `default_prompt` values.

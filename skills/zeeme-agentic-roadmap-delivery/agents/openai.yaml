@@ -1,0 +1,4 @@
+interface:
+  display_name: "ZeeMe Agentic Roadmap Delivery"
+  short_description: "Turn expansion vision into phased, shippable execution plans"
+  default_prompt: "Use $zeeme-agentic-roadmap-delivery to convert companion expansion ideas into sequenced engineering milestones with acceptance tests."

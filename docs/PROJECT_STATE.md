@@ -1,6 +1,6 @@
 # Project State: ZeeMe
 
-Last Updated: 2026-02-12
+Last Updated: 2026-02-13
 
 ## How To Resume Any Session
 1. Run `npm run dev:context`.
@@ -15,7 +15,7 @@ Ship a production-grade multimodal AI companion where voice and text share one m
 ## Current Focus
 - Execute agentic expansion roadmap tracked in `/Users/cheickdiakite/Codex/my-ai-companion/docs/AGENTIC_ROADMAP_V1.md`.
 - Prepare iOS/TestFlight readiness from the deployed web app baseline.
-- Improve live voice transcript quality and reduce pause latency without breaking stability.
+- Keep live voice stability high on mobile browsers while improving natural response pacing.
 - Keep Replit and local schema/runtime behavior strictly synchronized.
 - Maintain release safety with secret scanning, trace-driven debugging, and full regression gates.
 
@@ -37,6 +37,17 @@ Ship a production-grade multimodal AI companion where voice and text share one m
 - Artifact query resilience: staleTime 0, retry 2, refetchOnWindowFocus for session recovery.
 - ArtifactViewer error/retry/reload UX for failed loads and game restarts.
 - Created `docs/AGENTIC_ENGINEERING_GUIDE.md` — comprehensive reference for agentic features, Replit-specific concerns, and gotchas.
+- Added live voice reliability hardening for interruption/cutoff issues:
+  - configurable `activityHandling` with stability-first default
+  - safer VAD/thinking/output guardrails in live token config
+  - duplex suppression path while assistant audio is active
+  - suppression of user transcript ingestion during assistant speech window
+  - enhanced `live.server.content` trace diagnostics
+- Deployed higher live output budget profile (`GEMINI_LIVE_MAX_OUTPUT_TOKENS=1000`) for richer responses.
+- Added three new repo-local skills for this expansion:
+  - `zeeme-live-voice-stability`
+  - `zeeme-agentic-roadmap-delivery`
+  - `zeeme-agentic-gamegen-eval`
 
 ## What Works Today
 - Auth, onboarding, conversations, and message persistence.
@@ -46,19 +57,20 @@ Ship a production-grade multimodal AI companion where voice and text share one m
 - Profile and preference persistence (including Zee avatar + theme).
 - Quota accounting and route enforcement with branded 429 responses.
 - Replit deployment currently live at `https://zeeme.replit.app`.
+- Agentic mini-game generation is live in-thread with artifact viewer flow.
 
 ## Known Gaps
 - Native packaging path (Expo/ejected native bridge) is not completed.
 - Transcript segmentation quality still needs tuning for longer utterances.
-- Live response handoff latency can still feel long in some conditions.
+- Live response handoff latency can still feel long in some conditions despite stability improvements.
 - Replit schema drift can still happen if DB apply is skipped.
 - Automated visual snapshot matrix across major iPhone sizes is incomplete.
 
 ## Next Steps (Priority Order)
-1. Add transcript aggregation tuning and VAD/turn-end improvements for live voice continuity.
-2. Add device-size visual regression suite for iPhone SE/mini/Plus/Max and iPad portrait checks.
-3. Productize subscription/billing tiers on top of existing quota instrumentation.
-4. Formalize Replit schema-sync runbook into CI checks where possible.
+1. Run post-deploy voice soak tests across iPhone + Android browsers using new stable profile.
+2. Add transcript aggregation tuning for long utterances and bilingual edge cases.
+3. Expand agentic roadmap delivery beyond mini-games (docs/presentations) behind flags.
+4. Add device-size visual regression suite for iPhone SE/mini/Plus/Max and iPad portrait checks.
 5. Complete App Store packaging path (WebView wrapper or native migration decision).
 
 ## Blockers And Open Questions

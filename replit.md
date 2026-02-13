@@ -4,6 +4,11 @@
 A companion AI chat/voice app with personalized persona Zee (with voice variants). Users interact via text chat and voice calls. Features onboarding flow, dark teal branding, persistent conversations, agentic capabilities (AI game generation, task execution), and customizable themes.
 
 ## Recent Changes
+- 2026-02-13: Stabilized live voice interruption behavior with assistant-speech duplex suppression and user-transcript suppression during assistant speech windows
+- 2026-02-13: Added live trace diagnostics (`live.server.content`) for interruption vs normal completion classification
+- 2026-02-13: Simplified live baseline in deployment profile (NO_INTERRUPTION, proactivity off, client noise gate off)
+- 2026-02-13: Raised production live output headroom to `GEMINI_LIVE_MAX_OUTPUT_TOKENS=1000` for fuller voice replies
+- 2026-02-13: Added three new local skills: `zeeme-live-voice-stability`, `zeeme-agentic-roadmap-delivery`, `zeeme-agentic-gamegen-eval`
 - 2026-02-12: Fixed game artifact rendering — switched from blob URLs to server `/render` endpoint for reliable mobile Safari canvas support
 - 2026-02-12: Added `/api/agent/artifacts/:id/render` endpoint with CSP security headers
 - 2026-02-12: Added artifact query resilience (staleTime: 0, retry: 2, refetchOnWindowFocus) for session recovery
@@ -60,6 +65,8 @@ A companion AI chat/voice app with personalized persona Zee (with voice variants
 - No Docker/containers — Nix environment only
 - Playwright is unavailable in Replit (QA falls back to deterministic — this is expected)
 - Game artifacts render via server endpoint (`/api/agent/artifacts/:id/render`), NOT blob URLs or srcdoc
+- Any `VITE_*` secret change requires full rebuild/redeploy (restart only is insufficient)
+- Do not include private persona/system-prompt wording in public docs or logs
 - See `docs/AGENTIC_ENGINEERING_GUIDE.md` for full details on iframe rendering decisions
 
 ## Session Continuity Workflow

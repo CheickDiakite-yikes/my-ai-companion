@@ -8,7 +8,7 @@ Deployed web app: [https://zeeme.replit.app](https://zeeme.replit.app)
 
 ZeeMe is designed as a mobile-first companion experience where users can:
 - Chat with Zee in text mode (including adaptive multi-part replies).
-- Talk to Zee in live voice mode with low-latency interruption handling.
+- Talk to Zee in live voice mode with duplex-safe interruption control and trace-first tuning.
 - Share images in text chat (camera capture or library upload).
 - Share live camera frames during voice sessions.
 - Personalize Zee behavior via profile settings and response style presets.
@@ -106,6 +106,63 @@ Client start voice
      -> consume voice + camera seconds quotas
 ```
 
+### Unified memory system (text + live voice + profile + durable memory)
+
+```text
+                           +----------------------------------------------+
+                           | User profile + preferences                   |
+                           | (bio, style, memory mode, cross-chat toggle)|
+                           +---------------------+------------------------+
+                                                 |
+                    +----------------------------v----------------------------+
+                    | Memory builder (server/routes.ts)                     |
+                    |--------------------------------------------------------|
+                    | 1) Active thread turns (recent raw)                   |
+                    | 2) Thread summary (compressed older turns)            |
+                    | 3) Cross-chat relevant turns (same user)              |
+                    | 4) Durable memory items (reinforced facts/preferences)|
+                    | 5) Safe selective redaction                           |
+                    +----------------------+---------------------------------+
+                                           |
+                     +---------------------v----------------------+
+                     | Gemini text / live prompt context         |
+                     +---------------------+----------------------+
+                                           |
+      +------------------------------------+------------------------------------+
+      |                                                                         |
++-----v---------------------+                                      +------------v----------------------+
+| Text mode                |                                      | Live voice mode                  |
+| /api/chat/respond/stream |                                      | /api/live/token + WS session     |
++-----+---------------------+                                      +------------+----------------------+
+      |                                                                         |
+      | persist user + assistant messages                                       | persist user + assistant transcripts
+      +------------------------------------------+------------------------------+
+                                                 |
+                                     +-----------v-----------+
+                                     | messages table        |
+                                     | (single shared thread)|
+                                     +-----------------------+
+```
+
+### Agentic runtime architecture (single chat lane, split backend lanes)
+
+```text
+User message in normal chat composer
+  -> /api/chat/respond/stream
+     -> turn classifier (companion_reply | agent_task)
+
+If companion_reply:
+  -> text generation -> stream deltas -> persist messages
+
+If agent_task:
+  -> create task + steps + approvals + artifacts records
+  -> runtime planner/executor
+  -> sandbox/tool calls (policy + risk gates)
+  -> QA checks (deterministic + optional Playwright)
+  -> artifact publish (e.g., mini game)
+  -> stream task events back into same chat thread
+```
+
 ## 3) Tech Stack
 
 | Layer | Technology |
@@ -156,7 +213,7 @@ Client start voice
 │   ├── SESSION_LOG.md
 │   ├── GEMINI_INTEGRATION.md
 │   └── AI_COMPANION_DESIGN_SPEC.md
-└── zee-persona.md                   # Primary persona source file
+└── skills/                          # Repo-local skill pack for repeatable workflows
 ```
 
 ## 5) Data Model (PostgreSQL)
@@ -266,8 +323,9 @@ error      -> stream-level error payload
 - Live audio/video: `gemini-2.5-flash-native-audio-preview-12-2025`
 
 ### Persona and prompting
-- `zee-persona.md` is loaded at runtime by `server/gemini.ts`.
-- If missing, server falls back to a safe default prompt.
+- Persona instructions are server-side and treated as private runtime configuration.
+- Public docs intentionally avoid exposing raw system-prompt wording.
+- If private prompt source is unavailable, server falls back to a safe default prompt.
 - Additional runtime prompt blocks include:
   - profile context (optional user-provided fields)
   - response style preset (`concise|balanced|expressive|playful`)
@@ -281,9 +339,38 @@ A post-generation guardrail checks for ungrounded memory signals and can trigger
 
 ### Live conversation behavior
 - Server issues ephemeral live tokens with constrained config.
-- VAD and interruption knobs are configurable via env.
+- VAD, interruption, and duplex-suppression knobs are configurable via env.
 - Client streams mic audio and optional camera frames to Gemini Live.
 - Final transcript segments are persisted into shared conversation history.
+
+### Agentic capability status
+- Unified chat lane is active (no separate agent chat UI).
+- Agentic output is currently shipping as mini-game artifacts in-thread.
+- Task lifecycle events stream in normal chat flow (`task_created` to `task_artifact_ready`/`task_failed`).
+
+### Agentic roadmap graph (phased delivery)
+
+```text
+Phase A (done): Unified task runtime scaffold
+  - stream task events in-thread
+  - artifact cards + viewer
+  - sandbox policy baseline
+
+Phase B (done): Adaptive game generation v1
+  - model-driven generation
+  - QA + retry loop
+  - artifact publish path
+
+Phase C (active): Voice/text continuity and reliability hardening
+  - live memory hydration
+  - transcript stitching quality
+  - mobile interruption stability
+
+Phase D (next): Connectors and broader tool use
+  - Gmail/Drive/device control pilots
+  - stronger approval + audit surfaces
+  - expanded artifact categories (docs/presentations)
+```
 
 ## 8) Theming and Design System
 
@@ -390,10 +477,41 @@ Source of truth: `.env.example`
 - `GEMINI_LIVE_TOKEN_USES`
 - `GEMINI_LIVE_TOKEN_EXPIRE_MS`
 - `GEMINI_LIVE_NEW_SESSION_EXPIRE_MS`
+- `GEMINI_LIVE_LOW_LATENCY_MODE`
+- `GEMINI_LIVE_ACTIVITY_HANDLING`
 - `GEMINI_LIVE_VAD_START_SENSITIVITY`
 - `GEMINI_LIVE_VAD_END_SENSITIVITY`
 - `GEMINI_LIVE_VAD_PREFIX_PADDING_MS`
 - `GEMINI_LIVE_VAD_SILENCE_MS`
+- `GEMINI_LIVE_MIN_VAD_PREFIX_PADDING_MS`
+- `GEMINI_LIVE_MIN_VAD_SILENCE_MS`
+- `GEMINI_LIVE_PROACTIVE_AUDIO`
+- `GEMINI_LIVE_FORCE_ALWAYS_RESPOND`
+- `GEMINI_LIVE_USE_THINKING_CONFIG`
+- `GEMINI_LIVE_ALLOW_ZERO_THINKING_BUDGET`
+- `GEMINI_LIVE_THINKING_BUDGET`
+- `GEMINI_LIVE_INCLUDE_THOUGHTS`
+- `GEMINI_LIVE_MAX_OUTPUT_TOKENS`
+
+### Client live audio capture (build-time `VITE_*`)
+- `VITE_LIVE_AUDIO_PROCESSOR_BUFFER_SIZE`
+- `VITE_LIVE_AUDIO_NOISE_GATE_ENABLED`
+- `VITE_LIVE_AUDIO_NOISE_GATE_RMS_THRESHOLD`
+- `VITE_LIVE_AUDIO_NOISE_GATE_HANGOVER_FRAMES`
+- `VITE_LIVE_AUDIO_NOISE_GATE_FAILOPEN_ENABLED`
+- `VITE_LIVE_AUDIO_NOISE_GATE_ASSISTANT_SPEECH_MULTIPLIER`
+- `VITE_LIVE_AUDIO_NOISE_GATE_FAILOPEN_AFTER_DROPS`
+- `VITE_LIVE_AUDIO_NOISE_GATE_FAILOPEN_FRAMES`
+- `VITE_LIVE_AUDIO_SUPPRESS_INPUT_WHILE_ASSISTANT_SPEAKING`
+- `VITE_LIVE_AUDIO_SUPPRESS_INPUT_COOLDOWN_MS`
+- `VITE_LIVE_AUDIO_SUPPRESS_USER_TRANSCRIPT_DURING_ASSISTANT_SPEECH`
+
+### Memory controls
+- `ENABLE_LIVE_MEMORY_CONTEXT`
+- `LIVE_MEMORY_BUILD_TIMEOUT_MS`
+- `LIVE_MEMORY_ACTIVE_THREAD_MAX_MESSAGES`
+- `LIVE_MEMORY_CROSS_CHAT_MAX_MESSAGES`
+- `LIVE_MEMORY_POLICY_DEFAULT`
 
 ### Media
 - `MEDIA_STORAGE_DRIVER` (`auto|replit|local`)
@@ -423,6 +541,9 @@ Source of truth: `.env.example`
 - `BETA_TEXT_QUOTA_30D`
 - `BETA_VOICE_QUOTA_SECONDS_30D`
 - `BETA_CAMERA_QUOTA_SECONDS_30D`
+
+### Deployed voice profile note
+- Current production deployment intentionally uses higher response headroom (`GEMINI_LIVE_MAX_OUTPUT_TOKENS=1000`) to reduce clipped replies.
 
 ## 13) Testing and QA
 
@@ -459,6 +580,8 @@ START_SERVER=0 TEST_HOST=127.0.0.1 TEST_PORT=5599 npm run test:local:e2e
 - Run command: `node ./dist/index.cjs`
 - Internal app port: `5000`
 - Object storage bucket configured via Replit object storage integration.
+- Any `VITE_*` secret change requires full rebuild/redeploy (restart alone is not enough).
+- Keep persona/system-prompt source private; never document or log raw prompt text in public channels.
 
 Checklist before production promote:
 1. `npm run db:push` against production DB.

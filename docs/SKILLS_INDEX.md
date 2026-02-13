@@ -50,6 +50,30 @@ Key scripts:
 - `/Users/cheickdiakite/Codex/my-ai-companion/skills/zeeme-remotion-campaign-pipeline/scripts/render_campaign.sh`
 - `/Users/cheickdiakite/Codex/my-ai-companion/skills/zeeme-remotion-campaign-pipeline/scripts/generate_social_cuts.sh`
 
+### 7) `zeeme-live-voice-stability`
+Purpose:
+- Stabilize Gemini Live voice behavior with trace-first diagnosis and deterministic config profiles.
+
+Key scripts:
+- `/Users/cheickdiakite/Codex/my-ai-companion/skills/zeeme-live-voice-stability/scripts/live_trace_summary.sh`
+- `/Users/cheickdiakite/Codex/my-ai-companion/skills/zeeme-live-voice-stability/scripts/build_live_secrets_profile.sh`
+
+### 8) `zeeme-agentic-roadmap-delivery`
+Purpose:
+- Convert expansion ideas into phased, contract-driven engineering milestones and rollout plans.
+
+Key scripts:
+- `/Users/cheickdiakite/Codex/my-ai-companion/skills/zeeme-agentic-roadmap-delivery/scripts/generate_phase_plan.sh`
+- `/Users/cheickdiakite/Codex/my-ai-companion/skills/zeeme-agentic-roadmap-delivery/scripts/check_agentic_contract.sh`
+
+### 9) `zeeme-agentic-gamegen-eval`
+Purpose:
+- Evaluate prompt-driven game generation quality, detect template collapse, and summarize QA outcomes.
+
+Key scripts:
+- `/Users/cheickdiakite/Codex/my-ai-companion/skills/zeeme-agentic-gamegen-eval/scripts/game_prompt_matrix.sh`
+- `/Users/cheickdiakite/Codex/my-ai-companion/skills/zeeme-agentic-gamegen-eval/scripts/compare_game_outputs.py`
+
 ## Recommended Usage Sequence
 1. Start session with `zeeme-session-continuity`.
 2. Run implementation work.
@@ -58,3 +82,6 @@ Key scripts:
 5. If model calls fail, use `zeeme-gemini-forensics`.
 6. For iOS beta release packaging, use `zeeme-testflight-release`.
 7. For launch/promo video production, use `zeeme-remotion-campaign-pipeline`.
+8. For live voice reliability incidents, use `zeeme-live-voice-stability`.
+9. For planning new agentic slices, use `zeeme-agentic-roadmap-delivery`.
+10. For game generation QA and regression checks, use `zeeme-agentic-gamegen-eval`.
