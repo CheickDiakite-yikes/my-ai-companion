@@ -215,6 +215,11 @@ function cleanTextInput(value: string | null | undefined): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+function clampPromptBlock(value: string, maxChars: number): string {
+  if (value.length <= maxChars) return value;
+  return `${value.slice(0, Math.max(0, maxChars - 13)).trim()}\n[truncated]`;
+}
+
 function buildProfileContext(profile: TextPersonalizationProfile | null | undefined): string {
   if (!profile) return "";
 
@@ -258,9 +263,12 @@ function resolveResponseStyle(
 
 function buildTextPromptAdditions(params: {
   profileContext?: TextPersonalizationProfile | null;
+  memoryContextBlock?: string | null;
+  memoryPolicy?: LiveMemoryPolicy;
   enableMultipart: boolean;
 }): string {
   const sections: string[] = [];
+  const memoryPolicy = params.memoryPolicy ?? "safe_selective";
 
   const profileBlock = buildProfileContext(params.profileContext ?? null);
   if (profileBlock) {
@@ -301,8 +309,22 @@ function buildTextPromptAdditions(params: {
       "- Only reference facts that appear in conversation history or the user profile context above.",
       "- If uncertain whether a memory is real, ask a brief clarifying question.",
       "- Do not invent memories, journal entries, previous events, or private details.",
+      `- Memory mode for this turn: ${memoryPolicy}.`,
+      memoryPolicy === "safe_selective"
+        ? "- In safe_selective mode, avoid replaying sensitive identifiers and prioritize relevant continuity."
+        : "- In remember_everything mode, preserve broad continuity while still avoiding hallucinated claims.",
     ].join("\n"),
   );
+
+  const memoryBlock = cleanTextInput(params.memoryContextBlock);
+  if (memoryBlock) {
+    sections.push(
+      [
+        "LIVE + TEXT MEMORY CONTEXT:",
+        clampPromptBlock(memoryBlock, 12_000),
+      ].join("\n"),
+    );
+  }
 
   return sections.join("\n\n");
 }
@@ -467,11 +489,15 @@ OUTPUT SAFETY RULES:
 async function getTextPersonaPrompt(params: {
   persona: Persona;
   profileContext?: TextPersonalizationProfile | null;
+  memoryContextBlock?: string | null;
+  memoryPolicy?: LiveMemoryPolicy;
   enableMultipart: boolean;
 }): Promise<string> {
   const basePrompt = await loadZeePrompt();
   const additions = buildTextPromptAdditions({
     profileContext: params.profileContext,
+    memoryContextBlock: params.memoryContextBlock,
+    memoryPolicy: params.memoryPolicy,
     enableMultipart: params.enableMultipart,
   });
 
@@ -942,6 +968,8 @@ export interface GenerateTextReplyInput {
   persona: Persona;
   messages: ConversationMessage[];
   profileContext?: TextPersonalizationProfile | null;
+  memoryContextBlock?: string | null;
+  memoryPolicy?: LiveMemoryPolicy;
   enableMultipart?: boolean;
 }
 
@@ -1371,6 +1399,8 @@ export async function generateTextReply(
   const personaPrompt = await getTextPersonaPrompt({
     persona: input.persona,
     profileContext: input.profileContext,
+    memoryContextBlock: input.memoryContextBlock,
+    memoryPolicy: input.memoryPolicy,
     enableMultipart,
   });
   const contents = buildConversationContents(input.messages);
@@ -1547,6 +1577,8 @@ export async function generateTextReplyStream(
   const personaPrompt = await getTextPersonaPrompt({
     persona: input.persona,
     profileContext: input.profileContext,
+    memoryContextBlock: input.memoryContextBlock,
+    memoryPolicy: input.memoryPolicy,
     enableMultipart,
   });
   const contents = buildConversationContents(input.messages);

@@ -990,6 +990,158 @@ async function buildLiveMemoryContext(params: {
   };
 }
 
+type ChatTextMemoryContext = {
+  profileContext?: TextPersonalizationProfile;
+  memoryContextBlock?: string;
+  memoryMeta: LiveTokenMemoryMeta;
+  accountMemoryMode: LiveMemoryPolicy;
+  crossChatMemoryEnabled: boolean;
+  redactionCount: number;
+  durableMemoryItemsUsed: number;
+};
+
+async function buildChatTextMemoryContext(params: {
+  req: any;
+  userId: string;
+  conversationId: string;
+}): Promise<ChatTextMemoryContext> {
+  let accountMemoryMode = resolveLiveMemoryPolicy(undefined);
+  let crossChatMemoryEnabled = true;
+
+  try {
+    const prefs = await storage.getUserPreferences(params.userId);
+    accountMemoryMode = resolveLiveMemoryPolicy(
+      prefs?.memoryMode,
+      accountMemoryMode,
+    );
+    crossChatMemoryEnabled = prefs?.crossChatMemoryEnabled ?? true;
+  } catch (error) {
+    traceError(params.req, "chat.memory.preferences.read.failed", error, {
+      conversationId: params.conversationId,
+    });
+  }
+
+  const memoryMode = accountMemoryMode;
+  let profileContext: TextPersonalizationProfile | undefined;
+  if (ENABLE_PROFILE_PERSONALIZATION) {
+    try {
+      profileContext = toProfilePromptContext(
+        await storage.getUserProfile(params.userId),
+      );
+    } catch (error) {
+      traceError(params.req, "chat.memory.profile.read.failed", error, {
+        conversationId: params.conversationId,
+      });
+    }
+  }
+
+  const memoryBuildStartedAt = Date.now();
+  const memoryMeta: LiveTokenMemoryMeta = {
+    activeThreadMessagesUsed: 0,
+    crossChatMessagesUsed: 0,
+    profileApplied: Boolean(profileContext),
+    mode: memoryMode,
+    buildMs: 0,
+    fallbackUsed: ENABLE_LIVE_MEMORY_CONTEXT ? "persona_only" : "disabled",
+  };
+
+  let memoryContextBlock: string | undefined;
+  let redactionCount = 0;
+  let durableMemoryItemsUsed = 0;
+
+  if (ENABLE_LIVE_MEMORY_CONTEXT) {
+    const deadlineAt = memoryBuildStartedAt + LIVE_MEMORY_BUILD_TIMEOUT_MS;
+    const runMemoryStage = async (
+      includeCrossChat: boolean,
+    ): Promise<LiveMemoryBuildResult> => {
+      const remainingMs = deadlineAt - Date.now();
+      if (remainingMs <= 0) {
+        throw new Error("live_memory_build_timeout");
+      }
+      return withTimeout(
+        buildLiveMemoryContext({
+          userId: params.userId,
+          conversationId: params.conversationId,
+          profileContext,
+          includeCrossChat,
+          memoryPolicy: memoryMode,
+          activeThreadMaxMessages: LIVE_MEMORY_ACTIVE_THREAD_MAX_MESSAGES,
+          crossChatMaxMessages: LIVE_MEMORY_CROSS_CHAT_MAX_MESSAGES,
+        }),
+        remainingMs,
+        "live_memory_build_timeout",
+      );
+    };
+
+    try {
+      const fullContext = await runMemoryStage(crossChatMemoryEnabled);
+      memoryContextBlock = fullContext.memoryContextBlock || undefined;
+      memoryMeta.activeThreadMessagesUsed = fullContext.activeThreadMessagesUsed;
+      memoryMeta.crossChatMessagesUsed = fullContext.crossChatMessagesUsed;
+      memoryMeta.fallbackUsed = "none";
+      redactionCount = fullContext.redactionCount;
+      durableMemoryItemsUsed = fullContext.durableMemoryItemsUsed;
+    } catch (fullError) {
+      traceError(params.req, "chat.memory.build.full.failed", fullError, {
+        conversationId: params.conversationId,
+        mode: memoryMode,
+        timedOut: isMemoryTimeoutError(fullError),
+      });
+
+      try {
+        const activeOnlyContext = await runMemoryStage(false);
+        memoryContextBlock = activeOnlyContext.memoryContextBlock || undefined;
+        memoryMeta.activeThreadMessagesUsed =
+          activeOnlyContext.activeThreadMessagesUsed;
+        memoryMeta.crossChatMessagesUsed = 0;
+        memoryMeta.fallbackUsed = "active_thread_only";
+        redactionCount = activeOnlyContext.redactionCount;
+        durableMemoryItemsUsed = activeOnlyContext.durableMemoryItemsUsed;
+      } catch (activeOnlyError) {
+        traceError(
+          params.req,
+          "chat.memory.build.active_only.failed",
+          activeOnlyError,
+          {
+            conversationId: params.conversationId,
+            mode: memoryMode,
+            timedOut: isMemoryTimeoutError(activeOnlyError),
+          },
+        );
+        memoryMeta.fallbackUsed = "persona_only";
+        memoryContextBlock = undefined;
+        redactionCount = 0;
+        durableMemoryItemsUsed = 0;
+      }
+    }
+  }
+
+  memoryMeta.buildMs = elapsedMs(memoryBuildStartedAt);
+  trace(params.req, "chat.memory.build.completed", {
+    conversationId: params.conversationId,
+    mode: memoryMeta.mode,
+    activeThreadMessagesUsed: memoryMeta.activeThreadMessagesUsed,
+    crossChatMessagesUsed: memoryMeta.crossChatMessagesUsed,
+    profileApplied: memoryMeta.profileApplied,
+    buildMs: memoryMeta.buildMs,
+    fallbackUsed: memoryMeta.fallbackUsed,
+    redactionCount,
+    durableMemoryItemsUsed,
+    crossChatMemoryEnabled,
+    accountMemoryMode,
+  });
+
+  return {
+    profileContext,
+    memoryContextBlock,
+    memoryMeta,
+    accountMemoryMode,
+    crossChatMemoryEnabled,
+    redactionCount,
+    durableMemoryItemsUsed,
+  };
+}
+
 function isStorageProvider(value: string): value is StorageProvider {
   return value === "local" || value === "replit";
 }
@@ -3343,9 +3495,12 @@ export async function registerRoutes(
         mediaStore,
       });
 
-      const profileContext = ENABLE_PROFILE_PERSONALIZATION
-        ? toProfilePromptContext(await storage.getUserProfile(req.session.userId))
-        : undefined;
+      const chatMemory = await buildChatTextMemoryContext({
+        req,
+        userId: req.session.userId,
+        conversationId: conversation.id,
+      });
+      const profileContext = chatMemory.profileContext;
 
       if (profileContext) {
         trace(req, "chat.personalization.applied", {
@@ -3366,6 +3521,13 @@ export async function registerRoutes(
       trace(req, "chat.respond.memory_loaded", {
         conversationId: conversation.id,
         messageCount: modelMessages.length,
+        memoryMode: chatMemory.memoryMeta.mode,
+        memoryFallback: chatMemory.memoryMeta.fallbackUsed,
+        memoryBuildMs: chatMemory.memoryMeta.buildMs,
+        activeThreadMessagesUsed: chatMemory.memoryMeta.activeThreadMessagesUsed,
+        crossChatMessagesUsed: chatMemory.memoryMeta.crossChatMessagesUsed,
+        profileApplied: chatMemory.memoryMeta.profileApplied,
+        crossChatMemoryEnabled: chatMemory.crossChatMemoryEnabled,
       });
 
       const aiStartedAt = Date.now();
@@ -3373,6 +3535,8 @@ export async function registerRoutes(
         persona,
         messages: modelMessages,
         profileContext,
+        memoryContextBlock: chatMemory.memoryContextBlock,
+        memoryPolicy: chatMemory.memoryMeta.mode,
         enableMultipart: ENABLE_MULTIPART_TEXT,
       });
 
@@ -3740,9 +3904,12 @@ export async function registerRoutes(
         mediaStore,
       });
 
-      const profileContext = ENABLE_PROFILE_PERSONALIZATION
-        ? toProfilePromptContext(await storage.getUserProfile(req.session.userId))
-        : undefined;
+      const chatMemory = await buildChatTextMemoryContext({
+        req,
+        userId: req.session.userId,
+        conversationId: conversation.id,
+      });
+      const profileContext = chatMemory.profileContext;
 
       if (profileContext) {
         trace(req, "chat.personalization.applied", {
@@ -3764,6 +3931,13 @@ export async function registerRoutes(
         conversationId: conversation.id,
         persona,
         attachmentCount: boundAttachments.length,
+        memoryMode: chatMemory.memoryMeta.mode,
+        memoryFallback: chatMemory.memoryMeta.fallbackUsed,
+        memoryBuildMs: chatMemory.memoryMeta.buildMs,
+        activeThreadMessagesUsed: chatMemory.memoryMeta.activeThreadMessagesUsed,
+        crossChatMessagesUsed: chatMemory.memoryMeta.crossChatMessagesUsed,
+        profileApplied: chatMemory.memoryMeta.profileApplied,
+        crossChatMemoryEnabled: chatMemory.crossChatMemoryEnabled,
       });
 
       trace(req, "chat.multipart.started", {
@@ -3775,6 +3949,8 @@ export async function registerRoutes(
         persona,
         messages: modelMessages,
         profileContext,
+        memoryContextBlock: chatMemory.memoryContextBlock,
+        memoryPolicy: chatMemory.memoryMeta.mode,
         enableMultipart: ENABLE_MULTIPART_TEXT,
       });
 
