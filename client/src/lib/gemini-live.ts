@@ -214,6 +214,7 @@ export class GeminiLiveVoiceSession {
 
   private scheduledPlaybackTime = 0;
   private activePlaybackNodes = new Set<AudioBufferSourceNode>();
+  private audioContextKeepAliveInterval: number | null = null;
   private pendingTranscriptBySender: Record<TranscriptSender, string> = {
     user: "",
     assistant: "",
@@ -247,6 +248,8 @@ export class GeminiLiveVoiceSession {
     this.outputContext = new AudioContext({ sampleRate: OUTPUT_SAMPLE_RATE });
     await this.outputContext.resume();
     this.scheduledPlaybackTime = this.outputContext.currentTime;
+
+    this.startAudioContextKeepAlive();
 
     this.pendingTranscriptBySender = {
       user: "",
@@ -313,6 +316,7 @@ export class GeminiLiveVoiceSession {
       assistant: null,
     };
     this.clearPlaybackQueue();
+    this.stopAudioContextKeepAlive();
     await this.stopVideo();
 
     if (this.processorNode) {
@@ -554,6 +558,31 @@ export class GeminiLiveVoiceSession {
     this.videoCaptureInterval = window.setInterval(renderFrame, VIDEO_FRAME_INTERVAL_MS);
   }
 
+  private startAudioContextKeepAlive(): void {
+    this.stopAudioContextKeepAlive();
+    this.audioContextKeepAliveInterval = window.setInterval(() => {
+      this.ensureAudioContextsRunning();
+    }, 2000);
+  }
+
+  private stopAudioContextKeepAlive(): void {
+    if (this.audioContextKeepAliveInterval !== null) {
+      clearInterval(this.audioContextKeepAliveInterval);
+      this.audioContextKeepAliveInterval = null;
+    }
+  }
+
+  private ensureAudioContextsRunning(): void {
+    if (this.outputContext && this.outputContext.state === "suspended") {
+      this.debug("live.audio.output_context_resuming");
+      this.outputContext.resume().catch(() => {});
+    }
+    if (this.inputContext && this.inputContext.state === "suspended") {
+      this.debug("live.audio.input_context_resuming");
+      this.inputContext.resume().catch(() => {});
+    }
+  }
+
   private async startMicrophoneStream(): Promise<void> {
     if (!this.session) {
       throw new Error("Cannot start microphone stream without a live session");
@@ -591,6 +620,10 @@ export class GeminiLiveVoiceSession {
 
     this.processorNode.onaudioprocess = (event) => {
       if (!this.session || !this.inputContext) return;
+      if (this.inputContext.state === "suspended") {
+        this.inputContext.resume().catch(() => {});
+        return;
+      }
       const pcmBase64 = pcm16ToBase64(
         event.inputBuffer.getChannelData(0),
         this.inputContext.sampleRate,
@@ -632,6 +665,10 @@ export class GeminiLiveVoiceSession {
 
   private enqueueAudio(base64Audio: string): void {
     if (!this.outputContext) return;
+
+    if (this.outputContext.state === "suspended") {
+      this.outputContext.resume().catch(() => {});
+    }
 
     const int16 = base64ToPcm16(base64Audio);
     if (int16.length === 0) return;
