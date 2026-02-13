@@ -65,7 +65,7 @@ interface TokenUsageSnapshot {
 }
 
 const DEFAULT_TEXT_MODEL = "gemini-3-flash-preview";
-const DEFAULT_LIVE_MODEL = "gemini-2.5-flash-preview-native-audio-dialog";
+const DEFAULT_LIVE_MODEL = "gemini-2.5-flash-native-audio-preview-12-2025";
 const DEFAULT_AGENT_GAME_MODEL = "gemini-3-flash-preview";
 const DEFAULT_ZEE_PROMPT_FALLBACK = [
   "You are Zee, a warm, emotionally intelligent AI companion.",
@@ -122,7 +122,6 @@ function resolveAgentGameModel(): string {
 }
 
 const BUILTIN_LIVE_FALLBACKS = [
-  "gemini-2.5-flash-preview-native-audio-dialog",
   "gemini-2.5-flash-native-audio-preview-12-2025",
 ];
 
