@@ -4,6 +4,7 @@ import {
   GoogleGenAI,
   Modality,
   StartSensitivity,
+  TurnCoverage,
   type GenerateContentResponseUsageMetadata,
 } from "@google/genai";
 import { execFile } from "child_process";
@@ -160,6 +161,18 @@ function parsePositiveInt(input: string | undefined, fallback: number): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+function parseOptionalPositiveInt(input: string | undefined): number | undefined {
+  if (!input) return undefined;
+  const parsed = Number.parseInt(input, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function parseNonNegativeInt(input: string | undefined, fallback: number): number {
+  if (!input) return fallback;
+  const parsed = Number.parseInt(input, 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
 function resolveStartSensitivity(): StartSensitivity {
   const raw = (process.env.GEMINI_LIVE_VAD_START_SENSITIVITY ?? "HIGH")
     .trim()
@@ -176,6 +189,15 @@ function resolveEndSensitivity(): EndSensitivity {
   return raw === "LOW"
     ? EndSensitivity.END_SENSITIVITY_LOW
     : EndSensitivity.END_SENSITIVITY_HIGH;
+}
+
+function resolveTurnCoverage(): TurnCoverage {
+  const raw = (process.env.GEMINI_LIVE_TURN_COVERAGE ?? "TURN_INCLUDES_ONLY_ACTIVITY")
+    .trim()
+    .toUpperCase();
+  return raw === "TURN_INCLUDES_ALL_INPUT" || raw === "ALL_INPUT"
+    ? TurnCoverage.TURN_INCLUDES_ALL_INPUT
+    : TurnCoverage.TURN_INCLUDES_ONLY_ACTIVITY;
 }
 
 function parseBoundedNumber(
@@ -777,6 +799,24 @@ export interface CreateLiveTokenInput {
   memoryContextBlock?: string;
   profileContext?: TextPersonalizationProfile | null;
   memoryPolicy?: LiveMemoryPolicy;
+  deviceClass?: "mobile" | "desktop" | "unknown";
+}
+
+export interface LiveTokenConfigSummary {
+  vadStartSensitivity: "HIGH" | "LOW";
+  vadEndSensitivity: "HIGH" | "LOW";
+  vadPrefixPaddingMs: number;
+  vadSilenceMs: number;
+  turnCoverage: "TURN_INCLUDES_ONLY_ACTIVITY" | "TURN_INCLUDES_ALL_INPUT";
+  affectiveDialog: boolean;
+  proactiveAudio: boolean;
+  thinkingBudget: number | null;
+  includeThoughts: boolean;
+  temperature: number;
+  topP: number;
+  topK: number | null;
+  maxOutputTokens: number;
+  deviceClass: "mobile" | "desktop" | "unknown";
 }
 
 export interface CreateLiveTokenResult {
@@ -788,6 +828,7 @@ export interface CreateLiveTokenResult {
   newSessionExpireTime: string;
   generatedAt: string;
   uses: number;
+  configSummary: LiveTokenConfigSummary;
 }
 
 function composeLiveSystemInstruction(params: {
@@ -833,6 +874,8 @@ export async function createLiveToken(
   const responseModality = input.responseModality ?? "AUDIO";
   const voiceName = input.voiceName ?? DEFAULT_LIVE_VOICE;
   const memoryPolicy = input.memoryPolicy ?? "safe_selective";
+  const deviceClass = input.deviceClass ?? "unknown";
+  const isMobileDevice = deviceClass === "mobile";
   const systemInstruction = composeLiveSystemInstruction({
     personaPrompt,
     memoryContextBlock: input.memoryContextBlock,
@@ -850,6 +893,83 @@ export async function createLiveToken(
     60 * 1000,
   );
   const uses = parsePositiveInt(process.env.GEMINI_LIVE_TOKEN_USES, 1);
+  const vadStartSensitivity = resolveStartSensitivity();
+  const vadEndSensitivity = resolveEndSensitivity();
+  const vadPrefixPaddingMs = parsePositiveInt(
+    process.env.GEMINI_LIVE_VAD_PREFIX_PADDING_MS,
+    isMobileDevice ? 60 : 80,
+  );
+  const vadSilenceMs = parsePositiveInt(
+    process.env.GEMINI_LIVE_VAD_SILENCE_MS,
+    isMobileDevice ? 220 : 320,
+  );
+  const turnCoverage = resolveTurnCoverage();
+  const enableAffectiveDialog = parseBooleanFlag(
+    process.env.GEMINI_LIVE_ENABLE_AFFECTIVE_DIALOG,
+    true,
+  );
+  const proactiveAudio = parseBooleanFlag(
+    process.env.GEMINI_LIVE_PROACTIVE_AUDIO,
+    true,
+  );
+  const useThinkingConfig = parseBooleanFlag(
+    process.env.GEMINI_LIVE_USE_THINKING_CONFIG,
+    true,
+  );
+  const thinkingBudgetValue = parseNonNegativeInt(
+    process.env.GEMINI_LIVE_THINKING_BUDGET,
+    isMobileDevice ? 64 : 96,
+  );
+  const includeThoughts = parseBooleanFlag(
+    process.env.GEMINI_LIVE_INCLUDE_THOUGHTS,
+    false,
+  );
+  const liveTemperature = parseBoundedNumber(
+    process.env.GEMINI_LIVE_TEMPERATURE,
+    0.55,
+    0,
+    2,
+  );
+  const liveTopP = parseBoundedNumber(
+    process.env.GEMINI_LIVE_TOP_P,
+    0.9,
+    0,
+    1,
+  );
+  const liveTopK = parseOptionalPositiveInt(process.env.GEMINI_LIVE_TOP_K);
+  const liveMaxOutputTokens = parsePositiveInt(
+    process.env.GEMINI_LIVE_MAX_OUTPUT_TOKENS,
+    isMobileDevice ? 180 : 220,
+  );
+  const thinkingConfig = useThinkingConfig
+    ? {
+        thinkingBudget: thinkingBudgetValue,
+        includeThoughts,
+      }
+    : undefined;
+  const configSummary: LiveTokenConfigSummary = {
+    vadStartSensitivity:
+      vadStartSensitivity === StartSensitivity.START_SENSITIVITY_LOW
+        ? "LOW"
+        : "HIGH",
+    vadEndSensitivity:
+      vadEndSensitivity === EndSensitivity.END_SENSITIVITY_LOW ? "LOW" : "HIGH",
+    vadPrefixPaddingMs,
+    vadSilenceMs,
+    turnCoverage:
+      turnCoverage === TurnCoverage.TURN_INCLUDES_ALL_INPUT
+        ? "TURN_INCLUDES_ALL_INPUT"
+        : "TURN_INCLUDES_ONLY_ACTIVITY",
+    affectiveDialog: responseModality === "AUDIO" ? enableAffectiveDialog : false,
+    proactiveAudio: responseModality === "AUDIO" ? proactiveAudio : false,
+    thinkingBudget: thinkingConfig ? thinkingBudgetValue : null,
+    includeThoughts: thinkingConfig ? includeThoughts : false,
+    temperature: liveTemperature,
+    topP: liveTopP,
+    topK: liveTopK ?? null,
+    maxOutputTokens: liveMaxOutputTokens,
+    deviceClass,
+  };
 
   const expireTime = new Date(now + expireInMs).toISOString();
   const newSessionExpireTime = new Date(now + newSessionExpireInMs).toISOString();
@@ -884,6 +1004,13 @@ export async function createLiveToken(
                 responseModality === "TEXT" ? Modality.TEXT : Modality.AUDIO,
               ],
               systemInstruction,
+              temperature: liveTemperature,
+              topP: liveTopP,
+              topK: liveTopK,
+              maxOutputTokens: liveMaxOutputTokens,
+              enableAffectiveDialog:
+                responseModality === "AUDIO" ? enableAffectiveDialog : undefined,
+              thinkingConfig,
               speechConfig:
                 responseModality === "AUDIO"
                   ? {
@@ -897,19 +1024,18 @@ export async function createLiveToken(
               // These defaults prioritize natural turn-taking and low interruption latency.
               realtimeInputConfig: {
                 activityHandling: ActivityHandling.START_OF_ACTIVITY_INTERRUPTS,
+                turnCoverage,
                 automaticActivityDetection: {
-                  startOfSpeechSensitivity: resolveStartSensitivity(),
-                  endOfSpeechSensitivity: resolveEndSensitivity(),
-                  prefixPaddingMs: parsePositiveInt(
-                    process.env.GEMINI_LIVE_VAD_PREFIX_PADDING_MS,
-                    80,
-                  ),
-                  silenceDurationMs: parsePositiveInt(
-                    process.env.GEMINI_LIVE_VAD_SILENCE_MS,
-                    380,
-                  ),
+                  startOfSpeechSensitivity: vadStartSensitivity,
+                  endOfSpeechSensitivity: vadEndSensitivity,
+                  prefixPaddingMs: vadPrefixPaddingMs,
+                  silenceDurationMs: vadSilenceMs,
                 },
               },
+              proactivity:
+                responseModality === "AUDIO" && proactiveAudio
+                  ? { proactiveAudio: true }
+                  : undefined,
               inputAudioTranscription: {},
               outputAudioTranscription: {},
             },
@@ -962,6 +1088,7 @@ export async function createLiveToken(
     newSessionExpireTime,
     generatedAt: new Date(now).toISOString(),
     uses,
+    configSummary,
   };
 }
 

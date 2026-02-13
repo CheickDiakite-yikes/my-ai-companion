@@ -399,11 +399,29 @@ interface LiveTokenMemoryMeta {
   fallbackUsed: LiveMemoryFallbackUsed;
 }
 
+interface LiveTokenConfigSummary {
+  vadStartSensitivity: "HIGH" | "LOW";
+  vadEndSensitivity: "HIGH" | "LOW";
+  vadPrefixPaddingMs: number;
+  vadSilenceMs: number;
+  turnCoverage: "TURN_INCLUDES_ONLY_ACTIVITY" | "TURN_INCLUDES_ALL_INPUT";
+  affectiveDialog: boolean;
+  proactiveAudio: boolean;
+  thinkingBudget: number | null;
+  includeThoughts: boolean;
+  temperature: number;
+  topP: number;
+  topK: number | null;
+  maxOutputTokens: number;
+  deviceClass: "mobile" | "desktop" | "unknown";
+}
+
 interface LiveTokenResponse extends TraceAwareResponse {
   ephemeralToken: string;
   model: string;
   voice?: LiveVoiceName;
   memoryMeta?: LiveTokenMemoryMeta;
+  configSummary?: LiveTokenConfigSummary;
 }
 
 interface LiveTaskSnapshot {
@@ -458,6 +476,12 @@ function createRequestTraceId(): string {
     return crypto.randomUUID();
   }
   return `trace-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function detectLiveDeviceClass(): "mobile" | "desktop" | "unknown" {
+  if (typeof navigator === "undefined") return "unknown";
+  const ua = navigator.userAgent || "";
+  return /android|iphone|ipad|ipod|mobile/i.test(ua) ? "mobile" : "desktop";
 }
 
 function getErrorMessage(error: unknown): string {
@@ -6154,11 +6178,13 @@ function App() {
       persona: Persona;
       voice: LiveVoiceName;
       conversationId: string;
+      deviceClass: "mobile" | "desktop" | "unknown";
     }) => {
       const res = await apiRequest("POST", "/api/live/token", {
         conversationId: data.conversationId,
         persona: data.persona,
         voice: data.voice,
+        deviceClass: data.deviceClass,
         responseModality: "AUDIO",
       });
       const body = (await res.json()) as LiveTokenResponse;
@@ -7293,6 +7319,7 @@ function App() {
         persona,
         voice: selectedVoiceRef.current,
         conversationId,
+        deviceClass: detectLiveDeviceClass(),
       });
 
       if (startNonce !== liveStartNonceRef.current) {
@@ -7313,6 +7340,12 @@ function App() {
         crossChatMessagesUsed:
           tokenPayload.memoryMeta?.crossChatMessagesUsed ?? 0,
         profileApplied: Boolean(tokenPayload.memoryMeta?.profileApplied),
+        vadPrefixPaddingMs: tokenPayload.configSummary?.vadPrefixPaddingMs ?? null,
+        vadSilenceMs: tokenPayload.configSummary?.vadSilenceMs ?? null,
+        turnCoverage: tokenPayload.configSummary?.turnCoverage ?? null,
+        affectiveDialog: tokenPayload.configSummary?.affectiveDialog ?? null,
+        proactiveAudio: tokenPayload.configSummary?.proactiveAudio ?? null,
+        thinkingBudget: tokenPayload.configSummary?.thinkingBudget ?? null,
       });
 
       const resolvedConversationId = conversationId;

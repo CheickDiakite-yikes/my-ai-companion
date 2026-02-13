@@ -26,7 +26,6 @@ export interface GeminiLiveVoiceSessionStartParams {
 
 const INPUT_SAMPLE_RATE = 16000;
 const OUTPUT_SAMPLE_RATE = 24000;
-const PROCESSOR_BUFFER_SIZE = 2048;
 const VIDEO_FRAME_INTERVAL_MS = 1000;
 const VIDEO_MAX_EDGE = 640;
 const VIDEO_PERMISSION_TIMEOUT_MS = 12000;
@@ -34,6 +33,65 @@ const MICROPHONE_PERMISSION_TIMEOUT_MS = 12000;
 const TRANSCRIPT_DUPLICATE_WINDOW_MS = 1500;
 const TRANSCRIPT_FLUSH_DEBOUNCE_MS = 900;
 const TRANSCRIPT_OVERLAP_MIN_CHARS = 6;
+
+function parseClientPositiveInt(
+  value: unknown,
+  fallback: number,
+): number {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return Math.floor(value);
+  }
+  if (typeof value !== "string") return fallback;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function parseClientBoolean(value: unknown, fallback: boolean): boolean {
+  if (typeof value === "boolean") return value;
+  if (typeof value !== "string") return fallback;
+  const normalized = value.trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "off"].includes(normalized)) return false;
+  return fallback;
+}
+
+function parseClientBoundedNumber(
+  value: unknown,
+  fallback: number,
+  min: number,
+  max: number,
+): number {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return Math.min(Math.max(value, min), max);
+  }
+  if (typeof value !== "string") return fallback;
+  const parsed = Number.parseFloat(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(Math.max(parsed, min), max);
+}
+
+const liveClientEnv = (import.meta.env as Record<string, unknown>) ?? {};
+const PROCESSOR_BUFFER_SIZE = (() => {
+  const parsed = parseClientPositiveInt(
+    liveClientEnv.VITE_LIVE_AUDIO_PROCESSOR_BUFFER_SIZE,
+    1024,
+  );
+  return [256, 512, 1024, 2048, 4096].includes(parsed) ? parsed : 1024;
+})();
+const ENABLE_AUDIO_NOISE_GATE = parseClientBoolean(
+  liveClientEnv.VITE_LIVE_AUDIO_NOISE_GATE_ENABLED,
+  true,
+);
+const AUDIO_NOISE_GATE_RMS_THRESHOLD = parseClientBoundedNumber(
+  liveClientEnv.VITE_LIVE_AUDIO_NOISE_GATE_RMS_THRESHOLD,
+  0.006,
+  0.001,
+  0.08,
+);
+const AUDIO_NOISE_GATE_HANGOVER_FRAMES = parseClientPositiveInt(
+  liveClientEnv.VITE_LIVE_AUDIO_NOISE_GATE_HANGOVER_FRAMES,
+  6,
+);
 
 function normalizeText(input: string | undefined): string {
   return (input ?? "").replace(/\s+/g, " ").trim();
@@ -71,6 +129,16 @@ function mergeTranscriptText(previous: string, incoming: string): string {
       : `${existing} ${next}`;
 
   return normalizeText(merged);
+}
+
+function calculateRms(input: Float32Array): number {
+  if (input.length === 0) return 0;
+  let sumSquares = 0;
+  for (let index = 0; index < input.length; index += 1) {
+    const sample = input[index];
+    sumSquares += sample * sample;
+  }
+  return Math.sqrt(sumSquares / input.length);
 }
 
 function downsampleFloat32Buffer(
@@ -275,6 +343,7 @@ export class GeminiLiveVoiceSession {
   private scheduledPlaybackTime = 0;
   private activePlaybackNodes = new Set<AudioBufferSourceNode>();
   private audioContextKeepAliveInterval: number | null = null;
+  private audioNoiseGateHangoverFrames = 0;
   private pendingTranscriptBySender: Record<TranscriptSender, string> = {
     user: "",
     assistant: "",
@@ -331,6 +400,7 @@ export class GeminiLiveVoiceSession {
       user: null,
       assistant: null,
     };
+    this.audioNoiseGateHangoverFrames = 0;
 
     this.session = await ai.live.connect({
       model: params.model,
@@ -353,6 +423,13 @@ export class GeminiLiveVoiceSession {
           this.callbacks.onClosed?.(event.reason || undefined);
         },
       },
+    });
+
+    this.debug("live.audio.capture_config", {
+      processorBufferSize: PROCESSOR_BUFFER_SIZE,
+      noiseGateEnabled: ENABLE_AUDIO_NOISE_GATE,
+      noiseGateRmsThreshold: AUDIO_NOISE_GATE_RMS_THRESHOLD,
+      noiseGateHangoverFrames: AUDIO_NOISE_GATE_HANGOVER_FRAMES,
     });
 
     await this.startMicrophoneStream();
@@ -385,6 +462,7 @@ export class GeminiLiveVoiceSession {
       user: null,
       assistant: null,
     };
+    this.audioNoiseGateHangoverFrames = 0;
     this.clearPlaybackQueue();
     this.stopAudioContextKeepAlive();
     document.removeEventListener("visibilitychange", this.handleVisibilityChange);
@@ -691,8 +769,22 @@ export class GeminiLiveVoiceSession {
         this.inputContext.resume().catch(() => {});
         return;
       }
+      const inputSamples = event.inputBuffer.getChannelData(0);
+      if (ENABLE_AUDIO_NOISE_GATE) {
+        const rms = calculateRms(inputSamples);
+        const isActiveSpeech = rms >= AUDIO_NOISE_GATE_RMS_THRESHOLD;
+        if (isActiveSpeech) {
+          this.audioNoiseGateHangoverFrames = AUDIO_NOISE_GATE_HANGOVER_FRAMES;
+        } else if (this.audioNoiseGateHangoverFrames > 0) {
+          this.audioNoiseGateHangoverFrames -= 1;
+        }
+
+        if (!isActiveSpeech && this.audioNoiseGateHangoverFrames <= 0) {
+          return;
+        }
+      }
       const pcmBase64 = pcm16ToBase64(
-        event.inputBuffer.getChannelData(0),
+        inputSamples,
         this.inputContext.sampleRate,
       );
       try {

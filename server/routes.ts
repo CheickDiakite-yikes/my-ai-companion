@@ -66,6 +66,7 @@ const liveTokenSchema = z.object({
   persona: personaInputSchema.optional(),
   responseModality: z.enum(["AUDIO", "TEXT"]).optional(),
   voice: liveVoiceSchema.optional(),
+  deviceClass: z.enum(["mobile", "desktop", "unknown"]).optional(),
   memoryModeOverride: liveMemoryModeSchema.optional(),
 });
 
@@ -3342,6 +3343,7 @@ export async function registerRoutes(
         persona,
         voice,
         responseModality: parsed.responseModality ?? "AUDIO",
+        deviceClass: parsed.deviceClass ?? "unknown",
         memoryMode: memoryMeta.mode,
         memoryFallback: memoryMeta.fallbackUsed,
       });
@@ -3350,6 +3352,7 @@ export async function registerRoutes(
         persona,
         responseModality: parsed.responseModality,
         voiceName: voice,
+        deviceClass: parsed.deviceClass ?? "unknown",
         memoryContextBlock,
         profileContext: profileContext ?? null,
         memoryPolicy: memoryMeta.mode,
@@ -3363,6 +3366,9 @@ export async function registerRoutes(
         responseModality: token.responseModality,
         memoryFallback: memoryMeta.fallbackUsed,
         memoryBuildMs: memoryMeta.buildMs,
+        deviceClass: token.configSummary.deviceClass,
+        vadSilenceMs: token.configSummary.vadSilenceMs,
+        thinkingBudget: token.configSummary.thinkingBudget,
         elapsedMs: elapsedMs(startedAt),
       });
 
@@ -3377,6 +3383,7 @@ export async function registerRoutes(
         newSessionExpireTime: token.newSessionExpireTime,
         uses: token.uses,
         memoryMeta,
+        configSummary: token.configSummary,
       });
     } catch (error) {
       if (error instanceof z.ZodError) {
