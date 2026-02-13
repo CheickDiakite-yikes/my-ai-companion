@@ -400,6 +400,7 @@ interface LiveTokenMemoryMeta {
 }
 
 interface LiveTokenConfigSummary {
+  lowLatencyMode: boolean;
   vadStartSensitivity: "HIGH" | "LOW";
   vadEndSensitivity: "HIGH" | "LOW";
   vadPrefixPaddingMs: number;
@@ -7340,6 +7341,7 @@ function App() {
         crossChatMessagesUsed:
           tokenPayload.memoryMeta?.crossChatMessagesUsed ?? 0,
         profileApplied: Boolean(tokenPayload.memoryMeta?.profileApplied),
+        lowLatencyMode: tokenPayload.configSummary?.lowLatencyMode ?? null,
         vadPrefixPaddingMs: tokenPayload.configSummary?.vadPrefixPaddingMs ?? null,
         vadSilenceMs: tokenPayload.configSummary?.vadSilenceMs ?? null,
         turnCoverage: tokenPayload.configSummary?.turnCoverage ?? null,

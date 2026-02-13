@@ -3367,6 +3367,7 @@ export async function registerRoutes(
         memoryFallback: memoryMeta.fallbackUsed,
         memoryBuildMs: memoryMeta.buildMs,
         deviceClass: token.configSummary.deviceClass,
+        lowLatencyMode: token.configSummary.lowLatencyMode,
         vadSilenceMs: token.configSummary.vadSilenceMs,
         thinkingBudget: token.configSummary.thinkingBudget,
         elapsedMs: elapsedMs(startedAt),

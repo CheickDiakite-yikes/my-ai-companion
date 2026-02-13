@@ -74,9 +74,9 @@ const liveClientEnv = (import.meta.env as Record<string, unknown>) ?? {};
 const PROCESSOR_BUFFER_SIZE = (() => {
   const parsed = parseClientPositiveInt(
     liveClientEnv.VITE_LIVE_AUDIO_PROCESSOR_BUFFER_SIZE,
-    1024,
+    512,
   );
-  return [256, 512, 1024, 2048, 4096].includes(parsed) ? parsed : 1024;
+  return [256, 512, 1024, 2048, 4096].includes(parsed) ? parsed : 512;
 })();
 const ENABLE_AUDIO_NOISE_GATE = parseClientBoolean(
   liveClientEnv.VITE_LIVE_AUDIO_NOISE_GATE_ENABLED,
@@ -90,7 +90,7 @@ const AUDIO_NOISE_GATE_RMS_THRESHOLD = parseClientBoundedNumber(
 );
 const AUDIO_NOISE_GATE_HANGOVER_FRAMES = parseClientPositiveInt(
   liveClientEnv.VITE_LIVE_AUDIO_NOISE_GATE_HANGOVER_FRAMES,
-  6,
+  3,
 );
 
 function normalizeText(input: string | undefined): string {

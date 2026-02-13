@@ -803,6 +803,7 @@ export interface CreateLiveTokenInput {
 }
 
 export interface LiveTokenConfigSummary {
+  lowLatencyMode: boolean;
   vadStartSensitivity: "HIGH" | "LOW";
   vadEndSensitivity: "HIGH" | "LOW";
   vadPrefixPaddingMs: number;
@@ -893,15 +894,31 @@ export async function createLiveToken(
     60 * 1000,
   );
   const uses = parsePositiveInt(process.env.GEMINI_LIVE_TOKEN_USES, 1);
+  const lowLatencyMode = parseBooleanFlag(
+    process.env.GEMINI_LIVE_LOW_LATENCY_MODE,
+    true,
+  );
   const vadStartSensitivity = resolveStartSensitivity();
   const vadEndSensitivity = resolveEndSensitivity();
   const vadPrefixPaddingMs = parsePositiveInt(
     process.env.GEMINI_LIVE_VAD_PREFIX_PADDING_MS,
-    isMobileDevice ? 60 : 80,
+    isMobileDevice
+      ? lowLatencyMode
+        ? 40
+        : 60
+      : lowLatencyMode
+        ? 60
+        : 80,
   );
   const vadSilenceMs = parsePositiveInt(
     process.env.GEMINI_LIVE_VAD_SILENCE_MS,
-    isMobileDevice ? 220 : 320,
+    isMobileDevice
+      ? lowLatencyMode
+        ? 140
+        : 220
+      : lowLatencyMode
+        ? 180
+        : 320,
   );
   const turnCoverage = resolveTurnCoverage();
   const enableAffectiveDialog = parseBooleanFlag(
@@ -918,7 +935,13 @@ export async function createLiveToken(
   );
   const thinkingBudgetValue = parseNonNegativeInt(
     process.env.GEMINI_LIVE_THINKING_BUDGET,
-    isMobileDevice ? 64 : 96,
+    isMobileDevice
+      ? lowLatencyMode
+        ? 0
+        : 64
+      : lowLatencyMode
+        ? 24
+        : 96,
   );
   const includeThoughts = parseBooleanFlag(
     process.env.GEMINI_LIVE_INCLUDE_THOUGHTS,
@@ -926,20 +949,28 @@ export async function createLiveToken(
   );
   const liveTemperature = parseBoundedNumber(
     process.env.GEMINI_LIVE_TEMPERATURE,
-    0.55,
+    lowLatencyMode ? 0.45 : 0.55,
     0,
     2,
   );
   const liveTopP = parseBoundedNumber(
     process.env.GEMINI_LIVE_TOP_P,
-    0.9,
+    lowLatencyMode ? 0.85 : 0.9,
     0,
     1,
   );
-  const liveTopK = parseOptionalPositiveInt(process.env.GEMINI_LIVE_TOP_K);
+  const liveTopK =
+    parseOptionalPositiveInt(process.env.GEMINI_LIVE_TOP_K) ??
+    (lowLatencyMode ? 24 : 32);
   const liveMaxOutputTokens = parsePositiveInt(
     process.env.GEMINI_LIVE_MAX_OUTPUT_TOKENS,
-    isMobileDevice ? 180 : 220,
+    isMobileDevice
+      ? lowLatencyMode
+        ? 120
+        : 180
+      : lowLatencyMode
+        ? 160
+        : 220,
   );
   const thinkingConfig = useThinkingConfig
     ? {
@@ -948,6 +979,7 @@ export async function createLiveToken(
       }
     : undefined;
   const configSummary: LiveTokenConfigSummary = {
+    lowLatencyMode,
     vadStartSensitivity:
       vadStartSensitivity === StartSensitivity.START_SENSITIVITY_LOW
         ? "LOW"
