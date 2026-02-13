@@ -92,6 +92,14 @@ const AUDIO_NOISE_GATE_HANGOVER_FRAMES = parseClientPositiveInt(
   liveClientEnv.VITE_LIVE_AUDIO_NOISE_GATE_HANGOVER_FRAMES,
   3,
 );
+const AUDIO_NOISE_GATE_FAILOPEN_AFTER_DROPS = parseClientPositiveInt(
+  liveClientEnv.VITE_LIVE_AUDIO_NOISE_GATE_FAILOPEN_AFTER_DROPS,
+  120,
+);
+const AUDIO_NOISE_GATE_FAILOPEN_FRAMES = parseClientPositiveInt(
+  liveClientEnv.VITE_LIVE_AUDIO_NOISE_GATE_FAILOPEN_FRAMES,
+  60,
+);
 
 function normalizeText(input: string | undefined): string {
   return (input ?? "").replace(/\s+/g, " ").trim();
@@ -344,6 +352,8 @@ export class GeminiLiveVoiceSession {
   private activePlaybackNodes = new Set<AudioBufferSourceNode>();
   private audioContextKeepAliveInterval: number | null = null;
   private audioNoiseGateHangoverFrames = 0;
+  private audioNoiseGateConsecutiveDrops = 0;
+  private audioNoiseGateFailOpenFramesRemaining = 0;
   private pendingTranscriptBySender: Record<TranscriptSender, string> = {
     user: "",
     assistant: "",
@@ -401,6 +411,8 @@ export class GeminiLiveVoiceSession {
       assistant: null,
     };
     this.audioNoiseGateHangoverFrames = 0;
+    this.audioNoiseGateConsecutiveDrops = 0;
+    this.audioNoiseGateFailOpenFramesRemaining = 0;
 
     this.session = await ai.live.connect({
       model: params.model,
@@ -430,6 +442,8 @@ export class GeminiLiveVoiceSession {
       noiseGateEnabled: ENABLE_AUDIO_NOISE_GATE,
       noiseGateRmsThreshold: AUDIO_NOISE_GATE_RMS_THRESHOLD,
       noiseGateHangoverFrames: AUDIO_NOISE_GATE_HANGOVER_FRAMES,
+      noiseGateFailOpenAfterDrops: AUDIO_NOISE_GATE_FAILOPEN_AFTER_DROPS,
+      noiseGateFailOpenFrames: AUDIO_NOISE_GATE_FAILOPEN_FRAMES,
     });
 
     await this.startMicrophoneStream();
@@ -463,6 +477,8 @@ export class GeminiLiveVoiceSession {
       assistant: null,
     };
     this.audioNoiseGateHangoverFrames = 0;
+    this.audioNoiseGateConsecutiveDrops = 0;
+    this.audioNoiseGateFailOpenFramesRemaining = 0;
     this.clearPlaybackQueue();
     this.stopAudioContextKeepAlive();
     document.removeEventListener("visibilitychange", this.handleVisibilityChange);
@@ -773,14 +789,39 @@ export class GeminiLiveVoiceSession {
       if (ENABLE_AUDIO_NOISE_GATE) {
         const rms = calculateRms(inputSamples);
         const isActiveSpeech = rms >= AUDIO_NOISE_GATE_RMS_THRESHOLD;
+
         if (isActiveSpeech) {
           this.audioNoiseGateHangoverFrames = AUDIO_NOISE_GATE_HANGOVER_FRAMES;
+          this.audioNoiseGateConsecutiveDrops = 0;
+          this.audioNoiseGateFailOpenFramesRemaining = 0;
         } else if (this.audioNoiseGateHangoverFrames > 0) {
           this.audioNoiseGateHangoverFrames -= 1;
         }
 
-        if (!isActiveSpeech && this.audioNoiseGateHangoverFrames <= 0) {
+        const hasHangover = this.audioNoiseGateHangoverFrames > 0;
+        const failOpenActive = this.audioNoiseGateFailOpenFramesRemaining > 0;
+
+        if (!isActiveSpeech && !hasHangover && !failOpenActive) {
+          this.audioNoiseGateConsecutiveDrops += 1;
+          if (
+            this.audioNoiseGateConsecutiveDrops >=
+            AUDIO_NOISE_GATE_FAILOPEN_AFTER_DROPS
+          ) {
+            this.audioNoiseGateConsecutiveDrops = 0;
+            this.audioNoiseGateFailOpenFramesRemaining =
+              AUDIO_NOISE_GATE_FAILOPEN_FRAMES;
+            this.debug("live.audio.noise_gate.fail_open", {
+              rms,
+              threshold: AUDIO_NOISE_GATE_RMS_THRESHOLD,
+              failOpenFrames: AUDIO_NOISE_GATE_FAILOPEN_FRAMES,
+            });
+          }
           return;
+        }
+
+        this.audioNoiseGateConsecutiveDrops = 0;
+        if (!isActiveSpeech && !hasHangover && this.audioNoiseGateFailOpenFramesRemaining > 0) {
+          this.audioNoiseGateFailOpenFramesRemaining -= 1;
         }
       }
       const pcmBase64 = pcm16ToBase64(

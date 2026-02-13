@@ -932,7 +932,7 @@ export async function createLiveToken(
   );
   const forceAlwaysRespond = parseBooleanFlag(
     process.env.GEMINI_LIVE_FORCE_ALWAYS_RESPOND,
-    false,
+    true,
   );
   const effectiveProactiveAudio =
     responseModality === "AUDIO" && !forceAlwaysRespond && proactiveAudio;
@@ -948,10 +948,10 @@ export async function createLiveToken(
     process.env.GEMINI_LIVE_THINKING_BUDGET,
     isMobileDevice
       ? lowLatencyMode
-        ? 0
+        ? 24
         : 64
       : lowLatencyMode
-        ? 24
+        ? 32
         : 96,
   );
   if (!allowZeroThinkingBudget && thinkingBudgetValue === 0) {
@@ -988,11 +988,11 @@ export async function createLiveToken(
   );
   const minVadPrefixPaddingMs = parsePositiveInt(
     process.env.GEMINI_LIVE_MIN_VAD_PREFIX_PADDING_MS,
-    40,
+    50,
   );
   const minVadSilenceMs = parsePositiveInt(
     process.env.GEMINI_LIVE_MIN_VAD_SILENCE_MS,
-    140,
+    180,
   );
   const effectiveVadPrefixPaddingMs = Math.max(
     minVadPrefixPaddingMs,
