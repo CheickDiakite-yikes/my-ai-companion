@@ -92,6 +92,10 @@ const AUDIO_NOISE_GATE_HANGOVER_FRAMES = parseClientPositiveInt(
   liveClientEnv.VITE_LIVE_AUDIO_NOISE_GATE_HANGOVER_FRAMES,
   3,
 );
+const ENABLE_AUDIO_NOISE_GATE_FAIL_OPEN = parseClientBoolean(
+  liveClientEnv.VITE_LIVE_AUDIO_NOISE_GATE_FAILOPEN_ENABLED,
+  false,
+);
 const AUDIO_NOISE_GATE_FAILOPEN_AFTER_DROPS = parseClientPositiveInt(
   liveClientEnv.VITE_LIVE_AUDIO_NOISE_GATE_FAILOPEN_AFTER_DROPS,
   120,
@@ -105,6 +109,14 @@ const AUDIO_NOISE_GATE_ASSISTANT_SPEECH_MULTIPLIER = parseClientBoundedNumber(
   1.45,
   1,
   3,
+);
+const SUPPRESS_INPUT_WHILE_ASSISTANT_SPEAKING = parseClientBoolean(
+  liveClientEnv.VITE_LIVE_AUDIO_SUPPRESS_INPUT_WHILE_ASSISTANT_SPEAKING,
+  true,
+);
+const SUPPRESS_INPUT_COOLDOWN_MS = parseClientPositiveInt(
+  liveClientEnv.VITE_LIVE_AUDIO_SUPPRESS_INPUT_COOLDOWN_MS,
+  240,
 );
 
 function normalizeText(input: string | undefined): string {
@@ -360,6 +372,7 @@ export class GeminiLiveVoiceSession {
   private audioNoiseGateHangoverFrames = 0;
   private audioNoiseGateConsecutiveDrops = 0;
   private audioNoiseGateFailOpenFramesRemaining = 0;
+  private assistantPlaybackTailUntilMs = 0;
   private pendingTranscriptBySender: Record<TranscriptSender, string> = {
     user: "",
     assistant: "",
@@ -419,6 +432,7 @@ export class GeminiLiveVoiceSession {
     this.audioNoiseGateHangoverFrames = 0;
     this.audioNoiseGateConsecutiveDrops = 0;
     this.audioNoiseGateFailOpenFramesRemaining = 0;
+    this.assistantPlaybackTailUntilMs = 0;
 
     this.session = await ai.live.connect({
       model: params.model,
@@ -448,10 +462,14 @@ export class GeminiLiveVoiceSession {
       noiseGateEnabled: ENABLE_AUDIO_NOISE_GATE,
       noiseGateRmsThreshold: AUDIO_NOISE_GATE_RMS_THRESHOLD,
       noiseGateHangoverFrames: AUDIO_NOISE_GATE_HANGOVER_FRAMES,
+      noiseGateFailOpenEnabled: ENABLE_AUDIO_NOISE_GATE_FAIL_OPEN,
       noiseGateAssistantSpeechMultiplier:
         AUDIO_NOISE_GATE_ASSISTANT_SPEECH_MULTIPLIER,
       noiseGateFailOpenAfterDrops: AUDIO_NOISE_GATE_FAILOPEN_AFTER_DROPS,
       noiseGateFailOpenFrames: AUDIO_NOISE_GATE_FAILOPEN_FRAMES,
+      suppressInputWhileAssistantSpeaking:
+        SUPPRESS_INPUT_WHILE_ASSISTANT_SPEAKING,
+      suppressInputCooldownMs: SUPPRESS_INPUT_COOLDOWN_MS,
     });
 
     await this.startMicrophoneStream();
@@ -487,6 +505,7 @@ export class GeminiLiveVoiceSession {
     this.audioNoiseGateHangoverFrames = 0;
     this.audioNoiseGateConsecutiveDrops = 0;
     this.audioNoiseGateFailOpenFramesRemaining = 0;
+    this.assistantPlaybackTailUntilMs = 0;
     this.clearPlaybackQueue();
     this.stopAudioContextKeepAlive();
     document.removeEventListener("visibilitychange", this.handleVisibilityChange);
@@ -765,6 +784,14 @@ export class GeminiLiveVoiceSession {
     );
   }
 
+  private isAssistantSpeechWindowActive(): boolean {
+    if (!SUPPRESS_INPUT_WHILE_ASSISTANT_SPEAKING) return false;
+    return (
+      this.isAssistantAudioLikelyActive() ||
+      Date.now() < this.assistantPlaybackTailUntilMs
+    );
+  }
+
   private async startMicrophoneStream(): Promise<void> {
     if (!this.session) {
       throw new Error("Cannot start microphone stream without a live session");
@@ -801,6 +828,11 @@ export class GeminiLiveVoiceSession {
         this.inputContext.resume().catch(() => {});
         return;
       }
+      if (this.isAssistantSpeechWindowActive()) {
+        this.audioNoiseGateConsecutiveDrops = 0;
+        this.audioNoiseGateFailOpenFramesRemaining = 0;
+        return;
+      }
       const inputSamples = event.inputBuffer.getChannelData(0);
       if (ENABLE_AUDIO_NOISE_GATE) {
         const rms = calculateRms(inputSamples);
@@ -823,11 +855,9 @@ export class GeminiLiveVoiceSession {
         const failOpenActive = this.audioNoiseGateFailOpenFramesRemaining > 0;
 
         if (!isActiveSpeech && !hasHangover && !failOpenActive) {
-          if (assistantAudioActive) {
-            return;
-          }
           this.audioNoiseGateConsecutiveDrops += 1;
           if (
+            ENABLE_AUDIO_NOISE_GATE_FAIL_OPEN &&
             this.audioNoiseGateConsecutiveDrops >=
             AUDIO_NOISE_GATE_FAILOPEN_AFTER_DROPS
           ) {
@@ -871,13 +901,34 @@ export class GeminiLiveVoiceSession {
     const serverContent = message.serverContent;
     if (!serverContent) return;
 
+    const modelParts = serverContent.modelTurn?.parts ?? [];
+    const audioPartCount = modelParts.reduce((count, part) => {
+      return part.inlineData?.data ? count + 1 : count;
+    }, 0);
+    const shouldLogServerContent =
+      Boolean(serverContent.interrupted) ||
+      Boolean(serverContent.generationComplete) ||
+      Boolean(serverContent.turnComplete) ||
+      audioPartCount > 0 ||
+      Boolean(serverContent.inputTranscription?.text) ||
+      Boolean(serverContent.outputTranscription?.text);
+    if (shouldLogServerContent) {
+      this.debug("live.server.content", {
+        interrupted: Boolean(serverContent.interrupted),
+        generationComplete: Boolean(serverContent.generationComplete),
+        turnComplete: Boolean(serverContent.turnComplete),
+        audioPartCount,
+        hasInputTranscription: Boolean(serverContent.inputTranscription?.text),
+        hasOutputTranscription: Boolean(serverContent.outputTranscription?.text),
+      });
+    }
+
     if (serverContent.interrupted) {
       this.debug("live.server.interrupted");
       this.clearPlaybackQueue();
     }
 
-    const parts = serverContent.modelTurn?.parts ?? [];
-    for (const part of parts) {
+    for (const part of modelParts) {
       const audioData = part.inlineData?.data;
       if (audioData) {
         this.enqueueAudio(audioData);
@@ -923,6 +974,10 @@ export class GeminiLiveVoiceSession {
     source.start(this.scheduledPlaybackTime);
     this.scheduledPlaybackTime += audioBuffer.duration;
     this.activePlaybackNodes.add(source);
+    this.assistantPlaybackTailUntilMs = Math.max(
+      this.assistantPlaybackTailUntilMs,
+      Date.now() + Math.round(audioBuffer.duration * 1000) + SUPPRESS_INPUT_COOLDOWN_MS,
+    );
 
     source.onended = () => {
       this.activePlaybackNodes.delete(source);
