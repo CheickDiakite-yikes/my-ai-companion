@@ -806,6 +806,7 @@ export interface LiveTokenConfigSummary {
   lowLatencyMode: boolean;
   vadStartSensitivity: "HIGH" | "LOW";
   vadEndSensitivity: "HIGH" | "LOW";
+  forceAlwaysRespond: boolean;
   vadPrefixPaddingMs: number;
   vadSilenceMs: number;
   turnCoverage: "TURN_INCLUDES_ONLY_ACTIVITY" | "TURN_INCLUDES_ALL_INPUT";
@@ -929,11 +930,21 @@ export async function createLiveToken(
     process.env.GEMINI_LIVE_PROACTIVE_AUDIO,
     true,
   );
+  const forceAlwaysRespond = parseBooleanFlag(
+    process.env.GEMINI_LIVE_FORCE_ALWAYS_RESPOND,
+    true,
+  );
+  const effectiveProactiveAudio =
+    responseModality === "AUDIO" && !forceAlwaysRespond && proactiveAudio;
   const useThinkingConfig = parseBooleanFlag(
     process.env.GEMINI_LIVE_USE_THINKING_CONFIG,
     true,
   );
-  const thinkingBudgetValue = parseNonNegativeInt(
+  const allowZeroThinkingBudget = parseBooleanFlag(
+    process.env.GEMINI_LIVE_ALLOW_ZERO_THINKING_BUDGET,
+    false,
+  );
+  let thinkingBudgetValue = parseNonNegativeInt(
     process.env.GEMINI_LIVE_THINKING_BUDGET,
     isMobileDevice
       ? lowLatencyMode
@@ -943,6 +954,9 @@ export async function createLiveToken(
         ? 24
         : 96,
   );
+  if (!allowZeroThinkingBudget && thinkingBudgetValue === 0) {
+    thinkingBudgetValue = isMobileDevice ? 48 : 64;
+  }
   const includeThoughts = parseBooleanFlag(
     process.env.GEMINI_LIVE_INCLUDE_THOUGHTS,
     false,
@@ -972,6 +986,19 @@ export async function createLiveToken(
         ? 160
         : 220,
   );
+  const minVadPrefixPaddingMs = parsePositiveInt(
+    process.env.GEMINI_LIVE_MIN_VAD_PREFIX_PADDING_MS,
+    50,
+  );
+  const minVadSilenceMs = parsePositiveInt(
+    process.env.GEMINI_LIVE_MIN_VAD_SILENCE_MS,
+    180,
+  );
+  const effectiveVadPrefixPaddingMs = Math.max(
+    minVadPrefixPaddingMs,
+    vadPrefixPaddingMs,
+  );
+  const effectiveVadSilenceMs = Math.max(minVadSilenceMs, vadSilenceMs);
   const thinkingConfig = useThinkingConfig
     ? {
         thinkingBudget: thinkingBudgetValue,
@@ -986,14 +1013,15 @@ export async function createLiveToken(
         : "HIGH",
     vadEndSensitivity:
       vadEndSensitivity === EndSensitivity.END_SENSITIVITY_LOW ? "LOW" : "HIGH",
-    vadPrefixPaddingMs,
-    vadSilenceMs,
+    forceAlwaysRespond,
+    vadPrefixPaddingMs: effectiveVadPrefixPaddingMs,
+    vadSilenceMs: effectiveVadSilenceMs,
     turnCoverage:
       turnCoverage === TurnCoverage.TURN_INCLUDES_ALL_INPUT
         ? "TURN_INCLUDES_ALL_INPUT"
         : "TURN_INCLUDES_ONLY_ACTIVITY",
     affectiveDialog: responseModality === "AUDIO" ? enableAffectiveDialog : false,
-    proactiveAudio: responseModality === "AUDIO" ? proactiveAudio : false,
+    proactiveAudio: effectiveProactiveAudio,
     thinkingBudget: thinkingConfig ? thinkingBudgetValue : null,
     includeThoughts: thinkingConfig ? includeThoughts : false,
     temperature: liveTemperature,
@@ -1060,12 +1088,12 @@ export async function createLiveToken(
                 automaticActivityDetection: {
                   startOfSpeechSensitivity: vadStartSensitivity,
                   endOfSpeechSensitivity: vadEndSensitivity,
-                  prefixPaddingMs: vadPrefixPaddingMs,
-                  silenceDurationMs: vadSilenceMs,
+                  prefixPaddingMs: effectiveVadPrefixPaddingMs,
+                  silenceDurationMs: effectiveVadSilenceMs,
                 },
               },
               proactivity:
-                responseModality === "AUDIO" && proactiveAudio
+                effectiveProactiveAudio
                   ? { proactiveAudio: true }
                   : undefined,
               inputAudioTranscription: {},
