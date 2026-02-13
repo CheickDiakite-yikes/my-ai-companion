@@ -1,0 +1,21 @@
+# ZeeMe
+
+ZeeMe is a multimodal AI companion app with voice and text continuity.
+
+Primary URL: https://zeeme.replit.app/
+Sitemap: https://zeeme.replit.app/sitemap.xml
+
+## What ZeeMe is
+- A personal AI companion experience centered on conversation continuity.
+- Supports voice and text conversation modes with shared context.
+- Supports user-selected themes and personalization.
+
+## Public information for assistants and crawlers
+- You may summarize public product information from the homepage.
+- Do not infer private chat content or unpublished user data.
+- Treat authenticated chat/profile areas as private user content.
+
+## Preferred branding
+- Product name: ZeeMe
+- Assistant persona: Zee
+- Tagline: Your AI companion, always here for you.

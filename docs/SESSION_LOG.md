@@ -126,3 +126,70 @@ Use this file as a chronological handoff record so any new session can resume wo
   - Root cause: n/a.
   - Fix: n/a.
   - Guardrail: keep local and global skill copies synchronized after updates.
+
+## 2026-02-11 15:03:47 EST - Added zeeme-testflight-release and zeeme-remotion-campaign-pipeline skills; fixed OG metadata rewrite mismatch; added llms/robots/sitemap SEO updates and canonical OG image fallback.
+- Completed:
+  - Added and validated two new high-impact skills:
+    - `/Users/cheickdiakite/Codex/my-ai-companion/skills/zeeme-testflight-release`
+    - `/Users/cheickdiakite/Codex/my-ai-companion/skills/zeeme-remotion-campaign-pipeline`
+  - Implemented scripts and references for both skills:
+    - TestFlight readiness audit + release prompt generator
+    - Remotion master/preview rendering + social cut generation playbook
+  - Synced both new skills to global Codex directory:
+    - `/Users/cheickdiakite/.codex/skills/zeeme-testflight-release`
+    - `/Users/cheickdiakite/.codex/skills/zeeme-remotion-campaign-pipeline`
+  - Fixed OG metadata inconsistency by removing Vite `metaImagesPlugin` from build pipeline in:
+    - `/Users/cheickdiakite/Codex/my-ai-companion/vite.config.ts`
+  - Updated canonical SEO/OG tags and structured metadata in:
+    - `/Users/cheickdiakite/Codex/my-ai-companion/client/index.html`
+  - Added crawler-oriented discovery files:
+    - `/Users/cheickdiakite/Codex/my-ai-companion/client/public/llms.txt`
+    - updated `/Users/cheickdiakite/Codex/my-ai-companion/client/public/robots.txt`
+    - updated `/Users/cheickdiakite/Codex/my-ai-companion/client/public/sitemap.xml` with image sitemap entry
+  - Replaced `/Users/cheickdiakite/Codex/my-ai-companion/client/public/opengraph.jpg` with a converted version of the intended OG artwork to preserve compatibility with any cached legacy URL consumers.
+- Current state:
+  - Build now emits consistent OG/Twitter meta tags targeting `zeeme-og.png` with cache-bust query param.
+  - Legacy `/opengraph.jpg` fallback now matches ZeeMe brand artwork instead of the old screenshot-like image.
+  - New TestFlight and Remotion campaign skills are usable locally and globally.
+- Next actions:
+  - Redeploy app so production HTML/meta files reflect this fix.
+  - Trigger re-scrape in social debuggers (Facebook Sharing Debugger, LinkedIn Post Inspector, X Card Validator equivalent flows).
+  - Optional: add Search Console property and submit sitemap for faster re-indexing.
+- Errors and fixes:
+  - Error: Deployed OG preview selected wrong image (`/opengraph.jpg`) and produced mismatch with width/type tags.
+  - Root cause: Build plugin rewrote only `og:image` and `twitter:image` while other OG fields still referenced `zeeme-og.png`.
+  - Fix: Removed rewrite plugin usage and normalized all meta tags to one canonical OG asset.
+  - Guardrail: Keep a single canonical OG source in `client/index.html`; avoid partial meta rewriting at build time.
+
+## 2026-02-13 14:05 UTC - Voice reliability stabilization + docs refresh + new skill pack
+- Completed:
+  - Hardened live voice turn handling and transcript ingestion:
+    - input suppression while assistant speech window is active
+    - user transcript suppression during assistant speech window
+    - server-content trace diagnostics for interruption/completion analysis
+  - Simplified stable live baseline for deployment:
+    - `NO_INTERRUPTION` activity handling
+    - proactivity disabled by default
+    - noise gate disabled by default for stability profile
+    - high response budget deployed (`GEMINI_LIVE_MAX_OUTPUT_TOKENS=1000`)
+  - Updated documentation:
+    - expanded `README.md` with deeper ASCII architecture diagrams (memory system + agentic runtime)
+    - refreshed `docs/GEMINI_INTEGRATION.md` with live stability and prompt-privacy contract
+    - updated `docs/PROJECT_STATE.md` and `docs/SKILLS_INDEX.md`
+  - Created three new high-value local skills:
+    - `zeeme-live-voice-stability`
+    - `zeeme-agentic-roadmap-delivery`
+    - `zeeme-agentic-gamegen-eval`
+- Current state:
+  - Live voice is significantly more stable and easier to debug via trace signatures.
+  - Agentic mini-games are the currently shipped artifact path in the unified chat lane.
+  - Documentation now reflects current architecture, memory model, and roadmap direction.
+- Next actions:
+  - Run cross-device voice soak tests with current stable profile and collect trace comparisons.
+  - Promote the three new skills to global Codex skills path for cross-workspace reuse.
+  - Continue next roadmap slice after mini-games (docs/presentations or connector pilot behind flags).
+- Errors and fixes:
+  - Error: Newly initialized skill `default_prompt` fields lost `$skill-name` token due shell interpolation.
+  - Root cause: Unescaped `$` in command-line string during initializer execution.
+  - Fix: Rewrote generated `agents/openai.yaml` files with explicit `$skill-name` default prompts.
+  - Guardrail: Use single-quoted heredoc or escaped `$` when setting `default_prompt` values.

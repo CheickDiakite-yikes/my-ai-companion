@@ -26,13 +26,102 @@ export interface GeminiLiveVoiceSessionStartParams {
 
 const INPUT_SAMPLE_RATE = 16000;
 const OUTPUT_SAMPLE_RATE = 24000;
-const PROCESSOR_BUFFER_SIZE = 2048;
 const VIDEO_FRAME_INTERVAL_MS = 1000;
 const VIDEO_MAX_EDGE = 640;
 const VIDEO_PERMISSION_TIMEOUT_MS = 12000;
+const MICROPHONE_PERMISSION_TIMEOUT_MS = 12000;
 const TRANSCRIPT_DUPLICATE_WINDOW_MS = 1500;
 const TRANSCRIPT_FLUSH_DEBOUNCE_MS = 900;
 const TRANSCRIPT_OVERLAP_MIN_CHARS = 6;
+
+function parseClientPositiveInt(
+  value: unknown,
+  fallback: number,
+): number {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return Math.floor(value);
+  }
+  if (typeof value !== "string") return fallback;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function parseClientBoolean(value: unknown, fallback: boolean): boolean {
+  if (typeof value === "boolean") return value;
+  if (typeof value !== "string") return fallback;
+  const normalized = value.trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "off"].includes(normalized)) return false;
+  return fallback;
+}
+
+function parseClientBoundedNumber(
+  value: unknown,
+  fallback: number,
+  min: number,
+  max: number,
+): number {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return Math.min(Math.max(value, min), max);
+  }
+  if (typeof value !== "string") return fallback;
+  const parsed = Number.parseFloat(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(Math.max(parsed, min), max);
+}
+
+const liveClientEnv = (import.meta.env as Record<string, unknown>) ?? {};
+const PROCESSOR_BUFFER_SIZE = (() => {
+  const parsed = parseClientPositiveInt(
+    liveClientEnv.VITE_LIVE_AUDIO_PROCESSOR_BUFFER_SIZE,
+    512,
+  );
+  return [256, 512, 1024, 2048, 4096].includes(parsed) ? parsed : 512;
+})();
+const ENABLE_AUDIO_NOISE_GATE = parseClientBoolean(
+  liveClientEnv.VITE_LIVE_AUDIO_NOISE_GATE_ENABLED,
+  false,
+);
+const AUDIO_NOISE_GATE_RMS_THRESHOLD = parseClientBoundedNumber(
+  liveClientEnv.VITE_LIVE_AUDIO_NOISE_GATE_RMS_THRESHOLD,
+  0.006,
+  0.001,
+  0.08,
+);
+const AUDIO_NOISE_GATE_HANGOVER_FRAMES = parseClientPositiveInt(
+  liveClientEnv.VITE_LIVE_AUDIO_NOISE_GATE_HANGOVER_FRAMES,
+  3,
+);
+const ENABLE_AUDIO_NOISE_GATE_FAIL_OPEN = parseClientBoolean(
+  liveClientEnv.VITE_LIVE_AUDIO_NOISE_GATE_FAILOPEN_ENABLED,
+  false,
+);
+const AUDIO_NOISE_GATE_FAILOPEN_AFTER_DROPS = parseClientPositiveInt(
+  liveClientEnv.VITE_LIVE_AUDIO_NOISE_GATE_FAILOPEN_AFTER_DROPS,
+  120,
+);
+const AUDIO_NOISE_GATE_FAILOPEN_FRAMES = parseClientPositiveInt(
+  liveClientEnv.VITE_LIVE_AUDIO_NOISE_GATE_FAILOPEN_FRAMES,
+  60,
+);
+const AUDIO_NOISE_GATE_ASSISTANT_SPEECH_MULTIPLIER = parseClientBoundedNumber(
+  liveClientEnv.VITE_LIVE_AUDIO_NOISE_GATE_ASSISTANT_SPEECH_MULTIPLIER,
+  1.45,
+  1,
+  3,
+);
+const SUPPRESS_INPUT_WHILE_ASSISTANT_SPEAKING = parseClientBoolean(
+  liveClientEnv.VITE_LIVE_AUDIO_SUPPRESS_INPUT_WHILE_ASSISTANT_SPEAKING,
+  true,
+);
+const SUPPRESS_INPUT_COOLDOWN_MS = parseClientPositiveInt(
+  liveClientEnv.VITE_LIVE_AUDIO_SUPPRESS_INPUT_COOLDOWN_MS,
+  240,
+);
+const SUPPRESS_USER_TRANSCRIPT_DURING_ASSISTANT_SPEECH = parseClientBoolean(
+  liveClientEnv.VITE_LIVE_AUDIO_SUPPRESS_USER_TRANSCRIPT_DURING_ASSISTANT_SPEECH,
+  true,
+);
 
 function normalizeText(input: string | undefined): string {
   return (input ?? "").replace(/\s+/g, " ").trim();
@@ -70,6 +159,16 @@ function mergeTranscriptText(previous: string, incoming: string): string {
       : `${existing} ${next}`;
 
   return normalizeText(merged);
+}
+
+function calculateRms(input: Float32Array): number {
+  if (input.length === 0) return 0;
+  let sumSquares = 0;
+  for (let index = 0; index < input.length; index += 1) {
+    const sample = input[index];
+    sumSquares += sample * sample;
+  }
+  return Math.sqrt(sumSquares / input.length);
 }
 
 function downsampleFloat32Buffer(
@@ -154,6 +253,24 @@ function base64ToPcm16(base64: string): Int16Array {
   return new Int16Array(bytes.buffer, bytes.byteOffset, Math.floor(bytes.byteLength / 2));
 }
 
+function getAudioContextConstructor(): typeof AudioContext {
+  const win = window as Window & {
+    webkitAudioContext?: typeof AudioContext;
+  };
+  const AudioContextCtor =
+    (globalThis as { AudioContext?: typeof AudioContext }).AudioContext ??
+    win.webkitAudioContext;
+  if (!AudioContextCtor) {
+    throw new Error("Web Audio API is not supported in this browser");
+  }
+  return AudioContextCtor;
+}
+
+function createAudioContext(options?: AudioContextOptions): AudioContext {
+  const AudioContextCtor = getAudioContextConstructor();
+  return new AudioContextCtor(options);
+}
+
 function chooseVideoSize(video: HTMLVideoElement): { width: number; height: number } {
   const srcWidth = video.videoWidth || 640;
   const srcHeight = video.videoHeight || 360;
@@ -173,8 +290,11 @@ async function getUserMediaWithTimeout(
   constraints: MediaStreamConstraints,
   timeoutMs = VIDEO_PERMISSION_TIMEOUT_MS,
 ): Promise<MediaStream> {
+  if (!window.isSecureContext) {
+    throw new Error("Live voice requires a secure HTTPS connection");
+  }
   if (!navigator.mediaDevices?.getUserMedia) {
-    throw new Error("Camera API is not available in this browser");
+    throw new Error("Media capture API is not available in this browser");
   }
 
   let timeoutId: number | undefined;
@@ -192,6 +312,44 @@ async function getUserMediaWithTimeout(
       window.clearTimeout(timeoutId);
     }
   }
+}
+
+async function getMicrophoneStreamWithFallback(): Promise<MediaStream> {
+  const attemptConstraints: MediaStreamConstraints[] = [
+    {
+      audio: {
+        channelCount: 1,
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+      video: false,
+    },
+    {
+      audio: {
+        channelCount: 1,
+      },
+      video: false,
+    },
+    {
+      audio: true,
+      video: false,
+    },
+  ];
+
+  let lastError: unknown = null;
+  for (let index = 0; index < attemptConstraints.length; index += 1) {
+    try {
+      return await getUserMediaWithTimeout(
+        attemptConstraints[index],
+        MICROPHONE_PERMISSION_TIMEOUT_MS,
+      );
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw lastError ?? new Error("Microphone permission was denied or unavailable");
 }
 
 export class GeminiLiveVoiceSession {
@@ -214,6 +372,12 @@ export class GeminiLiveVoiceSession {
 
   private scheduledPlaybackTime = 0;
   private activePlaybackNodes = new Set<AudioBufferSourceNode>();
+  private audioContextKeepAliveInterval: number | null = null;
+  private audioNoiseGateHangoverFrames = 0;
+  private audioNoiseGateConsecutiveDrops = 0;
+  private audioNoiseGateFailOpenFramesRemaining = 0;
+  private assistantTurnActive = false;
+  private assistantPlaybackTailUntilMs = 0;
   private pendingTranscriptBySender: Record<TranscriptSender, string> = {
     user: "",
     assistant: "",
@@ -228,6 +392,14 @@ export class GeminiLiveVoiceSession {
   > = {
     user: null,
     assistant: null,
+  };
+  private readonly handleVisibilityChange = () => {
+    if (document.visibilityState === "visible") {
+      this.ensureAudioContextsRunning();
+    }
+  };
+  private readonly handleWindowFocus = () => {
+    this.ensureAudioContextsRunning();
   };
 
   constructor(callbacks: GeminiLiveVoiceSessionCallbacks = {}) {
@@ -244,9 +416,13 @@ export class GeminiLiveVoiceSession {
       apiVersion: "v1alpha",
     });
 
-    this.outputContext = new AudioContext({ sampleRate: OUTPUT_SAMPLE_RATE });
+    this.outputContext = createAudioContext({ sampleRate: OUTPUT_SAMPLE_RATE });
     await this.outputContext.resume();
     this.scheduledPlaybackTime = this.outputContext.currentTime;
+
+    this.startAudioContextKeepAlive();
+    document.addEventListener("visibilitychange", this.handleVisibilityChange);
+    window.addEventListener("focus", this.handleWindowFocus);
 
     this.pendingTranscriptBySender = {
       user: "",
@@ -258,6 +434,11 @@ export class GeminiLiveVoiceSession {
       user: null,
       assistant: null,
     };
+    this.audioNoiseGateHangoverFrames = 0;
+    this.audioNoiseGateConsecutiveDrops = 0;
+    this.audioNoiseGateFailOpenFramesRemaining = 0;
+    this.assistantTurnActive = false;
+    this.assistantPlaybackTailUntilMs = 0;
 
     this.session = await ai.live.connect({
       model: params.model,
@@ -280,6 +461,23 @@ export class GeminiLiveVoiceSession {
           this.callbacks.onClosed?.(event.reason || undefined);
         },
       },
+    });
+
+    this.debug("live.audio.capture_config", {
+      processorBufferSize: PROCESSOR_BUFFER_SIZE,
+      noiseGateEnabled: ENABLE_AUDIO_NOISE_GATE,
+      noiseGateRmsThreshold: AUDIO_NOISE_GATE_RMS_THRESHOLD,
+      noiseGateHangoverFrames: AUDIO_NOISE_GATE_HANGOVER_FRAMES,
+      noiseGateFailOpenEnabled: ENABLE_AUDIO_NOISE_GATE_FAIL_OPEN,
+      noiseGateAssistantSpeechMultiplier:
+        AUDIO_NOISE_GATE_ASSISTANT_SPEECH_MULTIPLIER,
+      noiseGateFailOpenAfterDrops: AUDIO_NOISE_GATE_FAILOPEN_AFTER_DROPS,
+      noiseGateFailOpenFrames: AUDIO_NOISE_GATE_FAILOPEN_FRAMES,
+      suppressInputWhileAssistantSpeaking:
+        SUPPRESS_INPUT_WHILE_ASSISTANT_SPEAKING,
+      suppressInputCooldownMs: SUPPRESS_INPUT_COOLDOWN_MS,
+      suppressUserTranscriptDuringAssistantSpeech:
+        SUPPRESS_USER_TRANSCRIPT_DURING_ASSISTANT_SPEECH,
     });
 
     await this.startMicrophoneStream();
@@ -312,7 +510,15 @@ export class GeminiLiveVoiceSession {
       user: null,
       assistant: null,
     };
+    this.audioNoiseGateHangoverFrames = 0;
+    this.audioNoiseGateConsecutiveDrops = 0;
+    this.audioNoiseGateFailOpenFramesRemaining = 0;
+    this.assistantTurnActive = false;
+    this.assistantPlaybackTailUntilMs = 0;
     this.clearPlaybackQueue();
+    this.stopAudioContextKeepAlive();
+    document.removeEventListener("visibilitychange", this.handleVisibilityChange);
+    window.removeEventListener("focus", this.handleWindowFocus);
     await this.stopVideo();
 
     if (this.processorNode) {
@@ -554,26 +760,63 @@ export class GeminiLiveVoiceSession {
     this.videoCaptureInterval = window.setInterval(renderFrame, VIDEO_FRAME_INTERVAL_MS);
   }
 
+  private startAudioContextKeepAlive(): void {
+    this.stopAudioContextKeepAlive();
+    this.audioContextKeepAliveInterval = window.setInterval(() => {
+      this.ensureAudioContextsRunning();
+    }, 2000);
+  }
+
+  private stopAudioContextKeepAlive(): void {
+    if (this.audioContextKeepAliveInterval !== null) {
+      clearInterval(this.audioContextKeepAliveInterval);
+      this.audioContextKeepAliveInterval = null;
+    }
+  }
+
+  private ensureAudioContextsRunning(): void {
+    if (this.outputContext && this.outputContext.state === "suspended") {
+      this.debug("live.audio.output_context_resuming");
+      this.outputContext.resume().catch(() => {});
+    }
+    if (this.inputContext && this.inputContext.state === "suspended") {
+      this.debug("live.audio.input_context_resuming");
+      this.inputContext.resume().catch(() => {});
+    }
+  }
+
+  private isAssistantAudioLikelyActive(): boolean {
+    if (!this.outputContext) return false;
+    return (
+      this.activePlaybackNodes.size > 0 ||
+      this.scheduledPlaybackTime > this.outputContext.currentTime + 0.04
+    );
+  }
+
+  private isAssistantSpeechWindowActive(): boolean {
+    if (!SUPPRESS_INPUT_WHILE_ASSISTANT_SPEAKING) return false;
+    return (
+      this.assistantTurnActive ||
+      this.isAssistantAudioLikelyActive() ||
+      Date.now() < this.assistantPlaybackTailUntilMs
+    );
+  }
+
   private async startMicrophoneStream(): Promise<void> {
     if (!this.session) {
       throw new Error("Cannot start microphone stream without a live session");
     }
 
     try {
-      this.mediaStream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          channelCount: 1,
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
-      });
+      this.mediaStream = await getMicrophoneStreamWithFallback();
     } catch (error) {
-      this.emitError(new Error("Microphone permission was denied or unavailable"));
+      const message =
+        error instanceof Error ? error.message : "Microphone permission was denied or unavailable";
+      this.emitError(new Error(message));
       throw error;
     }
 
-    this.inputContext = new AudioContext();
+    this.inputContext = createAudioContext();
     await this.inputContext.resume();
 
     this.mediaSourceNode = this.inputContext.createMediaStreamSource(this.mediaStream);
@@ -591,16 +834,76 @@ export class GeminiLiveVoiceSession {
 
     this.processorNode.onaudioprocess = (event) => {
       if (!this.session || !this.inputContext) return;
+      if (this.inputContext.state === "suspended") {
+        this.inputContext.resume().catch(() => {});
+        return;
+      }
+      if (this.isAssistantSpeechWindowActive()) {
+        this.audioNoiseGateConsecutiveDrops = 0;
+        this.audioNoiseGateFailOpenFramesRemaining = 0;
+        return;
+      }
+      const inputSamples = event.inputBuffer.getChannelData(0);
+      if (ENABLE_AUDIO_NOISE_GATE) {
+        const rms = calculateRms(inputSamples);
+        const assistantAudioActive = this.isAssistantAudioLikelyActive();
+        const effectiveThreshold = assistantAudioActive
+          ? AUDIO_NOISE_GATE_RMS_THRESHOLD *
+            AUDIO_NOISE_GATE_ASSISTANT_SPEECH_MULTIPLIER
+          : AUDIO_NOISE_GATE_RMS_THRESHOLD;
+        const isActiveSpeech = rms >= effectiveThreshold;
+
+        if (isActiveSpeech) {
+          this.audioNoiseGateHangoverFrames = AUDIO_NOISE_GATE_HANGOVER_FRAMES;
+          this.audioNoiseGateConsecutiveDrops = 0;
+          this.audioNoiseGateFailOpenFramesRemaining = 0;
+        } else if (this.audioNoiseGateHangoverFrames > 0) {
+          this.audioNoiseGateHangoverFrames -= 1;
+        }
+
+        const hasHangover = this.audioNoiseGateHangoverFrames > 0;
+        const failOpenActive = this.audioNoiseGateFailOpenFramesRemaining > 0;
+
+        if (!isActiveSpeech && !hasHangover && !failOpenActive) {
+          this.audioNoiseGateConsecutiveDrops += 1;
+          if (
+            ENABLE_AUDIO_NOISE_GATE_FAIL_OPEN &&
+            this.audioNoiseGateConsecutiveDrops >=
+            AUDIO_NOISE_GATE_FAILOPEN_AFTER_DROPS
+          ) {
+            this.audioNoiseGateConsecutiveDrops = 0;
+            this.audioNoiseGateFailOpenFramesRemaining =
+              AUDIO_NOISE_GATE_FAILOPEN_FRAMES;
+            this.debug("live.audio.noise_gate.fail_open", {
+              rms,
+              threshold: effectiveThreshold,
+              failOpenFrames: AUDIO_NOISE_GATE_FAILOPEN_FRAMES,
+            });
+          }
+          return;
+        }
+
+        this.audioNoiseGateConsecutiveDrops = 0;
+        if (!isActiveSpeech && !hasHangover && this.audioNoiseGateFailOpenFramesRemaining > 0) {
+          this.audioNoiseGateFailOpenFramesRemaining -= 1;
+        }
+      }
       const pcmBase64 = pcm16ToBase64(
-        event.inputBuffer.getChannelData(0),
+        inputSamples,
         this.inputContext.sampleRate,
       );
-      this.session.sendRealtimeInput({
-        audio: {
-          data: pcmBase64,
-          mimeType: `audio/pcm;rate=${INPUT_SAMPLE_RATE}`,
-        },
-      });
+      try {
+        this.session.sendRealtimeInput({
+          audio: {
+            data: pcmBase64,
+            mimeType: `audio/pcm;rate=${INPUT_SAMPLE_RATE}`,
+          },
+        });
+      } catch (error) {
+        this.debug("live.audio.send_failed", {
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
     };
   }
 
@@ -608,13 +911,47 @@ export class GeminiLiveVoiceSession {
     const serverContent = message.serverContent;
     if (!serverContent) return;
 
+    const modelParts = serverContent.modelTurn?.parts ?? [];
+    const audioPartCount = modelParts.reduce((count, part) => {
+      return part.inlineData?.data ? count + 1 : count;
+    }, 0);
+    const shouldLogServerContent =
+      Boolean(serverContent.interrupted) ||
+      Boolean(serverContent.generationComplete) ||
+      Boolean(serverContent.turnComplete) ||
+      audioPartCount > 0 ||
+      Boolean(serverContent.inputTranscription?.text) ||
+      Boolean(serverContent.outputTranscription?.text);
+    if (shouldLogServerContent) {
+      this.debug("live.server.content", {
+        interrupted: Boolean(serverContent.interrupted),
+        generationComplete: Boolean(serverContent.generationComplete),
+        turnComplete: Boolean(serverContent.turnComplete),
+        audioPartCount,
+        hasInputTranscription: Boolean(serverContent.inputTranscription?.text),
+        hasOutputTranscription: Boolean(serverContent.outputTranscription?.text),
+      });
+    }
+
+    if (audioPartCount > 0 || Boolean(serverContent.outputTranscription?.text)) {
+      this.assistantTurnActive = true;
+      this.assistantPlaybackTailUntilMs = Math.max(
+        this.assistantPlaybackTailUntilMs,
+        Date.now() + SUPPRESS_INPUT_COOLDOWN_MS,
+      );
+    }
+
     if (serverContent.interrupted) {
       this.debug("live.server.interrupted");
+      this.assistantTurnActive = false;
+      this.assistantPlaybackTailUntilMs = Math.max(
+        this.assistantPlaybackTailUntilMs,
+        Date.now() + SUPPRESS_INPUT_COOLDOWN_MS,
+      );
       this.clearPlaybackQueue();
     }
 
-    const parts = serverContent.modelTurn?.parts ?? [];
-    for (const part of parts) {
+    for (const part of modelParts) {
       const audioData = part.inlineData?.data;
       if (audioData) {
         this.enqueueAudio(audioData);
@@ -625,6 +962,11 @@ export class GeminiLiveVoiceSession {
     this.captureTranscript("assistant", serverContent.outputTranscription);
 
     if (serverContent.turnComplete) {
+      this.assistantTurnActive = false;
+      this.assistantPlaybackTailUntilMs = Math.max(
+        this.assistantPlaybackTailUntilMs,
+        Date.now() + SUPPRESS_INPUT_COOLDOWN_MS,
+      );
       this.flushPendingTranscript("user", "turn_complete");
       this.flushPendingTranscript("assistant", "turn_complete");
     }
@@ -632,6 +974,10 @@ export class GeminiLiveVoiceSession {
 
   private enqueueAudio(base64Audio: string): void {
     if (!this.outputContext) return;
+
+    if (this.outputContext.state === "suspended") {
+      this.outputContext.resume().catch(() => {});
+    }
 
     const int16 = base64ToPcm16(base64Audio);
     if (int16.length === 0) return;
@@ -656,6 +1002,10 @@ export class GeminiLiveVoiceSession {
     source.start(this.scheduledPlaybackTime);
     this.scheduledPlaybackTime += audioBuffer.duration;
     this.activePlaybackNodes.add(source);
+    this.assistantPlaybackTailUntilMs = Math.max(
+      this.assistantPlaybackTailUntilMs,
+      Date.now() + Math.round(audioBuffer.duration * 1000) + SUPPRESS_INPUT_COOLDOWN_MS,
+    );
 
     source.onended = () => {
       this.activePlaybackNodes.delete(source);
@@ -685,6 +1035,17 @@ export class GeminiLiveVoiceSession {
 
     const text = normalizeText(transcript.text);
     if (!text) return;
+
+    if (
+      sender === "user" &&
+      SUPPRESS_USER_TRANSCRIPT_DURING_ASSISTANT_SPEECH &&
+      this.isAssistantSpeechWindowActive()
+    ) {
+      this.debug("live.transcript.user_suppressed_during_assistant_speech", {
+        textLength: text.length,
+      });
+      return;
+    }
 
     const mergedText = mergeTranscriptText(
       this.pendingTranscriptBySender[sender],

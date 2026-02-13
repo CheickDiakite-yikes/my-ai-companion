@@ -1,0 +1,4 @@
+interface:
+  display_name: "ZeeMe Agentic GameGen Eval"
+  short_description: "Evaluate prompt-driven game generation quality and QA outcomes"
+  default_prompt: "Use $zeeme-agentic-gamegen-eval to test game generation quality, compare prompt outputs, and summarize failures with reproducible checks."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "ZeeMe TestFlight Release"
+  short_description: "Prepare iOS beta release with gating and QA"
+  default_prompt: "Use $zeeme-testflight-release to run readiness checks and produce a safe TestFlight release plan for ZeeMe."

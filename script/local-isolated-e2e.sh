@@ -157,7 +157,7 @@ HEADERS_FILE="$(new_tmp)"
 EMAIL="local.e2e.$(date +%s)@example.com"
 PASSWORD="TestPass123!"
 
-log "1/10 register user"
+log "1/12 register user"
 REG_BODY="$(new_tmp)"
 REG_STATUS="$(curl -sS -w "%{http_code}" -D "$HEADERS_FILE" -o "$REG_BODY" -c "$COOKIE_FILE" \
   -H "Content-Type: application/json" \
@@ -171,7 +171,7 @@ REG_TRACE="$(extract_trace "$HEADERS_FILE")"
 USER_ID="$(parse_json "$REG_BODY" "id")"
 log "register ok userId=${USER_ID} traceId=${REG_TRACE}"
 
-log "2/10 create conversation"
+log "2/12 create conversation"
 CONV_BODY="$(new_tmp)"
 CONV_STATUS="$(curl -sS -w "%{http_code}" -D "$HEADERS_FILE" -o "$CONV_BODY" -b "$COOKIE_FILE" -c "$COOKIE_FILE" \
   -H "Content-Type: application/json" \
@@ -185,7 +185,7 @@ CONV_TRACE="$(extract_trace "$HEADERS_FILE")"
 CONV_ID="$(parse_json "$CONV_BODY" "id")"
 log "conversation ok conversationId=${CONV_ID} traceId=${CONV_TRACE}"
 
-log "3/10 call /api/chat/respond (legacy)"
+log "3/12 call /api/chat/respond (legacy)"
 CHAT_BODY="$(new_tmp)"
 CHAT_STATUS="$(curl -sS -w "%{http_code}" -D "$HEADERS_FILE" -o "$CHAT_BODY" -b "$COOKIE_FILE" -c "$COOKIE_FILE" \
   -H "Content-Type: application/json" \
@@ -211,7 +211,7 @@ if [[ ! -f "$IMAGE_PATH" ]]; then
   exit 19
 fi
 
-log "4/10 upload image attachment"
+log "4/12 upload image attachment"
 ATTACH_BODY="$(new_tmp)"
 ATTACH_STATUS="$(curl -sS -w "%{http_code}" -D "$HEADERS_FILE" -o "$ATTACH_BODY" -b "$COOKIE_FILE" -c "$COOKIE_FILE" \
   -X POST "${BASE_URL}/api/conversations/${CONV_ID}/attachments/image" \
@@ -225,7 +225,7 @@ ATTACH_ID="$(parse_json "$ATTACH_BODY" "attachment.id")"
 ATTACH_URL="$(parse_json "$ATTACH_BODY" "attachment.signedUrl")"
 log "attachment ok id=${ATTACH_ID} traceId=${ATTACH_TRACE}"
 
-log "5/10 call /api/chat/respond/stream"
+log "5/12 call /api/chat/respond/stream"
 STREAM_BODY="$(new_tmp)"
 STREAM_STATUS="$(curl -sS -w "%{http_code}" -D "$HEADERS_FILE" -o "$STREAM_BODY" -b "$COOKIE_FILE" -c "$COOKIE_FILE" \
   -H "Content-Type: application/json" \
@@ -238,12 +238,12 @@ fi
 STREAM_TRACE="$(extract_trace "$HEADERS_FILE")"
 node -e "const fs=require('fs');const lines=fs.readFileSync(process.argv[1],'utf8').trim().split(/\\n+/).filter(Boolean);const events=lines.map(l=>JSON.parse(l));const hasAck=events.some(e=>e.type==='ack');const hasFinal=events.some(e=>e.type==='final');const partFinalCount=events.filter(e=>e.type==='part_final').length;const final=events.find(e=>e.type==='final');const assistantParts=Array.isArray(final?.assistantMessages)?final.assistantMessages.length:0;if(!hasAck||!hasFinal||partFinalCount===0||assistantParts<3){console.error(events);process.exit(2)};const preview=(final?.assistantMessage?.text||'').replace(/\\s+/g,' ').trim().slice(0,120);console.log('[local-e2e] stream ok traceId=' + process.argv[2] + ' events=' + events.length + ' partFinal=' + partFinalCount + ' assistantParts=' + assistantParts + ' assistantPreview=\"' + preview + '\"');" "$STREAM_BODY" "$STREAM_TRACE"
 
-log "6/10 call /api/live/token"
+log "6/12 call /api/live/token"
 TOKEN_BODY="$(new_tmp)"
 TOKEN_STATUS="$(curl -sS -w "%{http_code}" -D "$HEADERS_FILE" -o "$TOKEN_BODY" -b "$COOKIE_FILE" -c "$COOKIE_FILE" \
   -H "Content-Type: application/json" \
   -X POST "${BASE_URL}/api/live/token" \
-  --data '{"persona":"Zee","responseModality":"AUDIO","voice":"Aoede"}')"
+  --data "{\"conversationId\":\"${CONV_ID}\",\"persona\":\"Zee\",\"responseModality\":\"AUDIO\",\"voice\":\"Aoede\"}")"
 if [[ "$TOKEN_STATUS" != "201" ]]; then
   echo "[local-e2e] token_failed status=${TOKEN_STATUS} body=$(cat "$TOKEN_BODY")"
   exit 14
@@ -251,14 +251,26 @@ fi
 TOKEN_TRACE="$(extract_trace "$HEADERS_FILE")"
 TOKEN_MODEL="$(parse_json "$TOKEN_BODY" "model")"
 live_auth_resource="$(parse_json "$TOKEN_BODY" "ephemeralToken")"
+TOKEN_MEMORY_MODE="$(parse_json "$TOKEN_BODY" "memoryMeta.mode")"
+TOKEN_MEMORY_FALLBACK="$(parse_json "$TOKEN_BODY" "memoryMeta.fallbackUsed")"
+TOKEN_MEMORY_ACTIVE="$(parse_json "$TOKEN_BODY" "memoryMeta.activeThreadMessagesUsed")"
+TOKEN_MEMORY_CROSS="$(parse_json "$TOKEN_BODY" "memoryMeta.crossChatMessagesUsed")"
 if [[ -z "$live_auth_resource" ]]; then
   echo "[local-e2e] live auth token missing in response"
   exit 18
 fi
+if [[ -z "$TOKEN_MEMORY_MODE" || "$TOKEN_MEMORY_MODE" == "null" ]]; then
+  echo "[local-e2e] memoryMeta.mode missing in live token response"
+  exit 22
+fi
+if [[ -z "$TOKEN_MEMORY_FALLBACK" || "$TOKEN_MEMORY_FALLBACK" == "null" ]]; then
+  echo "[local-e2e] memoryMeta.fallbackUsed missing in live token response"
+  exit 23
+fi
 live_auth_resource_length="${#live_auth_resource}"
-log "live token ok model=${TOKEN_MODEL} traceId=${TOKEN_TRACE} authNameLength=${live_auth_resource_length}"
+log "live token ok model=${TOKEN_MODEL} traceId=${TOKEN_TRACE} authNameLength=${live_auth_resource_length} memoryMode=${TOKEN_MEMORY_MODE} fallback=${TOKEN_MEMORY_FALLBACK} active=${TOKEN_MEMORY_ACTIVE} cross=${TOKEN_MEMORY_CROSS}"
 
-log "7/10 persist voice transcript"
+log "7/12 persist voice transcript"
 VT1_BODY="$(new_tmp)"
 VT1_STATUS="$(curl -sS -w "%{http_code}" -D "$HEADERS_FILE" -o "$VT1_BODY" -b "$COOKIE_FILE" -c "$COOKIE_FILE" \
   -H "Content-Type: application/json" \
@@ -282,7 +294,7 @@ fi
 VT2_TRACE="$(extract_trace "$HEADERS_FILE")"
 log "voice transcript persisted traces=${VT1_TRACE},${VT2_TRACE}"
 
-log "8/10 verify stitched memory + signed media"
+log "8/12 verify stitched memory + signed media"
 MSGS_BODY="$(new_tmp)"
 MSGS_STATUS="$(curl -sS -w "%{http_code}" -D "$HEADERS_FILE" -o "$MSGS_BODY" -b "$COOKIE_FILE" -c "$COOKIE_FILE" \
   "${BASE_URL}/api/conversations/${CONV_ID}/messages")"
@@ -307,7 +319,7 @@ fi
 
 log "messages ok traceId=${MSGS_TRACE} mediaBytes=${MEDIA_BYTES}"
 
-log "9/10 profile read + patch"
+log "9/12 profile read + patch"
 PROFILE_GET_BODY="$(new_tmp)"
 PROFILE_GET_STATUS="$(curl -sS -w "%{http_code}" -D "$HEADERS_FILE" -o "$PROFILE_GET_BODY" -b "$COOKIE_FILE" -c "$COOKIE_FILE" \
   "${BASE_URL}/api/profile/me")"
@@ -333,7 +345,67 @@ if [[ "$PROFILE_NAME" != "Local E2E" || "$PROFILE_STYLE" != "playful" ]]; then
 fi
 log "profile patch ok displayName=${PROFILE_NAME} style=${PROFILE_STYLE}"
 
-log "10/10 profile avatar upload + fetch signed media"
+log "10/12 memory settings + extraction controls"
+MEMORY_SETTINGS_BODY="$(new_tmp)"
+MEMORY_SETTINGS_STATUS="$(curl -sS -w "%{http_code}" -D "$HEADERS_FILE" -o "$MEMORY_SETTINGS_BODY" -b "$COOKIE_FILE" -c "$COOKIE_FILE" \
+  "${BASE_URL}/api/memory/settings")"
+if [[ "$MEMORY_SETTINGS_STATUS" != "200" ]]; then
+  echo "[local-e2e] memory_settings_get_failed status=${MEMORY_SETTINGS_STATUS} body=$(cat "$MEMORY_SETTINGS_BODY")"
+  exit 32
+fi
+MEMORY_MODE="$(parse_json "$MEMORY_SETTINGS_BODY" "settings.memoryMode")"
+if [[ -z "$MEMORY_MODE" || "$MEMORY_MODE" == "null" ]]; then
+  echo "[local-e2e] memory_settings_missing_mode body=$(cat "$MEMORY_SETTINGS_BODY")"
+  exit 33
+fi
+
+MEMORY_PATCH_BODY="$(new_tmp)"
+MEMORY_PATCH_STATUS="$(curl -sS -w "%{http_code}" -D "$HEADERS_FILE" -o "$MEMORY_PATCH_BODY" -b "$COOKIE_FILE" -c "$COOKIE_FILE" \
+  -H "Content-Type: application/json" \
+  -X PATCH "${BASE_URL}/api/memory/settings" \
+  --data '{"memoryMode":"safe_selective","crossChatMemoryEnabled":false}')"
+if [[ "$MEMORY_PATCH_STATUS" != "200" ]]; then
+  echo "[local-e2e] memory_settings_patch_failed status=${MEMORY_PATCH_STATUS} body=$(cat "$MEMORY_PATCH_BODY")"
+  exit 34
+fi
+PATCHED_CROSS_CHAT="$(parse_json "$MEMORY_PATCH_BODY" "settings.crossChatMemoryEnabled")"
+if [[ "$PATCHED_CROSS_CHAT" != "false" ]]; then
+  echo "[local-e2e] memory_settings_patch_unexpected crossChatMemoryEnabled=${PATCHED_CROSS_CHAT}"
+  exit 35
+fi
+
+MEMORY_SEED_BODY="$(new_tmp)"
+MEMORY_SEED_STATUS="$(curl -sS -w "%{http_code}" -D "$HEADERS_FILE" -o "$MEMORY_SEED_BODY" -b "$COOKIE_FILE" -c "$COOKIE_FILE" \
+  -H "Content-Type: application/json" \
+  -X POST "${BASE_URL}/api/conversations/${CONV_ID}/messages" \
+  --data '{"sender":"user","text":"I love co-op puzzle games and my goal is to ship a prototype next week."}')"
+if [[ "$MEMORY_SEED_STATUS" != "201" ]]; then
+  echo "[local-e2e] memory_seed_message_failed status=${MEMORY_SEED_STATUS} body=$(cat "$MEMORY_SEED_BODY")"
+  exit 36
+fi
+
+MEMORY_ITEMS_BODY="$(new_tmp)"
+MEMORY_ITEMS_STATUS="$(curl -sS -w "%{http_code}" -D "$HEADERS_FILE" -o "$MEMORY_ITEMS_BODY" -b "$COOKIE_FILE" -c "$COOKIE_FILE" \
+  "${BASE_URL}/api/memory/items?limit=20")"
+if [[ "$MEMORY_ITEMS_STATUS" != "200" ]]; then
+  echo "[local-e2e] memory_items_list_failed status=${MEMORY_ITEMS_STATUS} body=$(cat "$MEMORY_ITEMS_BODY")"
+  exit 37
+fi
+MEMORY_ITEM_ID="$(parse_json "$MEMORY_ITEMS_BODY" "items.0.id")"
+if [[ -z "$MEMORY_ITEM_ID" || "$MEMORY_ITEM_ID" == "null" ]]; then
+  echo "[local-e2e] memory_items_empty body=$(cat "$MEMORY_ITEMS_BODY")"
+  exit 38
+fi
+
+MEMORY_DELETE_STATUS="$(curl -sS -w "%{http_code}" -D "$HEADERS_FILE" -o /dev/null -b "$COOKIE_FILE" -c "$COOKIE_FILE" \
+  -X DELETE "${BASE_URL}/api/memory/items/${MEMORY_ITEM_ID}")"
+if [[ "$MEMORY_DELETE_STATUS" != "204" ]]; then
+  echo "[local-e2e] memory_item_delete_failed status=${MEMORY_DELETE_STATUS}"
+  exit 39
+fi
+log "memory settings/items ok mode=${MEMORY_MODE} archivedItem=${MEMORY_ITEM_ID}"
+
+log "11/12 profile avatar upload + fetch signed media"
 PROFILE_AVATAR_BODY="$(new_tmp)"
 PROFILE_AVATAR_STATUS="$(curl -sS -w "%{http_code}" -D "$HEADERS_FILE" -o "$PROFILE_AVATAR_BODY" -b "$COOKIE_FILE" -c "$COOKIE_FILE" \
   -X POST "${BASE_URL}/api/profile/avatar" \
@@ -360,5 +432,16 @@ if [[ "$PROFILE_AVATAR_BYTES" -le 0 ]]; then
   exit 31
 fi
 log "profile avatar ok bytes=${PROFILE_AVATAR_BYTES}"
+
+log "12/12 restore memory defaults"
+MEMORY_RESET_BODY="$(new_tmp)"
+MEMORY_RESET_STATUS="$(curl -sS -w "%{http_code}" -D "$HEADERS_FILE" -o "$MEMORY_RESET_BODY" -b "$COOKIE_FILE" -c "$COOKIE_FILE" \
+  -H "Content-Type: application/json" \
+  -X PATCH "${BASE_URL}/api/memory/settings" \
+  --data '{"memoryMode":"safe_selective","crossChatMemoryEnabled":true}')"
+if [[ "$MEMORY_RESET_STATUS" != "200" ]]; then
+  echo "[local-e2e] memory_settings_reset_failed status=${MEMORY_RESET_STATUS} body=$(cat "$MEMORY_RESET_BODY")"
+  exit 40
+fi
 
 log "PASS all endpoints validated on ${BASE_URL} with isolated DB ${TEST_DB_NAME}"

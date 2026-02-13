@@ -1,6 +1,37 @@
-import { useState, useEffect, useRef, useId } from "react";
+import { useState, useEffect, useRef, useId, useMemo, type ReactNode } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Mic, Video, PhoneOff, MessageSquare, Menu, Settings, ChevronRight, ChevronDown, X, ArrowLeft, Camera, LogOut, Eye, EyeOff, ImageIcon, Pencil } from "lucide-react";
+import {
+  Mic,
+  Video,
+  PhoneOff,
+  MessageSquare,
+  Menu,
+  Settings,
+  ChevronRight,
+  ChevronDown,
+  X,
+  ArrowLeft,
+  Camera,
+  LogOut,
+  Eye,
+  EyeOff,
+  ImageIcon,
+  Pencil,
+  Archive,
+  Trash2,
+  Play,
+  FileText,
+  AlertTriangle,
+  CheckCircle2,
+  CircleDot,
+  Clock3,
+  Info,
+  Loader2,
+  Sparkles,
+  Terminal,
+  Maximize2,
+  Globe,
+} from "lucide-react";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -25,6 +56,16 @@ import {
   isAppThemeId,
   type AppThemeId,
 } from "@/lib/app-theme";
+import type {
+  AgentArtifactSummary,
+  AgentApprovalSummary,
+  AgentToolCallSummary,
+  AgentMessageUiPayload,
+  AgentStepSummary,
+  AgentTaskSummary,
+  UnifiedAgentTaskCardModel,
+  UnifiedAgentTaskTimelineItem,
+} from "@shared/agent";
 
 import {
   DropdownMenu,
@@ -32,6 +73,19 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 // --- Types ---
 type Mode = "voice" | "text" | "profile";
@@ -81,6 +135,7 @@ interface MessageData {
   text: string;
   createdAt: string | null;
   attachments?: MessageAttachmentData[];
+  uiPayload?: AgentMessageUiPayload | null;
   isTyping?: boolean;
   localOnly?: boolean;
 }
@@ -135,12 +190,46 @@ interface ChatStreamErrorEvent {
   traceId?: string;
 }
 
+interface ChatStreamTaskCreatedEvent {
+  type: "task_created";
+  task: AgentTaskSummary;
+}
+
+interface ChatStreamTaskStepEvent {
+  type: "task_step";
+  taskId: string;
+  step: AgentStepSummary;
+}
+
+interface ChatStreamTaskApprovalRequiredEvent {
+  type: "task_approval_required";
+  taskId: string;
+  approval: AgentApprovalSummary;
+}
+
+interface ChatStreamTaskArtifactReadyEvent {
+  type: "task_artifact_ready";
+  taskId: string;
+  artifact: AgentArtifactSummary;
+}
+
+interface ChatStreamTaskFailedEvent {
+  type: "task_failed";
+  taskId: string;
+  message: string;
+}
+
 type ChatStreamEvent =
   | ChatStreamAckEvent
   | ChatStreamDeltaEvent
   | ChatStreamPartFinalEvent
   | ChatStreamFinalEvent
-  | ChatStreamErrorEvent;
+  | ChatStreamErrorEvent
+  | ChatStreamTaskCreatedEvent
+  | ChatStreamTaskStepEvent
+  | ChatStreamTaskApprovalRequiredEvent
+  | ChatStreamTaskArtifactReadyEvent
+  | ChatStreamTaskFailedEvent;
 
 type ResponseStylePreset = "concise" | "balanced" | "expressive" | "playful";
 type GenderOption =
@@ -243,6 +332,121 @@ interface QuotaErrorPayload {
   };
 }
 
+interface AgentArtifactsResponse {
+  traceId?: string;
+  artifacts: AgentArtifactSummary[];
+}
+
+interface AgentArtifactResponse {
+  traceId?: string;
+  artifact: AgentArtifactSummary;
+}
+
+interface AgentTaskResponse {
+  traceId?: string;
+  task: AgentTaskSummary;
+  steps?: AgentStepSummary[];
+  approvals?: AgentApprovalSummary[];
+  artifacts?: AgentArtifactSummary[];
+  toolCalls?: AgentToolCallSummary[];
+}
+
+type LiveMemoryMode = "safe_selective" | "remember_everything";
+interface MemorySettingsData {
+  memoryMode: LiveMemoryMode;
+  crossChatMemoryEnabled: boolean;
+}
+
+interface MemorySettingsResponse extends TraceAwareResponse {
+  settings: MemorySettingsData;
+}
+
+interface MemoryItemData {
+  id: string;
+  kind: string;
+  summary: string;
+  sensitivity: string;
+  confidence: number | null;
+  sourceMessageId: string | null;
+  sourceConversationId: string | null;
+  lastReinforcedAt: string | null;
+  archived: boolean;
+  createdAt: string | null;
+  updatedAt: string | null;
+}
+
+interface MemoryItemsResponse extends TraceAwareResponse {
+  items: MemoryItemData[];
+  paging: {
+    limit: number;
+    offset: number;
+    nextOffset: number;
+  };
+}
+
+type LiveMemoryFallbackUsed =
+  | "none"
+  | "active_thread_only"
+  | "persona_only"
+  | "disabled";
+
+interface LiveTokenMemoryMeta {
+  activeThreadMessagesUsed: number;
+  crossChatMessagesUsed: number;
+  profileApplied: boolean;
+  mode: LiveMemoryMode;
+  buildMs: number;
+  fallbackUsed: LiveMemoryFallbackUsed;
+}
+
+interface LiveTokenConfigSummary {
+  lowLatencyMode: boolean;
+  activityHandling: "START_OF_ACTIVITY_INTERRUPTS" | "NO_INTERRUPTION";
+  forceAlwaysRespond: boolean;
+  vadStartSensitivity: "HIGH" | "LOW";
+  vadEndSensitivity: "HIGH" | "LOW";
+  vadPrefixPaddingMs: number;
+  vadSilenceMs: number;
+  turnCoverage: "TURN_INCLUDES_ONLY_ACTIVITY" | "TURN_INCLUDES_ALL_INPUT";
+  affectiveDialog: boolean;
+  proactiveAudio: boolean;
+  thinkingBudget: number | null;
+  includeThoughts: boolean;
+  temperature: number;
+  topP: number;
+  topK: number | null;
+  maxOutputTokens: number;
+  deviceClass: "mobile" | "desktop" | "unknown";
+}
+
+interface LiveTokenResponse extends TraceAwareResponse {
+  ephemeralToken: string;
+  model: string;
+  voice?: LiveVoiceName;
+  memoryMeta?: LiveTokenMemoryMeta;
+  configSummary?: LiveTokenConfigSummary;
+}
+
+interface LiveTaskSnapshot {
+  task: AgentTaskSummary;
+  latestStep: AgentStepSummary | null;
+  approval: AgentApprovalSummary | null;
+  artifact: AgentArtifactSummary | null;
+  timeline: UnifiedAgentTaskTimelineItem[];
+  updatedAtIso: string;
+}
+
+type TextRenderItem =
+  | {
+      kind: "message";
+      message: MessageData;
+    }
+  | {
+      kind: "agent_unified_task";
+      message: MessageData;
+      card: UnifiedAgentTaskCardModel;
+    };
+
 const ZEE_AVATAR_PRESET_OPTIONS: Array<{
   id: ZeeAvatarPreset;
   label: string;
@@ -277,6 +481,12 @@ function createRequestTraceId(): string {
   return `trace-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+function detectLiveDeviceClass(): "mobile" | "desktop" | "unknown" {
+  if (typeof navigator === "undefined") return "unknown";
+  const ua = navigator.userAgent || "";
+  return /android|iphone|ipad|ipod|mobile/i.test(ua) ? "mobile" : "desktop";
+}
+
 function getErrorMessage(error: unknown): string {
   if (error instanceof Error) {
     return error.message;
@@ -300,6 +510,390 @@ function parseQuotaError(error: unknown): QuotaErrorPayload | null {
   const payloadText = rest.join(": ").trim();
   if (!payloadText.startsWith("{")) return null;
   return safeParseJson<QuotaErrorPayload>(payloadText);
+}
+
+function isAgentTaskStatusPayload(
+  payload: MessageData["uiPayload"],
+): payload is Extract<AgentMessageUiPayload, { kind: "agent_task_status" }> {
+  return Boolean(payload && payload.kind === "agent_task_status");
+}
+
+function isAgentApprovalPayload(
+  payload: MessageData["uiPayload"],
+): payload is Extract<AgentMessageUiPayload, { kind: "agent_approval" }> {
+  return Boolean(payload && payload.kind === "agent_approval");
+}
+
+function isAgentArtifactPayload(
+  payload: MessageData["uiPayload"],
+): payload is Extract<AgentMessageUiPayload, { kind: "agent_artifact" }> {
+  return Boolean(payload && payload.kind === "agent_artifact");
+}
+
+function toTaskStatusLabel(status: AgentTaskSummary["status"]): string {
+  if (status === "in_progress") return "In progress";
+  if (status === "approval_required") return "Needs approval";
+  if (status === "completed") return "Completed";
+  if (status === "failed") return "Failed";
+  if (status === "cancelled") return "Canceled";
+  return "Queued";
+}
+
+function parseClientBooleanFlag(value: unknown, fallback: boolean): boolean {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value !== "string") {
+    return fallback;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "off"].includes(normalized)) return false;
+  return fallback;
+}
+
+const ENABLE_UNIFIED_AGENT_TASK_CARD = parseClientBooleanFlag(
+  (import.meta.env as Record<string, unknown>).VITE_ENABLE_UNIFIED_AGENT_TASK_CARD ??
+    (import.meta.env as Record<string, unknown>).ENABLE_UNIFIED_AGENT_TASK_CARD,
+  true,
+);
+
+const TASK_STATUS_PRECEDENCE: Record<AgentTaskSummary["status"], number> = {
+  queued: 1,
+  completed: 2,
+  in_progress: 3,
+  approval_required: 4,
+  failed: 5,
+  cancelled: 5,
+};
+
+function toIsoString(value: string | Date | null | undefined): string | null {
+  if (!value) return null;
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value.toISOString();
+  }
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+}
+
+function toEpochMs(value: string | Date | null | undefined): number {
+  const iso = toIsoString(value);
+  if (!iso) return 0;
+  const parsed = new Date(iso).getTime();
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function extractAgentTaskIdFromPayload(
+  payload: MessageData["uiPayload"],
+): string | null {
+  if (!payload) return null;
+  if (payload.kind === "agent_task_status") {
+    return payload.task.id;
+  }
+  if (payload.kind === "agent_approval" || payload.kind === "agent_artifact") {
+    return payload.taskId;
+  }
+  return null;
+}
+
+function pickLatestTaskSummary(
+  existingTask: AgentTaskSummary | null,
+  incomingTask: AgentTaskSummary | null,
+): AgentTaskSummary | null {
+  if (!incomingTask) return existingTask;
+  if (!existingTask) return incomingTask;
+  const existingUpdatedMs = Math.max(
+    toEpochMs(existingTask.updatedAt),
+    toEpochMs(existingTask.completedAt),
+    toEpochMs(existingTask.createdAt),
+  );
+  const incomingUpdatedMs = Math.max(
+    toEpochMs(incomingTask.updatedAt),
+    toEpochMs(incomingTask.completedAt),
+    toEpochMs(incomingTask.createdAt),
+  );
+  return incomingUpdatedMs >= existingUpdatedMs ? incomingTask : existingTask;
+}
+
+function resolveTaskStatus(
+  statuses: Array<AgentTaskSummary["status"] | null | undefined>,
+): AgentTaskSummary["status"] {
+  let resolved: AgentTaskSummary["status"] = "queued";
+  let bestRank = TASK_STATUS_PRECEDENCE[resolved];
+  for (const status of statuses) {
+    if (!status) continue;
+    const rank = TASK_STATUS_PRECEDENCE[status];
+    if (rank > bestRank) {
+      resolved = status;
+      bestRank = rank;
+    }
+  }
+  return resolved;
+}
+
+function upsertTimelineItem(
+  timeline: UnifiedAgentTaskTimelineItem[],
+  item: UnifiedAgentTaskTimelineItem,
+) {
+  const existingIndex = timeline.findIndex((entry) => entry.id === item.id);
+  if (existingIndex >= 0) {
+    timeline[existingIndex] = item;
+  } else {
+    timeline.push(item);
+  }
+}
+
+function toTaskKindLabel(taskKind: string): string {
+  if (taskKind === "mini_game") return "Mini game";
+  if (taskKind === "doc_markdown") return "Document";
+  if (taskKind === "mixed") return "Mixed";
+  return "Agent task";
+}
+
+function toUnifiedTaskOutputSummary(card: UnifiedAgentTaskCardModel): string {
+  const summary = card.summaryText?.trim() ?? "";
+  if (card.status === "failed") {
+    return summary || "This task failed before publishing an output.";
+  }
+  if (card.approval?.status === "pending") {
+    return card.approval.requestedAction;
+  }
+  if (card.artifact) {
+    const summaryLower = summary.toLowerCase();
+    const isStaleCraftingCopy =
+      summaryLower.includes("crafting") ||
+      summaryLower.includes("task started") ||
+      summaryLower.includes("queued");
+    if (summary.length > 0 && !isStaleCraftingCopy) {
+      return summary;
+    }
+    if (card.artifact.type === "mini_game") {
+      return "Open View / Play to launch the game and see controls in the full viewer.";
+    }
+    return "Your output is ready to open.";
+  }
+  if (summary.length > 0) {
+    return summary;
+  }
+  return card.latestStep?.detail ?? "Zee is working through your request.";
+}
+
+function toDefaultTaskTitle(params: {
+  task: AgentTaskSummary | null;
+  artifact: AgentArtifactSummary | null;
+  taskId: string;
+}): string {
+  if (params.artifact?.title) return params.artifact.title;
+  if (params.task?.prompt?.trim()) {
+    return params.task.prompt.trim().slice(0, 72);
+  }
+  return `Task ${params.taskId.slice(0, 8)}`;
+}
+
+function normalizeTimeline(
+  timeline: UnifiedAgentTaskTimelineItem[],
+): UnifiedAgentTaskTimelineItem[] {
+  return [...timeline].sort((a, b) => {
+    const aRank = toEpochMs(a.createdAt);
+    const bRank = toEpochMs(b.createdAt);
+    if (aRank !== bRank) return aRank - bRank;
+    return a.id.localeCompare(b.id);
+  });
+}
+
+function buildUnifiedAgentTaskCards(
+  messages: MessageData[],
+  liveTaskSnapshots: Record<string, LiveTaskSnapshot>,
+): TextRenderItem[] {
+  if (!ENABLE_UNIFIED_AGENT_TASK_CARD) {
+    return messages.map((message) => ({ kind: "message", message }));
+  }
+
+  interface AgentTaskAggregate {
+    taskId: string;
+    firstMessageId: string;
+    task: AgentTaskSummary | null;
+    latestStep: AgentStepSummary | null;
+    approval: AgentApprovalSummary | null;
+    artifact: AgentArtifactSummary | null;
+    timeline: UnifiedAgentTaskTimelineItem[];
+    summaryText: string | null;
+  }
+
+  const taskAggregates = new Map<string, AgentTaskAggregate>();
+  const hiddenMessageIds = new Set<string>();
+
+  for (const message of messages) {
+    if (message.sender !== "assistant") continue;
+    const taskId = extractAgentTaskIdFromPayload(message.uiPayload);
+    if (!taskId) continue;
+
+    const existingAggregate = taskAggregates.get(taskId);
+    if (!existingAggregate) {
+      taskAggregates.set(taskId, {
+        taskId,
+        firstMessageId: message.id,
+        task: null,
+        latestStep: null,
+        approval: null,
+        artifact: null,
+        timeline: [],
+        summaryText: null,
+      });
+    } else {
+      hiddenMessageIds.add(message.id);
+    }
+
+    const aggregate = taskAggregates.get(taskId);
+    if (!aggregate) continue;
+
+    if (message.text.trim().length > 0) {
+      aggregate.summaryText = message.text.trim();
+    }
+
+    if (isAgentTaskStatusPayload(message.uiPayload)) {
+      aggregate.task = pickLatestTaskSummary(aggregate.task, message.uiPayload.task);
+      if (message.uiPayload.latestStep) {
+        aggregate.latestStep = message.uiPayload.latestStep;
+        upsertTimelineItem(aggregate.timeline, {
+          id: `step-${message.uiPayload.latestStep.id}`,
+          title: message.uiPayload.latestStep.title,
+          detail: message.uiPayload.latestStep.detail ?? null,
+          status: message.uiPayload.latestStep.status,
+          createdAt: toIsoString(message.uiPayload.latestStep.updatedAt),
+        });
+      } else {
+        upsertTimelineItem(aggregate.timeline, {
+          id: `status-${message.uiPayload.task.status}`,
+          title: toTaskStatusLabel(message.uiPayload.task.status),
+          detail: message.uiPayload.text ?? null,
+          status:
+            message.uiPayload.task.status === "completed"
+              ? "completed"
+              : message.uiPayload.task.status === "failed"
+                ? "failed"
+                : message.uiPayload.task.status === "approval_required"
+                  ? "blocked"
+                  : "in_progress",
+          createdAt: toIsoString(message.createdAt),
+        });
+      }
+    }
+
+    if (isAgentApprovalPayload(message.uiPayload)) {
+      aggregate.approval = message.uiPayload.approval;
+      upsertTimelineItem(aggregate.timeline, {
+        id: `approval-${message.uiPayload.approval.id}`,
+        title:
+          message.uiPayload.approval.status === "pending"
+            ? "Approval required"
+            : `Approval ${message.uiPayload.approval.status}`,
+        detail: message.uiPayload.approval.requestedAction,
+        status:
+          message.uiPayload.approval.status === "denied" ? "failed" : "blocked",
+        createdAt: toIsoString(message.uiPayload.approval.createdAt),
+      });
+    }
+
+    if (isAgentArtifactPayload(message.uiPayload)) {
+      aggregate.artifact = message.uiPayload.artifact;
+      upsertTimelineItem(aggregate.timeline, {
+        id: `artifact-${message.uiPayload.artifact.id}`,
+        title: "Artifact ready",
+        detail: message.uiPayload.artifact.title,
+        status: "completed",
+        createdAt: toIsoString(message.uiPayload.artifact.updatedAt),
+      });
+    }
+  }
+
+  for (const [taskId, snapshot] of Object.entries(liveTaskSnapshots)) {
+    const aggregate = taskAggregates.get(taskId);
+    if (!aggregate) continue;
+
+    aggregate.task = pickLatestTaskSummary(aggregate.task, snapshot.task);
+    if (snapshot.latestStep) {
+      aggregate.latestStep = snapshot.latestStep;
+    }
+    if (snapshot.approval) {
+      aggregate.approval = snapshot.approval;
+    }
+    if (snapshot.artifact) {
+      aggregate.artifact = snapshot.artifact;
+    }
+    for (const timelineItem of snapshot.timeline) {
+      upsertTimelineItem(aggregate.timeline, timelineItem);
+    }
+  }
+
+  return messages.flatMap((message): TextRenderItem[] => {
+    const taskId =
+      message.sender === "assistant"
+        ? extractAgentTaskIdFromPayload(message.uiPayload)
+        : null;
+    if (!taskId) {
+      return [{ kind: "message", message }];
+    }
+    if (hiddenMessageIds.has(message.id)) {
+      return [];
+    }
+
+    const aggregate = taskAggregates.get(taskId);
+    if (!aggregate || aggregate.firstMessageId !== message.id) {
+      return [{ kind: "message", message }];
+    }
+
+    const inferredStatusFromApproval =
+      aggregate.approval?.status === "pending"
+        ? "approval_required"
+        : aggregate.approval?.status === "denied"
+          ? "failed"
+          : null;
+    const inferredStatusFromArtifact = aggregate.artifact ? "completed" : null;
+    const resolvedStatus = resolveTaskStatus([
+      aggregate.task?.status,
+      inferredStatusFromApproval,
+      inferredStatusFromArtifact,
+    ]);
+
+    const resolvedTask =
+      aggregate.task ??
+      ({
+        id: taskId,
+        conversationId: message.conversationId,
+        status: resolvedStatus,
+        riskLevel: "low",
+        taskKind:
+          aggregate.artifact?.type === "mini_game" ? "mini_game" : "doc_markdown",
+        prompt: message.text,
+        createdAt: message.createdAt ? new Date(message.createdAt) : null,
+        updatedAt: message.createdAt ? new Date(message.createdAt) : null,
+        completedAt: null,
+      } satisfies AgentTaskSummary);
+
+    const timeline = normalizeTimeline(aggregate.timeline);
+    const summaryText = aggregate.summaryText?.trim()
+      ? aggregate.summaryText.trim()
+      : null;
+    const card: UnifiedAgentTaskCardModel = {
+      taskId,
+      title: toDefaultTaskTitle({
+        task: resolvedTask,
+        artifact: aggregate.artifact,
+        taskId,
+      }),
+      prompt: resolvedTask.prompt,
+      summaryText,
+      taskKind: resolvedTask.taskKind,
+      status: resolvedStatus,
+      latestStep: aggregate.latestStep,
+      approval: aggregate.approval,
+      artifact: aggregate.artifact,
+      timeline,
+    };
+
+    return [{ kind: "agent_unified_task", message, card }];
+  });
 }
 
 function formatMinutesFromSeconds(seconds: number): string {
@@ -1234,6 +1828,8 @@ const ProfileView = ({
   onUploadAvatar,
   onUploadZeeAvatar,
   onReplayOnboarding,
+  onOpenSettings,
+  onOpenOutputsHistory,
   onLogout,
   quotaSummary,
   isQuotaLoading,
@@ -1262,6 +1858,8 @@ const ProfileView = ({
   onUploadAvatar: (file: File) => Promise<void>;
   onUploadZeeAvatar: (file: File) => Promise<void>;
   onReplayOnboarding: () => void;
+  onOpenSettings: () => void;
+  onOpenOutputsHistory: () => void;
   onLogout: () => void;
   quotaSummary?: QuotaSummaryData;
   isQuotaLoading: boolean;
@@ -1528,6 +2126,19 @@ const ProfileView = ({
                         data-testid="button-replay-onboarding"
                       >
                         Replay onboarding
+                      </button>
+                      <button
+                        type="button"
+                        onClick={onOpenOutputsHistory}
+                        className="w-full rounded-xl border px-3 py-2 text-sm font-medium transition-colors hover:opacity-95"
+                        style={{
+                          borderColor: "var(--app-soft-card-border)",
+                          backgroundColor: "var(--app-soft-card-bg)",
+                          color: "var(--app-on-dark)",
+                        }}
+                        data-testid="button-open-outputs-history"
+                      >
+                        Outputs history
                       </button>
                     </div>
                   </motion.div>
@@ -2128,6 +2739,21 @@ const ProfileView = ({
                 {isSaving ? "Saving..." : "Save Profile"}
               </Button>
               <Button
+                type="button"
+                variant="outline"
+                className="w-full h-12 rounded-xl gap-2"
+                onClick={onOpenSettings}
+                style={{
+                  borderColor: "var(--app-soft-card-border)",
+                  backgroundColor: "var(--app-soft-card-bg)",
+                  color: "var(--app-on-dark)",
+                }}
+                data-testid="button-open-settings"
+              >
+                <Settings className="w-5 h-5" />
+                Settings
+              </Button>
+              <Button
                 variant="destructive"
                 className="w-full h-12 rounded-xl gap-2"
                 onClick={onLogout}
@@ -2141,6 +2767,388 @@ const ProfileView = ({
           </form>
         </ScrollArea>
       </div>
+    </motion.div>
+  );
+};
+
+const MEMORY_MODE_OPTIONS: Array<{
+  value: LiveMemoryMode;
+  title: string;
+  description: string;
+}> = [
+  {
+    value: "safe_selective",
+    title: "Safe selective",
+    description:
+      "Prioritizes relevant context and avoids replaying sensitive details by default.",
+  },
+  {
+    value: "remember_everything",
+    title: "Remember everything",
+    description:
+      "Keeps broad recall across conversations, including lower-priority details.",
+  },
+];
+
+function formatMemoryKindLabel(kind: string): string {
+  if (kind === "fact") return "Fact";
+  if (kind === "preference") return "Preference";
+  if (kind === "goal") return "Goal";
+  if (kind === "relationship") return "Relationship";
+  return "Other";
+}
+
+function formatMemoryTimestamp(value: string | null): string {
+  if (!value) return "Just now";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "Just now";
+  return parsed.toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+const SettingsView = ({
+  onClose,
+  memorySettings,
+  isMemorySettingsLoading,
+  isSavingMemorySettings,
+  onUpdateMemorySettings,
+  memoryItems,
+  isMemoryItemsLoading,
+  onForgetMemoryItem,
+}: {
+  onClose: () => void;
+  memorySettings?: MemorySettingsData;
+  isMemorySettingsLoading: boolean;
+  isSavingMemorySettings: boolean;
+  onUpdateMemorySettings: (patch: Partial<MemorySettingsData>) => Promise<void>;
+  memoryItems: MemoryItemData[];
+  isMemoryItemsLoading: boolean;
+  onForgetMemoryItem: (memoryItemId: string) => Promise<void>;
+}) => {
+  const [localMode, setLocalMode] = useState<LiveMemoryMode>("safe_selective");
+  const [localCrossChatEnabled, setLocalCrossChatEnabled] = useState(true);
+  const [settingsError, setSettingsError] = useState<string | null>(null);
+  const [settingsSuccess, setSettingsSuccess] = useState<string | null>(null);
+  const [forgettingMemoryItemId, setForgettingMemoryItemId] = useState<
+    string | null
+  >(null);
+
+  useEffect(() => {
+    if (!memorySettings) return;
+    setLocalMode(memorySettings.memoryMode);
+    setLocalCrossChatEnabled(memorySettings.crossChatMemoryEnabled);
+  }, [memorySettings]);
+
+  const handleModeChange = async (nextMode: LiveMemoryMode) => {
+    if (
+      nextMode === localMode ||
+      isMemorySettingsLoading ||
+      isSavingMemorySettings
+    ) {
+      return;
+    }
+    const previousMode = localMode;
+    setSettingsError(null);
+    setSettingsSuccess(null);
+    setLocalMode(nextMode);
+    try {
+      await onUpdateMemorySettings({ memoryMode: nextMode });
+      setSettingsSuccess("Memory mode updated.");
+    } catch (error) {
+      setLocalMode(previousMode);
+      setSettingsError(getErrorMessage(error));
+    }
+  };
+
+  const handleCrossChatChange = async (nextEnabled: boolean) => {
+    if (isMemorySettingsLoading || isSavingMemorySettings) return;
+    const previous = localCrossChatEnabled;
+    setSettingsError(null);
+    setSettingsSuccess(null);
+    setLocalCrossChatEnabled(nextEnabled);
+    try {
+      await onUpdateMemorySettings({ crossChatMemoryEnabled: nextEnabled });
+      setSettingsSuccess("Cross-chat memory updated.");
+    } catch (error) {
+      setLocalCrossChatEnabled(previous);
+      setSettingsError(getErrorMessage(error));
+    }
+  };
+
+  const handleForgetMemoryItem = async (memoryItemId: string) => {
+    if (forgettingMemoryItemId) return;
+    setForgettingMemoryItemId(memoryItemId);
+    setSettingsError(null);
+    setSettingsSuccess(null);
+    try {
+      await onForgetMemoryItem(memoryItemId);
+      setSettingsSuccess("Memory removed.");
+    } catch (error) {
+      setSettingsError(getErrorMessage(error));
+    } finally {
+      setForgettingMemoryItemId(null);
+    }
+  };
+
+  const isBusy = isMemorySettingsLoading || isSavingMemorySettings;
+
+  return (
+    <motion.div
+      initial={{ x: "100%" }}
+      animate={{ x: 0 }}
+      exit={{ x: "100%" }}
+      transition={{ type: "spring", damping: 25, stiffness: 200 }}
+      className="absolute inset-0 z-[70] flex h-full flex-col overflow-hidden"
+      style={{
+        backgroundColor: "var(--app-panel-bg)",
+        color: "var(--app-on-dark)",
+      }}
+    >
+      <div className="relative h-28 shrink-0 overflow-hidden border-b border-[var(--app-soft-card-border)]">
+        <img src={leafBg} alt="Settings cover" className="h-full w-full object-cover" />
+        <div
+          className="absolute inset-0"
+          style={{
+            background:
+              "linear-gradient(to bottom, rgba(0,0,0,0.12) 0%, color-mix(in srgb, var(--app-panel-bg) 90%, transparent) 100%)",
+          }}
+        />
+        <Button
+          variant="ghost"
+          size="icon"
+          className="absolute left-4 top-4 hover:opacity-90"
+          style={{ color: "var(--app-on-dark)" }}
+          onClick={onClose}
+          data-testid="button-close-settings"
+        >
+          <ArrowLeft className="h-6 w-6" />
+        </Button>
+        <div className="absolute bottom-3 left-1/2 -translate-x-1/2 text-center">
+          <h2 className="text-lg font-semibold tracking-tight">Settings</h2>
+          <p
+            className="text-xs uppercase tracking-[0.22em]"
+            style={{ color: "var(--app-on-dark-muted)" }}
+          >
+            Memory and controls
+          </p>
+        </div>
+      </div>
+
+      <ScrollArea className="flex-1 px-4 py-4 sm:px-6">
+        <div className="space-y-4 pb-6">
+          <section
+            className="rounded-2xl border p-4 shadow-sm"
+            style={{
+              backgroundColor: "var(--app-soft-card-bg)",
+              borderColor: "var(--app-soft-card-border)",
+            }}
+          >
+            <div className="mb-4 flex items-start justify-between gap-3">
+              <div>
+                <h3 className="text-base font-semibold">Memory</h3>
+                <p
+                  className="mt-1 text-xs leading-relaxed"
+                  style={{ color: "var(--app-on-dark-muted)" }}
+                >
+                  Choose how much Zee recalls across voice + text and how cross-chat
+                  context should be used.
+                </p>
+              </div>
+              {isSavingMemorySettings && (
+                <Loader2
+                  className="h-4 w-4 animate-spin"
+                  style={{ color: "var(--app-on-dark-muted)" }}
+                />
+              )}
+            </div>
+
+            <div className="space-y-2.5">
+              {MEMORY_MODE_OPTIONS.map((option) => {
+                const selected = localMode === option.value;
+                return (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => {
+                      void handleModeChange(option.value);
+                    }}
+                    disabled={isBusy}
+                    className={cn(
+                      "w-full rounded-xl border px-3 py-3 text-left transition-opacity",
+                      !isBusy && "hover:opacity-95",
+                    )}
+                    style={{
+                      backgroundColor: selected
+                        ? "color-mix(in srgb, var(--app-accent) 14%, var(--app-soft-card-bg))"
+                        : "var(--app-panel-bg)",
+                      borderColor: selected
+                        ? "var(--app-accent)"
+                        : "var(--app-soft-card-border)",
+                    }}
+                    data-testid={`button-memory-mode-${option.value}`}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <p className="text-sm font-semibold">{option.title}</p>
+                        <p
+                          className="mt-1 text-xs leading-relaxed"
+                          style={{ color: "var(--app-on-dark-muted)" }}
+                        >
+                          {option.description}
+                        </p>
+                      </div>
+                      {selected && (
+                        <CheckCircle2
+                          className="h-4 w-4 shrink-0"
+                          style={{ color: "var(--app-accent)" }}
+                        />
+                      )}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div
+              className="mt-4 flex items-start justify-between gap-3 rounded-xl border px-3 py-3"
+              style={{
+                borderColor: "var(--app-soft-card-border)",
+                backgroundColor: "var(--app-panel-bg)",
+              }}
+            >
+              <div>
+                <p className="text-sm font-semibold">Use cross-chat memories</p>
+                <p
+                  className="mt-1 text-xs leading-relaxed"
+                  style={{ color: "var(--app-on-dark-muted)" }}
+                >
+                  Pull relevant memory from your other conversations when helpful.
+                </p>
+              </div>
+              <Switch
+                checked={localCrossChatEnabled}
+                onCheckedChange={(checked) => {
+                  void handleCrossChatChange(checked);
+                }}
+                disabled={isBusy}
+                data-testid="switch-cross-chat-memory"
+              />
+            </div>
+          </section>
+
+          <section
+            className="rounded-2xl border p-4 shadow-sm"
+            style={{
+              backgroundColor: "var(--app-soft-card-bg)",
+              borderColor: "var(--app-soft-card-border)",
+            }}
+          >
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div>
+                <h3 className="text-base font-semibold">Saved memories</h3>
+                <p
+                  className="mt-1 text-xs"
+                  style={{ color: "var(--app-on-dark-muted)" }}
+                >
+                  Inspect and forget individual memory items.
+                </p>
+              </div>
+            </div>
+
+            {isMemoryItemsLoading && (
+              <p className="text-xs" style={{ color: "var(--app-on-dark-muted)" }}>
+                Loading memories...
+              </p>
+            )}
+
+            {!isMemoryItemsLoading && memoryItems.length === 0 && (
+              <p className="text-xs" style={{ color: "var(--app-on-dark-muted)" }}>
+                No memory items yet. Zee will add memories as you chat.
+              </p>
+            )}
+
+            {!isMemoryItemsLoading && memoryItems.length > 0 && (
+              <div className="space-y-2.5">
+                {memoryItems.map((item) => (
+                  <div
+                    key={item.id}
+                    className="rounded-xl border p-3"
+                    style={{
+                      backgroundColor: "var(--app-panel-bg)",
+                      borderColor: "var(--app-soft-card-border)",
+                    }}
+                    data-testid="memory-item-row"
+                  >
+                    <div className="mb-2 flex flex-wrap items-center gap-2">
+                      <span
+                        className="rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
+                        style={{
+                          borderColor: "var(--app-soft-card-border)",
+                          color: "var(--app-on-dark-muted)",
+                        }}
+                      >
+                        {formatMemoryKindLabel(item.kind)}
+                      </span>
+                      <span
+                        className="rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
+                        style={{
+                          borderColor: "var(--app-soft-card-border)",
+                          color: "var(--app-on-dark-muted)",
+                        }}
+                      >
+                        {item.sensitivity}
+                      </span>
+                    </div>
+                    <p className="text-sm font-medium leading-relaxed">{item.summary}</p>
+                    <p
+                      className="mt-1 text-[11px]"
+                      style={{ color: "var(--app-on-dark-muted)" }}
+                    >
+                      Last reinforced {formatMemoryTimestamp(item.lastReinforcedAt)}
+                    </p>
+                    <div className="mt-3 flex justify-end">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-8 rounded-lg px-3 text-xs"
+                        style={{
+                          borderColor: "var(--app-soft-card-border)",
+                          color: "var(--app-on-dark)",
+                        }}
+                        disabled={Boolean(forgettingMemoryItemId)}
+                        onClick={() => {
+                          void handleForgetMemoryItem(item.id);
+                        }}
+                        data-testid={`button-forget-memory-${item.id}`}
+                      >
+                        {forgettingMemoryItemId === item.id ? "Forgetting..." : "Forget"}
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+
+          {(settingsError || settingsSuccess) && (
+            <div
+              className="rounded-xl border px-3 py-2 text-xs"
+              style={{
+                backgroundColor: "var(--app-soft-card-bg)",
+                borderColor: "var(--app-soft-card-border)",
+              }}
+            >
+              {settingsError && <p className="text-red-500">{settingsError}</p>}
+              {settingsSuccess && <p className="text-emerald-600">{settingsSuccess}</p>}
+            </div>
+          )}
+        </div>
+      </ScrollArea>
     </motion.div>
   );
 };
@@ -2594,13 +3602,17 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onProfile, assistantName
               </div>
             )}
 
-            <div
-              className="flex flex-col items-center justify-center gap-2 py-3 pb-6 cursor-grab active:cursor-grabbing"
+            <button
+              type="button"
+              className="w-full flex flex-col items-center justify-center gap-2 py-3 pb-6 cursor-grab active:cursor-grabbing"
               style={{ color: "var(--app-on-dark-muted)" }}
+              onClick={() => setMode("text")}
+              aria-label="Switch to text chat"
+              data-testid="button-open-text-chat"
             >
                <div className="w-12 h-1.5 rounded-full" style={{ backgroundColor: "var(--app-on-dark-muted)" }} />
                <span className="text-xs font-medium uppercase tracking-wider">Swipe up to chat</span>
-            </div>
+            </button>
           </div>
         </motion.div>
         
@@ -2622,6 +3634,931 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onProfile, assistantName
   );
 };
 
+function formatTimelineTimeLabel(value: string | null): string {
+  if (!value) return "";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "";
+  return parsed.toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function toTimelineVisual(status: UnifiedAgentTaskTimelineItem["status"]): {
+  label: string;
+  icon: ReactNode;
+  color: string;
+} {
+  if (status === "completed") {
+    return {
+      label: "Completed",
+      icon: <CheckCircle2 className="h-3.5 w-3.5" />,
+      color: "color-mix(in srgb, var(--app-accent) 75%, #22c55e)",
+    };
+  }
+  if (status === "failed") {
+    return {
+      label: "Failed",
+      icon: <AlertTriangle className="h-3.5 w-3.5" />,
+      color: "color-mix(in srgb, var(--app-accent) 38%, #ef4444)",
+    };
+  }
+  if (status === "blocked") {
+    return {
+      label: "Blocked",
+      icon: <AlertTriangle className="h-3.5 w-3.5" />,
+      color: "color-mix(in srgb, var(--app-accent) 65%, #f59e0b)",
+    };
+  }
+  if (status === "in_progress") {
+    return {
+      label: "In progress",
+      icon: <Loader2 className="h-3.5 w-3.5 animate-spin" />,
+      color: "var(--app-accent)",
+    };
+  }
+  if (status === "queued") {
+    return {
+      label: "Queued",
+      icon: <Clock3 className="h-3.5 w-3.5" />,
+      color: "var(--app-on-dark-muted)",
+    };
+  }
+  return {
+    label: "Info",
+    icon: <CircleDot className="h-3.5 w-3.5" />,
+    color: "var(--app-on-dark-muted)",
+  };
+}
+
+const UnifiedAgentTaskCard = ({
+  card,
+  onOpenArtifact,
+  onResolveApproval,
+}: {
+  card: UnifiedAgentTaskCardModel;
+  onOpenArtifact: (artifactId: string) => void;
+  onResolveApproval: (
+    taskId: string,
+    approve: boolean,
+    reason?: string,
+  ) => Promise<void>;
+}) => {
+  const [activeTab, setActiveTab] = useState("output");
+  const [isInfoOpen, setIsInfoOpen] = useState(false);
+  const [isResolvingApproval, setIsResolvingApproval] = useState(false);
+  const [inlineIframeKey, setInlineIframeKey] = useState(0);
+  const [hasRevealedIframe, setHasRevealedIframe] = useState(false);
+  const [isCollapsed, setIsCollapsed] = useState(false);
+
+  const taskDetailQuery = useQuery<AgentTaskResponse>({
+    queryKey: [`/api/agent/tasks/${card.taskId}`],
+    enabled: isInfoOpen || activeTab === "process" || activeTab === "terminal",
+    staleTime: 0,
+    retry: 2,
+  });
+
+  const detailTimeline = useMemo(() => {
+    const details = taskDetailQuery.data;
+    if (!details) return [] as UnifiedAgentTaskTimelineItem[];
+    const rows: UnifiedAgentTaskTimelineItem[] = [];
+
+    for (const step of details.steps ?? []) {
+      rows.push({
+        id: `detail-step-${step.id}`,
+        title: step.title,
+        detail: step.detail ?? null,
+        status: step.status,
+        createdAt: toIsoString(step.updatedAt) ?? toIsoString(step.createdAt),
+      });
+    }
+
+    for (const approval of details.approvals ?? []) {
+      rows.push({
+        id: `detail-approval-${approval.id}`,
+        title:
+          approval.status === "pending"
+            ? "Approval required"
+            : `Approval ${approval.status}`,
+        detail: approval.requestedAction,
+        status: approval.status === "denied" ? "failed" : "blocked",
+        createdAt: toIsoString(approval.respondedAt) ?? toIsoString(approval.createdAt),
+      });
+    }
+
+    for (const artifact of details.artifacts ?? []) {
+      rows.push({
+        id: `detail-artifact-${artifact.id}`,
+        title: "Artifact published",
+        detail: artifact.title,
+        status: "completed",
+        createdAt: toIsoString(artifact.updatedAt) ?? toIsoString(artifact.createdAt),
+      });
+    }
+
+    for (const toolCall of details.toolCalls ?? []) {
+      rows.push({
+        id: `detail-tool-${toolCall.id}`,
+        title: `Tool: ${toolCall.toolName}`,
+        detail: toolCall.outputSummary ?? null,
+        status:
+          toolCall.status === "completed"
+            ? "completed"
+            : toolCall.status === "failed"
+              ? "failed"
+              : toolCall.status === "started"
+                ? "in_progress"
+                : "info",
+        createdAt: toIsoString(toolCall.createdAt),
+      });
+    }
+
+    return normalizeTimeline(rows);
+  }, [taskDetailQuery.data]);
+
+  const timeline = detailTimeline.length > 0 ? detailTimeline : card.timeline;
+  const hasArtifact = Boolean(card.artifact);
+  const approvalPending = card.approval?.status === "pending";
+  const isRunning = card.status === "queued" || card.status === "in_progress";
+  const statusLabel = toTaskStatusLabel(card.status);
+  const kindLabel = toTaskKindLabel(card.taskKind);
+  const outputSummary = toUnifiedTaskOutputSummary(card);
+  const detailTools = taskDetailQuery.data?.toolCalls ?? [];
+
+  const statusTone =
+    card.status === "failed"
+      ? "color-mix(in srgb, var(--app-accent) 40%, #ef4444)"
+      : card.status === "approval_required"
+        ? "color-mix(in srgb, var(--app-accent) 70%, #f59e0b)"
+        : card.status === "completed"
+          ? "color-mix(in srgb, var(--app-accent) 85%, #22c55e)"
+          : "var(--app-accent)";
+
+  const handleApproval = async (approve: boolean) => {
+    setIsResolvingApproval(true);
+    try {
+      await onResolveApproval(
+        card.taskId,
+        approve,
+        approve ? undefined : "Denied from unified task card",
+      );
+    } finally {
+      setIsResolvingApproval(false);
+    }
+  };
+
+  const canRenderInline =
+    hasArtifact &&
+    card.artifact?.htmlContent &&
+    card.artifact.htmlContent.trim().length > 0;
+
+  const inlineIframeSrc = useMemo(() => {
+    if (!canRenderInline || !card.artifact?.id) return null;
+    return `/api/agent/artifacts/${card.artifact.id}/render?v=${inlineIframeKey}`;
+  }, [canRenderInline, card.artifact?.id, inlineIframeKey]);
+
+  const terminalLines = useMemo(() => {
+    const lines: { text: string; type: "info" | "success" | "warn" | "cmd" }[] = [];
+    const meta = card.artifact?.metadata as Record<string, unknown> | undefined;
+    const gen = meta?.generation as Record<string, unknown> | undefined;
+    const qa = meta?.qa as Record<string, unknown> | undefined;
+    const sandbox = meta?.sandbox as Record<string, unknown> | undefined;
+
+    lines.push({ text: `$ zee task init --kind ${card.taskKind}`, type: "cmd" });
+    lines.push({ text: `[task] ${card.taskId.slice(0, 8)}... created`, type: "info" });
+
+    if (gen) {
+      const model = gen.model ?? "unknown";
+      const engine = gen.engine ?? "canvas_dom";
+      const mode = gen.mode ?? "deterministic";
+      const attempts = gen.attempts ?? 1;
+      lines.push({ text: `$ zee generate --model ${model} --engine ${engine}`, type: "cmd" });
+      lines.push({ text: `[gen] mode=${mode} attempts=${attempts}`, type: "info" });
+      if (gen.backendFallbackReason) {
+        lines.push({ text: `[warn] fallback: ${gen.backendFallbackReason}`, type: "warn" });
+      }
+    }
+
+    if (sandbox) {
+      const jobId = String(sandbox.jobId ?? "").slice(0, 8);
+      const output = sandbox.outputPath ?? "index.html";
+      lines.push({ text: `$ zee sandbox run --job ${jobId}...`, type: "cmd" });
+      lines.push({ text: `[sandbox] output: ${output}`, type: "success" });
+    }
+
+    if (qa) {
+      const qaMode = qa.mode ?? "unknown";
+      const passed = qa.passed;
+      lines.push({ text: `$ zee qa check --mode ${qaMode}`, type: "cmd" });
+      if (passed) {
+        lines.push({ text: `[qa] PASSED`, type: "success" });
+      } else {
+        lines.push({ text: `[qa] FAILED`, type: "warn" });
+      }
+      if (qa.warning) {
+        lines.push({ text: `[qa] ${String(qa.warning).slice(0, 80)}...`, type: "warn" });
+      }
+    }
+
+    if (card.artifact) {
+      lines.push({ text: `$ zee artifact publish "${card.artifact.title}"`, type: "cmd" });
+      lines.push({ text: `[done] artifact ${card.artifact.id.slice(0, 8)}... ready`, type: "success" });
+    }
+
+    for (const tc of detailTools) {
+      lines.push({ text: `$ zee tool ${tc.toolName}`, type: "cmd" });
+      if (tc.outputSummary) {
+        lines.push({ text: `  → ${tc.outputSummary.slice(0, 60)}`, type: "info" });
+      }
+    }
+
+    return lines;
+  }, [card.artifact, card.taskId, card.taskKind, detailTools]);
+
+  const tabAnimVariants = {
+    initial: { opacity: 0, y: 6 },
+    animate: { opacity: 1, y: 0 },
+    exit: { opacity: 0, y: -4 },
+  };
+
+  return (
+    <div
+      className="space-y-2.5"
+      data-testid="agent-unified-task-card"
+      data-agent-task-id={card.taskId}
+      data-agent-task-status={card.status}
+    >
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2 min-w-0">
+          <div className="min-w-0">
+            <p className="line-clamp-1 text-sm font-semibold leading-snug" style={{ color: "var(--app-on-dark)" }}>{card.title}</p>
+            <div className="flex items-center gap-1.5 mt-0.5">
+              <span
+                className="text-[10px] font-bold uppercase tracking-[0.14em]"
+                style={{ color: "var(--app-on-dark-muted)" }}
+              >
+                {kindLabel}
+              </span>
+              <span
+                className="rounded-full border px-2 py-px text-[9px] font-bold uppercase tracking-wide"
+                style={{
+                  borderColor: "color-mix(in srgb, var(--app-soft-card-border) 75%, transparent)",
+                  backgroundColor: "color-mix(in srgb, var(--app-soft-card-bg) 65%, transparent)",
+                  color: statusTone,
+                }}
+              >
+                {statusLabel}
+              </span>
+              {isRunning && (
+                <motion.span
+                  className="inline-flex h-1.5 w-1.5 rounded-full"
+                  style={{ backgroundColor: "var(--app-accent)" }}
+                  animate={{ opacity: [1, 0.3, 1] }}
+                  transition={{ duration: 1.5, repeat: Infinity }}
+                />
+              )}
+            </div>
+          </div>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <TooltipProvider delayDuration={200}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  onClick={() => setIsCollapsed((c) => !c)}
+                  className="mt-0.5 rounded-lg border p-1.5 transition-all hover:opacity-90"
+                  style={{
+                    borderColor: "var(--app-soft-card-border)",
+                    backgroundColor: "var(--app-soft-card-bg)",
+                  }}
+                  data-testid="agent-task-collapse-button"
+                >
+                  <motion.div
+                    animate={{ rotate: isCollapsed ? 0 : 180 }}
+                    transition={{ duration: 0.25 }}
+                  >
+                    <ChevronDown className="h-3.5 w-3.5" style={{ color: "var(--app-on-dark)" }} />
+                  </motion.div>
+                </button>
+              </TooltipTrigger>
+              <TooltipContent>{isCollapsed ? "Expand" : "Collapse"}</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+          <TooltipProvider delayDuration={200}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  onClick={() => setIsInfoOpen(true)}
+                  className="mt-0.5 rounded-lg border p-1.5 transition-all hover:opacity-90"
+                  style={{
+                    borderColor: "var(--app-soft-card-border)",
+                    backgroundColor: "var(--app-soft-card-bg)",
+                  }}
+                  data-testid="agent-task-info-button"
+                >
+                  <Info className="h-3.5 w-3.5" style={{ color: "var(--app-on-dark)" }} />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent>View full activity</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        </div>
+      </div>
+
+      <AnimatePresence initial={false}>
+        {!isCollapsed && (
+          <motion.div
+            key="card-panel"
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.3, ease: "easeInOut" }}
+            className="overflow-hidden"
+          >
+            <div
+              className="overflow-hidden rounded-2xl border"
+              style={{
+                borderColor: "var(--app-soft-card-border)",
+                backgroundColor: "var(--app-soft-card-bg)",
+              }}
+            >
+        <div
+          className="flex border-b"
+          style={{ borderColor: "var(--app-soft-card-border)" }}
+          data-testid="agent-task-tabs"
+        >
+          {[
+            { key: "output", label: "Output" },
+            { key: "process", label: "Thinking/Process" },
+            { key: "terminal", label: "Terminal/Code" },
+          ].map((tab) => (
+            <button
+              key={tab.key}
+              type="button"
+              onClick={() => setActiveTab(tab.key)}
+              className={cn(
+                "relative flex-1 px-2 py-2.5 text-[11px] font-semibold tracking-wide transition-colors",
+              )}
+              style={{
+                color: activeTab === tab.key ? "var(--app-on-dark)" : "var(--app-on-dark-muted)",
+              }}
+              data-testid={`agent-task-tab-${tab.key}`}
+            >
+              {tab.label}
+              {activeTab === tab.key && (
+                <motion.div
+                  layoutId={`tab-indicator-${card.taskId}`}
+                  className="absolute inset-x-2 bottom-0 h-[2px] rounded-full"
+                  style={{ backgroundColor: "var(--app-accent)" }}
+                  transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                />
+              )}
+            </button>
+          ))}
+        </div>
+
+        <div className="relative min-h-[200px]">
+          <AnimatePresence mode="wait">
+            {activeTab === "output" && (
+              <motion.div
+                key="tab-output"
+                variants={tabAnimVariants}
+                initial="initial"
+                animate="animate"
+                exit="exit"
+                transition={{ duration: 0.2 }}
+                className="p-3"
+              >
+                {canRenderInline && inlineIframeSrc ? (
+                  <div className="space-y-2">
+                    <div
+                      className="relative overflow-hidden rounded-xl border group cursor-pointer"
+                      style={{
+                        borderColor: "var(--app-soft-card-border)",
+                        boxShadow: "inset 0 1px 8px color-mix(in srgb, var(--app-accent) 12%, transparent)",
+                      }}
+                      onClick={() => !hasRevealedIframe && setHasRevealedIframe(true)}
+                    >
+                      <AnimatePresence>
+                        {!hasRevealedIframe && (
+                          <motion.div
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            exit={{ opacity: 0, scale: 1.05 }}
+                            transition={{ duration: 0.4, ease: "easeOut" }}
+                            className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-4 text-center p-6"
+                            style={{
+                              background: "linear-gradient(135deg, color-mix(in srgb, var(--app-accent) 25%, #0a0a0a), #0a0a0a)",
+                            }}
+                          >
+                            <div 
+                              className="flex h-16 w-16 items-center justify-center rounded-full border-2 border-dashed transition-transform duration-500 group-hover:scale-110"
+                              style={{ borderColor: "color-mix(in srgb, var(--app-accent) 40%, transparent)" }}
+                            >
+                              <Play className="ml-1 h-6 w-6" style={{ color: "var(--app-accent)" }} />
+                            </div>
+                            <div className="space-y-1">
+                              <p className="text-sm font-bold tracking-tight" style={{ color: "var(--app-on-dark)" }}>
+                                Tap to Launch
+                              </p>
+                              <p className="text-[11px] font-medium opacity-60" style={{ color: "var(--app-on-dark-muted)" }}>
+                                {card.artifact?.title ?? "Mini Game"}
+                              </p>
+                            </div>
+                            <div 
+                              className="absolute inset-0 opacity-20 group-hover:opacity-30 transition-opacity duration-500"
+                              style={{
+                                background: "radial-gradient(circle at center, var(--app-accent) 0%, transparent 70%)"
+                              }}
+                            />
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+                      <iframe
+                        key={inlineIframeKey}
+                        title={card.artifact?.title ?? "Output"}
+                        sandbox="allow-scripts"
+                        src={inlineIframeSrc}
+                        className="h-[280px] w-full"
+                        style={{ backgroundColor: "#0a0a0a", border: "none" }}
+                        data-testid="agent-inline-artifact-iframe"
+                      />
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => onOpenArtifact(card.artifact!.id)}
+                        className="inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-[11px] font-semibold transition-colors hover:opacity-90"
+                        style={{
+                          borderColor: "var(--app-soft-card-border)",
+                          backgroundColor: "var(--app-soft-card-bg)",
+                          color: "var(--app-accent)",
+                        }}
+                        data-testid="button-fullscreen-inline-artifact"
+                      >
+                        <Maximize2 className="h-3 w-3" />
+                        Full Screen
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setInlineIframeKey((k) => k + 1)}
+                        className="inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-[11px] font-semibold transition-colors hover:opacity-90"
+                        style={{
+                          borderColor: "var(--app-soft-card-border)",
+                          backgroundColor: "var(--app-soft-card-bg)",
+                          color: "var(--app-on-dark)",
+                        }}
+                        data-testid="button-reload-inline-artifact"
+                      >
+                        Reload
+                      </button>
+                    </div>
+                  </div>
+                ) : hasArtifact && card.artifact && card.artifact.markdownContent ? (
+                  <div
+                    className="relative overflow-hidden rounded-xl border p-4"
+                    style={{
+                      borderColor: "var(--app-soft-card-border)",
+                      background:
+                        "radial-gradient(120% 100% at 12% 10%, color-mix(in srgb, var(--app-accent) 14%, transparent) 0%, transparent 56%), color-mix(in srgb, var(--app-soft-card-bg) 80%, transparent)",
+                    }}
+                  >
+                    <div className="space-y-2">
+                      <div className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide opacity-70">
+                        <FileText className="h-3 w-3" />
+                        Document
+                      </div>
+                      <p className="text-sm font-semibold">{card.artifact.title}</p>
+                      <div
+                        className="max-h-[200px] overflow-y-auto rounded-lg border p-3 text-xs leading-relaxed opacity-85"
+                        style={{
+                          borderColor: "var(--app-soft-card-border)",
+                          backgroundColor: "color-mix(in srgb, var(--app-soft-card-bg) 70%, transparent)",
+                        }}
+                        data-testid="agent-inline-markdown-preview"
+                      >
+                        <pre className="whitespace-pre-wrap font-sans">{card.artifact.markdownContent}</pre>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => onOpenArtifact(card.artifact!.id)}
+                        className="rounded-lg border px-3 py-1.5 text-[11px] font-semibold transition-colors hover:opacity-95"
+                        style={{
+                          borderColor: "var(--app-soft-card-border)",
+                          backgroundColor: "var(--app-soft-card-bg)",
+                          color: "var(--app-accent)",
+                        }}
+                        data-testid="button-open-agent-artifact"
+                      >
+                        View Full
+                      </button>
+                    </div>
+                  </div>
+                ) : hasArtifact && card.artifact ? (
+                  <div
+                    className="relative overflow-hidden rounded-xl border p-4"
+                    style={{
+                      borderColor: "var(--app-soft-card-border)",
+                      background:
+                        "radial-gradient(120% 100% at 12% 10%, color-mix(in srgb, var(--app-accent) 14%, transparent) 0%, transparent 56%), color-mix(in srgb, var(--app-soft-card-bg) 80%, transparent)",
+                    }}
+                  >
+                    <div className="space-y-2">
+                      <div className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide opacity-70">
+                        <Sparkles className="h-3 w-3" />
+                        Ready
+                      </div>
+                      <p className="text-sm font-semibold">{card.artifact.title}</p>
+                      <p className="text-xs opacity-75">{outputSummary}</p>
+                      <button
+                        type="button"
+                        onClick={() => onOpenArtifact(card.artifact!.id)}
+                        className="rounded-lg border px-3 py-1.5 text-[11px] font-semibold transition-colors hover:opacity-95"
+                        style={{
+                          borderColor: "var(--app-soft-card-border)",
+                          backgroundColor: "var(--app-soft-card-bg)",
+                          color: "var(--app-accent)",
+                        }}
+                        data-testid="button-open-agent-artifact"
+                      >
+                        {card.artifact.type === "mini_game" ? "View / Play" : "View"}
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex h-[200px] flex-col items-center justify-center gap-3 text-center">
+                    <motion.div
+                      animate={{ rotate: 360 }}
+                      transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
+                      className="h-8 w-8 rounded-full border-2"
+                      style={{
+                        borderColor: "color-mix(in srgb, var(--app-soft-card-border) 50%, transparent)",
+                        borderTopColor: "var(--app-accent)",
+                      }}
+                    />
+                    <p className="text-xs opacity-60">Generating output...</p>
+                  </div>
+                )}
+
+                {approvalPending && card.approval && (
+                  <div
+                    className="mt-3 space-y-2 rounded-xl border p-3"
+                    style={{
+                      borderColor: "var(--app-soft-card-border)",
+                      backgroundColor: "color-mix(in srgb, var(--app-soft-card-bg) 82%, transparent)",
+                    }}
+                  >
+                    <div className="flex items-center gap-2">
+                      <AlertTriangle className="h-4 w-4" />
+                      <p className="text-xs font-semibold uppercase tracking-wide">
+                        Approval required
+                      </p>
+                    </div>
+                    <p className="text-xs opacity-80">{card.approval.requestedAction}</p>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => void handleApproval(true)}
+                        disabled={isResolvingApproval}
+                        className="rounded-lg border px-2.5 py-1.5 text-xs font-semibold disabled:opacity-60"
+                        style={{
+                          borderColor: "var(--app-soft-card-border)",
+                          backgroundColor: "var(--app-soft-card-bg)",
+                          color: "var(--app-accent)",
+                        }}
+                        data-testid="button-agent-approve"
+                      >
+                        Approve
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void handleApproval(false)}
+                        disabled={isResolvingApproval}
+                        className="rounded-lg border px-2.5 py-1.5 text-xs font-semibold disabled:opacity-60"
+                        style={{
+                          borderColor: "var(--app-soft-card-border)",
+                          backgroundColor: "transparent",
+                        }}
+                        data-testid="button-agent-deny"
+                      >
+                        Deny
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </motion.div>
+            )}
+
+            {activeTab === "process" && (
+              <motion.div
+                key="tab-process"
+                variants={tabAnimVariants}
+                initial="initial"
+                animate="animate"
+                exit="exit"
+                transition={{ duration: 0.2 }}
+                className="max-h-[320px] overflow-y-auto p-3"
+              >
+                <div className="space-y-1" data-testid="agent-task-process-timeline">
+                  {timeline.length === 0 ? (
+                    <div className="flex h-[160px] items-center justify-center">
+                      <p className="text-xs opacity-50">
+                        Activity will appear here as Zee works.
+                      </p>
+                    </div>
+                  ) : (
+                    timeline.slice(-5).map((item, idx, arr) => {
+                      const visual = toTimelineVisual(item.status);
+                      const isLast = idx === arr.length - 1;
+                      return (
+                        <motion.div
+                          key={item.id}
+                          initial={{ opacity: 0, x: -8 }}
+                          animate={{ opacity: 1, x: 0 }}
+                          transition={{ delay: idx * 0.04, duration: 0.25 }}
+                          className="flex gap-3 py-2"
+                        >
+                          <div className="flex flex-col items-center">
+                            <div
+                              className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full"
+                              style={{
+                                backgroundColor: `color-mix(in srgb, ${visual.color} 18%, transparent)`,
+                                color: visual.color,
+                              }}
+                            >
+                              {visual.icon}
+                            </div>
+                            {!isLast && (
+                              <div
+                                className="mt-1 w-px flex-1"
+                                style={{
+                                  backgroundColor: "color-mix(in srgb, var(--app-soft-card-border) 60%, transparent)",
+                                }}
+                              />
+                            )}
+                          </div>
+                          <div className="min-w-0 flex-1 pb-2">
+                            <div className="flex items-start justify-between gap-2">
+                              <p className="text-xs font-semibold leading-tight" style={{ color: "var(--app-on-dark)" }}>{item.title}</p>
+                              <span className="shrink-0 text-[10px]" style={{ color: "var(--app-on-dark-muted)" }}>
+                                {formatTimelineTimeLabel(item.createdAt)}
+                              </span>
+                            </div>
+                            {item.detail && (
+                              <p className="mt-0.5 text-[11px] leading-relaxed" style={{ color: "var(--app-on-dark-muted)" }}>
+                                {item.detail}
+                              </p>
+                            )}
+                          </div>
+                        </motion.div>
+                      );
+                    })
+                  )}
+                  {timeline.length > 5 && (
+                    <button
+                      type="button"
+                      onClick={() => setIsInfoOpen(true)}
+                      className="mt-1 w-full text-center text-[11px] font-semibold opacity-50 transition-opacity hover:opacity-80"
+                      style={{ color: "var(--app-accent)" }}
+                      data-testid="agent-task-view-all-activity"
+                    >
+                      View all {timeline.length} steps
+                    </button>
+                  )}
+                </div>
+
+                {detailTools.length > 0 && (
+                  <div className="mt-2 space-y-1.5 border-t pt-2" style={{ borderColor: "var(--app-soft-card-border)" }}>
+                    <p className="text-[10px] font-bold uppercase tracking-widest" style={{ color: "var(--app-on-dark-muted)" }}>
+                      Services Used
+                    </p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {detailTools.map((toolCall) => (
+                        <span
+                          key={`tool-chip-${toolCall.id}`}
+                          className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium"
+                          style={{
+                            borderColor: "color-mix(in srgb, var(--app-accent) 30%, var(--app-soft-card-border))",
+                            backgroundColor: "color-mix(in srgb, var(--app-accent) 8%, transparent)",
+                            color: "var(--app-accent)",
+                          }}
+                        >
+                          <Globe className="h-2.5 w-2.5" />
+                          {toolCall.toolName}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </motion.div>
+            )}
+
+            {activeTab === "terminal" && (
+              <motion.div
+                key="tab-terminal"
+                variants={tabAnimVariants}
+                initial="initial"
+                animate="animate"
+                exit="exit"
+                transition={{ duration: 0.2 }}
+                className="flex flex-col"
+              >
+                <div
+                  className="flex items-center gap-2 border-b px-3 py-2"
+                  style={{ borderColor: "var(--app-soft-card-border)" }}
+                >
+                  <Terminal className="h-3.5 w-3.5 opacity-60" />
+                  <span className="text-[11px] font-bold tracking-wide opacity-70">
+                    Zee's Computer & IDE
+                  </span>
+                  <div className="ml-auto flex gap-1">
+                    <span className="h-2 w-2 rounded-full" style={{ backgroundColor: "#ef4444", opacity: 0.6 }} />
+                    <span className="h-2 w-2 rounded-full" style={{ backgroundColor: "#f59e0b", opacity: 0.6 }} />
+                    <span className="h-2 w-2 rounded-full" style={{ backgroundColor: "#22c55e", opacity: 0.6 }} />
+                  </div>
+                </div>
+                <div
+                  className="max-h-[280px] overflow-y-auto px-3 py-2 font-mono text-[11px] leading-[1.7]"
+                  style={{
+                    backgroundColor: "color-mix(in srgb, #000000 80%, var(--app-panel-bg))",
+                    color: "color-mix(in srgb, var(--app-accent) 60%, #a0ffa0)",
+                  }}
+                  data-testid="agent-task-terminal-view"
+                >
+                  {terminalLines.length === 0 ? (
+                    <div className="flex h-[160px] items-center justify-center font-sans">
+                      <p className="text-xs opacity-40">
+                        Terminal output will appear here.
+                      </p>
+                    </div>
+                  ) : (
+                    terminalLines.map((line, idx) => (
+                      <motion.div
+                        key={`term-${idx}`}
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        transition={{ delay: idx * 0.05, duration: 0.2 }}
+                        className={cn(
+                          line.type === "cmd" && "font-semibold",
+                          line.type === "warn" && "opacity-70",
+                        )}
+                        style={{
+                          color:
+                            line.type === "cmd"
+                              ? "color-mix(in srgb, var(--app-accent) 70%, #ffffff)"
+                              : line.type === "success"
+                                ? "#4ade80"
+                                : line.type === "warn"
+                                  ? "#fbbf24"
+                                  : undefined,
+                        }}
+                      >
+                        {line.text}
+                      </motion.div>
+                    ))
+                  )}
+                  <motion.span
+                    className="inline-block h-3 w-1.5 align-middle"
+                    style={{ backgroundColor: "var(--app-accent)" }}
+                    animate={{ opacity: [1, 0, 1] }}
+                    transition={{ duration: 1, repeat: Infinity }}
+                  />
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <Dialog open={isInfoOpen} onOpenChange={setIsInfoOpen}>
+        <DialogContent
+          className="fixed left-1/2 top-1/2 w-[calc(100%-1.5rem)] max-w-md -translate-x-1/2 -translate-y-1/2 rounded-2xl border p-0 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95"
+          style={{
+            borderColor: "var(--app-soft-card-border)",
+            backgroundColor: "var(--app-panel-bg)",
+            color: "var(--app-on-dark)",
+          }}
+          data-testid="agent-task-info-dialog"
+        >
+          <div className="flex items-center justify-between gap-3 border-b px-4 pb-3 pt-4" style={{ borderColor: "var(--app-soft-card-border)" }}>
+            <DialogHeader className="space-y-0.5 text-left p-0">
+              <DialogTitle className="text-sm font-bold" style={{ color: "var(--app-on-dark)" }}>
+                Task Timeline
+              </DialogTitle>
+              <DialogDescription className="text-[11px] line-clamp-1" style={{ color: "var(--app-on-dark-muted)" }}>
+                {card.title}
+              </DialogDescription>
+            </DialogHeader>
+            <span
+              className="shrink-0 rounded-full border px-2.5 py-0.5 text-[9px] font-bold uppercase tracking-wide"
+              style={{
+                borderColor: "color-mix(in srgb, var(--app-soft-card-border) 75%, transparent)",
+                backgroundColor: "color-mix(in srgb, var(--app-soft-card-bg) 65%, transparent)",
+                color: statusTone,
+              }}
+            >
+              {statusLabel}
+            </span>
+          </div>
+
+          {taskDetailQuery.isLoading ? (
+            <div className="flex items-center justify-center gap-2 py-10 text-xs" style={{ color: "var(--app-on-dark-muted)" }}>
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Loading timeline...
+            </div>
+          ) : (
+            <div className="max-h-[55dvh] overflow-y-auto px-4 py-3">
+              {timeline.length === 0 ? (
+                <p className="py-6 text-center text-xs" style={{ color: "var(--app-on-dark-muted)" }}>No activity logged yet.</p>
+              ) : (
+                <div className="relative pl-7">
+                  <div
+                    className="absolute left-[9px] top-3 bottom-3 w-px"
+                    style={{ backgroundColor: "color-mix(in srgb, var(--app-soft-card-border) 80%, transparent)" }}
+                  />
+                  {timeline.map((item, idx) => {
+                    const visual = toTimelineVisual(item.status);
+                    const isLast = idx === timeline.length - 1;
+                    return (
+                      <div
+                        key={`timeline-dialog-${item.id}`}
+                        className={cn("relative", !isLast && "pb-4")}
+                        data-testid="agent-task-timeline-row"
+                      >
+                        <div
+                          className="absolute -left-7 flex h-[18px] w-[18px] items-center justify-center rounded-full"
+                          style={{
+                            backgroundColor: `color-mix(in srgb, ${visual.color} 20%, var(--app-panel-bg))`,
+                            color: visual.color,
+                            boxShadow: `0 0 0 3px var(--app-panel-bg)`,
+                          }}
+                        >
+                          <span className="flex h-2.5 w-2.5 items-center justify-center [&>svg]:h-2.5 [&>svg]:w-2.5">{visual.icon}</span>
+                        </div>
+                        <div className="min-w-0">
+                          <div className="flex items-start justify-between gap-2">
+                            <p className="text-[12px] font-semibold leading-tight" style={{ color: "var(--app-on-dark)" }}>
+                              {item.title}
+                            </p>
+                            <span className="shrink-0 text-[10px] pt-px" style={{ color: "var(--app-on-dark-muted)" }}>
+                              {formatTimelineTimeLabel(item.createdAt)}
+                            </span>
+                          </div>
+                          {item.detail && (
+                            <p
+                              className="mt-1 rounded-lg border px-2.5 py-1.5 text-[11px] leading-relaxed"
+                              style={{
+                                color: "var(--app-on-dark-muted)",
+                                borderColor: "color-mix(in srgb, var(--app-soft-card-border) 50%, transparent)",
+                                backgroundColor: "color-mix(in srgb, var(--app-soft-card-bg) 40%, transparent)",
+                              }}
+                            >
+                              {item.detail}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {detailTools.length > 0 && (
+                <div className="mt-3 border-t pt-3" style={{ borderColor: "var(--app-soft-card-border)" }}>
+                  <p className="mb-2 text-[10px] font-bold uppercase tracking-widest" style={{ color: "var(--app-on-dark-muted)" }}>
+                    Services Used
+                  </p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {detailTools.map((toolCall) => (
+                      <span
+                        key={`tool-chip-dialog-${toolCall.id}`}
+                        className="inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[10px] font-medium"
+                        style={{
+                          borderColor: "color-mix(in srgb, var(--app-accent) 30%, var(--app-soft-card-border))",
+                          backgroundColor: "color-mix(in srgb, var(--app-accent) 8%, transparent)",
+                          color: "var(--app-accent)",
+                        }}
+                      >
+                        <Globe className="h-2.5 w-2.5" />
+                        {toolCall.toolName}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+};
+
 const TextView = ({
   messages,
   isStreamingReply,
@@ -2629,6 +4566,9 @@ const TextView = ({
   assistantAvatarSrc,
   mode,
   userProfileImage,
+  onOpenArtifact,
+  onResolveApproval,
+  liveTaskSnapshots,
 }: {
   messages: MessageData[];
   isStreamingReply: boolean;
@@ -2636,6 +4576,13 @@ const TextView = ({
   assistantAvatarSrc: string;
   mode: Mode;
   userProfileImage?: string;
+  onOpenArtifact: (artifactId: string) => void;
+  onResolveApproval: (
+    taskId: string,
+    approve: boolean,
+    reason?: string,
+  ) => Promise<void>;
+  liveTaskSnapshots: Record<string, LiveTaskSnapshot>;
 }) => {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const [showJumpToNewest, setShowJumpToNewest] = useState(false);
@@ -2676,6 +4623,11 @@ const TextView = ({
       .find((msg) => msg.sender === "assistant")
       ?.text ?? "";
 
+  const renderItems = useMemo(
+    () => buildUnifiedAgentTaskCards(messages, liveTaskSnapshots),
+    [messages, liveTaskSnapshots],
+  );
+
   return (
     <div
       className="h-full relative flex flex-col"
@@ -2701,9 +4653,16 @@ const TextView = ({
         }}
       >
         <div className="space-y-4 pb-8">
-          {messages.map((msg, idx) => (
+          {renderItems.map((item, idx) => {
+            const msg = item.message;
+            const isUnifiedTaskCard = item.kind === "agent_unified_task";
+            return (
             <motion.div
-              key={msg.id}
+              key={
+                isUnifiedTaskCard
+                  ? `agent-card-${item.card.taskId}-${msg.id}`
+                  : msg.id
+              }
               initial={{ opacity: 0, y: 16, scale: 0.97 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
               transition={{
@@ -2719,7 +4678,12 @@ const TextView = ({
                 msg.sender === "user" ? "justify-end" : "justify-start",
               )}
             >
-              <div className="flex items-end gap-2 max-w-[80%]">
+              <div
+                className={cn(
+                  "flex items-end gap-2",
+                  isUnifiedTaskCard ? "max-w-[88%]" : "max-w-[80%]",
+                )}
+              >
                 {msg.sender !== "user" && (
                   <Avatar
                     className="w-8 h-8 mb-1 shrink-0 ring-2"
@@ -2731,13 +4695,17 @@ const TextView = ({
                 )}
                 <div
                   className={cn(
-                    "rounded-2xl text-sm leading-relaxed shadow-sm",
-                    msg.sender === "user"
-                      ? "font-medium rounded-br-none"
-                      : "rounded-bl-none",
+                    "text-sm leading-relaxed",
+                    !isUnifiedTaskCard && "rounded-2xl shadow-sm",
+                    !isUnifiedTaskCard &&
+                      (msg.sender === "user"
+                        ? "font-medium rounded-br-none"
+                        : "rounded-bl-none"),
                   )}
                   style={
-                    msg.sender === "user"
+                    isUnifiedTaskCard
+                      ? undefined
+                      : msg.sender === "user"
                       ? {
                           backgroundColor: "var(--app-user-bubble-bg)",
                           color: "var(--app-user-bubble-text)",
@@ -2748,7 +4716,7 @@ const TextView = ({
                         }
                   }
                 >
-                  {(msg.attachments ?? []).length > 0 && (
+                  {!isUnifiedTaskCard && (msg.attachments ?? []).length > 0 && (
                     <div className="grid gap-2 p-2">
                       {(msg.attachments ?? []).map((attachment) => (
                         <img
@@ -2760,7 +4728,7 @@ const TextView = ({
                       ))}
                     </div>
                   )}
-                  <div className="px-5 py-3">
+                  <div className={isUnifiedTaskCard ? "" : "px-5 py-3"}>
                     {msg.isTyping ? (
                       <div className="flex items-center gap-1.5 py-1">
                         <motion.span
@@ -2781,6 +4749,137 @@ const TextView = ({
                           animate={{ y: [0, -4, 0], opacity: [0.4, 1, 0.4] }}
                           transition={{ duration: 0.8, repeat: Infinity, ease: "easeInOut", delay: 0.3 }}
                         />
+                      </div>
+                    ) : isUnifiedTaskCard ? (
+                      <UnifiedAgentTaskCard
+                        card={item.card}
+                        onOpenArtifact={onOpenArtifact}
+                        onResolveApproval={onResolveApproval}
+                      />
+                    ) : isAgentTaskStatusPayload(msg.uiPayload) ? (
+                      <div
+                        className="space-y-2"
+                        data-testid="agent-task-status-card"
+                        data-agent-task-id={msg.uiPayload.task.id}
+                        data-agent-task-status={msg.uiPayload.task.status}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-[11px] font-semibold uppercase tracking-wide opacity-75">
+                            Agent task
+                          </span>
+                          <span className="text-[11px] font-semibold">
+                            {toTaskStatusLabel(msg.uiPayload.task.status)}
+                          </span>
+                        </div>
+                        <p className="text-sm font-medium">{msg.uiPayload.text}</p>
+                        {msg.uiPayload.latestStep && (
+                          <div className="rounded-lg border border-black/10 bg-black/5 px-3 py-2 text-xs">
+                            <p className="font-semibold">{msg.uiPayload.latestStep.title}</p>
+                            <p className="opacity-80">{msg.uiPayload.latestStep.detail}</p>
+                          </div>
+                        )}
+                      </div>
+                    ) : isAgentApprovalPayload(msg.uiPayload) ? (
+                      <div
+                        className="space-y-2"
+                        data-testid="agent-approval-card"
+                        data-agent-task-id={msg.uiPayload.taskId}
+                      >
+                        <div className="flex items-center gap-2">
+                          <AlertTriangle className="h-4 w-4" />
+                          <p className="text-sm font-semibold">Approval required</p>
+                        </div>
+                        <p className="text-xs opacity-85">
+                          {msg.uiPayload.approval.requestedAction}
+                        </p>
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const approvalPayload = msg.uiPayload as Extract<
+                                AgentMessageUiPayload,
+                                { kind: "agent_approval" }
+                              >;
+                              void onResolveApproval(approvalPayload.taskId, true);
+                            }}
+                            className="rounded-lg border px-2.5 py-1.5 text-xs font-semibold"
+                            style={{
+                              borderColor: "var(--app-soft-card-border)",
+                              backgroundColor: "var(--app-soft-card-bg)",
+                            }}
+                            data-testid="button-agent-approve"
+                          >
+                            Approve
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const approvalPayload = msg.uiPayload as Extract<
+                                AgentMessageUiPayload,
+                                { kind: "agent_approval" }
+                              >;
+                              void onResolveApproval(
+                                approvalPayload.taskId,
+                                false,
+                                "Denied from chat card",
+                              );
+                            }}
+                            className="rounded-lg border px-2.5 py-1.5 text-xs font-semibold"
+                            style={{
+                              borderColor: "var(--app-soft-card-border)",
+                              backgroundColor: "transparent",
+                            }}
+                            data-testid="button-agent-deny"
+                          >
+                            Deny
+                          </button>
+                        </div>
+                      </div>
+                    ) : isAgentArtifactPayload(msg.uiPayload) ? (
+                      <div
+                        className="space-y-2"
+                        data-testid="agent-artifact-card"
+                        data-agent-artifact-id={msg.uiPayload.artifact.id}
+                        data-agent-artifact-type={msg.uiPayload.artifact.type}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-1.5">
+                            {msg.uiPayload.artifact.type === "mini_game" ? (
+                              <Play className="h-4 w-4" />
+                            ) : (
+                              <FileText className="h-4 w-4" />
+                            )}
+                            <p className="text-sm font-semibold">
+                              {msg.uiPayload.artifact.title}
+                            </p>
+                          </div>
+                          <span className="text-[11px] uppercase tracking-wide opacity-70">
+                            {msg.uiPayload.artifact.type === "mini_game"
+                              ? "Game"
+                              : "Doc"}
+                          </span>
+                        </div>
+                        <p className="text-xs opacity-80">{msg.text}</p>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const artifactPayload = msg.uiPayload as Extract<
+                              AgentMessageUiPayload,
+                              { kind: "agent_artifact" }
+                            >;
+                            onOpenArtifact(artifactPayload.artifact.id);
+                          }}
+                          className="rounded-lg border px-2.5 py-1.5 text-xs font-semibold"
+                          style={{
+                            borderColor: "var(--app-soft-card-border)",
+                            backgroundColor: "var(--app-soft-card-bg)",
+                          }}
+                          data-testid="button-open-agent-artifact"
+                        >
+                          {msg.uiPayload.artifact.type === "mini_game"
+                            ? "View / Play"
+                            : "View"}
+                        </button>
                       </div>
                     ) : (
                       msg.text
@@ -2805,7 +4904,8 @@ const TextView = ({
                 )}
               </div>
             </motion.div>
-          ))}
+            );
+          })}
         </div>
       </div>
       {mode === "text" && showJumpToNewest && (
@@ -2827,6 +4927,286 @@ const TextView = ({
         </button>
       )}
     </div>
+  );
+};
+
+const ArtifactViewer = ({
+  artifact,
+  isLoading,
+  onClose,
+  onRetry,
+}: {
+  artifact: AgentArtifactSummary | null;
+  isLoading: boolean;
+  onClose: () => void;
+  onRetry: () => void;
+}) => {
+  const isGame = artifact?.type === "mini_game";
+  const canRenderIframe =
+    typeof artifact?.htmlContent === "string" && artifact.htmlContent.trim().length > 0;
+  const markdown = artifact?.markdownContent ?? "";
+  const [iframeKey, setIframeKey] = useState(0);
+
+  const iframeSrc = useMemo(() => {
+    if (!canRenderIframe || !artifact?.id) return null;
+    return `/api/agent/artifacts/${artifact.id}/render?v=${iframeKey}`;
+  }, [canRenderIframe, artifact?.id, iframeKey]);
+
+  const handleReload = () => {
+    setIframeKey((k) => k + 1);
+  };
+
+  const downloadDoc = () => {
+    const blob = new Blob([markdown], { type: "text/markdown;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `${(artifact?.title ?? "document").replace(/\\s+/g, "-").toLowerCase()}.md`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  };
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="absolute inset-0 z-[95] flex flex-col"
+      style={{
+        backgroundColor: "var(--app-panel-bg)",
+        color: "var(--app-on-dark)",
+      }}
+    >
+      <div
+        className="flex items-center justify-between border-b px-4 py-3"
+        style={{ borderColor: "var(--app-soft-card-border)" }}
+      >
+        <div>
+          <p className="text-xs uppercase tracking-wide opacity-70">
+            {isGame ? "Mini Game" : "Document"}
+          </p>
+          <h3 className="text-base font-semibold">{artifact?.title ?? "Loading..."}</h3>
+        </div>
+        <div className="flex items-center gap-2">
+          {isGame && canRenderIframe && (
+            <button
+              type="button"
+              onClick={handleReload}
+              className="rounded-lg border px-3 py-1.5 text-xs font-semibold"
+              style={{
+                borderColor: "var(--app-soft-card-border)",
+                backgroundColor: "var(--app-soft-card-bg)",
+              }}
+              data-testid="button-reload-game"
+            >
+              Reload
+            </button>
+          )}
+          {!isGame && artifact && (
+            <button
+              type="button"
+              onClick={downloadDoc}
+              className="rounded-lg border px-3 py-1.5 text-xs font-semibold"
+              style={{
+                borderColor: "var(--app-soft-card-border)",
+                backgroundColor: "var(--app-soft-card-bg)",
+              }}
+            >
+              Download
+            </button>
+          )}
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={onClose}
+            data-testid="button-close-artifact-viewer"
+          >
+            <X className="h-5 w-5" />
+          </Button>
+        </div>
+      </div>
+      <div className="flex-1 overflow-hidden p-3">
+        {isLoading ? (
+          <div className="flex h-full items-center justify-center">
+            <motion.div
+              animate={{ rotate: 360 }}
+              transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
+              className="w-8 h-8 border-4 rounded-full"
+              style={{
+                borderColor: "var(--app-soft-card-border)",
+                borderTopColor: "var(--app-accent)",
+              }}
+            />
+          </div>
+        ) : canRenderIframe && iframeSrc ? (
+          <iframe
+            key={iframeKey}
+            title={artifact?.title ?? "Game"}
+            sandbox="allow-scripts"
+            src={iframeSrc}
+            className="h-full w-full rounded-xl border"
+            style={{
+              borderColor: "var(--app-soft-card-border)",
+              backgroundColor: "#0a0a0a",
+            }}
+          />
+        ) : !artifact ? (
+          <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
+            <p className="text-sm opacity-70">Could not load this content.</p>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={onRetry}
+                className="rounded-lg border px-3 py-1.5 text-xs font-semibold"
+                style={{
+                  borderColor: "var(--app-soft-card-border)",
+                  backgroundColor: "var(--app-soft-card-bg)",
+                  color: "var(--app-accent)",
+                }}
+                data-testid="button-retry-artifact"
+              >
+                Retry
+              </button>
+              <button
+                type="button"
+                onClick={onClose}
+                className="rounded-lg border px-3 py-1.5 text-xs font-semibold opacity-70"
+                style={{
+                  borderColor: "var(--app-soft-card-border)",
+                  backgroundColor: "var(--app-soft-card-bg)",
+                }}
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div
+            className="h-full overflow-auto rounded-xl border p-4 text-sm leading-relaxed"
+            style={{
+              borderColor: "var(--app-soft-card-border)",
+              backgroundColor: "var(--app-soft-card-bg)",
+            }}
+          >
+            <pre className="whitespace-pre-wrap font-sans">{markdown || "No content."}</pre>
+          </div>
+        )}
+      </div>
+    </motion.div>
+  );
+};
+
+const OutputsHistoryView = ({
+  artifacts,
+  isLoading,
+  onClose,
+  onOpenArtifact,
+  onArchiveArtifact,
+  onDeleteArtifact,
+}: {
+  artifacts: AgentArtifactSummary[];
+  isLoading: boolean;
+  onClose: () => void;
+  onOpenArtifact: (artifactId: string) => void;
+  onArchiveArtifact: (artifactId: string) => void;
+  onDeleteArtifact: (artifactId: string) => void;
+}) => {
+  return (
+    <motion.div
+      initial={{ x: "100%" }}
+      animate={{ x: 0 }}
+      exit={{ x: "100%" }}
+      transition={{ type: "spring", damping: 28, stiffness: 220 }}
+      className="absolute inset-0 z-[92] flex flex-col"
+      style={{
+        backgroundColor: "var(--app-panel-bg)",
+        color: "var(--app-on-dark)",
+      }}
+    >
+      <div
+        className="flex items-center justify-between border-b px-4 py-3"
+        style={{ borderColor: "var(--app-soft-card-border)" }}
+      >
+        <div>
+          <p className="text-xs uppercase tracking-wide opacity-70">History</p>
+          <h3 className="text-base font-semibold">Outputs</h3>
+        </div>
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={onClose}
+          data-testid="button-close-outputs-history"
+        >
+          <X className="h-5 w-5" />
+        </Button>
+      </div>
+      <ScrollArea className="flex-1 px-4 py-4">
+        {isLoading ? (
+          <p className="text-sm opacity-70">Loading outputs...</p>
+        ) : artifacts.length === 0 ? (
+          <p className="text-sm opacity-70">No outputs yet. Ask Zee to craft something.</p>
+        ) : (
+          <div className="space-y-3 pb-6">
+            {artifacts.map((artifact) => (
+              <div
+                key={artifact.id}
+                className="rounded-xl border p-3"
+                style={{
+                  borderColor: "var(--app-soft-card-border)",
+                  backgroundColor: "var(--app-soft-card-bg)",
+                }}
+                data-testid="outputs-history-artifact-card"
+                data-agent-artifact-id={artifact.id}
+                data-agent-artifact-type={artifact.type}
+                data-agent-artifact-status={artifact.status}
+              >
+                <div className="mb-2 flex items-start justify-between gap-2">
+                  <div>
+                    <p className="text-sm font-semibold">{artifact.title}</p>
+                    <p className="text-[11px] uppercase tracking-wide opacity-70">
+                      {artifact.type === "mini_game" ? "Game" : "Doc"} · {artifact.status}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    className="rounded-md border px-2 py-1 text-[11px] font-semibold"
+                    style={{ borderColor: "var(--app-soft-card-border)" }}
+                    onClick={() => onOpenArtifact(artifact.id)}
+                    data-testid="button-open-history-artifact"
+                  >
+                    {artifact.type === "mini_game" ? "View/Play" : "View"}
+                  </button>
+                </div>
+                <div className="flex gap-2">
+                  {artifact.status !== "archived" && (
+                    <button
+                      type="button"
+                      className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] font-semibold"
+                      style={{ borderColor: "var(--app-soft-card-border)" }}
+                      onClick={() => onArchiveArtifact(artifact.id)}
+                      data-testid="button-archive-history-artifact"
+                    >
+                      <Archive className="h-3.5 w-3.5" />
+                      Archive
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] font-semibold"
+                    style={{ borderColor: "var(--app-soft-card-border)" }}
+                    onClick={() => onDeleteArtifact(artifact.id)}
+                    data-testid="button-delete-history-artifact"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    Delete
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </ScrollArea>
+    </motion.div>
   );
 };
 
@@ -3204,6 +5584,12 @@ function App() {
   const [isCalling, setIsCalling] = useState(false);
   const [isLiveConnecting, setIsLiveConnecting] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [showOutputsHistory, setShowOutputsHistory] = useState(false);
+  const [activeArtifactId, setActiveArtifactId] = useState<string | null>(null);
+  const [liveTaskSnapshots, setLiveTaskSnapshots] = useState<
+    Record<string, LiveTaskSnapshot>
+  >({});
   const [duration, setDuration] = useState(0);
   const [callStartTime, setCallStartTime] = useState<number | null>(null);
   const [liveError, setLiveError] = useState<string | null>(null);
@@ -3253,6 +5639,11 @@ function App() {
 
   const getConversationMessagesKey = (conversationId: string) =>
     [`/api/conversations/${conversationId}/messages`];
+  const memorySettingsQueryKey = ["/api/memory/settings"];
+  const memoryItemsQueryKey = [
+    "/api/memory/items",
+    { limit: 20, offset: 0, includeArchived: 0 },
+  ] as const;
 
   const resetCallUsageTracking = () => {
     cameraAccumulatedSecondsRef.current = 0;
@@ -3318,6 +5709,62 @@ function App() {
       queryKey: ["/api/profile/me"],
       enabled: isAuthenticated,
     });
+
+  const {
+    data: memorySettingsResponse,
+    isLoading: isMemorySettingsLoading,
+  } = useQuery<MemorySettingsResponse>({
+    queryKey: memorySettingsQueryKey,
+    enabled: isAuthenticated && showSettings,
+    staleTime: 30_000,
+  });
+  const memorySettings = memorySettingsResponse?.settings;
+
+  const {
+    data: memoryItemsResponse,
+    isLoading: isMemoryItemsLoading,
+  } = useQuery<MemoryItemsResponse>({
+    queryKey: memoryItemsQueryKey,
+    queryFn: async () => {
+      const response = await fetch(
+        "/api/memory/items?limit=20&offset=0&includeArchived=0",
+        {
+          credentials: "include",
+          headers: {
+            "x-trace-id": createRequestTraceId(),
+          },
+        },
+      );
+      if (!response.ok) {
+        const text = (await response.text()) || response.statusText;
+        throw new Error(text);
+      }
+      return response.json() as Promise<MemoryItemsResponse>;
+    },
+    enabled: isAuthenticated && showSettings,
+    staleTime: 10_000,
+  });
+  const memoryItems = memoryItemsResponse?.items ?? [];
+
+  const {
+    data: artifactsResponse,
+    isLoading: isArtifactsLoading,
+  } = useQuery<AgentArtifactsResponse>({
+    queryKey: ["/api/agent/artifacts?includeArchived=1"],
+    enabled: isAuthenticated,
+    refetchInterval: 15000,
+  });
+  const artifacts = artifactsResponse?.artifacts ?? [];
+
+  const { data: activeArtifactResponse, isLoading: isActiveArtifactLoading, refetch: refetchActiveArtifact } = useQuery<AgentArtifactResponse>({
+    queryKey: activeArtifactId
+      ? [`/api/agent/artifacts/${activeArtifactId}`]
+      : ["/api/agent/artifacts/none"],
+    enabled: Boolean(activeArtifactId),
+    staleTime: 0,
+    retry: 2,
+    refetchOnWindowFocus: true,
+  });
 
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [selectedVoice, setSelectedVoice] =
@@ -3456,6 +5903,85 @@ function App() {
     },
   });
 
+  const updateMemorySettingsMutation = useMutation({
+    mutationFn: async (payload: Partial<MemorySettingsData>) => {
+      const response = await apiRequest("PATCH", "/api/memory/settings", payload);
+      return (await response.json()) as MemorySettingsResponse;
+    },
+    onSuccess: (response) => {
+      queryClient.setQueryData(memorySettingsQueryKey, response);
+      queryClient.invalidateQueries({ queryKey: ["/api/preferences"] });
+    },
+  });
+
+  const forgetMemoryItemMutation = useMutation({
+    mutationFn: async (memoryItemId: string) => {
+      await apiRequest("DELETE", `/api/memory/items/${memoryItemId}`);
+      return memoryItemId;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: memoryItemsQueryKey });
+    },
+  });
+
+  const resolveTaskApprovalMutation = useMutation({
+    mutationFn: async (params: {
+      taskId: string;
+      approve: boolean;
+      reason?: string;
+    }) => {
+      const response = await apiRequest(
+        "POST",
+        `/api/agent/tasks/${params.taskId}/approve`,
+        {
+          approve: params.approve,
+          reason: params.reason ?? null,
+        },
+      );
+      return (await response.json()) as AgentTaskResponse;
+    },
+    onSuccess: () => {
+      if (activeConversationId) {
+        queryClient.invalidateQueries({
+          queryKey: getConversationMessagesKey(activeConversationId),
+        });
+      }
+      queryClient.invalidateQueries({
+        queryKey: ["/api/agent/artifacts?includeArchived=1"],
+      });
+    },
+  });
+
+  const archiveArtifactMutation = useMutation({
+    mutationFn: async (artifactId: string) => {
+      const response = await apiRequest(
+        "POST",
+        `/api/agent/artifacts/${artifactId}/archive`,
+      );
+      return (await response.json()) as AgentArtifactResponse;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: ["/api/agent/artifacts?includeArchived=1"],
+      });
+    },
+  });
+
+  const deleteArtifactMutation = useMutation({
+    mutationFn: async (artifactId: string) => {
+      await apiRequest("DELETE", `/api/agent/artifacts/${artifactId}`);
+      return artifactId;
+    },
+    onSuccess: (artifactId) => {
+      if (activeArtifactId === artifactId) {
+        setActiveArtifactId(null);
+      }
+      queryClient.invalidateQueries({
+        queryKey: ["/api/agent/artifacts?includeArchived=1"],
+      });
+    },
+  });
+
   const handleOnboardingComplete = () => {
     forceOnboardingRef.current = false;
     if (typeof window !== "undefined") {
@@ -3482,6 +6008,8 @@ function App() {
       window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
     }
     setShowProfile(false);
+    setShowSettings(false);
+    setShowOutputsHistory(false);
     setShowOnboarding(true);
     updatePreferencesMutation.mutate({
       selectedPersona: persona,
@@ -3535,6 +6063,54 @@ function App() {
     await uploadZeeAvatarMutation.mutateAsync(file);
   };
 
+  const handleUpdateMemorySettings = async (
+    patch: Partial<MemorySettingsData>,
+  ) => {
+    await updateMemorySettingsMutation.mutateAsync(patch);
+  };
+
+  const handleForgetMemoryItem = async (memoryItemId: string) => {
+    await forgetMemoryItemMutation.mutateAsync(memoryItemId);
+  };
+
+  const handleResolveTaskApproval = async (
+    taskId: string,
+    approve: boolean,
+    reason?: string,
+  ) => {
+    try {
+      await resolveTaskApprovalMutation.mutateAsync({
+        taskId,
+        approve,
+        reason,
+      });
+      if (activeConversationId) {
+        queryClient.invalidateQueries({
+          queryKey: getConversationMessagesKey(activeConversationId),
+        });
+      }
+    } catch (error) {
+      setComposerError(
+        getErrorMessage(error) || "Failed to process approval decision.",
+      );
+    }
+  };
+
+  const handleOpenArtifact = (artifactId: string) => {
+    queryClient.invalidateQueries({
+      queryKey: [`/api/agent/artifacts/${artifactId}`],
+    });
+    setActiveArtifactId(artifactId);
+  };
+
+  const handleArchiveArtifact = (artifactId: string) => {
+    archiveArtifactMutation.mutate(artifactId);
+  };
+
+  const handleDeleteArtifact = (artifactId: string) => {
+    deleteArtifactMutation.mutate(artifactId);
+  };
+
   const { data: conversations } = useQuery<any[]>({
     queryKey: ["/api/conversations"],
     enabled: isAuthenticated && !showOnboarding,
@@ -3562,6 +6138,10 @@ function App() {
       createConversationMutation.mutate({ persona });
     }
   }, [conversations, isAuthenticated, showOnboarding]);
+
+  useEffect(() => {
+    setLiveTaskSnapshots({});
+  }, [activeConversationId]);
 
   const ensureActiveConversationId = async (): Promise<string> => {
     if (activeConversationId) {
@@ -3597,18 +6177,20 @@ function App() {
   });
 
   const createLiveTokenMutation = useMutation({
-    mutationFn: async (data: { persona: Persona; voice: LiveVoiceName }) => {
+    mutationFn: async (data: {
+      persona: Persona;
+      voice: LiveVoiceName;
+      conversationId: string;
+      deviceClass: "mobile" | "desktop" | "unknown";
+    }) => {
       const res = await apiRequest("POST", "/api/live/token", {
+        conversationId: data.conversationId,
         persona: data.persona,
         voice: data.voice,
+        deviceClass: data.deviceClass,
         responseModality: "AUDIO",
       });
-      const body = (await res.json()) as {
-        ephemeralToken: string;
-        model: string;
-        voice?: LiveVoiceName;
-        traceId?: string;
-      };
+      const body = (await res.json()) as LiveTokenResponse;
       return {
         ...body,
         traceId: extractTraceId(res, body),
@@ -3871,6 +6453,63 @@ function App() {
     return next;
   };
 
+  const createFallbackLiveTaskSnapshot = (params: {
+    taskId: string;
+    conversationId: string;
+  }): LiveTaskSnapshot => {
+    const nowIso = new Date().toISOString();
+    return {
+      task: {
+        id: params.taskId,
+        conversationId: params.conversationId,
+        status: "queued",
+        riskLevel: "low",
+        taskKind: "mixed",
+        prompt: "",
+        createdAt: new Date(nowIso),
+        updatedAt: new Date(nowIso),
+        completedAt: null,
+      },
+      latestStep: null,
+      approval: null,
+      artifact: null,
+      timeline: [],
+      updatedAtIso: nowIso,
+    };
+  };
+
+  const upsertLiveTaskSnapshot = (params: {
+    taskId: string;
+    conversationId: string;
+    updater: (current: LiveTaskSnapshot) => LiveTaskSnapshot;
+  }) => {
+    setLiveTaskSnapshots((current) => {
+      const existing =
+        current[params.taskId] ??
+        createFallbackLiveTaskSnapshot({
+          taskId: params.taskId,
+          conversationId: params.conversationId,
+        });
+      const updated = params.updater(existing);
+      return {
+        ...current,
+        [params.taskId]: {
+          ...updated,
+          updatedAtIso: new Date().toISOString(),
+        },
+      };
+    });
+  };
+
+  const appendLiveTimelineItem = (
+    timeline: UnifiedAgentTaskTimelineItem[],
+    item: UnifiedAgentTaskTimelineItem,
+  ): UnifiedAgentTaskTimelineItem[] => {
+    const next = [...timeline];
+    upsertTimelineItem(next, item);
+    return normalizeTimeline(next);
+  };
+
   const streamChatResponse = async (params: {
     conversationId: string;
     text: string;
@@ -3906,37 +6545,47 @@ function App() {
     const decoder = new TextDecoder();
     let buffer = "";
     let finalized = false;
+    let activeTaskSummary: AgentTaskSummary | null = null;
+    const pendingPartDeltas = new Map<number, string>();
+    let deltaFlushTimer: number | null = null;
 
-    const applyEvent = (event: ChatStreamEvent) => {
-      if (event.type === "ack") {
-        updateConversationMessages(params.conversationId, (current) =>
-          current.map((message) =>
-            message.id === params.optimisticUserId ? event.userMessage : message,
-          ),
-        );
-        return;
-      }
+    const primaryPartId = buildOptimisticAssistantPartId(
+      params.optimisticAssistantTurnId,
+      0,
+    );
 
-      if (event.type === "delta") {
-        const partIndex = Number.isInteger(event.partIndex)
-          ? Math.max(0, event.partIndex ?? 0)
-          : 0;
-        const partId = buildOptimisticAssistantPartId(
-          params.optimisticAssistantTurnId,
-          partIndex,
-        );
+    const updatePrimaryOptimisticMessage = (updater: (message: MessageData) => MessageData) => {
+      updateConversationMessages(params.conversationId, (current) => {
+        const next = [...current];
+        const index = next.findIndex((message) => message.id === primaryPartId);
+        if (index < 0) return next;
+        next[index] = updater(next[index]);
+        return next;
+      });
+    };
 
-        updateConversationMessages(params.conversationId, (current) => {
-          const next = [...current];
+    const flushPendingPartDeltas = () => {
+      if (pendingPartDeltas.size === 0) return;
+      const updates = Array.from(pendingPartDeltas.entries());
+      pendingPartDeltas.clear();
+
+      updateConversationMessages(params.conversationId, (current) => {
+        const next = [...current];
+        for (const [partIndex, deltaText] of updates) {
+          if (!deltaText) continue;
+          const partId = buildOptimisticAssistantPartId(
+            params.optimisticAssistantTurnId,
+            partIndex,
+          );
           const existingIndex = next.findIndex((message) => message.id === partId);
           if (existingIndex >= 0) {
             next[existingIndex] = {
               ...next[existingIndex],
-              text: `${next[existingIndex].text}${event.text}`,
+              text: `${next[existingIndex].text}${deltaText}`,
               isTyping: false,
               partIndex,
             };
-            return next;
+            continue;
           }
 
           const newPartMessage: MessageData = {
@@ -3945,7 +6594,7 @@ function App() {
             sender: "assistant",
             turnId: params.optimisticAssistantTurnId,
             partIndex,
-            text: event.text,
+            text: deltaText,
             createdAt: new Date().toISOString(),
             isTyping: false,
             localOnly: true,
@@ -3968,13 +6617,51 @@ function App() {
           } else {
             next.push(newPartMessage);
           }
+        }
+        return next;
+      });
+    };
 
-          return next;
-        });
+    const schedulePartDeltaFlush = () => {
+      if (deltaFlushTimer !== null) return;
+      deltaFlushTimer = window.setTimeout(() => {
+        deltaFlushTimer = null;
+        flushPendingPartDeltas();
+      }, 40);
+    };
+
+    const clearPendingPartDeltaFlush = () => {
+      if (deltaFlushTimer !== null) {
+        window.clearTimeout(deltaFlushTimer);
+        deltaFlushTimer = null;
+      }
+    };
+
+    const applyEvent = (event: ChatStreamEvent) => {
+      if (event.type === "ack") {
+        updateConversationMessages(params.conversationId, (current) =>
+          current.map((message) =>
+            message.id === params.optimisticUserId ? event.userMessage : message,
+          ),
+        );
+        return;
+      }
+
+      if (event.type === "delta") {
+        const partIndex = Number.isInteger(event.partIndex)
+          ? Math.max(0, event.partIndex ?? 0)
+          : 0;
+        pendingPartDeltas.set(
+          partIndex,
+          `${pendingPartDeltas.get(partIndex) ?? ""}${event.text}`,
+        );
+        schedulePartDeltaFlush();
         return;
       }
 
       if (event.type === "part_final") {
+        clearPendingPartDeltaFlush();
+        flushPendingPartDeltas();
         const partId = buildOptimisticAssistantPartId(
           params.optimisticAssistantTurnId,
           event.partIndex,
@@ -4000,7 +6687,196 @@ function App() {
         return;
       }
 
+      if (event.type === "task_created") {
+        activeTaskSummary = event.task;
+        upsertLiveTaskSnapshot({
+          taskId: event.task.id,
+          conversationId: params.conversationId,
+          updater: (snapshot) => ({
+            ...snapshot,
+            task: pickLatestTaskSummary(snapshot.task, event.task) ?? event.task,
+            timeline: appendLiveTimelineItem(snapshot.timeline, {
+              id: `task-created-${event.task.id}`,
+              title: "Task started",
+              detail: "Zee started crafting your request.",
+              status: "queued",
+              createdAt: new Date().toISOString(),
+            }),
+          }),
+        });
+        updatePrimaryOptimisticMessage((message) => ({
+          ...message,
+          isTyping: false,
+          text: "Zee is crafting your request...",
+          uiPayload: {
+            kind: "agent_task_status",
+            task: event.task,
+            text: "Task started",
+          },
+        }));
+        return;
+      }
+
+      if (event.type === "task_step") {
+        updatePrimaryOptimisticMessage((message) => {
+          const task =
+            activeTaskSummary ??
+            (isAgentTaskStatusPayload(message.uiPayload)
+              ? message.uiPayload.task
+              : null);
+          return {
+            ...message,
+            isTyping: false,
+            text: event.step.detail ?? message.text,
+            uiPayload: task
+              ? {
+                  kind: "agent_task_status",
+                  task,
+                  latestStep: event.step,
+                  text: event.step.detail ?? event.step.title,
+                }
+              : message.uiPayload,
+          };
+        });
+        upsertLiveTaskSnapshot({
+          taskId: event.taskId,
+          conversationId: params.conversationId,
+          updater: (snapshot) => {
+            const nextTask: AgentTaskSummary = {
+              ...snapshot.task,
+              status:
+                snapshot.task.status === "approval_required"
+                  ? "approval_required"
+                  : "in_progress",
+              updatedAt: new Date(),
+            };
+            return {
+              ...snapshot,
+              task: nextTask,
+              latestStep: event.step,
+              timeline: appendLiveTimelineItem(snapshot.timeline, {
+                id: `step-${event.step.id}`,
+                title: event.step.title,
+                detail: event.step.detail ?? null,
+                status: event.step.status,
+                createdAt: toIsoString(event.step.updatedAt) ?? new Date().toISOString(),
+              }),
+            };
+          },
+        });
+        return;
+      }
+
+      if (event.type === "task_approval_required") {
+        upsertLiveTaskSnapshot({
+          taskId: event.taskId,
+          conversationId: params.conversationId,
+          updater: (snapshot) => ({
+            ...snapshot,
+            task: {
+              ...snapshot.task,
+              status: "approval_required",
+              updatedAt: new Date(),
+            },
+            approval: event.approval,
+            timeline: appendLiveTimelineItem(snapshot.timeline, {
+              id: `approval-${event.approval.id}`,
+              title: "Approval required",
+              detail: event.approval.requestedAction,
+              status: "blocked",
+              createdAt:
+                toIsoString(event.approval.createdAt) ?? new Date().toISOString(),
+            }),
+          }),
+        });
+        updatePrimaryOptimisticMessage((message) => ({
+          ...message,
+          isTyping: false,
+          text: "Approval required before continuing.",
+          uiPayload: {
+            kind: "agent_approval",
+            taskId: event.taskId,
+            approval: event.approval,
+            text: "Approval needed",
+          },
+        }));
+        return;
+      }
+
+      if (event.type === "task_artifact_ready") {
+        upsertLiveTaskSnapshot({
+          taskId: event.taskId,
+          conversationId: params.conversationId,
+          updater: (snapshot) => ({
+            ...snapshot,
+            artifact: event.artifact,
+            timeline: appendLiveTimelineItem(snapshot.timeline, {
+              id: `artifact-${event.artifact.id}`,
+              title: "Artifact ready",
+              detail: event.artifact.title,
+              status: "completed",
+              createdAt:
+                toIsoString(event.artifact.updatedAt) ?? new Date().toISOString(),
+            }),
+          }),
+        });
+        updatePrimaryOptimisticMessage((message) => ({
+          ...message,
+          isTyping: false,
+          text: `Artifact ready: ${event.artifact.title}`,
+          uiPayload: {
+            kind: "agent_artifact",
+            taskId: event.taskId,
+            artifact: event.artifact,
+            text: "View/Play",
+          },
+        }));
+        return;
+      }
+
+      if (event.type === "task_failed") {
+        upsertLiveTaskSnapshot({
+          taskId: event.taskId,
+          conversationId: params.conversationId,
+          updater: (snapshot) => ({
+            ...snapshot,
+            task: {
+              ...snapshot.task,
+              status: "failed",
+              updatedAt: new Date(),
+              completedAt: new Date(),
+            },
+            timeline: appendLiveTimelineItem(snapshot.timeline, {
+              id: `failed-${event.taskId}`,
+              title: "Task failed",
+              detail: event.message,
+              status: "failed",
+              createdAt: new Date().toISOString(),
+            }),
+          }),
+        });
+        updatePrimaryOptimisticMessage((message) => ({
+          ...message,
+          isTyping: false,
+          text: event.message,
+          uiPayload:
+            activeTaskSummary
+              ? {
+                  kind: "agent_task_status",
+                  task: {
+                    ...activeTaskSummary,
+                    status: "failed",
+                  },
+                  text: "Failed",
+                }
+              : message.uiPayload,
+        }));
+        return;
+      }
+
       if (event.type === "final") {
+        clearPendingPartDeltaFlush();
+        flushPendingPartDeltas();
         finalized = true;
         const assistantMessages =
           event.assistantMessages && event.assistantMessages.length > 0
@@ -4013,10 +6889,95 @@ function App() {
             assistantMessages,
           ),
         );
+        for (const assistantMessage of assistantMessages) {
+          const payload = assistantMessage.uiPayload ?? null;
+          if (!payload) continue;
+
+          if (isAgentTaskStatusPayload(payload)) {
+            upsertLiveTaskSnapshot({
+              taskId: payload.task.id,
+              conversationId: params.conversationId,
+              updater: (snapshot) => ({
+                ...snapshot,
+                task: pickLatestTaskSummary(snapshot.task, payload.task) ?? payload.task,
+                latestStep: payload.latestStep ?? snapshot.latestStep,
+                timeline: appendLiveTimelineItem(snapshot.timeline, {
+                  id: `final-status-${payload.task.status}`,
+                  title: toTaskStatusLabel(payload.task.status),
+                  detail: payload.text ?? assistantMessage.text,
+                  status:
+                    payload.task.status === "completed"
+                      ? "completed"
+                      : payload.task.status === "failed"
+                        ? "failed"
+                        : payload.task.status === "approval_required"
+                          ? "blocked"
+                          : payload.task.status === "queued"
+                            ? "queued"
+                            : "in_progress",
+                  createdAt:
+                    toIsoString(payload.task.updatedAt) ??
+                    toIsoString(assistantMessage.createdAt) ??
+                    new Date().toISOString(),
+                }),
+              }),
+            });
+            continue;
+          }
+
+          if (isAgentApprovalPayload(payload)) {
+            upsertLiveTaskSnapshot({
+              taskId: payload.taskId,
+              conversationId: params.conversationId,
+              updater: (snapshot) => ({
+                ...snapshot,
+                approval: payload.approval,
+                timeline: appendLiveTimelineItem(snapshot.timeline, {
+                  id: `approval-${payload.approval.id}`,
+                  title:
+                    payload.approval.status === "pending"
+                      ? "Approval required"
+                      : `Approval ${payload.approval.status}`,
+                  detail: payload.approval.requestedAction,
+                  status:
+                    payload.approval.status === "denied" ? "failed" : "blocked",
+                  createdAt:
+                    toIsoString(payload.approval.respondedAt) ??
+                    toIsoString(payload.approval.createdAt) ??
+                    new Date().toISOString(),
+                }),
+              }),
+            });
+            continue;
+          }
+
+          if (isAgentArtifactPayload(payload)) {
+            upsertLiveTaskSnapshot({
+              taskId: payload.taskId,
+              conversationId: params.conversationId,
+              updater: (snapshot) => ({
+                ...snapshot,
+                artifact: payload.artifact,
+                timeline: appendLiveTimelineItem(snapshot.timeline, {
+                  id: `artifact-${payload.artifact.id}`,
+                  title: "Artifact ready",
+                  detail: payload.artifact.title,
+                  status: "completed",
+                  createdAt:
+                    toIsoString(payload.artifact.updatedAt) ??
+                    toIsoString(payload.artifact.createdAt) ??
+                    new Date().toISOString(),
+                }),
+              }),
+            });
+          }
+        }
         return;
       }
 
       if (event.type === "error") {
+        clearPendingPartDeltaFlush();
+        flushPendingPartDeltas();
         throw new Error(event.message);
       }
     };
@@ -4038,6 +6999,9 @@ function App() {
         applyEvent(parsed);
       }
     }
+
+    clearPendingPartDeltaFlush();
+    flushPendingPartDeltas();
 
     if (!finalized) {
       throw new Error("Stream ended before final response.");
@@ -4252,6 +7216,9 @@ function App() {
           queryKey: getConversationMessagesKey(conversationId),
         });
       }
+      queryClient.invalidateQueries({
+        queryKey: ["/api/agent/artifacts?includeArchived=1"],
+      });
     }
   };
 
@@ -4354,6 +7321,8 @@ function App() {
       const tokenPayload = await createLiveTokenMutation.mutateAsync({
         persona,
         voice: selectedVoiceRef.current,
+        conversationId,
+        deviceClass: detectLiveDeviceClass(),
       });
 
       if (startNonce !== liveStartNonceRef.current) {
@@ -4366,6 +7335,23 @@ function App() {
         model: tokenPayload.model,
         voice: tokenPayload.voice ?? selectedVoiceRef.current,
         traceId: tokenPayload.traceId,
+        memoryMode: tokenPayload.memoryMeta?.mode ?? "safe_selective",
+        memoryFallback: tokenPayload.memoryMeta?.fallbackUsed ?? "disabled",
+        memoryBuildMs: tokenPayload.memoryMeta?.buildMs ?? 0,
+        activeThreadMessagesUsed:
+          tokenPayload.memoryMeta?.activeThreadMessagesUsed ?? 0,
+        crossChatMessagesUsed:
+          tokenPayload.memoryMeta?.crossChatMessagesUsed ?? 0,
+        profileApplied: Boolean(tokenPayload.memoryMeta?.profileApplied),
+        lowLatencyMode: tokenPayload.configSummary?.lowLatencyMode ?? null,
+        activityHandling: tokenPayload.configSummary?.activityHandling ?? null,
+        forceAlwaysRespond: tokenPayload.configSummary?.forceAlwaysRespond ?? null,
+        vadPrefixPaddingMs: tokenPayload.configSummary?.vadPrefixPaddingMs ?? null,
+        vadSilenceMs: tokenPayload.configSummary?.vadSilenceMs ?? null,
+        turnCoverage: tokenPayload.configSummary?.turnCoverage ?? null,
+        affectiveDialog: tokenPayload.configSummary?.affectiveDialog ?? null,
+        proactiveAudio: tokenPayload.configSummary?.proactiveAudio ?? null,
+        thinkingBudget: tokenPayload.configSummary?.thinkingBudget ?? null,
       });
 
       const resolvedConversationId = conversationId;
@@ -4390,8 +7376,7 @@ function App() {
             runId,
             reason: reason ?? "unknown",
           });
-          const shouldAutoResume =
-            !manualLiveStopRef.current && isVideoEnabledRef.current;
+          const shouldAutoResume = !manualLiveStopRef.current;
           setIsLiveConnecting(false);
           setIsCalling(false);
           setCallStartTime(null);
@@ -4413,7 +7398,10 @@ function App() {
               return;
             }
             autoResumeBudgetRef.current -= 1;
-            void startLiveSession({ autoResumed: true, restoreVideo: true });
+            void startLiveSession({
+              autoResumed: true,
+              restoreVideo: isVideoEnabledRef.current,
+            });
           }
         },
         onDebug: (message, metadata) => {
@@ -4686,6 +7674,11 @@ function App() {
   const resolvedProfileImage =
     userProfile?.avatarUrl || user?.profileImageUrl || undefined;
   const resolvedAssistantAvatar = getPersonaAvatar(persona, userProfile);
+  const activeArtifact =
+    activeArtifactResponse?.artifact ??
+    (activeArtifactId
+      ? artifacts.find((artifact) => artifact.id === activeArtifactId) ?? null
+      : null);
 
   if (authLoading) {
     return (
@@ -4758,6 +7751,9 @@ function App() {
               assistantAvatarSrc={resolvedAssistantAvatar}
               mode={mode}
               userProfileImage={resolvedProfileImage}
+              onOpenArtifact={handleOpenArtifact}
+              onResolveApproval={handleResolveTaskApproval}
+              liveTaskSnapshots={liveTaskSnapshots}
             />
           </div>
 
@@ -4765,7 +7761,11 @@ function App() {
             isActive={isCalling} 
             isConnecting={isLiveConnecting}
             onEndCall={handleEndCall}
-            onProfile={() => setShowProfile(true)}
+            onProfile={() => {
+              setShowSettings(false);
+              setShowOutputsHistory(false);
+              setShowProfile(true);
+            }}
             assistantName={persona}
             assistantAvatar={resolvedAssistantAvatar}
             selectedVoice={selectedVoice}
@@ -4786,6 +7786,7 @@ function App() {
               <ProfileView
                 onClose={() => {
                   applyAppTheme(selectedTheme);
+                  setShowSettings(false);
                   setShowProfile(false);
                 }}
                 user={user}
@@ -4799,9 +7800,56 @@ function App() {
                 onUploadAvatar={handleUploadProfileAvatar}
                 onUploadZeeAvatar={handleUploadZeeAvatar}
                 onReplayOnboarding={handleReplayOnboarding}
+                onOpenSettings={() => setShowSettings(true)}
+                onOpenOutputsHistory={() => {
+                  setShowSettings(false);
+                  setShowProfile(false);
+                  setShowOutputsHistory(true);
+                }}
                 onLogout={logout}
                 quotaSummary={quotaSummary}
                 isQuotaLoading={isQuotaLoading}
+              />
+            )}
+          </AnimatePresence>
+
+          <AnimatePresence>
+            {showSettings && (
+              <SettingsView
+                onClose={() => setShowSettings(false)}
+                memorySettings={memorySettings}
+                isMemorySettingsLoading={isMemorySettingsLoading}
+                isSavingMemorySettings={updateMemorySettingsMutation.isPending}
+                onUpdateMemorySettings={handleUpdateMemorySettings}
+                memoryItems={memoryItems}
+                isMemoryItemsLoading={isMemoryItemsLoading}
+                onForgetMemoryItem={handleForgetMemoryItem}
+              />
+            )}
+          </AnimatePresence>
+
+          <AnimatePresence>
+            {showOutputsHistory && (
+              <OutputsHistoryView
+                artifacts={artifacts}
+                isLoading={isArtifactsLoading}
+                onClose={() => setShowOutputsHistory(false)}
+                onOpenArtifact={(artifactId) => {
+                  setActiveArtifactId(artifactId);
+                }}
+                onArchiveArtifact={handleArchiveArtifact}
+                onDeleteArtifact={handleDeleteArtifact}
+              />
+            )}
+          </AnimatePresence>
+
+          <AnimatePresence>
+            {activeArtifactId && (
+              <ArtifactViewer
+                artifact={activeArtifact}
+                isLoading={isActiveArtifactLoading && !activeArtifact}
+                onClose={() => setActiveArtifactId(null)}
+                onRetry={() => refetchActiveArtifact()}
               />
             )}
           </AnimatePresence>

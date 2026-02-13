@@ -4,10 +4,15 @@ import {
   GoogleGenAI,
   Modality,
   StartSensitivity,
+  TurnCoverage,
   type GenerateContentResponseUsageMetadata,
 } from "@google/genai";
+import { execFile } from "child_process";
 import { readFile } from "fs/promises";
 import { resolve } from "path";
+import { promisify } from "util";
+
+const execFileAsync = promisify(execFile);
 
 type Persona = "Zee";
 export type LiveVoiceName = "Aoede" | "Kore" | "Charon" | "Fenrir";
@@ -16,6 +21,7 @@ export type ResponseStylePreset =
   | "balanced"
   | "expressive"
   | "playful";
+export type LiveMemoryPolicy = "safe_selective" | "remember_everything";
 
 export interface TextPersonalizationProfile {
   displayName?: string | null;
@@ -60,6 +66,7 @@ interface TokenUsageSnapshot {
 
 const DEFAULT_TEXT_MODEL = "gemini-3-flash-preview";
 const DEFAULT_LIVE_MODEL = "gemini-2.5-flash-native-audio-preview-12-2025";
+const DEFAULT_AGENT_GAME_MODEL = "gemini-3-flash-preview";
 const DEFAULT_ZEE_PROMPT_FALLBACK = [
   "You are Zee, a warm, emotionally intelligent AI companion.",
   "Stay helpful, grounded, and conversational.",
@@ -108,6 +115,12 @@ function resolveLiveModel(): string {
   return normalizeModelId(process.env.GEMINI_LIVE_MODEL ?? DEFAULT_LIVE_MODEL);
 }
 
+function resolveAgentGameModel(): string {
+  return normalizeModelId(
+    process.env.AGENT_GAME_MODEL ?? DEFAULT_AGENT_GAME_MODEL,
+  );
+}
+
 function resolveLiveModelCandidates(): string[] {
   const primary = resolveLiveModel();
   const configuredFallbacks = (process.env.GEMINI_LIVE_MODEL_FALLBACKS ?? "")
@@ -148,8 +161,20 @@ function parsePositiveInt(input: string | undefined, fallback: number): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+function parseOptionalPositiveInt(input: string | undefined): number | undefined {
+  if (!input) return undefined;
+  const parsed = Number.parseInt(input, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function parseNonNegativeInt(input: string | undefined, fallback: number): number {
+  if (!input) return fallback;
+  const parsed = Number.parseInt(input, 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
 function resolveStartSensitivity(): StartSensitivity {
-  const raw = (process.env.GEMINI_LIVE_VAD_START_SENSITIVITY ?? "HIGH")
+  const raw = (process.env.GEMINI_LIVE_VAD_START_SENSITIVITY ?? "LOW")
     .trim()
     .toUpperCase();
   return raw === "LOW"
@@ -164,6 +189,29 @@ function resolveEndSensitivity(): EndSensitivity {
   return raw === "LOW"
     ? EndSensitivity.END_SENSITIVITY_LOW
     : EndSensitivity.END_SENSITIVITY_HIGH;
+}
+
+function resolveTurnCoverage(): TurnCoverage {
+  const raw = (process.env.GEMINI_LIVE_TURN_COVERAGE ?? "TURN_INCLUDES_ONLY_ACTIVITY")
+    .trim()
+    .toUpperCase();
+  return raw === "TURN_INCLUDES_ALL_INPUT" || raw === "ALL_INPUT"
+    ? TurnCoverage.TURN_INCLUDES_ALL_INPUT
+    : TurnCoverage.TURN_INCLUDES_ONLY_ACTIVITY;
+}
+
+function resolveActivityHandling(
+  isMobileDevice: boolean,
+): ActivityHandling {
+  const fallback = isMobileDevice
+    ? "NO_INTERRUPTION"
+    : "START_OF_ACTIVITY_INTERRUPTS";
+  const raw = (process.env.GEMINI_LIVE_ACTIVITY_HANDLING ?? fallback)
+    .trim()
+    .toUpperCase();
+  return raw === "NO_INTERRUPTION"
+    ? ActivityHandling.NO_INTERRUPTION
+    : ActivityHandling.START_OF_ACTIVITY_INTERRUPTS;
 }
 
 function parseBoundedNumber(
@@ -201,6 +249,11 @@ function cleanTextInput(value: string | null | undefined): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
+}
+
+function clampPromptBlock(value: string, maxChars: number): string {
+  if (value.length <= maxChars) return value;
+  return `${value.slice(0, Math.max(0, maxChars - 13)).trim()}\n[truncated]`;
 }
 
 function buildProfileContext(profile: TextPersonalizationProfile | null | undefined): string {
@@ -246,9 +299,12 @@ function resolveResponseStyle(
 
 function buildTextPromptAdditions(params: {
   profileContext?: TextPersonalizationProfile | null;
+  memoryContextBlock?: string | null;
+  memoryPolicy?: LiveMemoryPolicy;
   enableMultipart: boolean;
 }): string {
   const sections: string[] = [];
+  const memoryPolicy = params.memoryPolicy ?? "safe_selective";
 
   const profileBlock = buildProfileContext(params.profileContext ?? null);
   if (profileBlock) {
@@ -271,9 +327,10 @@ function buildTextPromptAdditions(params: {
       "TEXT CONVERSATION BEHAVIOR:",
       "- Sound like natural human texting and keep pacing dynamic.",
       "- Many turns should be short. Use one-liners when that feels right.",
-      "- It is okay to send 1-3 messages in one turn when that feels more human (reaction + follow-up).",
-      "- If the user asks to double text, return 2 messages. If they ask to triple/tripple text, return 3 messages.",
-      "- For casual banter, often send a short reaction first, then a follow-up.",
+      "- Default to one assistant message per turn.",
+      "- You may occasionally send 2 short messages when the user's tone is emotional/casual and a reaction + follow-up feels natural.",
+      "- If the user asks to double text, return exactly 2 messages. If they ask to triple/tripple text, return exactly 3 messages.",
+      "- For casual banter, keep reactions concise in the same message unless split mode is requested.",
       params.enableMultipart
         ? `- For multi-message turns, separate each message with ${ZEE_SPLIT_TOKEN}.`
         : "- Return one assistant message per turn.",
@@ -289,8 +346,22 @@ function buildTextPromptAdditions(params: {
       "- Only reference facts that appear in conversation history or the user profile context above.",
       "- If uncertain whether a memory is real, ask a brief clarifying question.",
       "- Do not invent memories, journal entries, previous events, or private details.",
+      `- Memory mode for this turn: ${memoryPolicy}.`,
+      memoryPolicy === "safe_selective"
+        ? "- In safe_selective mode, avoid replaying sensitive identifiers and prioritize relevant continuity."
+        : "- In remember_everything mode, preserve broad continuity while still avoiding hallucinated claims.",
     ].join("\n"),
   );
+
+  const memoryBlock = cleanTextInput(params.memoryContextBlock);
+  if (memoryBlock) {
+    sections.push(
+      [
+        "LIVE + TEXT MEMORY CONTEXT:",
+        clampPromptBlock(memoryBlock, 12_000),
+      ].join("\n"),
+    );
+  }
 
   return sections.join("\n\n");
 }
@@ -455,11 +526,15 @@ OUTPUT SAFETY RULES:
 async function getTextPersonaPrompt(params: {
   persona: Persona;
   profileContext?: TextPersonalizationProfile | null;
+  memoryContextBlock?: string | null;
+  memoryPolicy?: LiveMemoryPolicy;
   enableMultipart: boolean;
 }): Promise<string> {
   const basePrompt = await loadZeePrompt();
   const additions = buildTextPromptAdditions({
     profileContext: params.profileContext,
+    memoryContextBlock: params.memoryContextBlock,
+    memoryPolicy: params.memoryPolicy,
     enableMultipart: params.enableMultipart,
   });
 
@@ -735,6 +810,30 @@ export interface CreateLiveTokenInput {
   persona: Persona;
   responseModality?: "AUDIO" | "TEXT";
   voiceName?: LiveVoiceName;
+  memoryContextBlock?: string;
+  profileContext?: TextPersonalizationProfile | null;
+  memoryPolicy?: LiveMemoryPolicy;
+  deviceClass?: "mobile" | "desktop" | "unknown";
+}
+
+export interface LiveTokenConfigSummary {
+  lowLatencyMode: boolean;
+  activityHandling: "START_OF_ACTIVITY_INTERRUPTS" | "NO_INTERRUPTION";
+  vadStartSensitivity: "HIGH" | "LOW";
+  vadEndSensitivity: "HIGH" | "LOW";
+  forceAlwaysRespond: boolean;
+  vadPrefixPaddingMs: number;
+  vadSilenceMs: number;
+  turnCoverage: "TURN_INCLUDES_ONLY_ACTIVITY" | "TURN_INCLUDES_ALL_INPUT";
+  affectiveDialog: boolean;
+  proactiveAudio: boolean;
+  thinkingBudget: number | null;
+  includeThoughts: boolean;
+  temperature: number;
+  topP: number;
+  topK: number | null;
+  maxOutputTokens: number;
+  deviceClass: "mobile" | "desktop" | "unknown";
 }
 
 export interface CreateLiveTokenResult {
@@ -746,6 +845,41 @@ export interface CreateLiveTokenResult {
   newSessionExpireTime: string;
   generatedAt: string;
   uses: number;
+  configSummary: LiveTokenConfigSummary;
+}
+
+function composeLiveSystemInstruction(params: {
+  personaPrompt: string;
+  memoryContextBlock?: string;
+  profileContext?: TextPersonalizationProfile | null;
+  memoryPolicy: LiveMemoryPolicy;
+}): string {
+  const sections: string[] = [params.personaPrompt];
+
+  const profileBlock = buildProfileContext(params.profileContext ?? null);
+  if (profileBlock) {
+    sections.push(profileBlock);
+  }
+
+  sections.push(
+    [
+      "LIVE MEMORY BEHAVIOR:",
+      `- Memory mode: ${params.memoryPolicy}.`,
+      "- Prioritize continuity with the current conversation first, then relevant cross-chat context.",
+      "- If a memory is uncertain or ambiguous, ask a brief clarifying question before treating it as fact.",
+      params.memoryPolicy === "safe_selective"
+        ? "- Treat sensitive identifiers carefully. Avoid repeating highly sensitive details unless the user explicitly asks."
+        : "- User opted into broad continuity. Keep recall natural, precise, and context-appropriate.",
+      "- Keep replies grounded in provided memory context and current user signals.",
+    ].join("\n"),
+  );
+
+  const memoryBlock = cleanTextInput(params.memoryContextBlock);
+  if (memoryBlock) {
+    sections.push(`LIVE MEMORY CONTEXT:\n${memoryBlock}`);
+  }
+
+  return sections.join("\n\n");
 }
 
 export async function createLiveToken(
@@ -756,6 +890,15 @@ export async function createLiveToken(
   const personaPrompt = await getPersonaPrompt(input.persona);
   const responseModality = input.responseModality ?? "AUDIO";
   const voiceName = input.voiceName ?? DEFAULT_LIVE_VOICE;
+  const memoryPolicy = input.memoryPolicy ?? "safe_selective";
+  const deviceClass = input.deviceClass ?? "unknown";
+  const isMobileDevice = deviceClass === "mobile";
+  const systemInstruction = composeLiveSystemInstruction({
+    personaPrompt,
+    memoryContextBlock: input.memoryContextBlock,
+    profileContext: input.profileContext ?? null,
+    memoryPolicy,
+  });
 
   const now = Date.now();
   const expireInMs = parsePositiveInt(
@@ -767,6 +910,146 @@ export async function createLiveToken(
     60 * 1000,
   );
   const uses = parsePositiveInt(process.env.GEMINI_LIVE_TOKEN_USES, 1);
+  const lowLatencyMode = parseBooleanFlag(
+    process.env.GEMINI_LIVE_LOW_LATENCY_MODE,
+    true,
+  );
+  const activityHandling = resolveActivityHandling(isMobileDevice);
+  const vadStartSensitivity = resolveStartSensitivity();
+  const vadEndSensitivity = resolveEndSensitivity();
+  const vadPrefixPaddingMs = parsePositiveInt(
+    process.env.GEMINI_LIVE_VAD_PREFIX_PADDING_MS,
+    isMobileDevice
+      ? lowLatencyMode
+        ? 40
+        : 60
+      : lowLatencyMode
+        ? 60
+        : 80,
+  );
+  const vadSilenceMs = parsePositiveInt(
+    process.env.GEMINI_LIVE_VAD_SILENCE_MS,
+    isMobileDevice
+      ? lowLatencyMode
+        ? 140
+        : 220
+      : lowLatencyMode
+        ? 180
+        : 320,
+  );
+  const turnCoverage = resolveTurnCoverage();
+  const enableAffectiveDialog = parseBooleanFlag(
+    process.env.GEMINI_LIVE_ENABLE_AFFECTIVE_DIALOG,
+    true,
+  );
+  const proactiveAudio = parseBooleanFlag(
+    process.env.GEMINI_LIVE_PROACTIVE_AUDIO,
+    false,
+  );
+  const forceAlwaysRespond = parseBooleanFlag(
+    process.env.GEMINI_LIVE_FORCE_ALWAYS_RESPOND,
+    true,
+  );
+  const effectiveProactiveAudio =
+    responseModality === "AUDIO" && !forceAlwaysRespond && proactiveAudio;
+  const useThinkingConfig = parseBooleanFlag(
+    process.env.GEMINI_LIVE_USE_THINKING_CONFIG,
+    true,
+  );
+  const allowZeroThinkingBudget = parseBooleanFlag(
+    process.env.GEMINI_LIVE_ALLOW_ZERO_THINKING_BUDGET,
+    false,
+  );
+  let thinkingBudgetValue = parseNonNegativeInt(
+    process.env.GEMINI_LIVE_THINKING_BUDGET,
+    isMobileDevice
+      ? lowLatencyMode
+        ? 24
+        : 64
+      : lowLatencyMode
+        ? 32
+        : 96,
+  );
+  if (!allowZeroThinkingBudget && thinkingBudgetValue === 0) {
+    thinkingBudgetValue = isMobileDevice ? 24 : 32;
+  }
+  const includeThoughts = parseBooleanFlag(
+    process.env.GEMINI_LIVE_INCLUDE_THOUGHTS,
+    false,
+  );
+  const liveTemperature = parseBoundedNumber(
+    process.env.GEMINI_LIVE_TEMPERATURE,
+    lowLatencyMode ? 0.45 : 0.55,
+    0,
+    2,
+  );
+  const liveTopP = parseBoundedNumber(
+    process.env.GEMINI_LIVE_TOP_P,
+    lowLatencyMode ? 0.85 : 0.9,
+    0,
+    1,
+  );
+  const liveTopK =
+    parseOptionalPositiveInt(process.env.GEMINI_LIVE_TOP_K) ??
+    (lowLatencyMode ? 24 : 32);
+  const liveMaxOutputTokens = parsePositiveInt(
+    process.env.GEMINI_LIVE_MAX_OUTPUT_TOKENS,
+    isMobileDevice
+      ? lowLatencyMode
+        ? 180
+        : 180
+      : lowLatencyMode
+        ? 220
+        : 280,
+  );
+  const minVadPrefixPaddingMs = parsePositiveInt(
+    process.env.GEMINI_LIVE_MIN_VAD_PREFIX_PADDING_MS,
+    50,
+  );
+  const minVadSilenceMs = parsePositiveInt(
+    process.env.GEMINI_LIVE_MIN_VAD_SILENCE_MS,
+    180,
+  );
+  const effectiveVadPrefixPaddingMs = Math.max(
+    minVadPrefixPaddingMs,
+    vadPrefixPaddingMs,
+  );
+  const effectiveVadSilenceMs = Math.max(minVadSilenceMs, vadSilenceMs);
+  const thinkingConfig = useThinkingConfig
+    ? {
+        thinkingBudget: thinkingBudgetValue,
+        includeThoughts,
+      }
+    : undefined;
+  const configSummary: LiveTokenConfigSummary = {
+    lowLatencyMode,
+    activityHandling:
+      activityHandling === ActivityHandling.NO_INTERRUPTION
+        ? "NO_INTERRUPTION"
+        : "START_OF_ACTIVITY_INTERRUPTS",
+    vadStartSensitivity:
+      vadStartSensitivity === StartSensitivity.START_SENSITIVITY_LOW
+        ? "LOW"
+        : "HIGH",
+    vadEndSensitivity:
+      vadEndSensitivity === EndSensitivity.END_SENSITIVITY_LOW ? "LOW" : "HIGH",
+    forceAlwaysRespond,
+    vadPrefixPaddingMs: effectiveVadPrefixPaddingMs,
+    vadSilenceMs: effectiveVadSilenceMs,
+    turnCoverage:
+      turnCoverage === TurnCoverage.TURN_INCLUDES_ALL_INPUT
+        ? "TURN_INCLUDES_ALL_INPUT"
+        : "TURN_INCLUDES_ONLY_ACTIVITY",
+    affectiveDialog: responseModality === "AUDIO" ? enableAffectiveDialog : false,
+    proactiveAudio: effectiveProactiveAudio,
+    thinkingBudget: thinkingConfig ? thinkingBudgetValue : null,
+    includeThoughts: thinkingConfig ? includeThoughts : false,
+    temperature: liveTemperature,
+    topP: liveTopP,
+    topK: liveTopK ?? null,
+    maxOutputTokens: liveMaxOutputTokens,
+    deviceClass,
+  };
 
   const expireTime = new Date(now + expireInMs).toISOString();
   const newSessionExpireTime = new Date(now + newSessionExpireInMs).toISOString();
@@ -800,7 +1083,14 @@ export async function createLiveToken(
               responseModalities: [
                 responseModality === "TEXT" ? Modality.TEXT : Modality.AUDIO,
               ],
-              systemInstruction: personaPrompt,
+              systemInstruction,
+              temperature: liveTemperature,
+              topP: liveTopP,
+              topK: liveTopK,
+              maxOutputTokens: liveMaxOutputTokens,
+              enableAffectiveDialog:
+                responseModality === "AUDIO" ? enableAffectiveDialog : undefined,
+              thinkingConfig,
               speechConfig:
                 responseModality === "AUDIO"
                   ? {
@@ -813,20 +1103,19 @@ export async function createLiveToken(
                   : undefined,
               // These defaults prioritize natural turn-taking and low interruption latency.
               realtimeInputConfig: {
-                activityHandling: ActivityHandling.START_OF_ACTIVITY_INTERRUPTS,
+                activityHandling,
+                turnCoverage,
                 automaticActivityDetection: {
-                  startOfSpeechSensitivity: resolveStartSensitivity(),
-                  endOfSpeechSensitivity: resolveEndSensitivity(),
-                  prefixPaddingMs: parsePositiveInt(
-                    process.env.GEMINI_LIVE_VAD_PREFIX_PADDING_MS,
-                    80,
-                  ),
-                  silenceDurationMs: parsePositiveInt(
-                    process.env.GEMINI_LIVE_VAD_SILENCE_MS,
-                    380,
-                  ),
+                  startOfSpeechSensitivity: vadStartSensitivity,
+                  endOfSpeechSensitivity: vadEndSensitivity,
+                  prefixPaddingMs: effectiveVadPrefixPaddingMs,
+                  silenceDurationMs: effectiveVadSilenceMs,
                 },
               },
+              proactivity:
+                effectiveProactiveAudio
+                  ? { proactiveAudio: true }
+                  : undefined,
               inputAudioTranscription: {},
               outputAudioTranscription: {},
             },
@@ -879,6 +1168,7 @@ export async function createLiveToken(
     newSessionExpireTime,
     generatedAt: new Date(now).toISOString(),
     uses,
+    configSummary,
   };
 }
 
@@ -886,6 +1176,8 @@ export interface GenerateTextReplyInput {
   persona: Persona;
   messages: ConversationMessage[];
   profileContext?: TextPersonalizationProfile | null;
+  memoryContextBlock?: string | null;
+  memoryPolicy?: LiveMemoryPolicy;
   enableMultipart?: boolean;
 }
 
@@ -905,6 +1197,391 @@ export interface GenerateTextReplyStreamChunk {
 export interface GenerateTextReplyStreamResult {
   model: string;
   stream: AsyncGenerator<GenerateTextReplyStreamChunk>;
+}
+
+export interface GenerateAgentPlannerDraftInput {
+  prompt: string;
+  hasImage: boolean;
+  inferredTaskKind: "mini_game" | "doc_markdown" | "mixed";
+  inferredRiskLevel: "low" | "high";
+}
+
+export interface GenerateAgentPlannerDraftResult {
+  model: string;
+  rawJson: string;
+  responseId?: string;
+  usage?: TokenUsageSnapshot;
+}
+
+export type GameProjectFormat = "single_file" | "multi_file";
+export type GameProjectEngine = "canvas_dom" | "threejs_light";
+
+export interface GeneratedGameProjectFile {
+  path: string;
+  content: string;
+}
+
+export interface GeneratedGameProjectDraft {
+  title: string;
+  summary: string;
+  format: GameProjectFormat;
+  engine: GameProjectEngine;
+  mechanics: string[];
+  entryPath: string;
+  files: GeneratedGameProjectFile[];
+}
+
+export interface GenerateGameProjectDraftInput {
+  prompt: string;
+  imageHints: string[];
+  preferredFormat: GameProjectFormat;
+  allowLight3d: boolean;
+}
+
+export interface RepairGameProjectDraftInput {
+  prompt: string;
+  imageHints: string[];
+  preferredFormat: GameProjectFormat;
+  allowLight3d: boolean;
+  previousDraft: GeneratedGameProjectDraft;
+  qaFailures: string[];
+  attempt: number;
+}
+
+export interface GenerateGameProjectDraftResult {
+  model: string;
+  draft: GeneratedGameProjectDraft;
+  rawJson: string;
+  responseId?: string;
+  usage?: TokenUsageSnapshot;
+}
+
+export async function generateAgentPlannerDraft(
+  input: GenerateAgentPlannerDraftInput,
+): Promise<GenerateAgentPlannerDraftResult> {
+  const ai = getGeminiClient();
+  const model = resolveTextModel();
+
+  const prompt = [
+    "Build an execution plan for an AI companion task.",
+    "Return JSON only with this exact schema:",
+    "{",
+    '  "title": string,',
+    '  "taskKind": "mini_game" | "doc_markdown" | "mixed",',
+    '  "riskLevel": "low" | "high",',
+    '  "steps": [',
+    '    { "key": string, "title": string, "detail": string }',
+    "  ]",
+    "}",
+    "Rules:",
+    "- Produce 3-6 steps in chronological order.",
+    '- Keys must be short snake_case identifiers (for example: "plan", "build", "qa", "publish").',
+    "- Keep details concise and implementation-oriented.",
+    "- If uncertain, prefer conservative low-risk build/test workflow without external side effects.",
+    "",
+    "Task input:",
+    `- Prompt: ${input.prompt}`,
+    `- Has image input: ${input.hasImage ? "yes" : "no"}`,
+    `- Inferred task kind baseline: ${input.inferredTaskKind}`,
+    `- Inferred risk baseline: ${input.inferredRiskLevel}`,
+  ].join("\n");
+
+  const response = await ai.models.generateContent({
+    model,
+    contents: [{ role: "user", parts: [{ text: prompt }] }],
+    config: {
+      systemInstruction:
+        "You are a reliable planning engine for a sandboxed AI runtime. Output valid JSON only.",
+      temperature: 0.2,
+      maxOutputTokens: 600,
+      responseMimeType: "application/json",
+    },
+  });
+
+  const rawJson = stripJsonCodeFence((response.text ?? "").trim());
+  if (!rawJson) {
+    throw new Error("Gemini returned an empty planner draft");
+  }
+
+  return {
+    model,
+    rawJson,
+    responseId: response.responseId,
+    usage: compactUsage(response.usageMetadata),
+  };
+}
+
+export async function generateGameProjectDraft(
+  input: GenerateGameProjectDraftInput,
+): Promise<GenerateGameProjectDraftResult> {
+  const ai = getGeminiClient();
+  const model = resolveAgentGameModel();
+  const prompt = buildGenerateGameProjectPrompt(input);
+
+  const response = await ai.models.generateContent({
+    model,
+    contents: [{ role: "user", parts: [{ text: prompt }] }],
+    config: {
+      systemInstruction:
+        "You are a deterministic code generator for sandboxed browser mini-games. Output strict JSON only.",
+      temperature: 0.35,
+      maxOutputTokens: 6400,
+      responseMimeType: "application/json",
+    },
+  });
+
+  const rawJson = stripJsonCodeFence((response.text ?? "").trim());
+  if (!rawJson) {
+    throw new Error("Gemini returned an empty game project draft");
+  }
+
+  const draft = parseGameProjectDraft(rawJson, {
+    allowLight3d: input.allowLight3d,
+  });
+
+  return {
+    model,
+    draft,
+    rawJson,
+    responseId: response.responseId,
+    usage: compactUsage(response.usageMetadata),
+  };
+}
+
+export async function generateGameProjectDraftViaGeminiCli(
+  input: GenerateGameProjectDraftInput,
+): Promise<GenerateGameProjectDraftResult> {
+  const model = resolveAgentGameModel();
+  const prompt = buildGenerateGameProjectPrompt(input);
+  const rawOutput = await runGeminiCliJsonPrompt({
+    prompt,
+    model,
+  });
+
+  const rawJson = stripJsonCodeFence(rawOutput);
+  if (!rawJson) {
+    throw new Error("Gemini CLI returned an empty game project draft");
+  }
+
+  const draft = parseGameProjectDraft(rawJson, {
+    allowLight3d: input.allowLight3d,
+  });
+
+  return {
+    model: `${model}:gemini_cli`,
+    draft,
+    rawJson,
+  };
+}
+
+export async function repairGameProjectDraft(
+  input: RepairGameProjectDraftInput,
+): Promise<GenerateGameProjectDraftResult> {
+  const ai = getGeminiClient();
+  const model = resolveAgentGameModel();
+  const prompt = buildRepairGameProjectPrompt(input);
+
+  const response = await ai.models.generateContent({
+    model,
+    contents: [{ role: "user", parts: [{ text: prompt }] }],
+    config: {
+      systemInstruction:
+        "You repair browser game projects for a sandboxed runtime. Output strict JSON only.",
+      temperature: 0.2,
+      maxOutputTokens: 7000,
+      responseMimeType: "application/json",
+    },
+  });
+
+  const rawJson = stripJsonCodeFence((response.text ?? "").trim());
+  if (!rawJson) {
+    throw new Error("Gemini returned an empty repaired game project draft");
+  }
+
+  const draft = parseGameProjectDraft(rawJson, {
+    allowLight3d: input.allowLight3d,
+  });
+
+  return {
+    model,
+    draft,
+    rawJson,
+    responseId: response.responseId,
+    usage: compactUsage(response.usageMetadata),
+  };
+}
+
+export async function repairGameProjectDraftViaGeminiCli(
+  input: RepairGameProjectDraftInput,
+): Promise<GenerateGameProjectDraftResult> {
+  const model = resolveAgentGameModel();
+  const prompt = buildRepairGameProjectPrompt(input);
+  const rawOutput = await runGeminiCliJsonPrompt({
+    prompt,
+    model,
+  });
+
+  const rawJson = stripJsonCodeFence(rawOutput);
+  if (!rawJson) {
+    throw new Error("Gemini CLI returned an empty repaired game project draft");
+  }
+
+  const draft = parseGameProjectDraft(rawJson, {
+    allowLight3d: input.allowLight3d,
+  });
+
+  return {
+    model: `${model}:gemini_cli`,
+    draft,
+    rawJson,
+  };
+}
+
+function buildGenerateGameProjectPrompt(
+  input: GenerateGameProjectDraftInput,
+): string {
+  const imageHints = input.imageHints.length
+    ? input.imageHints.map((hint) => `- ${hint}`).join("\n")
+    : "- none";
+
+  return [
+    "Generate a runnable browser mini-game project.",
+    "Return JSON only, with this exact schema:",
+    "{",
+    '  "title": string,',
+    '  "summary": string,',
+    '  "format": "single_file" | "multi_file",',
+    '  "engine": "canvas_dom" | "threejs_light",',
+    '  "mechanics": string[],',
+    '  "entryPath": string,',
+    '  "files": [{ "path": string, "content": string }]',
+    "}",
+    "",
+    "Hard rules:",
+    "- Files must be self-contained and browser-runnable with no build step.",
+    "- Do not use external CDNs, network fetches, or remote assets.",
+    "- Keep game mechanics clear and playable with keyboard/mouse/touch input.",
+    "- If the prompt explicitly requests a named genre (for example: snake), implement that genre's core mechanics and controls. Do not substitute with a different style of game.",
+    "- Ensure the entry file is HTML and references only files included in files[].",
+    "- Avoid dynamic imports and runtime bundlers.",
+    "- Keep total generated source concise (target <= 80KB total file content).",
+    "",
+    "Task request:",
+    `- Prompt: ${input.prompt}`,
+    `- Preferred format: ${input.preferredFormat}`,
+    `- Light 3D allowed: ${input.allowLight3d ? "yes" : "no"}`,
+    "- Image hints:",
+    imageHints,
+  ].join("\n");
+}
+
+function buildRepairGameProjectPrompt(input: RepairGameProjectDraftInput): string {
+  const imageHints = input.imageHints.length
+    ? input.imageHints.map((hint) => `- ${hint}`).join("\n")
+    : "- none";
+  const qaFailures = input.qaFailures.length
+    ? input.qaFailures.map((failure) => `- ${failure}`).join("\n")
+    : "- unknown";
+
+  return [
+    "Repair the provided game project draft to pass QA.",
+    "Return strict JSON with the exact schema previously defined.",
+    "",
+    `Attempt: ${input.attempt}`,
+    `Preferred format: ${input.preferredFormat}`,
+    `Light 3D allowed: ${input.allowLight3d ? "yes" : "no"}`,
+    "",
+    "Original user prompt:",
+    input.prompt,
+    "",
+    "Image hints:",
+    imageHints,
+    "",
+    "QA failures to fix:",
+    qaFailures,
+    "",
+    "Current project draft JSON:",
+    JSON.stringify(input.previousDraft),
+    "",
+    "Hard rules:",
+    "- Preserve core intent and fun mechanics.",
+    "- If the prompt explicitly requests a named genre (for example: snake), keep that exact genre and repair mechanics to match it.",
+    "- Keep output browser-runnable with no build step.",
+    "- Do not rely on external network assets or CDNs.",
+    "- Keep entryPath present in files[] and valid.",
+  ].join("\n");
+}
+
+async function runGeminiCliJsonPrompt(params: {
+  prompt: string;
+  model: string;
+}): Promise<string> {
+  const cli = resolveGeminiCliCommand();
+  const timeoutMs = resolveGeminiCliTimeoutMs();
+
+  const result = await execFileAsync(cli.command, [
+    ...cli.baseArgs,
+    "--model",
+    params.model,
+    "--prompt",
+    params.prompt,
+  ], {
+    timeout: timeoutMs,
+    maxBuffer: 2 * 1024 * 1024,
+    env: {
+      ...process.env,
+      GEMINI_API_KEY: requireGeminiApiKey(),
+    },
+  });
+
+  const stdout = result.stdout?.toString().trim() ?? "";
+  if (!stdout) {
+    throw new Error("Gemini CLI returned empty output");
+  }
+  return extractLikelyJsonPayload(stdout);
+}
+
+function resolveGeminiCliCommand(): { command: string; baseArgs: string[] } {
+  const raw = (process.env.AGENT_GEMINI_CLI_COMMAND ?? "gemini")
+    .trim()
+    .replace(/\s+/g, " ");
+  if (!raw) {
+    throw new Error("AGENT_GEMINI_CLI_COMMAND is empty");
+  }
+  const [command, ...baseArgs] = raw.split(" ").filter(Boolean);
+  return { command, baseArgs };
+}
+
+function resolveGeminiCliTimeoutMs(): number {
+  const fallback = 75_000;
+  const parsed = Number.parseInt(
+    process.env.AGENT_GEMINI_CLI_TIMEOUT_MS ?? `${fallback}`,
+    10,
+  );
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return Math.min(Math.max(parsed, 5_000), 180_000);
+}
+
+function extractLikelyJsonPayload(raw: string): string {
+  const trimmed = raw.trim();
+  if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+    return trimmed;
+  }
+
+  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+  if (fenced?.[1]) {
+    return fenced[1].trim();
+  }
+
+  const firstBrace = trimmed.indexOf("{");
+  const lastBrace = trimmed.lastIndexOf("}");
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    return trimmed.slice(firstBrace, lastBrace + 1).trim();
+  }
+
+  return trimmed;
 }
 
 function buildTextGenerationConfig(personaPrompt: string) {
@@ -930,6 +1607,8 @@ export async function generateTextReply(
   const personaPrompt = await getTextPersonaPrompt({
     persona: input.persona,
     profileContext: input.profileContext,
+    memoryContextBlock: input.memoryContextBlock,
+    memoryPolicy: input.memoryPolicy,
     enableMultipart,
   });
   const contents = buildConversationContents(input.messages);
@@ -958,6 +1637,143 @@ export async function generateTextReply(
   };
 }
 
+function stripJsonCodeFence(input: string): string {
+  const trimmed = input.trim();
+  if (!trimmed.startsWith("```")) {
+    return trimmed;
+  }
+
+  const fenceMatch = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  if (!fenceMatch) {
+    return trimmed;
+  }
+
+  return fenceMatch[1].trim();
+}
+
+function parseGameProjectDraft(
+  rawJson: string,
+  options: { allowLight3d: boolean },
+): GeneratedGameProjectDraft {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawJson) as unknown;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Game project JSON parse failed: ${message}`);
+  }
+
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Game project must be a JSON object");
+  }
+
+  const record = parsed as Record<string, unknown>;
+  const title = coerceRequiredString(record.title, "title", 140);
+  const summary = coerceRequiredString(record.summary, "summary", 400);
+  const format = coerceGameProjectFormat(record.format);
+  const engine = coerceGameProjectEngine(record.engine, options.allowLight3d);
+  const mechanics = coerceMechanics(record.mechanics);
+  const entryPath = coerceRequiredString(record.entryPath, "entryPath", 180);
+  const files = coerceFiles(record.files);
+
+  if (!files.some((file) => file.path === entryPath)) {
+    throw new Error("Game project entryPath must match a file path in files[]");
+  }
+  if (!entryPath.toLowerCase().endsWith(".html")) {
+    throw new Error("Game project entryPath must reference an .html file");
+  }
+  if (format === "single_file" && files.length !== 1) {
+    throw new Error("single_file format requires exactly one file");
+  }
+
+  return {
+    title,
+    summary,
+    format,
+    engine,
+    mechanics,
+    entryPath,
+    files,
+  };
+}
+
+function coerceRequiredString(
+  value: unknown,
+  field: string,
+  maxLength: number,
+): string {
+  if (typeof value !== "string") {
+    throw new Error(`Game project field "${field}" must be a string`);
+  }
+  const normalized = value.trim();
+  if (!normalized) {
+    throw new Error(`Game project field "${field}" cannot be empty`);
+  }
+  return normalized.slice(0, maxLength);
+}
+
+function coerceGameProjectFormat(value: unknown): GameProjectFormat {
+  if (value === "single_file" || value === "multi_file") {
+    return value;
+  }
+  throw new Error('Game project field "format" must be "single_file" or "multi_file"');
+}
+
+function coerceGameProjectEngine(
+  value: unknown,
+  allowLight3d: boolean,
+): GameProjectEngine {
+  if (value === "canvas_dom") {
+    return value;
+  }
+  if (value === "threejs_light") {
+    if (!allowLight3d) {
+      throw new Error("threejs_light engine is disabled by runtime policy");
+    }
+    return value;
+  }
+  throw new Error(
+    'Game project field "engine" must be "canvas_dom" or "threejs_light"',
+  );
+}
+
+function coerceMechanics(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    throw new Error('Game project field "mechanics" must be an array of strings');
+  }
+  const mechanics = value
+    .filter((item): item is string => typeof item === "string")
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0)
+    .slice(0, 8);
+  if (mechanics.length === 0) {
+    throw new Error('Game project field "mechanics" must include at least one item');
+  }
+  return mechanics;
+}
+
+function coerceFiles(value: unknown): GeneratedGameProjectFile[] {
+  if (!Array.isArray(value)) {
+    throw new Error('Game project field "files" must be an array');
+  }
+  const files: GeneratedGameProjectFile[] = [];
+
+  for (const item of value) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      continue;
+    }
+    const record = item as Record<string, unknown>;
+    const path = coerceRequiredString(record.path, "files[].path", 220);
+    const content = coerceRequiredString(record.content, "files[].content", 500_000);
+    files.push({ path, content });
+  }
+
+  if (files.length === 0) {
+    throw new Error('Game project field "files" must include at least one file');
+  }
+  return files;
+}
+
 export async function generateTextReplyStream(
   input: GenerateTextReplyInput,
 ): Promise<GenerateTextReplyStreamResult> {
@@ -969,6 +1785,8 @@ export async function generateTextReplyStream(
   const personaPrompt = await getTextPersonaPrompt({
     persona: input.persona,
     profileContext: input.profileContext,
+    memoryContextBlock: input.memoryContextBlock,
+    memoryPolicy: input.memoryPolicy,
     enableMultipart,
   });
   const contents = buildConversationContents(input.messages);

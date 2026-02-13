@@ -169,10 +169,14 @@ export function isAppThemeId(value: unknown): value is AppThemeId {
 
 export function getAppTheme(themeId?: string | null): AppThemeOption {
   if (!themeId) {
-    return APP_THEME_OPTIONS[0];
+    return (
+      APP_THEME_OPTIONS.find((theme) => theme.id === DEFAULT_APP_THEME_ID) ??
+      APP_THEME_OPTIONS[0]
+    );
   }
   return (
     APP_THEME_OPTIONS.find((theme) => theme.id === themeId) ??
+    APP_THEME_OPTIONS.find((theme) => theme.id === DEFAULT_APP_THEME_ID) ??
     APP_THEME_OPTIONS[0]
   );
 }

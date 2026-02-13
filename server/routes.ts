@@ -14,9 +14,24 @@ import {
   insertConversationSchema,
   insertMessageSchema,
   insertUserPreferencesSchema,
+  type AgentArtifact,
+  type AgentApproval,
+  type AgentToolCall,
+  type AgentStep,
+  type AgentTask,
+  type Message,
   type MessageAttachment,
   type UserProfile,
 } from "@shared/schema";
+import type {
+  AgentArtifactSummary,
+  AgentApprovalSummary,
+  AgentStepSummary,
+  AgentTaskKind,
+  AgentTaskEvent,
+  AgentTaskSummary,
+  AgentToolCallSummary,
+} from "@shared/agent";
 import {
   createLiveToken,
   DEFAULT_LIVE_VOICE,
@@ -27,22 +42,53 @@ import {
   splitAssistantReplyParts,
   splitAssistantReplyPartsWithDiagnostics,
   summarizeImageForMemory,
+  type LiveMemoryPolicy,
   type LiveVoiceName,
   type ResponseStylePreset,
   type TextPersonalizationProfile,
   ZEE_SPLIT_TOKEN,
 } from "./gemini";
+import {
+  approveAndContinueAgentTask,
+  classifyChatTurnIntent,
+  startAgentTaskRun,
+} from "./agent-runtime";
 import { elapsedMs, getTraceId, trace, traceError } from "./observability";
 import { getMediaStore, type StorageProvider } from "./media-store";
 import { createSignedMediaPath, verifyMediaSignature } from "./media-signing";
 
 const personaInputSchema = z.string().trim().min(1).max(64);
 const liveVoiceSchema = z.enum(["Aoede", "Kore", "Charon", "Fenrir"]);
+const liveMemoryModeSchema = z.enum(["safe_selective", "remember_everything"]);
 
 const liveTokenSchema = z.object({
+  conversationId: z.string().min(1, "conversationId is required"),
   persona: personaInputSchema.optional(),
   responseModality: z.enum(["AUDIO", "TEXT"]).optional(),
   voice: liveVoiceSchema.optional(),
+  deviceClass: z.enum(["mobile", "desktop", "unknown"]).optional(),
+  memoryModeOverride: liveMemoryModeSchema.optional(),
+});
+
+const memorySettingsPatchSchema = z
+  .object({
+    memoryMode: liveMemoryModeSchema.optional(),
+    crossChatMemoryEnabled: z.boolean().optional(),
+  })
+  .refine(
+    (value) =>
+      value.memoryMode !== undefined ||
+      value.crossChatMemoryEnabled !== undefined,
+    {
+      message: "At least one memory setting is required",
+    },
+  );
+
+const memoryItemsQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).optional().default(30),
+  offset: z.coerce.number().int().min(0).optional().default(0),
+  includeArchived: z.coerce.boolean().optional().default(false),
+  q: z.string().trim().max(120).optional(),
 });
 
 const chatRespondSchema = z
@@ -61,6 +107,15 @@ const chatRespondSchema = z
       });
     }
   });
+
+const agentApprovalDecisionSchema = z.object({
+  approve: z.boolean(),
+  reason: z.string().trim().max(400).optional().nullable(),
+});
+
+const agentArtifactsQuerySchema = z.object({
+  includeArchived: z.coerce.boolean().optional().default(true),
+});
 
 const voiceTranscriptSchema = z.object({
   sender: z.enum(["user", "assistant"]),
@@ -179,6 +234,22 @@ const ENABLE_PROFILE_PERSONALIZATION = parseBooleanFlag(
 const ENABLE_BETA_QUOTAS = parseBooleanFlag(
   process.env.ENABLE_BETA_QUOTAS,
   true,
+);
+const ENABLE_LIVE_MEMORY_CONTEXT = parseBooleanFlag(
+  process.env.ENABLE_LIVE_MEMORY_CONTEXT,
+  true,
+);
+const LIVE_MEMORY_BUILD_TIMEOUT_MS = parsePositiveInt(
+  process.env.LIVE_MEMORY_BUILD_TIMEOUT_MS,
+  1800,
+);
+const LIVE_MEMORY_ACTIVE_THREAD_MAX_MESSAGES = parsePositiveInt(
+  process.env.LIVE_MEMORY_ACTIVE_THREAD_MAX_MESSAGES,
+  60,
+);
+const LIVE_MEMORY_CROSS_CHAT_MAX_MESSAGES = parsePositiveInt(
+  process.env.LIVE_MEMORY_CROSS_CHAT_MAX_MESSAGES,
+  80,
 );
 const BETA_TEXT_QUOTA_30D = parsePositiveInt(process.env.BETA_TEXT_QUOTA_30D, 200);
 const BETA_VOICE_QUOTA_SECONDS_30D = parsePositiveInt(
@@ -443,6 +514,635 @@ function resolveLiveVoice(input: unknown): LiveVoiceName {
   return parsed.success ? parsed.data : DEFAULT_LIVE_VOICE;
 }
 
+type LiveMemoryFallbackUsed =
+  | "none"
+  | "active_thread_only"
+  | "persona_only"
+  | "disabled";
+
+type LiveTokenMemoryMeta = {
+  activeThreadMessagesUsed: number;
+  crossChatMessagesUsed: number;
+  profileApplied: boolean;
+  mode: LiveMemoryPolicy;
+  buildMs: number;
+  fallbackUsed: LiveMemoryFallbackUsed;
+};
+
+type MemorySourceMessage = {
+  sender: string;
+  text: string;
+  createdAt: Date | null;
+};
+
+type SanitizedMemoryText = {
+  text: string;
+  redactionCount: number;
+};
+
+const MEMORY_STOP_WORDS = new Set([
+  "about",
+  "after",
+  "again",
+  "already",
+  "also",
+  "and",
+  "are",
+  "because",
+  "been",
+  "before",
+  "being",
+  "between",
+  "both",
+  "but",
+  "can",
+  "did",
+  "does",
+  "doing",
+  "for",
+  "from",
+  "have",
+  "just",
+  "like",
+  "more",
+  "most",
+  "much",
+  "need",
+  "really",
+  "that",
+  "the",
+  "their",
+  "them",
+  "there",
+  "these",
+  "they",
+  "this",
+  "those",
+  "through",
+  "very",
+  "want",
+  "were",
+  "what",
+  "when",
+  "which",
+  "will",
+  "with",
+  "your",
+  "you",
+]);
+
+const MEMORY_WORD_PATTERN = /[a-z0-9][a-z0-9'_-]{2,}/gi;
+
+const MEMORY_SENSITIVE_PATTERNS = [
+  /(api[_ -]?key|access[_ -]?token|refresh[_ -]?token|session[_ -]?token|password|secret)\s*[:=]\s*[^\s,;]+/gi,
+  /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi,
+  /\b\d{3}-\d{2}-\d{4}\b/g,
+  /\b(?:\d[ -]?){13,16}\b/g,
+  /\b(?=[A-Za-z0-9_-]{24,})(?=.*[A-Za-z])(?=.*\d)[A-Za-z0-9_-]+\b/g,
+];
+
+function resolveLiveMemoryPolicy(
+  input: unknown,
+  fallbackInput?: unknown,
+): LiveMemoryPolicy {
+  const override = liveMemoryModeSchema.safeParse(input);
+  if (override.success) {
+    return override.data;
+  }
+
+  const fallback = liveMemoryModeSchema.safeParse(fallbackInput);
+  if (fallback.success) {
+    return fallback.data;
+  }
+
+  const envDefault = liveMemoryModeSchema.safeParse(
+    (process.env.LIVE_MEMORY_POLICY_DEFAULT ?? "").trim().toLowerCase(),
+  );
+  if (envDefault.success) {
+    return envDefault.data;
+  }
+  return "safe_selective";
+}
+
+function normalizeMemoryText(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function truncateMemoryText(value: string, maxLength: number): string {
+  if (value.length <= maxLength) return value;
+  return `${value.slice(0, Math.max(0, maxLength - 3)).trim()}...`;
+}
+
+function sanitizeMemoryText(
+  value: string,
+  memoryPolicy: LiveMemoryPolicy,
+): SanitizedMemoryText {
+  const normalized = normalizeMemoryText(value);
+  if (!normalized) {
+    return { text: "", redactionCount: 0 };
+  }
+
+  if (memoryPolicy === "remember_everything") {
+    return { text: normalized, redactionCount: 0 };
+  }
+
+  let redactionCount = 0;
+  let sanitized = normalized;
+  for (const pattern of MEMORY_SENSITIVE_PATTERNS) {
+    sanitized = sanitized.replace(pattern, (match) => {
+      if (!match.trim()) return match;
+      redactionCount += 1;
+      return "[redacted]";
+    });
+  }
+
+  return {
+    text: normalizeMemoryText(sanitized),
+    redactionCount,
+  };
+}
+
+function messageLabel(sender: string): "User" | "Zee" | "System" {
+  if (sender === "user") return "User";
+  if (sender === "assistant") return "Zee";
+  return "System";
+}
+
+function formatMemoryLine(sender: string, text: string): string {
+  return `- ${messageLabel(sender)}: ${text}`;
+}
+
+function toMemoryMessageText(message: MessageWithAttachments): string {
+  const base = normalizeMemoryText(message.text);
+  const attachmentSummaries = message.attachments
+    .map((attachment) => normalizeMemoryText(attachment.summaryText ?? ""))
+    .filter((text) => text.length > 0)
+    .slice(0, 2)
+    .map((text) => truncateMemoryText(text, 140));
+
+  if (attachmentSummaries.length === 0) {
+    return base;
+  }
+
+  if (base.length === 0) {
+    return `Image context: ${attachmentSummaries.join(" | ")}`;
+  }
+
+  return `${base} Image context: ${attachmentSummaries.join(" | ")}`;
+}
+
+function extractKeywords(text: string): string[] {
+  const matches = text.toLowerCase().match(MEMORY_WORD_PATTERN) ?? [];
+  const deduped = new Set<string>();
+
+  for (const token of matches) {
+    if (token.length < 4) continue;
+    if (MEMORY_STOP_WORDS.has(token)) continue;
+    deduped.add(token);
+    if (deduped.size >= 32) break;
+  }
+
+  return Array.from(deduped);
+}
+
+function scoreRelevance(text: string, keywords: Set<string>): number {
+  if (keywords.size === 0) return 0;
+  const tokens = extractKeywords(text);
+  let score = 0;
+  for (const token of tokens) {
+    if (keywords.has(token)) score += 1;
+  }
+  return score;
+}
+
+function buildProfileMemoryLines(
+  profile: TextPersonalizationProfile | null | undefined,
+  memoryPolicy: LiveMemoryPolicy,
+): SanitizedMemoryText {
+  if (!profile) {
+    return { text: "", redactionCount: 0 };
+  }
+
+  const entries: string[] = [];
+  if (profile.displayName?.trim()) {
+    entries.push(`- Preferred name: ${profile.displayName.trim()}`);
+  }
+  if (profile.location?.trim()) {
+    entries.push(`- Location: ${profile.location.trim()}`);
+  }
+  if (typeof profile.age === "number" && Number.isFinite(profile.age)) {
+    entries.push(`- Age: ${profile.age}`);
+  }
+  if (profile.profession?.trim()) {
+    entries.push(`- Profession: ${profile.profession.trim()}`);
+  }
+  if (profile.bio?.trim()) {
+    entries.push(`- Bio: ${profile.bio.trim()}`);
+  }
+  if (profile.responseStylePreset) {
+    entries.push(`- Preferred response style: ${profile.responseStylePreset}`);
+  }
+  if (profile.responseStyleNote?.trim()) {
+    entries.push(`- Response style note: ${profile.responseStyleNote.trim()}`);
+  }
+
+  const raw = entries.join("\n");
+  return sanitizeMemoryText(raw, memoryPolicy);
+}
+
+async function withTimeout<T>(
+  work: Promise<T>,
+  timeoutMs: number,
+  label: string,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(label));
+    }, timeoutMs);
+
+    work
+      .then((value) => {
+        clearTimeout(timer);
+        resolve(value);
+      })
+      .catch((error) => {
+        clearTimeout(timer);
+        reject(error);
+      });
+  });
+}
+
+function isMemoryTimeoutError(error: unknown): boolean {
+  return error instanceof Error && error.message === "live_memory_build_timeout";
+}
+
+type LiveMemoryBuildResult = {
+  memoryContextBlock: string;
+  activeThreadMessagesUsed: number;
+  crossChatMessagesUsed: number;
+  durableMemoryItemsUsed: number;
+  redactionCount: number;
+};
+
+async function buildLiveMemoryContext(params: {
+  userId: string;
+  conversationId: string;
+  profileContext?: TextPersonalizationProfile | null;
+  includeCrossChat: boolean;
+  memoryPolicy: LiveMemoryPolicy;
+  activeThreadMaxMessages: number;
+  crossChatMaxMessages: number;
+}): Promise<LiveMemoryBuildResult> {
+  const activeMessages = await storage.getMessagesWithAttachments(params.conversationId);
+  const activeHistory: MemorySourceMessage[] = activeMessages
+    .map((message) => ({
+      sender: message.sender,
+      text: toMemoryMessageText(message),
+      createdAt: message.createdAt ?? null,
+    }))
+    .filter((message) => message.text.trim().length > 0);
+
+  const recentActive = activeHistory.slice(
+    -Math.max(1, params.activeThreadMaxMessages),
+  );
+  const olderActive = activeHistory.slice(
+    0,
+    Math.max(0, activeHistory.length - recentActive.length),
+  );
+
+  let redactionCount = 0;
+  const currentThreadLines = recentActive
+    .map((message) => {
+      const sanitized = sanitizeMemoryText(message.text, params.memoryPolicy);
+      redactionCount += sanitized.redactionCount;
+      if (!sanitized.text) return null;
+      return formatMemoryLine(
+        message.sender,
+        truncateMemoryText(sanitized.text, 220),
+      );
+    })
+    .filter((line): line is string => Boolean(line));
+
+  const olderThreadSummaryLines = olderActive
+    .slice(-10)
+    .map((message) => {
+      const sanitized = sanitizeMemoryText(message.text, params.memoryPolicy);
+      redactionCount += sanitized.redactionCount;
+      if (!sanitized.text) return null;
+      return `- ${messageLabel(message.sender)} earlier: ${truncateMemoryText(
+        sanitized.text,
+        150,
+      )}`;
+    })
+    .filter((line): line is string => Boolean(line));
+
+  const crossChatLines: string[] = [];
+  const durableMemoryLines: string[] = [];
+  if (params.includeCrossChat && params.crossChatMaxMessages > 0) {
+    const retrievalLimit = Math.min(
+      240,
+      Math.max(
+        params.crossChatMaxMessages,
+        params.crossChatMaxMessages * 2,
+      ),
+    );
+    const crossChatMessages = (
+      await storage.getRecentMessagesForUser({
+        userId: params.userId,
+        limit: retrievalLimit,
+        excludeConversationId: params.conversationId,
+      })
+    )
+      .map((message) => ({
+        sender: message.sender,
+        text: normalizeMemoryText(message.text),
+        createdAt: message.createdAt ?? null,
+      }))
+      .filter((message) => message.text.length > 0);
+
+    const activeKeywords = new Set(
+      recentActive.flatMap((message) => extractKeywords(message.text)),
+    );
+
+    const rankedCrossChat = crossChatMessages.map((message) => ({
+      message,
+      score: scoreRelevance(message.text, activeKeywords),
+    }));
+
+    const selectedCrossChat = [
+      ...rankedCrossChat
+        .filter((entry) => entry.score > 0)
+        .sort(
+          (a, b) =>
+            b.score - a.score ||
+            (b.message.createdAt?.getTime() ?? 0) -
+              (a.message.createdAt?.getTime() ?? 0),
+        ),
+      ...rankedCrossChat
+        .filter((entry) => entry.score === 0)
+        .sort(
+          (a, b) =>
+            (b.message.createdAt?.getTime() ?? 0) -
+            (a.message.createdAt?.getTime() ?? 0),
+        ),
+    ].slice(0, Math.max(1, params.crossChatMaxMessages));
+
+    selectedCrossChat.sort(
+      (a, b) =>
+        (a.message.createdAt?.getTime() ?? 0) -
+        (b.message.createdAt?.getTime() ?? 0),
+    );
+
+    for (const entry of selectedCrossChat) {
+      const sanitized = sanitizeMemoryText(entry.message.text, params.memoryPolicy);
+      redactionCount += sanitized.redactionCount;
+      if (!sanitized.text) continue;
+      crossChatLines.push(
+        formatMemoryLine(
+          entry.message.sender,
+          truncateMemoryText(sanitized.text, 180),
+        ),
+      );
+    }
+
+    const durableMemoryItems = await storage.getUserMemoryItems({
+      userId: params.userId,
+      limit: Math.min(120, Math.max(params.crossChatMaxMessages * 2, 24)),
+      includeArchived: false,
+    });
+
+    const kindCounts = new Map<string, number>();
+    const rankedDurable = durableMemoryItems
+      .map((item) => {
+        const relevance = scoreRelevance(item.summary, activeKeywords);
+        const lastTouchedAt = item.lastReinforcedAt ?? item.updatedAt ?? item.createdAt;
+        const ageDays = Math.max(
+          0,
+          (Date.now() - (lastTouchedAt?.getTime() ?? Date.now())) /
+            (24 * 60 * 60 * 1000),
+        );
+        const recencyBonus = Math.max(0, 2.5 - ageDays / 14);
+        const confidenceBonus = Math.min(3, Math.max(0, item.confidence / 40));
+        const score = relevance * 4 + recencyBonus + confidenceBonus;
+        return { item, score, relevance };
+      })
+      .sort((a, b) => b.score - a.score);
+
+    for (const entry of rankedDurable) {
+      if (durableMemoryLines.length >= Math.min(12, params.crossChatMaxMessages)) {
+        break;
+      }
+      if (entry.relevance <= 0 && durableMemoryLines.length >= 4) {
+        continue;
+      }
+      const kindCount = kindCounts.get(entry.item.kind) ?? 0;
+      if (kindCount >= 3) {
+        continue;
+      }
+
+      const sanitized = sanitizeMemoryText(entry.item.summary, params.memoryPolicy);
+      redactionCount += sanitized.redactionCount;
+      if (!sanitized.text) continue;
+
+      durableMemoryLines.push(
+        `- [${entry.item.kind}] ${truncateMemoryText(sanitized.text, 170)}`,
+      );
+      kindCounts.set(entry.item.kind, kindCount + 1);
+    }
+  }
+
+  const profileFacts = buildProfileMemoryLines(
+    params.profileContext ?? null,
+    params.memoryPolicy,
+  );
+  redactionCount += profileFacts.redactionCount;
+
+  const sections: string[] = [];
+  if (currentThreadLines.length > 0) {
+    sections.push(
+      ["Current Thread (recent raw turns):", ...currentThreadLines].join("\n"),
+    );
+  }
+  if (olderThreadSummaryLines.length > 0) {
+    sections.push(
+      ["Thread Summary (older compressed points):", ...olderThreadSummaryLines].join(
+        "\n",
+      ),
+    );
+  }
+  if (crossChatLines.length > 0) {
+    sections.push(
+      ["Cross-Chat Relevant Memories:", ...crossChatLines].join("\n"),
+    );
+  }
+  if (durableMemoryLines.length > 0) {
+    sections.push(["Long-Term Memory Highlights:", ...durableMemoryLines].join("\n"));
+  }
+  if (profileFacts.text.length > 0) {
+    sections.push(["User Profile Facts:", profileFacts.text].join("\n"));
+  }
+
+  return {
+    memoryContextBlock: sections.join("\n\n").trim(),
+    activeThreadMessagesUsed: currentThreadLines.length,
+    crossChatMessagesUsed: crossChatLines.length + durableMemoryLines.length,
+    durableMemoryItemsUsed: durableMemoryLines.length,
+    redactionCount,
+  };
+}
+
+type ChatTextMemoryContext = {
+  profileContext?: TextPersonalizationProfile;
+  memoryContextBlock?: string;
+  memoryMeta: LiveTokenMemoryMeta;
+  accountMemoryMode: LiveMemoryPolicy;
+  crossChatMemoryEnabled: boolean;
+  redactionCount: number;
+  durableMemoryItemsUsed: number;
+};
+
+async function buildChatTextMemoryContext(params: {
+  req: any;
+  userId: string;
+  conversationId: string;
+}): Promise<ChatTextMemoryContext> {
+  let accountMemoryMode = resolveLiveMemoryPolicy(undefined);
+  let crossChatMemoryEnabled = true;
+
+  try {
+    const prefs = await storage.getUserPreferences(params.userId);
+    accountMemoryMode = resolveLiveMemoryPolicy(
+      prefs?.memoryMode,
+      accountMemoryMode,
+    );
+    crossChatMemoryEnabled = prefs?.crossChatMemoryEnabled ?? true;
+  } catch (error) {
+    traceError(params.req, "chat.memory.preferences.read.failed", error, {
+      conversationId: params.conversationId,
+    });
+  }
+
+  const memoryMode = accountMemoryMode;
+  let profileContext: TextPersonalizationProfile | undefined;
+  if (ENABLE_PROFILE_PERSONALIZATION) {
+    try {
+      profileContext = toProfilePromptContext(
+        await storage.getUserProfile(params.userId),
+      );
+    } catch (error) {
+      traceError(params.req, "chat.memory.profile.read.failed", error, {
+        conversationId: params.conversationId,
+      });
+    }
+  }
+
+  const memoryBuildStartedAt = Date.now();
+  const memoryMeta: LiveTokenMemoryMeta = {
+    activeThreadMessagesUsed: 0,
+    crossChatMessagesUsed: 0,
+    profileApplied: Boolean(profileContext),
+    mode: memoryMode,
+    buildMs: 0,
+    fallbackUsed: ENABLE_LIVE_MEMORY_CONTEXT ? "persona_only" : "disabled",
+  };
+
+  let memoryContextBlock: string | undefined;
+  let redactionCount = 0;
+  let durableMemoryItemsUsed = 0;
+
+  if (ENABLE_LIVE_MEMORY_CONTEXT) {
+    const deadlineAt = memoryBuildStartedAt + LIVE_MEMORY_BUILD_TIMEOUT_MS;
+    const runMemoryStage = async (
+      includeCrossChat: boolean,
+    ): Promise<LiveMemoryBuildResult> => {
+      const remainingMs = deadlineAt - Date.now();
+      if (remainingMs <= 0) {
+        throw new Error("live_memory_build_timeout");
+      }
+      return withTimeout(
+        buildLiveMemoryContext({
+          userId: params.userId,
+          conversationId: params.conversationId,
+          profileContext,
+          includeCrossChat,
+          memoryPolicy: memoryMode,
+          activeThreadMaxMessages: LIVE_MEMORY_ACTIVE_THREAD_MAX_MESSAGES,
+          crossChatMaxMessages: LIVE_MEMORY_CROSS_CHAT_MAX_MESSAGES,
+        }),
+        remainingMs,
+        "live_memory_build_timeout",
+      );
+    };
+
+    try {
+      const fullContext = await runMemoryStage(crossChatMemoryEnabled);
+      memoryContextBlock = fullContext.memoryContextBlock || undefined;
+      memoryMeta.activeThreadMessagesUsed = fullContext.activeThreadMessagesUsed;
+      memoryMeta.crossChatMessagesUsed = fullContext.crossChatMessagesUsed;
+      memoryMeta.fallbackUsed = "none";
+      redactionCount = fullContext.redactionCount;
+      durableMemoryItemsUsed = fullContext.durableMemoryItemsUsed;
+    } catch (fullError) {
+      traceError(params.req, "chat.memory.build.full.failed", fullError, {
+        conversationId: params.conversationId,
+        mode: memoryMode,
+        timedOut: isMemoryTimeoutError(fullError),
+      });
+
+      try {
+        const activeOnlyContext = await runMemoryStage(false);
+        memoryContextBlock = activeOnlyContext.memoryContextBlock || undefined;
+        memoryMeta.activeThreadMessagesUsed =
+          activeOnlyContext.activeThreadMessagesUsed;
+        memoryMeta.crossChatMessagesUsed = 0;
+        memoryMeta.fallbackUsed = "active_thread_only";
+        redactionCount = activeOnlyContext.redactionCount;
+        durableMemoryItemsUsed = activeOnlyContext.durableMemoryItemsUsed;
+      } catch (activeOnlyError) {
+        traceError(
+          params.req,
+          "chat.memory.build.active_only.failed",
+          activeOnlyError,
+          {
+            conversationId: params.conversationId,
+            mode: memoryMode,
+            timedOut: isMemoryTimeoutError(activeOnlyError),
+          },
+        );
+        memoryMeta.fallbackUsed = "persona_only";
+        memoryContextBlock = undefined;
+        redactionCount = 0;
+        durableMemoryItemsUsed = 0;
+      }
+    }
+  }
+
+  memoryMeta.buildMs = elapsedMs(memoryBuildStartedAt);
+  trace(params.req, "chat.memory.build.completed", {
+    conversationId: params.conversationId,
+    mode: memoryMeta.mode,
+    activeThreadMessagesUsed: memoryMeta.activeThreadMessagesUsed,
+    crossChatMessagesUsed: memoryMeta.crossChatMessagesUsed,
+    profileApplied: memoryMeta.profileApplied,
+    buildMs: memoryMeta.buildMs,
+    fallbackUsed: memoryMeta.fallbackUsed,
+    redactionCount,
+    durableMemoryItemsUsed,
+    crossChatMemoryEnabled,
+    accountMemoryMode,
+  });
+
+  return {
+    profileContext,
+    memoryContextBlock,
+    memoryMeta,
+    accountMemoryMode,
+    crossChatMemoryEnabled,
+    redactionCount,
+    durableMemoryItemsUsed,
+  };
+}
+
 function isStorageProvider(value: string): value is StorageProvider {
   return value === "local" || value === "replit";
 }
@@ -473,6 +1173,144 @@ function mapMessagesWithSignedAttachments(
       .filter((attachment) => attachment.status !== "deleted")
       .map((attachment) => toAttachmentResponse(attachment, userId)),
   }));
+}
+
+function toAgentTaskSummary(task: AgentTask): AgentTaskSummary {
+  return {
+    id: task.id,
+    conversationId: task.conversationId,
+    status: task.status,
+    riskLevel: task.riskLevel,
+    taskKind: task.taskKind,
+    prompt: task.prompt,
+    createdAt: task.createdAt,
+    updatedAt: task.updatedAt,
+    completedAt: task.completedAt,
+  };
+}
+
+function toAgentStepSummary(step: AgentStep): AgentStepSummary {
+  return {
+    id: step.id,
+    taskId: step.taskId,
+    stepKey: step.stepKey,
+    title: step.title,
+    detail: step.detail,
+    status: step.status,
+    orderIndex: step.orderIndex,
+    createdAt: step.createdAt,
+    updatedAt: step.updatedAt,
+  };
+}
+
+function toAgentApprovalSummary(approval: AgentApproval): AgentApprovalSummary {
+  return {
+    id: approval.id,
+    taskId: approval.taskId,
+    status: approval.status,
+    reason: approval.reason,
+    requestedAction: approval.requestedAction,
+    createdAt: approval.createdAt,
+    respondedAt: approval.respondedAt,
+  };
+}
+
+function toAgentArtifactSummary(artifact: AgentArtifact): AgentArtifactSummary {
+  return {
+    id: artifact.id,
+    taskId: artifact.taskId,
+    conversationId: artifact.conversationId,
+    type: artifact.type,
+    status: artifact.status,
+    title: artifact.title,
+    markdownContent: artifact.markdownContent,
+    htmlContent: artifact.htmlContent,
+    metadata: artifact.metadata,
+    createdAt: artifact.createdAt,
+    updatedAt: artifact.updatedAt,
+  };
+}
+
+function toAgentToolCallSummary(toolCall: AgentToolCall): AgentToolCallSummary {
+  return {
+    id: toolCall.id,
+    taskId: toolCall.taskId,
+    stepId: toolCall.stepId ?? null,
+    toolName: toolCall.toolName,
+    riskLevel: toolCall.riskLevel,
+    status: toolCall.status,
+    outputSummary: toolCall.outputSummary ?? null,
+    createdAt: toolCall.createdAt,
+  };
+}
+
+function isAgentMessageUiPayload(
+  value: unknown,
+): value is { kind: string; [key: string]: unknown } {
+  if (!value || typeof value !== "object") return false;
+  const kind = (value as Record<string, unknown>).kind;
+  return typeof kind === "string" && kind.startsWith("agent_");
+}
+
+const TURN_INTENT_CONTEXT_LOOKBACK = 12;
+
+function toTaskKindOrNull(value: unknown): AgentTaskKind | null {
+  if (value === "mini_game" || value === "doc_markdown" || value === "mixed") {
+    return value;
+  }
+  return null;
+}
+
+function inferRecentAgentIntentContext(messages: Message[], excludeMessageId: string) {
+  let scanned = 0;
+  for (let idx = messages.length - 1; idx >= 0; idx -= 1) {
+    const message = messages[idx];
+    if (message.id === excludeMessageId) continue;
+    scanned += 1;
+    if (scanned > TURN_INTENT_CONTEXT_LOOKBACK) break;
+
+    if (message.sender !== "assistant") continue;
+    if (!isAgentMessageUiPayload(message.uiPayload)) continue;
+
+    const payload = message.uiPayload as Record<string, unknown>;
+    const payloadKind = payload.kind;
+    if (payloadKind === "agent_task_status") {
+      const task =
+        payload.task && typeof payload.task === "object"
+          ? (payload.task as Record<string, unknown>)
+          : null;
+      return {
+        hasRecentAgentActivity: true,
+        recentTaskKind: toTaskKindOrNull(task?.taskKind),
+      };
+    }
+    if (payloadKind === "agent_artifact") {
+      const artifact =
+        payload.artifact && typeof payload.artifact === "object"
+          ? (payload.artifact as Record<string, unknown>)
+          : null;
+      const artifactType = artifact?.type;
+      return {
+        hasRecentAgentActivity: true,
+        recentTaskKind:
+          artifactType === "mini_game"
+            ? ("mini_game" as const)
+            : artifactType === "doc_markdown"
+              ? ("doc_markdown" as const)
+              : null,
+      };
+    }
+
+    return {
+      hasRecentAgentActivity: true,
+      recentTaskKind: null,
+    };
+  }
+
+  return {
+    hasRecentAgentActivity: false,
+    recentTaskKind: null,
+  };
 }
 
 function normalizeOptionalString(value: unknown): string | null | undefined {
@@ -632,6 +1470,16 @@ function sanitizeMultipartArtifacts(input: string): string {
     .trim();
 }
 
+function hasEmojiLikeGlyph(input: string): boolean {
+  for (let index = 0; index < input.length; index += 1) {
+    const code = input.charCodeAt(index);
+    if ((code >= 0xd83c && code <= 0xdbff) || (code >= 0x2600 && code <= 0x27bf)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function inferDesiredMultipartCount(userText: string): number {
   const normalized = userText.toLowerCase();
   const tripleKeyword = "(?:triple|tripple)";
@@ -664,12 +1512,68 @@ function inferDesiredMultipartCount(userText: string): number {
     return 2;
   }
 
+  if (
+    /\b(split|break)\b(?:\W+\w+){0,5}\W+\b(?:into|in)\b(?:\W+\w+){0,3}\W+\b(?:2|two)\b(?:\W+\w+){0,3}\W+\b(?:parts?|messages?|texts?|bubbles?)\b/.test(
+      normalized,
+    )
+  ) {
+    return 2;
+  }
+
+  if (
+    /\b(split|break)\b(?:\W+\w+){0,5}\W+\b(?:into|in)\b(?:\W+\w+){0,3}\W+\b(?:3|three)\b(?:\W+\w+){0,3}\W+\b(?:parts?|messages?|texts?|bubbles?)\b/.test(
+      normalized,
+    )
+  ) {
+    return 3;
+  }
+
+  if (
+    /\b(single|one)\b(?:\W+\w+){0,4}\W+\b(?:message|text|bubble)\b/.test(
+      normalized,
+    )
+  ) {
+    return 1;
+  }
+
   const tokenCount = normalized.trim().split(/\s+/).filter(Boolean).length;
-  const casualSignal = /\b(hey+|yo+|sup|wyd|lol|lmao|haha|omg|bro|sis|bet|nah|yep|yup)\b/.test(
+  if (tokenCount === 0 || tokenCount > 28) {
+    return 1;
+  }
+
+  const analyticalRequest =
+    /\b(explain|analyze|compare|summarize|research|outline|instructions?|step(?:\W+by\W+step)|plan|debug|fix)\b/.test(
+      normalized,
+    ) || /\b(why|how)\b/.test(normalized);
+
+  if (analyticalRequest) {
+    return 1;
+  }
+
+  const casualTone = /\b(hey+|heyy+|hello+|hi+|yo+|yoo+|sup+|wyd|lmao|lol|haha+|omg|bro|sis|bestie|hmm+|huh+|ugh+)\b/.test(
     normalized,
   );
+  const emotionalWords = /\b(excited|happy|sad|stressed|anxious|nervous|angry|upset|tired|overwhelmed|lonely|frustrated|love|miss you)\b/.test(
+    normalized,
+  );
+  const vulnerableSignal =
+    /\b(i(?:'m| am)|feeling)\b(?:\W+\w+){0,5}\W+\b(sad|stressed|anxious|overwhelmed|upset|lonely|frustrated|down)\b/.test(
+      normalized,
+    );
+  const expressivePunctuation = /[!?]{2,}|\.{3,}/.test(normalized);
+  const elongatedWord = /([a-z])\1{2,}/i.test(normalized);
+  const emojiSignal = hasEmojiLikeGlyph(userText);
+  const shortCasualTurn = tokenCount <= 14 && !/\b(what|when|where)\b/.test(normalized);
 
-  if (tokenCount <= 12 && casualSignal) {
+  if (
+    shortCasualTurn &&
+    casualTone &&
+    (emotionalWords || vulnerableSignal || expressivePunctuation || elongatedWord || emojiSignal)
+  ) {
+    return 2;
+  }
+
+  if (vulnerableSignal && tokenCount <= 18) {
     return 2;
   }
 
@@ -739,6 +1643,37 @@ function autoSplitReplyParts(replyText: string, targetParts: number): string[] {
   return [first, second, third].filter(Boolean);
 }
 
+function clampAssistantPartsToDesiredCount(
+  parts: string[],
+  desiredCount: number,
+): string[] {
+  const cleaned = parts
+    .map((part) => sanitizeMultipartArtifacts(part))
+    .filter((part) => part.trim().length > 0);
+
+  const target = Math.min(Math.max(desiredCount, 1), 3);
+  if (cleaned.length <= target) {
+    return cleaned;
+  }
+
+  if (target === 1) {
+    return [sanitizeMultipartArtifacts(cleaned.join(" "))];
+  }
+
+  if (target === 2) {
+    return [
+      sanitizeMultipartArtifacts(cleaned[0] ?? ""),
+      sanitizeMultipartArtifacts(cleaned.slice(1).join(" ")),
+    ].filter((part) => part.trim().length > 0);
+  }
+
+  return [
+    sanitizeMultipartArtifacts(cleaned[0] ?? ""),
+    sanitizeMultipartArtifacts(cleaned[1] ?? ""),
+    sanitizeMultipartArtifacts(cleaned.slice(2).join(" ")),
+  ].filter((part) => part.trim().length > 0);
+}
+
 function resolveAssistantParts(params: {
   rawReplyText: string;
   userText: string;
@@ -760,10 +1695,7 @@ function resolveAssistantParts(params: {
     parts = [params.rawReplyText];
   }
 
-  return parts
-    .slice(0, 3)
-    .map((part) => sanitizeMultipartArtifacts(part))
-    .filter((part) => part.trim().length > 0);
+  return clampAssistantPartsToDesiredCount(parts, desiredCount);
 }
 
 async function runMulterSingleImage(req: any, res: any): Promise<void> {
@@ -1630,6 +2562,8 @@ export async function registerRoutes(
           selectedVoice: DEFAULT_LIVE_VOICE,
           selectedTheme: "sunset_path",
           onboardingCompleted: false,
+          memoryMode: "safe_selective",
+          crossChatMemoryEnabled: true,
         },
       );
     } catch (error) {
@@ -1651,6 +2585,157 @@ export async function registerRoutes(
       res.status(400).json({ message: "Invalid preferences data" });
     }
   });
+
+  app.get("/api/memory/settings", isAuthenticated, async (req: any, res) => {
+    const startedAt = Date.now();
+    try {
+      const prefs = await storage.getUserPreferences(req.session.userId);
+      const settings = {
+        memoryMode: resolveLiveMemoryPolicy(prefs?.memoryMode),
+        crossChatMemoryEnabled: prefs?.crossChatMemoryEnabled ?? true,
+      };
+
+      trace(req, "memory.settings.read", {
+        ...settings,
+        elapsedMs: elapsedMs(startedAt),
+      });
+
+      return res.status(200).json({
+        traceId: getTraceId(req),
+        settings,
+      });
+    } catch (error) {
+      traceError(req, "memory.settings.read.failed", error, {
+        elapsedMs: elapsedMs(startedAt),
+      });
+      return res.status(500).json({
+        message: "Failed to fetch memory settings",
+        traceId: getTraceId(req),
+      });
+    }
+  });
+
+  app.patch("/api/memory/settings", isAuthenticated, async (req: any, res) => {
+    const startedAt = Date.now();
+    try {
+      const parsed = memorySettingsPatchSchema.parse(req.body ?? {});
+      const updated = await storage.upsertUserPreferences({
+        userId: req.session.userId,
+        memoryMode: parsed.memoryMode,
+        crossChatMemoryEnabled: parsed.crossChatMemoryEnabled,
+      });
+
+      trace(req, "memory.settings.updated", {
+        memoryMode: updated.memoryMode,
+        crossChatMemoryEnabled: updated.crossChatMemoryEnabled,
+        elapsedMs: elapsedMs(startedAt),
+      });
+
+      return res.status(200).json({
+        traceId: getTraceId(req),
+        settings: {
+          memoryMode: updated.memoryMode,
+          crossChatMemoryEnabled: updated.crossChatMemoryEnabled,
+        },
+      });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({
+          message: error.errors[0]?.message ?? "Invalid memory settings payload",
+          traceId: getTraceId(req),
+        });
+      }
+      traceError(req, "memory.settings.update.failed", error, {
+        elapsedMs: elapsedMs(startedAt),
+      });
+      return res.status(500).json({
+        message: "Failed to update memory settings",
+        traceId: getTraceId(req),
+      });
+    }
+  });
+
+  app.get("/api/memory/items", isAuthenticated, async (req: any, res) => {
+    const startedAt = Date.now();
+    try {
+      const parsed = memoryItemsQuerySchema.parse(req.query ?? {});
+      const items = await storage.getUserMemoryItems({
+        userId: req.session.userId,
+        limit: parsed.limit,
+        offset: parsed.offset,
+        includeArchived: parsed.includeArchived,
+        search: parsed.q,
+      });
+
+      trace(req, "memory.items.list", {
+        count: items.length,
+        limit: parsed.limit,
+        offset: parsed.offset,
+        includeArchived: parsed.includeArchived,
+        elapsedMs: elapsedMs(startedAt),
+      });
+
+      return res.status(200).json({
+        traceId: getTraceId(req),
+        items,
+        paging: {
+          limit: parsed.limit,
+          offset: parsed.offset,
+          nextOffset: parsed.offset + items.length,
+        },
+      });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({
+          message: error.errors[0]?.message ?? "Invalid memory query",
+          traceId: getTraceId(req),
+        });
+      }
+      traceError(req, "memory.items.list.failed", error, {
+        elapsedMs: elapsedMs(startedAt),
+      });
+      return res.status(500).json({
+        message: "Failed to fetch memory items",
+        traceId: getTraceId(req),
+      });
+    }
+  });
+
+  app.delete(
+    "/api/memory/items/:id",
+    isAuthenticated,
+    async (req: any, res) => {
+      const startedAt = Date.now();
+      try {
+        const archived = await storage.archiveUserMemoryItem({
+          userId: req.session.userId,
+          memoryItemId: req.params.id,
+        });
+        if (!archived) {
+          return res.status(404).json({
+            message: "Memory item not found",
+            traceId: getTraceId(req),
+          });
+        }
+
+        trace(req, "memory.items.archived", {
+          memoryItemId: archived.id,
+          elapsedMs: elapsedMs(startedAt),
+        });
+
+        return res.status(204).end();
+      } catch (error) {
+        traceError(req, "memory.items.archive.failed", error, {
+          memoryItemId: req.params.id,
+          elapsedMs: elapsedMs(startedAt),
+        });
+        return res.status(500).json({
+          message: "Failed to archive memory item",
+          traceId: getTraceId(req),
+        });
+      }
+    },
+  );
 
   app.post("/api/voice-sessions", isAuthenticated, async (req: any, res) => {
     const startedAt = Date.now();
@@ -1764,13 +2849,470 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/agent/tasks/:taskId", isAuthenticated, async (req: any, res) => {
+    const startedAt = Date.now();
+    try {
+      const task = await storage.getAgentTaskWithDetails(req.params.taskId);
+      if (!task || task.userId !== req.session.userId) {
+        return res.status(404).json({
+          message: "Task not found",
+          traceId: getTraceId(req),
+        });
+      }
+
+      trace(req, "agent.task.read", {
+        taskId: task.id,
+        status: task.status,
+        stepCount: task.steps.length,
+        artifactCount: task.artifacts.length,
+        toolCallCount: task.toolCalls.length,
+        elapsedMs: elapsedMs(startedAt),
+      });
+
+      return res.status(200).json({
+        traceId: getTraceId(req),
+        task: toAgentTaskSummary(task),
+        steps: task.steps.map((step) => toAgentStepSummary(step)),
+        approvals: task.approvals.map((approval) =>
+          toAgentApprovalSummary(approval),
+        ),
+        artifacts: task.artifacts.map((artifact) =>
+          toAgentArtifactSummary(artifact),
+        ),
+        toolCalls: task.toolCalls.map((toolCall) =>
+          toAgentToolCallSummary(toolCall),
+        ),
+      });
+    } catch (error) {
+      traceError(req, "agent.task.read.failed", error, {
+        taskId: req.params.taskId,
+        elapsedMs: elapsedMs(startedAt),
+      });
+      return res.status(500).json({
+        message: "Failed to fetch task",
+        traceId: getTraceId(req),
+      });
+    }
+  });
+
+  app.post(
+    "/api/agent/tasks/:taskId/approve",
+    isAuthenticated,
+    async (req: any, res) => {
+      const startedAt = Date.now();
+      try {
+        const parsed = agentApprovalDecisionSchema.parse(req.body ?? {});
+        const task = await storage.getAgentTaskById(req.params.taskId);
+        if (!task || task.userId !== req.session.userId) {
+          return res.status(404).json({
+            message: "Task not found",
+            traceId: getTraceId(req),
+          });
+        }
+
+        const pendingApproval = await storage.getPendingAgentApproval(task.id);
+        if (!pendingApproval) {
+          return res.status(409).json({
+            message: "No pending approval for this task",
+            traceId: getTraceId(req),
+          });
+        }
+
+        if (!parsed.approve) {
+          const reason = parsed.reason?.trim() || "Denied by user";
+          await storage.resolveAgentApproval({
+            approvalId: pendingApproval.id,
+            status: "denied",
+            reason,
+          });
+          const cancelled = await storage.updateAgentTaskStatus({
+            taskId: task.id,
+            status: "cancelled",
+            errorMessage: reason,
+            completedAt: new Date(),
+          });
+
+          await storage.createMessage({
+            conversationId: task.conversationId,
+            sender: "assistant",
+            text: "Understood. I canceled that task.",
+            partIndex: 0,
+            uiPayload: {
+              kind: "agent_task_status",
+              task: toAgentTaskSummary(
+                cancelled ?? {
+                  ...task,
+                  status: "cancelled",
+                  errorMessage: reason,
+                  completedAt: new Date(),
+                  updatedAt: new Date(),
+                },
+              ),
+              text: "Canceled",
+            },
+          });
+
+          trace(req, "agent.task.approval.denied", {
+            taskId: task.id,
+            elapsedMs: elapsedMs(startedAt),
+          });
+
+          return res.status(200).json({
+            traceId: getTraceId(req),
+            approved: false,
+            task: toAgentTaskSummary(
+              cancelled ?? {
+                ...task,
+                status: "cancelled",
+                errorMessage: reason,
+                completedAt: new Date(),
+                updatedAt: new Date(),
+              },
+            ),
+          });
+        }
+
+        const resumed = await approveAndContinueAgentTask({
+          taskId: task.id,
+          userId: req.session.userId,
+        });
+
+        trace(req, "agent.task.approval.approved", {
+          taskId: task.id,
+          status: resumed.status,
+          elapsedMs: elapsedMs(startedAt),
+        });
+
+        return res.status(200).json({
+          traceId: getTraceId(req),
+          approved: true,
+          task: resumed,
+        });
+      } catch (error) {
+        if (error instanceof z.ZodError) {
+          return res.status(400).json({
+            message: error.errors[0]?.message ?? "Invalid approval request",
+            traceId: getTraceId(req),
+          });
+        }
+        traceError(req, "agent.task.approval.failed", error, {
+          taskId: req.params.taskId,
+          elapsedMs: elapsedMs(startedAt),
+        });
+        return res.status(500).json({
+          message: "Failed to process approval",
+          traceId: getTraceId(req),
+        });
+      }
+    },
+  );
+
+  app.get("/api/agent/artifacts", isAuthenticated, async (req: any, res) => {
+    const startedAt = Date.now();
+    try {
+      const parsed = agentArtifactsQuerySchema.parse(req.query ?? {});
+      const artifacts = await storage.getAgentArtifactsForUser({
+        userId: req.session.userId,
+        includeArchived: parsed.includeArchived,
+      });
+
+      trace(req, "agent.artifacts.list", {
+        count: artifacts.length,
+        includeArchived: parsed.includeArchived,
+        elapsedMs: elapsedMs(startedAt),
+      });
+
+      return res.status(200).json({
+        traceId: getTraceId(req),
+        artifacts: artifacts.map((artifact) => toAgentArtifactSummary(artifact)),
+      });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({
+          message: error.errors[0]?.message ?? "Invalid artifacts query",
+          traceId: getTraceId(req),
+        });
+      }
+      traceError(req, "agent.artifacts.list.failed", error, {
+        elapsedMs: elapsedMs(startedAt),
+      });
+      return res.status(500).json({
+        message: "Failed to fetch artifacts",
+        traceId: getTraceId(req),
+      });
+    }
+  });
+
+  app.get(
+    "/api/agent/artifacts/:artifactId/render",
+    isAuthenticated,
+    async (req: any, res) => {
+      try {
+        const artifact = await storage.getAgentArtifactById(req.params.artifactId);
+        if (!artifact || artifact.userId !== req.session.userId) {
+          return res.status(404).send("Not found");
+        }
+        if (artifact.status === "deleted") {
+          return res.status(404).send("Deleted");
+        }
+        const html = artifact.htmlContent;
+        if (!html || typeof html !== "string" || html.trim().length === 0) {
+          return res.status(404).send("No HTML content");
+        }
+        res.setHeader("Content-Type", "text/html; charset=utf-8");
+        res.setHeader("X-Frame-Options", "SAMEORIGIN");
+        res.setHeader("Cache-Control", "no-store");
+        res.setHeader(
+          "Content-Security-Policy",
+          "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'",
+        );
+        return res.status(200).send(html);
+      } catch (error) {
+        traceError(req, "agent.artifact.render.failed", error, {
+          artifactId: req.params.artifactId,
+        });
+        return res.status(500).send("Failed to render artifact");
+      }
+    },
+  );
+
+  app.get(
+    "/api/agent/artifacts/:artifactId",
+    isAuthenticated,
+    async (req: any, res) => {
+      const startedAt = Date.now();
+      try {
+        const artifact = await storage.getAgentArtifactById(req.params.artifactId);
+        if (!artifact || artifact.userId !== req.session.userId) {
+          return res.status(404).json({
+            message: "Artifact not found",
+            traceId: getTraceId(req),
+          });
+        }
+        if (artifact.status === "deleted") {
+          return res.status(404).json({
+            message: "Artifact was deleted",
+            traceId: getTraceId(req),
+          });
+        }
+
+        trace(req, "agent.artifact.read", {
+          artifactId: artifact.id,
+          type: artifact.type,
+          status: artifact.status,
+          elapsedMs: elapsedMs(startedAt),
+        });
+
+        return res.status(200).json({
+          traceId: getTraceId(req),
+          artifact: toAgentArtifactSummary(artifact),
+        });
+      } catch (error) {
+        traceError(req, "agent.artifact.read.failed", error, {
+          artifactId: req.params.artifactId,
+          elapsedMs: elapsedMs(startedAt),
+        });
+        return res.status(500).json({
+          message: "Failed to fetch artifact",
+          traceId: getTraceId(req),
+        });
+      }
+    },
+  );
+
+  app.post(
+    "/api/agent/artifacts/:artifactId/archive",
+    isAuthenticated,
+    async (req: any, res) => {
+      const startedAt = Date.now();
+      try {
+        const artifact = await storage.updateAgentArtifactStatus({
+          artifactId: req.params.artifactId,
+          userId: req.session.userId,
+          status: "archived",
+        });
+        if (!artifact) {
+          return res.status(404).json({
+            message: "Artifact not found",
+            traceId: getTraceId(req),
+          });
+        }
+
+        trace(req, "agent.artifact.archived", {
+          artifactId: artifact.id,
+          elapsedMs: elapsedMs(startedAt),
+        });
+
+        return res.status(200).json({
+          traceId: getTraceId(req),
+          artifact: toAgentArtifactSummary(artifact),
+        });
+      } catch (error) {
+        traceError(req, "agent.artifact.archive.failed", error, {
+          artifactId: req.params.artifactId,
+          elapsedMs: elapsedMs(startedAt),
+        });
+        return res.status(500).json({
+          message: "Failed to archive artifact",
+          traceId: getTraceId(req),
+        });
+      }
+    },
+  );
+
+  app.delete(
+    "/api/agent/artifacts/:artifactId",
+    isAuthenticated,
+    async (req: any, res) => {
+      const startedAt = Date.now();
+      try {
+        const artifact = await storage.updateAgentArtifactStatus({
+          artifactId: req.params.artifactId,
+          userId: req.session.userId,
+          status: "deleted",
+        });
+        if (!artifact) {
+          return res.status(404).json({
+            message: "Artifact not found",
+            traceId: getTraceId(req),
+          });
+        }
+
+        trace(req, "agent.artifact.deleted", {
+          artifactId: artifact.id,
+          elapsedMs: elapsedMs(startedAt),
+        });
+        return res.status(204).end();
+      } catch (error) {
+        traceError(req, "agent.artifact.delete.failed", error, {
+          artifactId: req.params.artifactId,
+          elapsedMs: elapsedMs(startedAt),
+        });
+        return res.status(500).json({
+          message: "Failed to delete artifact",
+          traceId: getTraceId(req),
+        });
+      }
+    },
+  );
+
   app.post("/api/live/token", isAuthenticated, async (req: any, res) => {
     const startedAt = Date.now();
     try {
       const parsed = liveTokenSchema.parse(req.body ?? {});
+      const conversation = await requireConversationOwnership(
+        req,
+        res,
+        parsed.conversationId,
+      );
+      if (!conversation) return;
+
       const prefs = await storage.getUserPreferences(req.session.userId);
       const persona = normalizePersona(parsed.persona ?? prefs?.selectedPersona);
       const voice = resolveLiveVoice(parsed.voice ?? prefs?.selectedVoice);
+      const accountMemoryMode = resolveLiveMemoryPolicy(prefs?.memoryMode);
+      const memoryOverride =
+        process.env.NODE_ENV !== "production"
+          ? liveMemoryModeSchema.safeParse(parsed.memoryModeOverride)
+          : { success: false as const };
+      const memoryMode = memoryOverride.success
+        ? memoryOverride.data
+        : accountMemoryMode;
+      const crossChatMemoryEnabled = prefs?.crossChatMemoryEnabled ?? true;
+      const profileContext = ENABLE_PROFILE_PERSONALIZATION
+        ? toProfilePromptContext(await storage.getUserProfile(req.session.userId))
+        : undefined;
+
+      const memoryBuildStartedAt = Date.now();
+      const memoryMeta: LiveTokenMemoryMeta = {
+        activeThreadMessagesUsed: 0,
+        crossChatMessagesUsed: 0,
+        profileApplied: Boolean(profileContext),
+        mode: memoryMode,
+        buildMs: 0,
+        fallbackUsed: ENABLE_LIVE_MEMORY_CONTEXT ? "persona_only" : "disabled",
+      };
+      let memoryContextBlock: string | undefined;
+      let memoryRedactionCount = 0;
+      let memoryDurableItemsUsed = 0;
+
+      if (ENABLE_LIVE_MEMORY_CONTEXT) {
+        const deadlineAt = memoryBuildStartedAt + LIVE_MEMORY_BUILD_TIMEOUT_MS;
+        const runMemoryStage = async (
+          includeCrossChat: boolean,
+        ): Promise<LiveMemoryBuildResult> => {
+          const remainingMs = deadlineAt - Date.now();
+          if (remainingMs <= 0) {
+            throw new Error("live_memory_build_timeout");
+          }
+          return withTimeout(
+            buildLiveMemoryContext({
+              userId: req.session.userId,
+              conversationId: conversation.id,
+              profileContext,
+              includeCrossChat,
+              memoryPolicy: memoryMode,
+              activeThreadMaxMessages: LIVE_MEMORY_ACTIVE_THREAD_MAX_MESSAGES,
+              crossChatMaxMessages: LIVE_MEMORY_CROSS_CHAT_MAX_MESSAGES,
+            }),
+            remainingMs,
+            "live_memory_build_timeout",
+          );
+        };
+
+        try {
+          const fullContext = await runMemoryStage(crossChatMemoryEnabled);
+          memoryContextBlock = fullContext.memoryContextBlock || undefined;
+          memoryMeta.activeThreadMessagesUsed = fullContext.activeThreadMessagesUsed;
+          memoryMeta.crossChatMessagesUsed = fullContext.crossChatMessagesUsed;
+          memoryMeta.fallbackUsed = "none";
+          memoryRedactionCount = fullContext.redactionCount;
+          memoryDurableItemsUsed = fullContext.durableMemoryItemsUsed;
+        } catch (fullError) {
+          traceError(req, "live.memory.build.full.failed", fullError, {
+            conversationId: conversation.id,
+            mode: memoryMode,
+            timedOut: isMemoryTimeoutError(fullError),
+          });
+
+          try {
+            const activeOnlyContext = await runMemoryStage(false);
+            memoryContextBlock = activeOnlyContext.memoryContextBlock || undefined;
+            memoryMeta.activeThreadMessagesUsed =
+              activeOnlyContext.activeThreadMessagesUsed;
+            memoryMeta.crossChatMessagesUsed = 0;
+            memoryMeta.fallbackUsed = "active_thread_only";
+            memoryRedactionCount = activeOnlyContext.redactionCount;
+            memoryDurableItemsUsed = activeOnlyContext.durableMemoryItemsUsed;
+          } catch (activeOnlyError) {
+            traceError(req, "live.memory.build.active_only.failed", activeOnlyError, {
+              conversationId: conversation.id,
+              mode: memoryMode,
+              timedOut: isMemoryTimeoutError(activeOnlyError),
+            });
+            memoryMeta.fallbackUsed = "persona_only";
+            memoryContextBlock = undefined;
+            memoryRedactionCount = 0;
+            memoryDurableItemsUsed = 0;
+          }
+        }
+      }
+
+      memoryMeta.buildMs = elapsedMs(memoryBuildStartedAt);
+      trace(req, "live.memory.build.completed", {
+        conversationId: conversation.id,
+        mode: memoryMeta.mode,
+        activeThreadMessagesUsed: memoryMeta.activeThreadMessagesUsed,
+        crossChatMessagesUsed: memoryMeta.crossChatMessagesUsed,
+        profileApplied: memoryMeta.profileApplied,
+        buildMs: memoryMeta.buildMs,
+        fallbackUsed: memoryMeta.fallbackUsed,
+        redactionCount: memoryRedactionCount,
+        durableMemoryItemsUsed: memoryDurableItemsUsed,
+        crossChatMemoryEnabled,
+        accountMemoryMode,
+        memoryOverrideApplied: memoryOverride.success,
+      });
 
       if (ENABLE_BETA_QUOTAS) {
         const quota = await getQuotaSummaryResponseForUser(req.session.userId);
@@ -1797,22 +3339,39 @@ export async function registerRoutes(
       }
 
       trace(req, "live.token.requested", {
+        conversationId: conversation.id,
         persona,
         voice,
         responseModality: parsed.responseModality ?? "AUDIO",
+        deviceClass: parsed.deviceClass ?? "unknown",
+        memoryMode: memoryMeta.mode,
+        memoryFallback: memoryMeta.fallbackUsed,
       });
 
       const token = await createLiveToken({
         persona,
         responseModality: parsed.responseModality,
         voiceName: voice,
+        deviceClass: parsed.deviceClass ?? "unknown",
+        memoryContextBlock,
+        profileContext: profileContext ?? null,
+        memoryPolicy: memoryMeta.mode,
       });
 
       trace(req, "live.token.generated", {
+        conversationId: conversation.id,
         persona,
         voice: token.voiceName,
         model: token.model,
         responseModality: token.responseModality,
+        memoryFallback: memoryMeta.fallbackUsed,
+        memoryBuildMs: memoryMeta.buildMs,
+        deviceClass: token.configSummary.deviceClass,
+        lowLatencyMode: token.configSummary.lowLatencyMode,
+        activityHandling: token.configSummary.activityHandling,
+        forceAlwaysRespond: token.configSummary.forceAlwaysRespond,
+        vadSilenceMs: token.configSummary.vadSilenceMs,
+        thinkingBudget: token.configSummary.thinkingBudget,
         elapsedMs: elapsedMs(startedAt),
       });
 
@@ -1826,6 +3385,8 @@ export async function registerRoutes(
         expireTime: token.expireTime,
         newSessionExpireTime: token.newSessionExpireTime,
         uses: token.uses,
+        memoryMeta,
+        configSummary: token.configSummary,
       });
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -1940,15 +3501,110 @@ export async function registerRoutes(
         parsed.attachmentIds,
       );
 
+      const turnIntentContext = inferRecentAgentIntentContext(
+        await storage.getMessages(conversation.id),
+        userMessage.id,
+      );
+      const turnIntent = classifyChatTurnIntent(parsed.text, turnIntentContext);
+      trace(req, "chat.turn.classified", {
+        conversationId: conversation.id,
+        intent: turnIntent,
+        attachmentCount: boundAttachments.length,
+        recentAgentContext: turnIntentContext.hasRecentAgentActivity,
+        recentAgentTaskKind: turnIntentContext.recentTaskKind,
+      });
+
+      if (turnIntent === "agent_task") {
+        const run = await startAgentTaskRun({
+          userId: req.session.userId,
+          conversationId: conversation.id,
+          prompt: parsed.text,
+          requestedByMessageId: userMessage.id,
+          attachments: boundAttachments,
+          intentContext: turnIntentContext,
+        });
+
+        const allMessages = mapMessagesWithSignedAttachments(
+          await storage.getMessagesWithAttachments(conversation.id),
+          req.session.userId,
+        );
+        const userCreatedAtMs = userMessage.createdAt?.getTime() ?? Date.now();
+        const finalizedAssistantMessages = allMessages.filter((message) => {
+          if (message.sender !== "assistant") return false;
+          if (!isAgentMessageUiPayload((message as Record<string, unknown>).uiPayload)) {
+            return false;
+          }
+          const uiPayload = (message as Record<string, unknown>).uiPayload as Record<
+            string,
+            unknown
+          >;
+          const payloadTaskId =
+            typeof uiPayload.taskId === "string"
+              ? uiPayload.taskId
+              : uiPayload.task &&
+                  typeof uiPayload.task === "object" &&
+                  typeof (uiPayload.task as Record<string, unknown>).id === "string"
+                ? ((uiPayload.task as Record<string, unknown>).id as string)
+                : null;
+          if (payloadTaskId !== run.task.id) return false;
+          const createdAtMs =
+            message.createdAt instanceof Date
+              ? message.createdAt.getTime()
+              : message.createdAt
+                ? new Date(message.createdAt).getTime()
+                : 0;
+          return createdAtMs >= userCreatedAtMs - 5_000;
+        });
+
+        const assistantMessages =
+          finalizedAssistantMessages.length > 0
+            ? finalizedAssistantMessages
+            : [
+                {
+                  id: `agent-final-${run.task.id}`,
+                  conversationId: conversation.id,
+                  sender: "assistant",
+                  turnId: randomUUID(),
+                  partIndex: 0,
+                  text: run.awaitingApproval
+                    ? "I started this task and need your approval to continue."
+                    : "I finished this task and posted outputs in chat.",
+                  createdAt: new Date(),
+                  attachments: [],
+                },
+              ];
+
+        const legacyAssistantMessage = makeLegacyAssistantMessage(assistantMessages);
+
+        return res.status(201).json({
+          traceId: getTraceId(req),
+          conversationId: conversation.id,
+          userMessage: {
+            ...userMessage,
+            attachments: boundAttachments.map((attachment) =>
+              toAttachmentResponse(attachment, req.session.userId),
+            ),
+          },
+          assistantMessage: legacyAssistantMessage,
+          assistantMessages,
+          model: "agent_runtime_v1",
+          usage: null,
+          elapsedMs: elapsedMs(startedAt),
+        });
+      }
+
       const modelMessages = await buildModelMessages({
         conversationId: conversation.id,
         boundAttachments,
         mediaStore,
       });
 
-      const profileContext = ENABLE_PROFILE_PERSONALIZATION
-        ? toProfilePromptContext(await storage.getUserProfile(req.session.userId))
-        : undefined;
+      const chatMemory = await buildChatTextMemoryContext({
+        req,
+        userId: req.session.userId,
+        conversationId: conversation.id,
+      });
+      const profileContext = chatMemory.profileContext;
 
       if (profileContext) {
         trace(req, "chat.personalization.applied", {
@@ -1969,6 +3625,13 @@ export async function registerRoutes(
       trace(req, "chat.respond.memory_loaded", {
         conversationId: conversation.id,
         messageCount: modelMessages.length,
+        memoryMode: chatMemory.memoryMeta.mode,
+        memoryFallback: chatMemory.memoryMeta.fallbackUsed,
+        memoryBuildMs: chatMemory.memoryMeta.buildMs,
+        activeThreadMessagesUsed: chatMemory.memoryMeta.activeThreadMessagesUsed,
+        crossChatMessagesUsed: chatMemory.memoryMeta.crossChatMessagesUsed,
+        profileApplied: chatMemory.memoryMeta.profileApplied,
+        crossChatMemoryEnabled: chatMemory.crossChatMemoryEnabled,
       });
 
       const aiStartedAt = Date.now();
@@ -1976,6 +3639,8 @@ export async function registerRoutes(
         persona,
         messages: modelMessages,
         profileContext,
+        memoryContextBlock: chatMemory.memoryContextBlock,
+        memoryPolicy: chatMemory.memoryMeta.mode,
         enableMultipart: ENABLE_MULTIPART_TEXT,
       });
 
@@ -2209,31 +3874,18 @@ export async function registerRoutes(
         parsed.attachmentIds,
       );
 
-      const modelMessages = await buildModelMessages({
+      const turnIntentContext = inferRecentAgentIntentContext(
+        await storage.getMessages(conversation.id),
+        userMessage.id,
+      );
+      const turnIntent = classifyChatTurnIntent(parsed.text, turnIntentContext);
+      trace(req, "chat.turn.classified", {
         conversationId: conversation.id,
-        boundAttachments,
-        mediaStore,
+        intent: turnIntent,
+        attachmentCount: boundAttachments.length,
+        recentAgentContext: turnIntentContext.hasRecentAgentActivity,
+        recentAgentTaskKind: turnIntentContext.recentTaskKind,
       });
-
-      const profileContext = ENABLE_PROFILE_PERSONALIZATION
-        ? toProfilePromptContext(await storage.getUserProfile(req.session.userId))
-        : undefined;
-
-      if (profileContext) {
-        trace(req, "chat.personalization.applied", {
-          conversationId: conversation.id,
-          stylePreset: profileContext.responseStylePreset ?? "balanced",
-          hasBio: Boolean(profileContext.bio),
-          hasLocation: Boolean(profileContext.location),
-        });
-      } else {
-        trace(req, "chat.personalization.skipped", {
-          conversationId: conversation.id,
-          reason: ENABLE_PROFILE_PERSONALIZATION
-            ? "profile_missing"
-            : "feature_disabled",
-        });
-      }
 
       res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
       res.setHeader("Cache-Control", "no-cache");
@@ -2256,25 +3908,159 @@ export async function registerRoutes(
         },
       });
 
+      if (turnIntent === "agent_task") {
+        trace(req, "chat.stream.agent_task.started", {
+          conversationId: conversation.id,
+          attachmentCount: boundAttachments.length,
+        });
+
+        const run = await startAgentTaskRun({
+          userId: req.session.userId,
+          conversationId: conversation.id,
+          prompt: parsed.text,
+          requestedByMessageId: userMessage.id,
+          attachments: boundAttachments,
+          intentContext: turnIntentContext,
+          onEvent: (event: AgentTaskEvent) => {
+            writeEvent(event as unknown as Record<string, unknown>);
+          },
+        });
+
+        const allMessages = mapMessagesWithSignedAttachments(
+          await storage.getMessagesWithAttachments(conversation.id),
+          req.session.userId,
+        );
+        const userCreatedAtMs = userMessage.createdAt?.getTime() ?? Date.now();
+        const taskAssistantMessages = allMessages.filter((message) => {
+          if (message.sender !== "assistant") return false;
+          if (!isAgentMessageUiPayload((message as Record<string, unknown>).uiPayload)) {
+            return false;
+          }
+          const uiPayload = (message as Record<string, unknown>).uiPayload as Record<
+            string,
+            unknown
+          >;
+          const payloadTaskId =
+            typeof uiPayload.taskId === "string"
+              ? uiPayload.taskId
+              : uiPayload.task &&
+                  typeof uiPayload.task === "object" &&
+                  typeof (uiPayload.task as Record<string, unknown>).id === "string"
+                ? ((uiPayload.task as Record<string, unknown>).id as string)
+                : null;
+          if (payloadTaskId !== run.task.id) return false;
+          const createdAtMs =
+            message.createdAt instanceof Date
+              ? message.createdAt.getTime()
+              : message.createdAt
+                ? new Date(message.createdAt).getTime()
+                : 0;
+          return createdAtMs >= userCreatedAtMs - 5_000;
+        });
+
+        const finalAssistantMessages =
+          taskAssistantMessages.length > 0
+            ? taskAssistantMessages
+            : [
+                {
+                  id: `agent-final-${run.task.id}`,
+                  conversationId: conversation.id,
+                  sender: "assistant",
+                  turnId: randomUUID(),
+                  partIndex: 0,
+                  text: run.awaitingApproval
+                    ? "I started the task and I need your approval to continue."
+                    : "I finished that task and posted outputs in this chat.",
+                  createdAt: new Date(),
+                  attachments: [],
+                },
+              ];
+
+        const legacyAssistantMessage = makeLegacyAssistantMessage(
+          finalAssistantMessages,
+        );
+
+        writeEvent({
+          type: "final",
+          assistantMessage: legacyAssistantMessage,
+          assistantMessages: finalAssistantMessages,
+          model: "agent_runtime_v1",
+          usage: null,
+          elapsedMs: elapsedMs(startedAt),
+        });
+
+        trace(req, "chat.stream.agent_task.completed", {
+          conversationId: conversation.id,
+          taskId: run.task.id,
+          taskStatus: run.task.status,
+          awaitingApproval: run.awaitingApproval,
+          emittedAssistantMessages: finalAssistantMessages.length,
+          elapsedMs: elapsedMs(startedAt),
+        });
+
+        res.end();
+        return;
+      }
+
+      const modelMessages = await buildModelMessages({
+        conversationId: conversation.id,
+        boundAttachments,
+        mediaStore,
+      });
+
+      const chatMemory = await buildChatTextMemoryContext({
+        req,
+        userId: req.session.userId,
+        conversationId: conversation.id,
+      });
+      const profileContext = chatMemory.profileContext;
+
+      if (profileContext) {
+        trace(req, "chat.personalization.applied", {
+          conversationId: conversation.id,
+          stylePreset: profileContext.responseStylePreset ?? "balanced",
+          hasBio: Boolean(profileContext.bio),
+          hasLocation: Boolean(profileContext.location),
+        });
+      } else {
+        trace(req, "chat.personalization.skipped", {
+          conversationId: conversation.id,
+          reason: ENABLE_PROFILE_PERSONALIZATION
+            ? "profile_missing"
+            : "feature_disabled",
+        });
+      }
+
       trace(req, "chat.stream.started", {
         conversationId: conversation.id,
         persona,
         attachmentCount: boundAttachments.length,
+        memoryMode: chatMemory.memoryMeta.mode,
+        memoryFallback: chatMemory.memoryMeta.fallbackUsed,
+        memoryBuildMs: chatMemory.memoryMeta.buildMs,
+        activeThreadMessagesUsed: chatMemory.memoryMeta.activeThreadMessagesUsed,
+        crossChatMessagesUsed: chatMemory.memoryMeta.crossChatMessagesUsed,
+        profileApplied: chatMemory.memoryMeta.profileApplied,
+        crossChatMemoryEnabled: chatMemory.crossChatMemoryEnabled,
       });
 
+      const desiredParts = inferDesiredMultipartCount(parsed.text);
       trace(req, "chat.multipart.started", {
         conversationId: conversation.id,
         enabled: ENABLE_MULTIPART_TEXT,
+        desiredParts,
       });
 
       const { model, stream } = await generateTextReplyStream({
         persona,
         messages: modelMessages,
         profileContext,
+        memoryContextBlock: chatMemory.memoryContextBlock,
+        memoryPolicy: chatMemory.memoryMeta.mode,
         enableMultipart: ENABLE_MULTIPART_TEXT,
       });
 
-      const MAX_MULTIPART_PARTS = 3;
+      const maxMultipartParts = Math.min(Math.max(desiredParts, 1), 3);
       const streamTurnId = randomUUID();
       const streamedParts: string[] = [""];
       let currentPartIndex = 0;
@@ -2334,7 +4120,7 @@ export async function registerRoutes(
       };
 
       const flushStreamBuffer = (flushAll: boolean) => {
-        if (!ENABLE_MULTIPART_TEXT) {
+        if (!ENABLE_MULTIPART_TEXT || maxMultipartParts <= 1) {
           if (replyBuffer.length > 0) {
             appendDelta(sanitizeMultipartArtifacts(replyBuffer));
             replyBuffer = "";
@@ -2352,7 +4138,7 @@ export async function registerRoutes(
           appendDelta(segment);
           replyBuffer = replyBuffer.slice(delimiterIndex + ZEE_SPLIT_TOKEN.length);
 
-          if (currentPartIndex < MAX_MULTIPART_PARTS - 1) {
+          if (currentPartIndex < maxMultipartParts - 1) {
             finalizeCurrentSyntheticPart();
             currentPartIndex += 1;
             if (!streamedParts[currentPartIndex]) {
@@ -2437,7 +4223,6 @@ export async function registerRoutes(
         });
       }
 
-      const desiredParts = inferDesiredMultipartCount(parsed.text);
       let splitParts: string[];
 
       if (grounded.rewritten) {
@@ -2459,6 +4244,8 @@ export async function registerRoutes(
           enableMultipart: ENABLE_MULTIPART_TEXT,
         });
       }
+
+      splitParts = clampAssistantPartsToDesiredCount(splitParts, desiredParts);
 
       const groundedReplyText = sanitizeMultipartArtifacts(grounded.replyText);
       if (!groundedReplyText) {
