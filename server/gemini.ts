@@ -121,10 +121,6 @@ function resolveAgentGameModel(): string {
   );
 }
 
-const BUILTIN_LIVE_FALLBACKS = [
-  "gemini-2.5-flash-native-audio-preview-12-2025",
-];
-
 function resolveLiveModelCandidates(): string[] {
   const primary = resolveLiveModel();
   const configuredFallbacks = (process.env.GEMINI_LIVE_MODEL_FALLBACKS ?? "")
@@ -134,10 +130,7 @@ function resolveLiveModelCandidates(): string[] {
 
   const deduped: string[] = [];
   const seen = new Set<string>();
-  const allCandidates = configuredFallbacks.length > 0
-    ? [primary, ...configuredFallbacks]
-    : [primary, ...BUILTIN_LIVE_FALLBACKS];
-  for (const candidate of allCandidates) {
+  for (const candidate of [primary, ...configuredFallbacks]) {
     if (seen.has(candidate)) continue;
     seen.add(candidate);
     deduped.push(candidate);
@@ -956,13 +949,13 @@ export async function createLiveToken(
     isMobileDevice
       ? lowLatencyMode
         ? 0
-        : 16
+        : 64
       : lowLatencyMode
-        ? 0
-        : 24,
+        ? 24
+        : 96,
   );
   if (!allowZeroThinkingBudget && thinkingBudgetValue === 0) {
-    thinkingBudgetValue = isMobileDevice ? 8 : 16;
+    thinkingBudgetValue = isMobileDevice ? 24 : 32;
   }
   const includeThoughts = parseBooleanFlag(
     process.env.GEMINI_LIVE_INCLUDE_THOUGHTS,
@@ -987,11 +980,11 @@ export async function createLiveToken(
     process.env.GEMINI_LIVE_MAX_OUTPUT_TOKENS,
     isMobileDevice
       ? lowLatencyMode
-        ? 80
-        : 120
+        ? 120
+        : 180
       : lowLatencyMode
-        ? 100
-        : 160,
+        ? 160
+        : 220,
   );
   const minVadPrefixPaddingMs = parsePositiveInt(
     process.env.GEMINI_LIVE_MIN_VAD_PREFIX_PADDING_MS,
