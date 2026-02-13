@@ -174,7 +174,7 @@ function parseNonNegativeInt(input: string | undefined, fallback: number): numbe
 }
 
 function resolveStartSensitivity(): StartSensitivity {
-  const raw = (process.env.GEMINI_LIVE_VAD_START_SENSITIVITY ?? "HIGH")
+  const raw = (process.env.GEMINI_LIVE_VAD_START_SENSITIVITY ?? "LOW")
     .trim()
     .toUpperCase();
   return raw === "LOW"
@@ -198,6 +198,20 @@ function resolveTurnCoverage(): TurnCoverage {
   return raw === "TURN_INCLUDES_ALL_INPUT" || raw === "ALL_INPUT"
     ? TurnCoverage.TURN_INCLUDES_ALL_INPUT
     : TurnCoverage.TURN_INCLUDES_ONLY_ACTIVITY;
+}
+
+function resolveActivityHandling(
+  isMobileDevice: boolean,
+): ActivityHandling {
+  const fallback = isMobileDevice
+    ? "NO_INTERRUPTION"
+    : "START_OF_ACTIVITY_INTERRUPTS";
+  const raw = (process.env.GEMINI_LIVE_ACTIVITY_HANDLING ?? fallback)
+    .trim()
+    .toUpperCase();
+  return raw === "NO_INTERRUPTION"
+    ? ActivityHandling.NO_INTERRUPTION
+    : ActivityHandling.START_OF_ACTIVITY_INTERRUPTS;
 }
 
 function parseBoundedNumber(
@@ -804,6 +818,7 @@ export interface CreateLiveTokenInput {
 
 export interface LiveTokenConfigSummary {
   lowLatencyMode: boolean;
+  activityHandling: "START_OF_ACTIVITY_INTERRUPTS" | "NO_INTERRUPTION";
   vadStartSensitivity: "HIGH" | "LOW";
   vadEndSensitivity: "HIGH" | "LOW";
   forceAlwaysRespond: boolean;
@@ -899,6 +914,7 @@ export async function createLiveToken(
     process.env.GEMINI_LIVE_LOW_LATENCY_MODE,
     true,
   );
+  const activityHandling = resolveActivityHandling(isMobileDevice);
   const vadStartSensitivity = resolveStartSensitivity();
   const vadEndSensitivity = resolveEndSensitivity();
   const vadPrefixPaddingMs = parsePositiveInt(
@@ -1007,6 +1023,10 @@ export async function createLiveToken(
     : undefined;
   const configSummary: LiveTokenConfigSummary = {
     lowLatencyMode,
+    activityHandling:
+      activityHandling === ActivityHandling.NO_INTERRUPTION
+        ? "NO_INTERRUPTION"
+        : "START_OF_ACTIVITY_INTERRUPTS",
     vadStartSensitivity:
       vadStartSensitivity === StartSensitivity.START_SENSITIVITY_LOW
         ? "LOW"
@@ -1083,7 +1103,7 @@ export async function createLiveToken(
                   : undefined,
               // These defaults prioritize natural turn-taking and low interruption latency.
               realtimeInputConfig: {
-                activityHandling: ActivityHandling.START_OF_ACTIVITY_INTERRUPTS,
+                activityHandling,
                 turnCoverage,
                 automaticActivityDetection: {
                   startOfSpeechSensitivity: vadStartSensitivity,

@@ -401,6 +401,7 @@ interface LiveTokenMemoryMeta {
 
 interface LiveTokenConfigSummary {
   lowLatencyMode: boolean;
+  activityHandling: "START_OF_ACTIVITY_INTERRUPTS" | "NO_INTERRUPTION";
   forceAlwaysRespond: boolean;
   vadStartSensitivity: "HIGH" | "LOW";
   vadEndSensitivity: "HIGH" | "LOW";
@@ -7343,6 +7344,7 @@ function App() {
           tokenPayload.memoryMeta?.crossChatMessagesUsed ?? 0,
         profileApplied: Boolean(tokenPayload.memoryMeta?.profileApplied),
         lowLatencyMode: tokenPayload.configSummary?.lowLatencyMode ?? null,
+        activityHandling: tokenPayload.configSummary?.activityHandling ?? null,
         forceAlwaysRespond: tokenPayload.configSummary?.forceAlwaysRespond ?? null,
         vadPrefixPaddingMs: tokenPayload.configSummary?.vadPrefixPaddingMs ?? null,
         vadSilenceMs: tokenPayload.configSummary?.vadSilenceMs ?? null,

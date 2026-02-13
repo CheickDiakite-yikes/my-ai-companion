@@ -100,6 +100,12 @@ const AUDIO_NOISE_GATE_FAILOPEN_FRAMES = parseClientPositiveInt(
   liveClientEnv.VITE_LIVE_AUDIO_NOISE_GATE_FAILOPEN_FRAMES,
   60,
 );
+const AUDIO_NOISE_GATE_ASSISTANT_SPEECH_MULTIPLIER = parseClientBoundedNumber(
+  liveClientEnv.VITE_LIVE_AUDIO_NOISE_GATE_ASSISTANT_SPEECH_MULTIPLIER,
+  1.45,
+  1,
+  3,
+);
 
 function normalizeText(input: string | undefined): string {
   return (input ?? "").replace(/\s+/g, " ").trim();
@@ -442,6 +448,8 @@ export class GeminiLiveVoiceSession {
       noiseGateEnabled: ENABLE_AUDIO_NOISE_GATE,
       noiseGateRmsThreshold: AUDIO_NOISE_GATE_RMS_THRESHOLD,
       noiseGateHangoverFrames: AUDIO_NOISE_GATE_HANGOVER_FRAMES,
+      noiseGateAssistantSpeechMultiplier:
+        AUDIO_NOISE_GATE_ASSISTANT_SPEECH_MULTIPLIER,
       noiseGateFailOpenAfterDrops: AUDIO_NOISE_GATE_FAILOPEN_AFTER_DROPS,
       noiseGateFailOpenFrames: AUDIO_NOISE_GATE_FAILOPEN_FRAMES,
     });
@@ -749,6 +757,14 @@ export class GeminiLiveVoiceSession {
     }
   }
 
+  private isAssistantAudioLikelyActive(): boolean {
+    if (!this.outputContext) return false;
+    return (
+      this.activePlaybackNodes.size > 0 ||
+      this.scheduledPlaybackTime > this.outputContext.currentTime + 0.04
+    );
+  }
+
   private async startMicrophoneStream(): Promise<void> {
     if (!this.session) {
       throw new Error("Cannot start microphone stream without a live session");
@@ -788,7 +804,12 @@ export class GeminiLiveVoiceSession {
       const inputSamples = event.inputBuffer.getChannelData(0);
       if (ENABLE_AUDIO_NOISE_GATE) {
         const rms = calculateRms(inputSamples);
-        const isActiveSpeech = rms >= AUDIO_NOISE_GATE_RMS_THRESHOLD;
+        const assistantAudioActive = this.isAssistantAudioLikelyActive();
+        const effectiveThreshold = assistantAudioActive
+          ? AUDIO_NOISE_GATE_RMS_THRESHOLD *
+            AUDIO_NOISE_GATE_ASSISTANT_SPEECH_MULTIPLIER
+          : AUDIO_NOISE_GATE_RMS_THRESHOLD;
+        const isActiveSpeech = rms >= effectiveThreshold;
 
         if (isActiveSpeech) {
           this.audioNoiseGateHangoverFrames = AUDIO_NOISE_GATE_HANGOVER_FRAMES;
@@ -802,6 +823,9 @@ export class GeminiLiveVoiceSession {
         const failOpenActive = this.audioNoiseGateFailOpenFramesRemaining > 0;
 
         if (!isActiveSpeech && !hasHangover && !failOpenActive) {
+          if (assistantAudioActive) {
+            return;
+          }
           this.audioNoiseGateConsecutiveDrops += 1;
           if (
             this.audioNoiseGateConsecutiveDrops >=
@@ -812,7 +836,7 @@ export class GeminiLiveVoiceSession {
               AUDIO_NOISE_GATE_FAILOPEN_FRAMES;
             this.debug("live.audio.noise_gate.fail_open", {
               rms,
-              threshold: AUDIO_NOISE_GATE_RMS_THRESHOLD,
+              threshold: effectiveThreshold,
               failOpenFrames: AUDIO_NOISE_GATE_FAILOPEN_FRAMES,
             });
           }
