@@ -65,7 +65,7 @@ interface TokenUsageSnapshot {
 }
 
 const DEFAULT_TEXT_MODEL = "gemini-3-flash-preview";
-const DEFAULT_LIVE_MODEL = "gemini-2.5-flash-native-audio-preview-12-2025";
+const DEFAULT_LIVE_MODEL = "gemini-2.5-flash-preview-native-audio-dialog";
 const DEFAULT_AGENT_GAME_MODEL = "gemini-3-flash-preview";
 const DEFAULT_ZEE_PROMPT_FALLBACK = [
   "You are Zee, a warm, emotionally intelligent AI companion.",
@@ -121,6 +121,11 @@ function resolveAgentGameModel(): string {
   );
 }
 
+const BUILTIN_LIVE_FALLBACKS = [
+  "gemini-2.5-flash-preview-native-audio-dialog",
+  "gemini-2.5-flash-native-audio-preview-12-2025",
+];
+
 function resolveLiveModelCandidates(): string[] {
   const primary = resolveLiveModel();
   const configuredFallbacks = (process.env.GEMINI_LIVE_MODEL_FALLBACKS ?? "")
@@ -130,7 +135,10 @@ function resolveLiveModelCandidates(): string[] {
 
   const deduped: string[] = [];
   const seen = new Set<string>();
-  for (const candidate of [primary, ...configuredFallbacks]) {
+  const allCandidates = configuredFallbacks.length > 0
+    ? [primary, ...configuredFallbacks]
+    : [primary, ...BUILTIN_LIVE_FALLBACKS];
+  for (const candidate of allCandidates) {
     if (seen.has(candidate)) continue;
     seen.add(candidate);
     deduped.push(candidate);
@@ -942,20 +950,20 @@ export async function createLiveToken(
   );
   const allowZeroThinkingBudget = parseBooleanFlag(
     process.env.GEMINI_LIVE_ALLOW_ZERO_THINKING_BUDGET,
-    false,
+    true,
   );
   let thinkingBudgetValue = parseNonNegativeInt(
     process.env.GEMINI_LIVE_THINKING_BUDGET,
     isMobileDevice
       ? lowLatencyMode
         ? 0
-        : 64
+        : 16
       : lowLatencyMode
-        ? 24
-        : 96,
+        ? 0
+        : 24,
   );
   if (!allowZeroThinkingBudget && thinkingBudgetValue === 0) {
-    thinkingBudgetValue = isMobileDevice ? 24 : 32;
+    thinkingBudgetValue = isMobileDevice ? 8 : 16;
   }
   const includeThoughts = parseBooleanFlag(
     process.env.GEMINI_LIVE_INCLUDE_THOUGHTS,
@@ -980,11 +988,11 @@ export async function createLiveToken(
     process.env.GEMINI_LIVE_MAX_OUTPUT_TOKENS,
     isMobileDevice
       ? lowLatencyMode
-        ? 120
-        : 180
+        ? 80
+        : 120
       : lowLatencyMode
-        ? 160
-        : 220,
+        ? 100
+        : 160,
   );
   const minVadPrefixPaddingMs = parsePositiveInt(
     process.env.GEMINI_LIVE_MIN_VAD_PREFIX_PADDING_MS,
