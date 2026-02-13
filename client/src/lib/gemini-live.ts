@@ -80,7 +80,7 @@ const PROCESSOR_BUFFER_SIZE = (() => {
 })();
 const ENABLE_AUDIO_NOISE_GATE = parseClientBoolean(
   liveClientEnv.VITE_LIVE_AUDIO_NOISE_GATE_ENABLED,
-  true,
+  false,
 );
 const AUDIO_NOISE_GATE_RMS_THRESHOLD = parseClientBoundedNumber(
   liveClientEnv.VITE_LIVE_AUDIO_NOISE_GATE_RMS_THRESHOLD,
