@@ -3,6 +3,7 @@ import type { Express } from "express";
 import multer, { MulterError } from "multer";
 import { type Server } from "http";
 import { z } from "zod";
+import { eq } from "drizzle-orm";
 import {
   storage,
   type MessageWithAttachments,
@@ -10,6 +11,8 @@ import {
   type QuotaSummary,
 } from "./storage";
 import { setupAuth, registerAuthRoutes, isAuthenticated } from "./auth";
+import { db } from "./db";
+import { users } from "@shared/models/auth";
 import {
   insertConversationSchema,
   insertMessageSchema,
@@ -208,6 +211,18 @@ function parsePositiveInt(input: string | undefined, fallback: number): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+function parseEmailList(
+  input: string | undefined,
+  fallback: string[],
+): string[] {
+  const source = input ?? fallback.join(",");
+  const parsed = source
+    .split(",")
+    .map((value) => value.trim().toLowerCase())
+    .filter((value) => value.length > 0);
+  return parsed.length > 0 ? parsed : fallback;
+}
+
 const CHAT_IMAGE_MAX_COUNT = parsePositiveInt(process.env.CHAT_IMAGE_MAX_COUNT, 3);
 const CHAT_IMAGE_MAX_BYTES = parsePositiveInt(
   process.env.CHAT_IMAGE_MAX_BYTES,
@@ -260,8 +275,44 @@ const BETA_CAMERA_QUOTA_SECONDS_30D = parsePositiveInt(
   process.env.BETA_CAMERA_QUOTA_SECONDS_30D,
   10 * 60,
 );
+const BETA_PRIVILEGED_QUOTA_EMAILS = new Set(
+  parseEmailList(process.env.BETA_PRIVILEGED_QUOTA_EMAILS, [
+    "zorovt18@gmail.com",
+  ]),
+);
+const BETA_PRIVILEGED_TEXT_QUOTA_30D = parsePositiveInt(
+  process.env.BETA_PRIVILEGED_TEXT_QUOTA_30D,
+  5000,
+);
+const BETA_PRIVILEGED_VOICE_QUOTA_SECONDS_30D = parsePositiveInt(
+  process.env.BETA_PRIVILEGED_VOICE_QUOTA_SECONDS_30D,
+  6 * 60 * 60,
+);
+const BETA_PRIVILEGED_CAMERA_QUOTA_SECONDS_30D = parsePositiveInt(
+  process.env.BETA_PRIVILEGED_CAMERA_QUOTA_SECONDS_30D,
+  6 * 60 * 60,
+);
+const BETA_PRIVILEGED_QUOTA_CACHE_TTL_MS = parsePositiveInt(
+  process.env.BETA_PRIVILEGED_QUOTA_CACHE_TTL_MS,
+  5 * 60 * 1000,
+);
 const QUOTA_WINDOW_DAYS = 30;
 const QUOTA_WINDOW_MS = QUOTA_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+
+type EffectiveQuotaLimits = {
+  text: number;
+  voiceSeconds: number;
+  cameraSeconds: number;
+  tier: "default" | "privileged";
+  email: string | null;
+};
+
+type EffectiveQuotaLimitsCacheEntry = {
+  value: EffectiveQuotaLimits;
+  expiresAt: number;
+};
+
+const effectiveQuotaLimitsCache = new Map<string, EffectiveQuotaLimitsCacheEntry>();
 
 type QuotaMetricResponse = {
   used: number;
@@ -335,15 +386,66 @@ function toQuotaMetric(
   };
 }
 
-function toQuotaSummaryResponse(summary: QuotaSummary): QuotaSummaryResponse {
-  const text = toQuotaMetric(summary.textMessages, BETA_TEXT_QUOTA_30D);
+function defaultQuotaLimits(): EffectiveQuotaLimits {
+  return {
+    text: BETA_TEXT_QUOTA_30D,
+    voiceSeconds: BETA_VOICE_QUOTA_SECONDS_30D,
+    cameraSeconds: BETA_CAMERA_QUOTA_SECONDS_30D,
+    tier: "default",
+    email: null,
+  };
+}
+
+async function resolveQuotaLimitsForUser(
+  userId: string,
+): Promise<EffectiveQuotaLimits> {
+  const cached = effectiveQuotaLimitsCache.get(userId);
+  const now = Date.now();
+  if (cached && cached.expiresAt > now) {
+    return cached.value;
+  }
+
+  const fallback = defaultQuotaLimits();
+  const [user] = await db
+    .select({ email: users.email })
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1);
+  const email = user?.email?.trim().toLowerCase() ?? null;
+
+  const value: EffectiveQuotaLimits =
+    email && BETA_PRIVILEGED_QUOTA_EMAILS.has(email)
+      ? {
+          text: BETA_PRIVILEGED_TEXT_QUOTA_30D,
+          voiceSeconds: BETA_PRIVILEGED_VOICE_QUOTA_SECONDS_30D,
+          cameraSeconds: BETA_PRIVILEGED_CAMERA_QUOTA_SECONDS_30D,
+          tier: "privileged",
+          email,
+        }
+      : {
+          ...fallback,
+          email,
+        };
+
+  effectiveQuotaLimitsCache.set(userId, {
+    value,
+    expiresAt: now + BETA_PRIVILEGED_QUOTA_CACHE_TTL_MS,
+  });
+  return value;
+}
+
+function toQuotaSummaryResponse(
+  summary: QuotaSummary,
+  limits: EffectiveQuotaLimits,
+): QuotaSummaryResponse {
+  const text = toQuotaMetric(summary.textMessages, limits.text);
   const voiceSeconds = toQuotaMetric(
     summary.voiceSeconds,
-    BETA_VOICE_QUOTA_SECONDS_30D,
+    limits.voiceSeconds,
   );
   const cameraSeconds = toQuotaMetric(
     summary.cameraSeconds,
-    BETA_CAMERA_QUOTA_SECONDS_30D,
+    limits.cameraSeconds,
   );
 
   return {
@@ -377,9 +479,13 @@ function toQuotaSummaryResponse(summary: QuotaSummary): QuotaSummaryResponse {
   };
 }
 
-async function getQuotaSummaryResponseForUser(userId: string) {
+async function getQuotaSummaryResponseForUser(
+  userId: string,
+  limits?: EffectiveQuotaLimits,
+) {
   const summary = await storage.getQuotaSummary(userId);
-  return toQuotaSummaryResponse(summary);
+  const resolvedLimits = limits ?? (await resolveQuotaLimitsForUser(userId));
+  return toQuotaSummaryResponse(summary, resolvedLimits);
 }
 
 function quotaBlockedMessage(reason: string): string {
@@ -2531,11 +2637,16 @@ export async function registerRoutes(
   app.get("/api/quota/summary", isAuthenticated, async (req: any, res) => {
     const startedAt = Date.now();
     try {
-      const quota = await getQuotaSummaryResponseForUser(req.session.userId);
+      const quotaLimits = await resolveQuotaLimitsForUser(req.session.userId);
+      const quota = await getQuotaSummaryResponseForUser(
+        req.session.userId,
+        quotaLimits,
+      );
       trace(req, "quota.summary.read", {
         elapsedMs: elapsedMs(startedAt),
         used: quota.used,
         remaining: quota.remaining,
+        tier: quotaLimits.tier,
       });
       res.status(200).json({
         traceId: getTraceId(req),
@@ -2748,14 +2859,17 @@ export async function registerRoutes(
         duration,
         normalizeNonNegativeInt(parsed.cameraDuration),
       );
+      const quotaLimits = ENABLE_BETA_QUOTAS
+        ? await resolveQuotaLimitsForUser(userId)
+        : null;
 
       if (ENABLE_BETA_QUOTAS && (duration > 0 || cameraDuration > 0)) {
         const consumeResult = await storage.consumeLiveQuota({
           userId,
           voiceSeconds: duration,
           cameraSeconds: cameraDuration,
-          voiceLimit: BETA_VOICE_QUOTA_SECONDS_30D,
-          cameraLimit: BETA_CAMERA_QUOTA_SECONDS_30D,
+          voiceLimit: quotaLimits!.voiceSeconds,
+          cameraLimit: quotaLimits!.cameraSeconds,
           conversationId: null,
           meta: {
             source: "voice_session",
@@ -2769,18 +2883,21 @@ export async function registerRoutes(
               userId,
               units: duration,
               remaining: consumeResult.voice.remaining,
-              limit: BETA_VOICE_QUOTA_SECONDS_30D,
+              limit: quotaLimits!.voiceSeconds,
             });
           } else {
             trace(req, "quota.consume.camera.blocked", {
               userId,
               units: cameraDuration,
               remaining: consumeResult.camera.remaining,
-              limit: BETA_CAMERA_QUOTA_SECONDS_30D,
+              limit: quotaLimits!.cameraSeconds,
             });
           }
 
-          const quota = await getQuotaSummaryResponseForUser(userId);
+          const quota = await getQuotaSummaryResponseForUser(
+            userId,
+            quotaLimits!,
+          );
           return sendQuotaBlocked(req, res, {
             reason:
               consumeResult.reason === "camera_quota_exceeded"
@@ -2794,14 +2911,14 @@ export async function registerRoutes(
           userId,
           units: duration,
           remaining: consumeResult.voice.remaining,
-          limit: BETA_VOICE_QUOTA_SECONDS_30D,
+          limit: quotaLimits!.voiceSeconds,
         });
         if (cameraDuration > 0) {
           trace(req, "quota.consume.camera.allowed", {
             userId,
             units: cameraDuration,
             remaining: consumeResult.camera.remaining,
-            limit: BETA_CAMERA_QUOTA_SECONDS_30D,
+            limit: quotaLimits!.cameraSeconds,
           });
         }
       }
@@ -3315,13 +3432,17 @@ export async function registerRoutes(
       });
 
       if (ENABLE_BETA_QUOTAS) {
-        const quota = await getQuotaSummaryResponseForUser(req.session.userId);
+        const quotaLimits = await resolveQuotaLimitsForUser(req.session.userId);
+        const quota = await getQuotaSummaryResponseForUser(
+          req.session.userId,
+          quotaLimits,
+        );
         if (quota.remaining.voiceSeconds <= 0) {
           trace(req, "quota.consume.voice.blocked", {
             userId: req.session.userId,
             units: 0,
             remaining: quota.remaining.voiceSeconds,
-            limit: BETA_VOICE_QUOTA_SECONDS_30D,
+            limit: quotaLimits.voiceSeconds,
             source: "live_token_gate",
           });
           return sendQuotaBlocked(req, res, {
@@ -3333,7 +3454,7 @@ export async function registerRoutes(
           userId: req.session.userId,
           units: 0,
           remaining: quota.remaining.voiceSeconds,
-          limit: BETA_VOICE_QUOTA_SECONDS_30D,
+          limit: quotaLimits.voiceSeconds,
           source: "live_token_gate",
         });
       }
@@ -3454,11 +3575,12 @@ export async function registerRoutes(
       }
 
       if (ENABLE_BETA_QUOTAS) {
+        const quotaLimits = await resolveQuotaLimitsForUser(req.session.userId);
         const textQuota = await storage.consumeQuota({
           userId: req.session.userId,
           metric: "text_message",
           units: 1,
-          limit: BETA_TEXT_QUOTA_30D,
+          limit: quotaLimits.text,
           conversationId: conversation.id,
           meta: {
             source: "chat.respond",
@@ -3470,10 +3592,13 @@ export async function registerRoutes(
             userId: req.session.userId,
             units: 1,
             remaining: textQuota.remaining,
-            limit: BETA_TEXT_QUOTA_30D,
+            limit: quotaLimits.text,
             conversationId: conversation.id,
           });
-          const quota = await getQuotaSummaryResponseForUser(req.session.userId);
+          const quota = await getQuotaSummaryResponseForUser(
+            req.session.userId,
+            quotaLimits,
+          );
           return sendQuotaBlocked(req, res, {
             reason: "text_quota_exceeded",
             quota,
@@ -3484,7 +3609,7 @@ export async function registerRoutes(
           userId: req.session.userId,
           units: 1,
           remaining: textQuota.remaining,
-          limit: BETA_TEXT_QUOTA_30D,
+          limit: quotaLimits.text,
           conversationId: conversation.id,
         });
       }
@@ -3827,11 +3952,12 @@ export async function registerRoutes(
       }
 
       if (ENABLE_BETA_QUOTAS) {
+        const quotaLimits = await resolveQuotaLimitsForUser(req.session.userId);
         const textQuota = await storage.consumeQuota({
           userId: req.session.userId,
           metric: "text_message",
           units: 1,
-          limit: BETA_TEXT_QUOTA_30D,
+          limit: quotaLimits.text,
           conversationId: conversation.id,
           meta: {
             source: "chat.respond.stream",
@@ -3843,10 +3969,13 @@ export async function registerRoutes(
             userId: req.session.userId,
             units: 1,
             remaining: textQuota.remaining,
-            limit: BETA_TEXT_QUOTA_30D,
+            limit: quotaLimits.text,
             conversationId: conversation.id,
           });
-          const quota = await getQuotaSummaryResponseForUser(req.session.userId);
+          const quota = await getQuotaSummaryResponseForUser(
+            req.session.userId,
+            quotaLimits,
+          );
           return sendQuotaBlocked(req, res, {
             reason: "text_quota_exceeded",
             quota,
@@ -3857,7 +3986,7 @@ export async function registerRoutes(
           userId: req.session.userId,
           units: 1,
           remaining: textQuota.remaining,
-          limit: BETA_TEXT_QUOTA_30D,
+          limit: quotaLimits.text,
           conversationId: conversation.id,
         });
       }

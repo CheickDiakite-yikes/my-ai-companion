@@ -541,6 +541,11 @@ Source of truth: `.env.example`
 - `BETA_TEXT_QUOTA_30D`
 - `BETA_VOICE_QUOTA_SECONDS_30D`
 - `BETA_CAMERA_QUOTA_SECONDS_30D`
+- `BETA_PRIVILEGED_QUOTA_EMAILS` (comma-separated emails with elevated quotas)
+- `BETA_PRIVILEGED_TEXT_QUOTA_30D`
+- `BETA_PRIVILEGED_VOICE_QUOTA_SECONDS_30D`
+- `BETA_PRIVILEGED_CAMERA_QUOTA_SECONDS_30D`
+- `BETA_PRIVILEGED_QUOTA_CACHE_TTL_MS`
 
 ### Deployed voice profile note
 - Current production deployment intentionally uses higher response headroom (`GEMINI_LIVE_MAX_OUTPUT_TOKENS=1000`) to reduce clipped replies.
