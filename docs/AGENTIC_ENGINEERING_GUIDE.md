@@ -133,7 +133,7 @@ GET /api/agent/artifacts/:artifactId/render
 These must be set in the Replit Secrets tab (or `.env` locally):
 
 ```
-GEMINI_API_KEY=<your-key>
+GEMINI_API_KEY=your-api-key
 ENABLE_AGENT_MODEL_GAME_GENERATOR=true
 AGENT_GAME_MODEL=gemini-3-flash-preview
 ```
