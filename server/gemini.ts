@@ -949,7 +949,7 @@ export async function createLiveToken(
   );
   const allowZeroThinkingBudget = parseBooleanFlag(
     process.env.GEMINI_LIVE_ALLOW_ZERO_THINKING_BUDGET,
-    true,
+    false,
   );
   let thinkingBudgetValue = parseNonNegativeInt(
     process.env.GEMINI_LIVE_THINKING_BUDGET,
