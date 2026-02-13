@@ -213,9 +213,15 @@ async function runUiAssertions(params: {
     }
     trigger.click();
   });
-  await page.waitForSelector('[data-testid="button-open-agent-artifact"]', {
-    timeout: 10_000,
-  });
+  await page.waitForFunction(
+    () =>
+      Boolean(
+        document.querySelector('[data-testid="button-open-agent-artifact"]') ||
+          document.querySelector('[data-testid="button-fullscreen-inline-artifact"]') ||
+          document.querySelector('[data-testid="button-open-inline-artifact"]'),
+      ),
+    { timeout: 10_000 },
+  );
 
   await page.evaluate(() => {
     const trigger = document.querySelector('[data-testid="agent-task-info-button"]');

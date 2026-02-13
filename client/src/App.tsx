@@ -6517,6 +6517,8 @@ function App() {
     let buffer = "";
     let finalized = false;
     let activeTaskSummary: AgentTaskSummary | null = null;
+    const pendingPartDeltas = new Map<number, string>();
+    let deltaFlushTimer: number | null = null;
 
     const primaryPartId = buildOptimisticAssistantPartId(
       params.optimisticAssistantTurnId,
@@ -6533,36 +6535,28 @@ function App() {
       });
     };
 
-    const applyEvent = (event: ChatStreamEvent) => {
-      if (event.type === "ack") {
-        updateConversationMessages(params.conversationId, (current) =>
-          current.map((message) =>
-            message.id === params.optimisticUserId ? event.userMessage : message,
-          ),
-        );
-        return;
-      }
+    const flushPendingPartDeltas = () => {
+      if (pendingPartDeltas.size === 0) return;
+      const updates = Array.from(pendingPartDeltas.entries());
+      pendingPartDeltas.clear();
 
-      if (event.type === "delta") {
-        const partIndex = Number.isInteger(event.partIndex)
-          ? Math.max(0, event.partIndex ?? 0)
-          : 0;
-        const partId = buildOptimisticAssistantPartId(
-          params.optimisticAssistantTurnId,
-          partIndex,
-        );
-
-        updateConversationMessages(params.conversationId, (current) => {
-          const next = [...current];
+      updateConversationMessages(params.conversationId, (current) => {
+        const next = [...current];
+        for (const [partIndex, deltaText] of updates) {
+          if (!deltaText) continue;
+          const partId = buildOptimisticAssistantPartId(
+            params.optimisticAssistantTurnId,
+            partIndex,
+          );
           const existingIndex = next.findIndex((message) => message.id === partId);
           if (existingIndex >= 0) {
             next[existingIndex] = {
               ...next[existingIndex],
-              text: `${next[existingIndex].text}${event.text}`,
+              text: `${next[existingIndex].text}${deltaText}`,
               isTyping: false,
               partIndex,
             };
-            return next;
+            continue;
           }
 
           const newPartMessage: MessageData = {
@@ -6571,7 +6565,7 @@ function App() {
             sender: "assistant",
             turnId: params.optimisticAssistantTurnId,
             partIndex,
-            text: event.text,
+            text: deltaText,
             createdAt: new Date().toISOString(),
             isTyping: false,
             localOnly: true,
@@ -6594,13 +6588,51 @@ function App() {
           } else {
             next.push(newPartMessage);
           }
+        }
+        return next;
+      });
+    };
 
-          return next;
-        });
+    const schedulePartDeltaFlush = () => {
+      if (deltaFlushTimer !== null) return;
+      deltaFlushTimer = window.setTimeout(() => {
+        deltaFlushTimer = null;
+        flushPendingPartDeltas();
+      }, 40);
+    };
+
+    const clearPendingPartDeltaFlush = () => {
+      if (deltaFlushTimer !== null) {
+        window.clearTimeout(deltaFlushTimer);
+        deltaFlushTimer = null;
+      }
+    };
+
+    const applyEvent = (event: ChatStreamEvent) => {
+      if (event.type === "ack") {
+        updateConversationMessages(params.conversationId, (current) =>
+          current.map((message) =>
+            message.id === params.optimisticUserId ? event.userMessage : message,
+          ),
+        );
+        return;
+      }
+
+      if (event.type === "delta") {
+        const partIndex = Number.isInteger(event.partIndex)
+          ? Math.max(0, event.partIndex ?? 0)
+          : 0;
+        pendingPartDeltas.set(
+          partIndex,
+          `${pendingPartDeltas.get(partIndex) ?? ""}${event.text}`,
+        );
+        schedulePartDeltaFlush();
         return;
       }
 
       if (event.type === "part_final") {
+        clearPendingPartDeltaFlush();
+        flushPendingPartDeltas();
         const partId = buildOptimisticAssistantPartId(
           params.optimisticAssistantTurnId,
           event.partIndex,
@@ -6814,6 +6846,8 @@ function App() {
       }
 
       if (event.type === "final") {
+        clearPendingPartDeltaFlush();
+        flushPendingPartDeltas();
         finalized = true;
         const assistantMessages =
           event.assistantMessages && event.assistantMessages.length > 0
@@ -6913,6 +6947,8 @@ function App() {
       }
 
       if (event.type === "error") {
+        clearPendingPartDeltaFlush();
+        flushPendingPartDeltas();
         throw new Error(event.message);
       }
     };
@@ -6934,6 +6970,9 @@ function App() {
         applyEvent(parsed);
       }
     }
+
+    clearPendingPartDeltaFlush();
+    flushPendingPartDeltas();
 
     if (!finalized) {
       throw new Error("Stream ended before final response.");
@@ -7298,8 +7337,7 @@ function App() {
             runId,
             reason: reason ?? "unknown",
           });
-          const shouldAutoResume =
-            !manualLiveStopRef.current && isVideoEnabledRef.current;
+          const shouldAutoResume = !manualLiveStopRef.current;
           setIsLiveConnecting(false);
           setIsCalling(false);
           setCallStartTime(null);
@@ -7321,7 +7359,10 @@ function App() {
               return;
             }
             autoResumeBudgetRef.current -= 1;
-            void startLiveSession({ autoResumed: true, restoreVideo: true });
+            void startLiveSession({
+              autoResumed: true,
+              restoreVideo: isVideoEnabledRef.current,
+            });
           }
         },
         onDebug: (message, metadata) => {

@@ -1469,6 +1469,16 @@ function sanitizeMultipartArtifacts(input: string): string {
     .trim();
 }
 
+function hasEmojiLikeGlyph(input: string): boolean {
+  for (let index = 0; index < input.length; index += 1) {
+    const code = input.charCodeAt(index);
+    if ((code >= 0xd83c && code <= 0xdbff) || (code >= 0x2600 && code <= 0x27bf)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function inferDesiredMultipartCount(userText: string): number {
   const normalized = userText.toLowerCase();
   const tripleKeyword = "(?:triple|tripple)";
@@ -1501,12 +1511,68 @@ function inferDesiredMultipartCount(userText: string): number {
     return 2;
   }
 
+  if (
+    /\b(split|break)\b(?:\W+\w+){0,5}\W+\b(?:into|in)\b(?:\W+\w+){0,3}\W+\b(?:2|two)\b(?:\W+\w+){0,3}\W+\b(?:parts?|messages?|texts?|bubbles?)\b/.test(
+      normalized,
+    )
+  ) {
+    return 2;
+  }
+
+  if (
+    /\b(split|break)\b(?:\W+\w+){0,5}\W+\b(?:into|in)\b(?:\W+\w+){0,3}\W+\b(?:3|three)\b(?:\W+\w+){0,3}\W+\b(?:parts?|messages?|texts?|bubbles?)\b/.test(
+      normalized,
+    )
+  ) {
+    return 3;
+  }
+
+  if (
+    /\b(single|one)\b(?:\W+\w+){0,4}\W+\b(?:message|text|bubble)\b/.test(
+      normalized,
+    )
+  ) {
+    return 1;
+  }
+
   const tokenCount = normalized.trim().split(/\s+/).filter(Boolean).length;
-  const casualSignal = /\b(hey+|yo+|sup|wyd|lol|lmao|haha|omg|bro|sis|bet|nah|yep|yup)\b/.test(
+  if (tokenCount === 0 || tokenCount > 28) {
+    return 1;
+  }
+
+  const analyticalRequest =
+    /\b(explain|analyze|compare|summarize|research|outline|instructions?|step(?:\W+by\W+step)|plan|debug|fix)\b/.test(
+      normalized,
+    ) || /\b(why|how)\b/.test(normalized);
+
+  if (analyticalRequest) {
+    return 1;
+  }
+
+  const casualTone = /\b(hey+|heyy+|hello+|hi+|yo+|yoo+|sup+|wyd|lmao|lol|haha+|omg|bro|sis|bestie|hmm+|huh+|ugh+)\b/.test(
     normalized,
   );
+  const emotionalWords = /\b(excited|happy|sad|stressed|anxious|nervous|angry|upset|tired|overwhelmed|lonely|frustrated|love|miss you)\b/.test(
+    normalized,
+  );
+  const vulnerableSignal =
+    /\b(i(?:'m| am)|feeling)\b(?:\W+\w+){0,5}\W+\b(sad|stressed|anxious|overwhelmed|upset|lonely|frustrated|down)\b/.test(
+      normalized,
+    );
+  const expressivePunctuation = /[!?]{2,}|\.{3,}/.test(normalized);
+  const elongatedWord = /([a-z])\1{2,}/i.test(normalized);
+  const emojiSignal = hasEmojiLikeGlyph(userText);
+  const shortCasualTurn = tokenCount <= 14 && !/\b(what|when|where)\b/.test(normalized);
 
-  if (tokenCount <= 12 && casualSignal) {
+  if (
+    shortCasualTurn &&
+    casualTone &&
+    (emotionalWords || vulnerableSignal || expressivePunctuation || elongatedWord || emojiSignal)
+  ) {
+    return 2;
+  }
+
+  if (vulnerableSignal && tokenCount <= 18) {
     return 2;
   }
 
@@ -1576,6 +1642,37 @@ function autoSplitReplyParts(replyText: string, targetParts: number): string[] {
   return [first, second, third].filter(Boolean);
 }
 
+function clampAssistantPartsToDesiredCount(
+  parts: string[],
+  desiredCount: number,
+): string[] {
+  const cleaned = parts
+    .map((part) => sanitizeMultipartArtifacts(part))
+    .filter((part) => part.trim().length > 0);
+
+  const target = Math.min(Math.max(desiredCount, 1), 3);
+  if (cleaned.length <= target) {
+    return cleaned;
+  }
+
+  if (target === 1) {
+    return [sanitizeMultipartArtifacts(cleaned.join(" "))];
+  }
+
+  if (target === 2) {
+    return [
+      sanitizeMultipartArtifacts(cleaned[0] ?? ""),
+      sanitizeMultipartArtifacts(cleaned.slice(1).join(" ")),
+    ].filter((part) => part.trim().length > 0);
+  }
+
+  return [
+    sanitizeMultipartArtifacts(cleaned[0] ?? ""),
+    sanitizeMultipartArtifacts(cleaned[1] ?? ""),
+    sanitizeMultipartArtifacts(cleaned.slice(2).join(" ")),
+  ].filter((part) => part.trim().length > 0);
+}
+
 function resolveAssistantParts(params: {
   rawReplyText: string;
   userText: string;
@@ -1597,10 +1694,7 @@ function resolveAssistantParts(params: {
     parts = [params.rawReplyText];
   }
 
-  return parts
-    .slice(0, 3)
-    .map((part) => sanitizeMultipartArtifacts(part))
-    .filter((part) => part.trim().length > 0);
+  return clampAssistantPartsToDesiredCount(parts, desiredCount);
 }
 
 async function runMulterSingleImage(req: any, res: any): Promise<void> {
@@ -3940,9 +4034,11 @@ export async function registerRoutes(
         crossChatMemoryEnabled: chatMemory.crossChatMemoryEnabled,
       });
 
+      const desiredParts = inferDesiredMultipartCount(parsed.text);
       trace(req, "chat.multipart.started", {
         conversationId: conversation.id,
         enabled: ENABLE_MULTIPART_TEXT,
+        desiredParts,
       });
 
       const { model, stream } = await generateTextReplyStream({
@@ -3954,7 +4050,7 @@ export async function registerRoutes(
         enableMultipart: ENABLE_MULTIPART_TEXT,
       });
 
-      const MAX_MULTIPART_PARTS = 3;
+      const maxMultipartParts = Math.min(Math.max(desiredParts, 1), 3);
       const streamTurnId = randomUUID();
       const streamedParts: string[] = [""];
       let currentPartIndex = 0;
@@ -4014,7 +4110,7 @@ export async function registerRoutes(
       };
 
       const flushStreamBuffer = (flushAll: boolean) => {
-        if (!ENABLE_MULTIPART_TEXT) {
+        if (!ENABLE_MULTIPART_TEXT || maxMultipartParts <= 1) {
           if (replyBuffer.length > 0) {
             appendDelta(sanitizeMultipartArtifacts(replyBuffer));
             replyBuffer = "";
@@ -4032,7 +4128,7 @@ export async function registerRoutes(
           appendDelta(segment);
           replyBuffer = replyBuffer.slice(delimiterIndex + ZEE_SPLIT_TOKEN.length);
 
-          if (currentPartIndex < MAX_MULTIPART_PARTS - 1) {
+          if (currentPartIndex < maxMultipartParts - 1) {
             finalizeCurrentSyntheticPart();
             currentPartIndex += 1;
             if (!streamedParts[currentPartIndex]) {
@@ -4117,7 +4213,6 @@ export async function registerRoutes(
         });
       }
 
-      const desiredParts = inferDesiredMultipartCount(parsed.text);
       let splitParts: string[];
 
       if (grounded.rewritten) {
@@ -4139,6 +4234,8 @@ export async function registerRoutes(
           enableMultipart: ENABLE_MULTIPART_TEXT,
         });
       }
+
+      splitParts = clampAssistantPartsToDesiredCount(splitParts, desiredParts);
 
       const groundedReplyText = sanitizeMultipartArtifacts(grounded.replyText);
       if (!groundedReplyText) {

@@ -30,6 +30,7 @@ const PROCESSOR_BUFFER_SIZE = 2048;
 const VIDEO_FRAME_INTERVAL_MS = 1000;
 const VIDEO_MAX_EDGE = 640;
 const VIDEO_PERMISSION_TIMEOUT_MS = 12000;
+const MICROPHONE_PERMISSION_TIMEOUT_MS = 12000;
 const TRANSCRIPT_DUPLICATE_WINDOW_MS = 1500;
 const TRANSCRIPT_FLUSH_DEBOUNCE_MS = 900;
 const TRANSCRIPT_OVERLAP_MIN_CHARS = 6;
@@ -154,6 +155,24 @@ function base64ToPcm16(base64: string): Int16Array {
   return new Int16Array(bytes.buffer, bytes.byteOffset, Math.floor(bytes.byteLength / 2));
 }
 
+function getAudioContextConstructor(): typeof AudioContext {
+  const win = window as Window & {
+    webkitAudioContext?: typeof AudioContext;
+  };
+  const AudioContextCtor =
+    (globalThis as { AudioContext?: typeof AudioContext }).AudioContext ??
+    win.webkitAudioContext;
+  if (!AudioContextCtor) {
+    throw new Error("Web Audio API is not supported in this browser");
+  }
+  return AudioContextCtor;
+}
+
+function createAudioContext(options?: AudioContextOptions): AudioContext {
+  const AudioContextCtor = getAudioContextConstructor();
+  return new AudioContextCtor(options);
+}
+
 function chooseVideoSize(video: HTMLVideoElement): { width: number; height: number } {
   const srcWidth = video.videoWidth || 640;
   const srcHeight = video.videoHeight || 360;
@@ -173,8 +192,11 @@ async function getUserMediaWithTimeout(
   constraints: MediaStreamConstraints,
   timeoutMs = VIDEO_PERMISSION_TIMEOUT_MS,
 ): Promise<MediaStream> {
+  if (!window.isSecureContext) {
+    throw new Error("Live voice requires a secure HTTPS connection");
+  }
   if (!navigator.mediaDevices?.getUserMedia) {
-    throw new Error("Camera API is not available in this browser");
+    throw new Error("Media capture API is not available in this browser");
   }
 
   let timeoutId: number | undefined;
@@ -192,6 +214,44 @@ async function getUserMediaWithTimeout(
       window.clearTimeout(timeoutId);
     }
   }
+}
+
+async function getMicrophoneStreamWithFallback(): Promise<MediaStream> {
+  const attemptConstraints: MediaStreamConstraints[] = [
+    {
+      audio: {
+        channelCount: 1,
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+      video: false,
+    },
+    {
+      audio: {
+        channelCount: 1,
+      },
+      video: false,
+    },
+    {
+      audio: true,
+      video: false,
+    },
+  ];
+
+  let lastError: unknown = null;
+  for (let index = 0; index < attemptConstraints.length; index += 1) {
+    try {
+      return await getUserMediaWithTimeout(
+        attemptConstraints[index],
+        MICROPHONE_PERMISSION_TIMEOUT_MS,
+      );
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw lastError ?? new Error("Microphone permission was denied or unavailable");
 }
 
 export class GeminiLiveVoiceSession {
@@ -230,6 +290,14 @@ export class GeminiLiveVoiceSession {
     user: null,
     assistant: null,
   };
+  private readonly handleVisibilityChange = () => {
+    if (document.visibilityState === "visible") {
+      this.ensureAudioContextsRunning();
+    }
+  };
+  private readonly handleWindowFocus = () => {
+    this.ensureAudioContextsRunning();
+  };
 
   constructor(callbacks: GeminiLiveVoiceSessionCallbacks = {}) {
     this.callbacks = callbacks;
@@ -245,11 +313,13 @@ export class GeminiLiveVoiceSession {
       apiVersion: "v1alpha",
     });
 
-    this.outputContext = new AudioContext({ sampleRate: OUTPUT_SAMPLE_RATE });
+    this.outputContext = createAudioContext({ sampleRate: OUTPUT_SAMPLE_RATE });
     await this.outputContext.resume();
     this.scheduledPlaybackTime = this.outputContext.currentTime;
 
     this.startAudioContextKeepAlive();
+    document.addEventListener("visibilitychange", this.handleVisibilityChange);
+    window.addEventListener("focus", this.handleWindowFocus);
 
     this.pendingTranscriptBySender = {
       user: "",
@@ -317,6 +387,8 @@ export class GeminiLiveVoiceSession {
     };
     this.clearPlaybackQueue();
     this.stopAudioContextKeepAlive();
+    document.removeEventListener("visibilitychange", this.handleVisibilityChange);
+    window.removeEventListener("focus", this.handleWindowFocus);
     await this.stopVideo();
 
     if (this.processorNode) {
@@ -589,20 +661,15 @@ export class GeminiLiveVoiceSession {
     }
 
     try {
-      this.mediaStream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          channelCount: 1,
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
-      });
+      this.mediaStream = await getMicrophoneStreamWithFallback();
     } catch (error) {
-      this.emitError(new Error("Microphone permission was denied or unavailable"));
+      const message =
+        error instanceof Error ? error.message : "Microphone permission was denied or unavailable";
+      this.emitError(new Error(message));
       throw error;
     }
 
-    this.inputContext = new AudioContext();
+    this.inputContext = createAudioContext();
     await this.inputContext.resume();
 
     this.mediaSourceNode = this.inputContext.createMediaStreamSource(this.mediaStream);
@@ -628,12 +695,18 @@ export class GeminiLiveVoiceSession {
         event.inputBuffer.getChannelData(0),
         this.inputContext.sampleRate,
       );
-      this.session.sendRealtimeInput({
-        audio: {
-          data: pcmBase64,
-          mimeType: `audio/pcm;rate=${INPUT_SAMPLE_RATE}`,
-        },
-      });
+      try {
+        this.session.sendRealtimeInput({
+          audio: {
+            data: pcmBase64,
+            mimeType: `audio/pcm;rate=${INPUT_SAMPLE_RATE}`,
+          },
+        });
+      } catch (error) {
+        this.debug("live.audio.send_failed", {
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
     };
   }
 
