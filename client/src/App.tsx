@@ -351,6 +351,61 @@ interface AgentTaskResponse {
   toolCalls?: AgentToolCallSummary[];
 }
 
+type LiveMemoryMode = "safe_selective" | "remember_everything";
+interface MemorySettingsData {
+  memoryMode: LiveMemoryMode;
+  crossChatMemoryEnabled: boolean;
+}
+
+interface MemorySettingsResponse extends TraceAwareResponse {
+  settings: MemorySettingsData;
+}
+
+interface MemoryItemData {
+  id: string;
+  kind: string;
+  summary: string;
+  sensitivity: string;
+  confidence: number | null;
+  sourceMessageId: string | null;
+  sourceConversationId: string | null;
+  lastReinforcedAt: string | null;
+  archived: boolean;
+  createdAt: string | null;
+  updatedAt: string | null;
+}
+
+interface MemoryItemsResponse extends TraceAwareResponse {
+  items: MemoryItemData[];
+  paging: {
+    limit: number;
+    offset: number;
+    nextOffset: number;
+  };
+}
+
+type LiveMemoryFallbackUsed =
+  | "none"
+  | "active_thread_only"
+  | "persona_only"
+  | "disabled";
+
+interface LiveTokenMemoryMeta {
+  activeThreadMessagesUsed: number;
+  crossChatMessagesUsed: number;
+  profileApplied: boolean;
+  mode: LiveMemoryMode;
+  buildMs: number;
+  fallbackUsed: LiveMemoryFallbackUsed;
+}
+
+interface LiveTokenResponse extends TraceAwareResponse {
+  ephemeralToken: string;
+  model: string;
+  voice?: LiveVoiceName;
+  memoryMeta?: LiveTokenMemoryMeta;
+}
+
 interface LiveTaskSnapshot {
   task: AgentTaskSummary;
   latestStep: AgentStepSummary | null;
@@ -1746,6 +1801,7 @@ const ProfileView = ({
   onUploadAvatar,
   onUploadZeeAvatar,
   onReplayOnboarding,
+  onOpenSettings,
   onOpenOutputsHistory,
   onLogout,
   quotaSummary,
@@ -1775,6 +1831,7 @@ const ProfileView = ({
   onUploadAvatar: (file: File) => Promise<void>;
   onUploadZeeAvatar: (file: File) => Promise<void>;
   onReplayOnboarding: () => void;
+  onOpenSettings: () => void;
   onOpenOutputsHistory: () => void;
   onLogout: () => void;
   quotaSummary?: QuotaSummaryData;
@@ -2655,6 +2712,21 @@ const ProfileView = ({
                 {isSaving ? "Saving..." : "Save Profile"}
               </Button>
               <Button
+                type="button"
+                variant="outline"
+                className="w-full h-12 rounded-xl gap-2"
+                onClick={onOpenSettings}
+                style={{
+                  borderColor: "var(--app-soft-card-border)",
+                  backgroundColor: "var(--app-soft-card-bg)",
+                  color: "var(--app-on-dark)",
+                }}
+                data-testid="button-open-settings"
+              >
+                <Settings className="w-5 h-5" />
+                Settings
+              </Button>
+              <Button
                 variant="destructive"
                 className="w-full h-12 rounded-xl gap-2"
                 onClick={onLogout}
@@ -2668,6 +2740,388 @@ const ProfileView = ({
           </form>
         </ScrollArea>
       </div>
+    </motion.div>
+  );
+};
+
+const MEMORY_MODE_OPTIONS: Array<{
+  value: LiveMemoryMode;
+  title: string;
+  description: string;
+}> = [
+  {
+    value: "safe_selective",
+    title: "Safe selective",
+    description:
+      "Prioritizes relevant context and avoids replaying sensitive details by default.",
+  },
+  {
+    value: "remember_everything",
+    title: "Remember everything",
+    description:
+      "Keeps broad recall across conversations, including lower-priority details.",
+  },
+];
+
+function formatMemoryKindLabel(kind: string): string {
+  if (kind === "fact") return "Fact";
+  if (kind === "preference") return "Preference";
+  if (kind === "goal") return "Goal";
+  if (kind === "relationship") return "Relationship";
+  return "Other";
+}
+
+function formatMemoryTimestamp(value: string | null): string {
+  if (!value) return "Just now";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "Just now";
+  return parsed.toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+const SettingsView = ({
+  onClose,
+  memorySettings,
+  isMemorySettingsLoading,
+  isSavingMemorySettings,
+  onUpdateMemorySettings,
+  memoryItems,
+  isMemoryItemsLoading,
+  onForgetMemoryItem,
+}: {
+  onClose: () => void;
+  memorySettings?: MemorySettingsData;
+  isMemorySettingsLoading: boolean;
+  isSavingMemorySettings: boolean;
+  onUpdateMemorySettings: (patch: Partial<MemorySettingsData>) => Promise<void>;
+  memoryItems: MemoryItemData[];
+  isMemoryItemsLoading: boolean;
+  onForgetMemoryItem: (memoryItemId: string) => Promise<void>;
+}) => {
+  const [localMode, setLocalMode] = useState<LiveMemoryMode>("safe_selective");
+  const [localCrossChatEnabled, setLocalCrossChatEnabled] = useState(true);
+  const [settingsError, setSettingsError] = useState<string | null>(null);
+  const [settingsSuccess, setSettingsSuccess] = useState<string | null>(null);
+  const [forgettingMemoryItemId, setForgettingMemoryItemId] = useState<
+    string | null
+  >(null);
+
+  useEffect(() => {
+    if (!memorySettings) return;
+    setLocalMode(memorySettings.memoryMode);
+    setLocalCrossChatEnabled(memorySettings.crossChatMemoryEnabled);
+  }, [memorySettings]);
+
+  const handleModeChange = async (nextMode: LiveMemoryMode) => {
+    if (
+      nextMode === localMode ||
+      isMemorySettingsLoading ||
+      isSavingMemorySettings
+    ) {
+      return;
+    }
+    const previousMode = localMode;
+    setSettingsError(null);
+    setSettingsSuccess(null);
+    setLocalMode(nextMode);
+    try {
+      await onUpdateMemorySettings({ memoryMode: nextMode });
+      setSettingsSuccess("Memory mode updated.");
+    } catch (error) {
+      setLocalMode(previousMode);
+      setSettingsError(getErrorMessage(error));
+    }
+  };
+
+  const handleCrossChatChange = async (nextEnabled: boolean) => {
+    if (isMemorySettingsLoading || isSavingMemorySettings) return;
+    const previous = localCrossChatEnabled;
+    setSettingsError(null);
+    setSettingsSuccess(null);
+    setLocalCrossChatEnabled(nextEnabled);
+    try {
+      await onUpdateMemorySettings({ crossChatMemoryEnabled: nextEnabled });
+      setSettingsSuccess("Cross-chat memory updated.");
+    } catch (error) {
+      setLocalCrossChatEnabled(previous);
+      setSettingsError(getErrorMessage(error));
+    }
+  };
+
+  const handleForgetMemoryItem = async (memoryItemId: string) => {
+    if (forgettingMemoryItemId) return;
+    setForgettingMemoryItemId(memoryItemId);
+    setSettingsError(null);
+    setSettingsSuccess(null);
+    try {
+      await onForgetMemoryItem(memoryItemId);
+      setSettingsSuccess("Memory removed.");
+    } catch (error) {
+      setSettingsError(getErrorMessage(error));
+    } finally {
+      setForgettingMemoryItemId(null);
+    }
+  };
+
+  const isBusy = isMemorySettingsLoading || isSavingMemorySettings;
+
+  return (
+    <motion.div
+      initial={{ x: "100%" }}
+      animate={{ x: 0 }}
+      exit={{ x: "100%" }}
+      transition={{ type: "spring", damping: 25, stiffness: 200 }}
+      className="absolute inset-0 z-[70] flex h-full flex-col overflow-hidden"
+      style={{
+        backgroundColor: "var(--app-panel-bg)",
+        color: "var(--app-on-dark)",
+      }}
+    >
+      <div className="relative h-28 shrink-0 overflow-hidden border-b border-[var(--app-soft-card-border)]">
+        <img src={leafBg} alt="Settings cover" className="h-full w-full object-cover" />
+        <div
+          className="absolute inset-0"
+          style={{
+            background:
+              "linear-gradient(to bottom, rgba(0,0,0,0.12) 0%, color-mix(in srgb, var(--app-panel-bg) 90%, transparent) 100%)",
+          }}
+        />
+        <Button
+          variant="ghost"
+          size="icon"
+          className="absolute left-4 top-4 hover:opacity-90"
+          style={{ color: "var(--app-on-dark)" }}
+          onClick={onClose}
+          data-testid="button-close-settings"
+        >
+          <ArrowLeft className="h-6 w-6" />
+        </Button>
+        <div className="absolute bottom-3 left-1/2 -translate-x-1/2 text-center">
+          <h2 className="text-lg font-semibold tracking-tight">Settings</h2>
+          <p
+            className="text-xs uppercase tracking-[0.22em]"
+            style={{ color: "var(--app-on-dark-muted)" }}
+          >
+            Memory and controls
+          </p>
+        </div>
+      </div>
+
+      <ScrollArea className="flex-1 px-4 py-4 sm:px-6">
+        <div className="space-y-4 pb-6">
+          <section
+            className="rounded-2xl border p-4 shadow-sm"
+            style={{
+              backgroundColor: "var(--app-soft-card-bg)",
+              borderColor: "var(--app-soft-card-border)",
+            }}
+          >
+            <div className="mb-4 flex items-start justify-between gap-3">
+              <div>
+                <h3 className="text-base font-semibold">Memory</h3>
+                <p
+                  className="mt-1 text-xs leading-relaxed"
+                  style={{ color: "var(--app-on-dark-muted)" }}
+                >
+                  Choose how much Zee recalls across voice + text and how cross-chat
+                  context should be used.
+                </p>
+              </div>
+              {isSavingMemorySettings && (
+                <Loader2
+                  className="h-4 w-4 animate-spin"
+                  style={{ color: "var(--app-on-dark-muted)" }}
+                />
+              )}
+            </div>
+
+            <div className="space-y-2.5">
+              {MEMORY_MODE_OPTIONS.map((option) => {
+                const selected = localMode === option.value;
+                return (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => {
+                      void handleModeChange(option.value);
+                    }}
+                    disabled={isBusy}
+                    className={cn(
+                      "w-full rounded-xl border px-3 py-3 text-left transition-opacity",
+                      !isBusy && "hover:opacity-95",
+                    )}
+                    style={{
+                      backgroundColor: selected
+                        ? "color-mix(in srgb, var(--app-accent) 14%, var(--app-soft-card-bg))"
+                        : "var(--app-panel-bg)",
+                      borderColor: selected
+                        ? "var(--app-accent)"
+                        : "var(--app-soft-card-border)",
+                    }}
+                    data-testid={`button-memory-mode-${option.value}`}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <p className="text-sm font-semibold">{option.title}</p>
+                        <p
+                          className="mt-1 text-xs leading-relaxed"
+                          style={{ color: "var(--app-on-dark-muted)" }}
+                        >
+                          {option.description}
+                        </p>
+                      </div>
+                      {selected && (
+                        <CheckCircle2
+                          className="h-4 w-4 shrink-0"
+                          style={{ color: "var(--app-accent)" }}
+                        />
+                      )}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div
+              className="mt-4 flex items-start justify-between gap-3 rounded-xl border px-3 py-3"
+              style={{
+                borderColor: "var(--app-soft-card-border)",
+                backgroundColor: "var(--app-panel-bg)",
+              }}
+            >
+              <div>
+                <p className="text-sm font-semibold">Use cross-chat memories</p>
+                <p
+                  className="mt-1 text-xs leading-relaxed"
+                  style={{ color: "var(--app-on-dark-muted)" }}
+                >
+                  Pull relevant memory from your other conversations when helpful.
+                </p>
+              </div>
+              <Switch
+                checked={localCrossChatEnabled}
+                onCheckedChange={(checked) => {
+                  void handleCrossChatChange(checked);
+                }}
+                disabled={isBusy}
+                data-testid="switch-cross-chat-memory"
+              />
+            </div>
+          </section>
+
+          <section
+            className="rounded-2xl border p-4 shadow-sm"
+            style={{
+              backgroundColor: "var(--app-soft-card-bg)",
+              borderColor: "var(--app-soft-card-border)",
+            }}
+          >
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div>
+                <h3 className="text-base font-semibold">Saved memories</h3>
+                <p
+                  className="mt-1 text-xs"
+                  style={{ color: "var(--app-on-dark-muted)" }}
+                >
+                  Inspect and forget individual memory items.
+                </p>
+              </div>
+            </div>
+
+            {isMemoryItemsLoading && (
+              <p className="text-xs" style={{ color: "var(--app-on-dark-muted)" }}>
+                Loading memories...
+              </p>
+            )}
+
+            {!isMemoryItemsLoading && memoryItems.length === 0 && (
+              <p className="text-xs" style={{ color: "var(--app-on-dark-muted)" }}>
+                No memory items yet. Zee will add memories as you chat.
+              </p>
+            )}
+
+            {!isMemoryItemsLoading && memoryItems.length > 0 && (
+              <div className="space-y-2.5">
+                {memoryItems.map((item) => (
+                  <div
+                    key={item.id}
+                    className="rounded-xl border p-3"
+                    style={{
+                      backgroundColor: "var(--app-panel-bg)",
+                      borderColor: "var(--app-soft-card-border)",
+                    }}
+                    data-testid="memory-item-row"
+                  >
+                    <div className="mb-2 flex flex-wrap items-center gap-2">
+                      <span
+                        className="rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
+                        style={{
+                          borderColor: "var(--app-soft-card-border)",
+                          color: "var(--app-on-dark-muted)",
+                        }}
+                      >
+                        {formatMemoryKindLabel(item.kind)}
+                      </span>
+                      <span
+                        className="rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
+                        style={{
+                          borderColor: "var(--app-soft-card-border)",
+                          color: "var(--app-on-dark-muted)",
+                        }}
+                      >
+                        {item.sensitivity}
+                      </span>
+                    </div>
+                    <p className="text-sm font-medium leading-relaxed">{item.summary}</p>
+                    <p
+                      className="mt-1 text-[11px]"
+                      style={{ color: "var(--app-on-dark-muted)" }}
+                    >
+                      Last reinforced {formatMemoryTimestamp(item.lastReinforcedAt)}
+                    </p>
+                    <div className="mt-3 flex justify-end">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-8 rounded-lg px-3 text-xs"
+                        style={{
+                          borderColor: "var(--app-soft-card-border)",
+                          color: "var(--app-on-dark)",
+                        }}
+                        disabled={Boolean(forgettingMemoryItemId)}
+                        onClick={() => {
+                          void handleForgetMemoryItem(item.id);
+                        }}
+                        data-testid={`button-forget-memory-${item.id}`}
+                      >
+                        {forgettingMemoryItemId === item.id ? "Forgetting..." : "Forget"}
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+
+          {(settingsError || settingsSuccess) && (
+            <div
+              className="rounded-xl border px-3 py-2 text-xs"
+              style={{
+                backgroundColor: "var(--app-soft-card-bg)",
+                borderColor: "var(--app-soft-card-border)",
+              }}
+            >
+              {settingsError && <p className="text-red-500">{settingsError}</p>}
+              {settingsSuccess && <p className="text-emerald-600">{settingsSuccess}</p>}
+            </div>
+          )}
+        </div>
+      </ScrollArea>
     </motion.div>
   );
 };
@@ -5103,6 +5557,7 @@ function App() {
   const [isCalling, setIsCalling] = useState(false);
   const [isLiveConnecting, setIsLiveConnecting] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const [showOutputsHistory, setShowOutputsHistory] = useState(false);
   const [activeArtifactId, setActiveArtifactId] = useState<string | null>(null);
   const [liveTaskSnapshots, setLiveTaskSnapshots] = useState<
@@ -5157,6 +5612,11 @@ function App() {
 
   const getConversationMessagesKey = (conversationId: string) =>
     [`/api/conversations/${conversationId}/messages`];
+  const memorySettingsQueryKey = ["/api/memory/settings"];
+  const memoryItemsQueryKey = [
+    "/api/memory/items",
+    { limit: 20, offset: 0, includeArchived: 0 },
+  ] as const;
 
   const resetCallUsageTracking = () => {
     cameraAccumulatedSecondsRef.current = 0;
@@ -5222,6 +5682,42 @@ function App() {
       queryKey: ["/api/profile/me"],
       enabled: isAuthenticated,
     });
+
+  const {
+    data: memorySettingsResponse,
+    isLoading: isMemorySettingsLoading,
+  } = useQuery<MemorySettingsResponse>({
+    queryKey: memorySettingsQueryKey,
+    enabled: isAuthenticated && showSettings,
+    staleTime: 30_000,
+  });
+  const memorySettings = memorySettingsResponse?.settings;
+
+  const {
+    data: memoryItemsResponse,
+    isLoading: isMemoryItemsLoading,
+  } = useQuery<MemoryItemsResponse>({
+    queryKey: memoryItemsQueryKey,
+    queryFn: async () => {
+      const response = await fetch(
+        "/api/memory/items?limit=20&offset=0&includeArchived=0",
+        {
+          credentials: "include",
+          headers: {
+            "x-trace-id": createRequestTraceId(),
+          },
+        },
+      );
+      if (!response.ok) {
+        const text = (await response.text()) || response.statusText;
+        throw new Error(text);
+      }
+      return response.json() as Promise<MemoryItemsResponse>;
+    },
+    enabled: isAuthenticated && showSettings,
+    staleTime: 10_000,
+  });
+  const memoryItems = memoryItemsResponse?.items ?? [];
 
   const {
     data: artifactsResponse,
@@ -5380,6 +5876,27 @@ function App() {
     },
   });
 
+  const updateMemorySettingsMutation = useMutation({
+    mutationFn: async (payload: Partial<MemorySettingsData>) => {
+      const response = await apiRequest("PATCH", "/api/memory/settings", payload);
+      return (await response.json()) as MemorySettingsResponse;
+    },
+    onSuccess: (response) => {
+      queryClient.setQueryData(memorySettingsQueryKey, response);
+      queryClient.invalidateQueries({ queryKey: ["/api/preferences"] });
+    },
+  });
+
+  const forgetMemoryItemMutation = useMutation({
+    mutationFn: async (memoryItemId: string) => {
+      await apiRequest("DELETE", `/api/memory/items/${memoryItemId}`);
+      return memoryItemId;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: memoryItemsQueryKey });
+    },
+  });
+
   const resolveTaskApprovalMutation = useMutation({
     mutationFn: async (params: {
       taskId: string;
@@ -5464,6 +5981,7 @@ function App() {
       window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
     }
     setShowProfile(false);
+    setShowSettings(false);
     setShowOutputsHistory(false);
     setShowOnboarding(true);
     updatePreferencesMutation.mutate({
@@ -5516,6 +6034,16 @@ function App() {
 
   const handleUploadZeeAvatar = async (file: File) => {
     await uploadZeeAvatarMutation.mutateAsync(file);
+  };
+
+  const handleUpdateMemorySettings = async (
+    patch: Partial<MemorySettingsData>,
+  ) => {
+    await updateMemorySettingsMutation.mutateAsync(patch);
+  };
+
+  const handleForgetMemoryItem = async (memoryItemId: string) => {
+    await forgetMemoryItemMutation.mutateAsync(memoryItemId);
   };
 
   const handleResolveTaskApproval = async (
@@ -5622,18 +6150,18 @@ function App() {
   });
 
   const createLiveTokenMutation = useMutation({
-    mutationFn: async (data: { persona: Persona; voice: LiveVoiceName }) => {
+    mutationFn: async (data: {
+      persona: Persona;
+      voice: LiveVoiceName;
+      conversationId: string;
+    }) => {
       const res = await apiRequest("POST", "/api/live/token", {
+        conversationId: data.conversationId,
         persona: data.persona,
         voice: data.voice,
         responseModality: "AUDIO",
       });
-      const body = (await res.json()) as {
-        ephemeralToken: string;
-        model: string;
-        voice?: LiveVoiceName;
-        traceId?: string;
-      };
+      const body = (await res.json()) as LiveTokenResponse;
       return {
         ...body,
         traceId: extractTraceId(res, body),
@@ -6725,6 +7253,7 @@ function App() {
       const tokenPayload = await createLiveTokenMutation.mutateAsync({
         persona,
         voice: selectedVoiceRef.current,
+        conversationId,
       });
 
       if (startNonce !== liveStartNonceRef.current) {
@@ -6737,6 +7266,14 @@ function App() {
         model: tokenPayload.model,
         voice: tokenPayload.voice ?? selectedVoiceRef.current,
         traceId: tokenPayload.traceId,
+        memoryMode: tokenPayload.memoryMeta?.mode ?? "safe_selective",
+        memoryFallback: tokenPayload.memoryMeta?.fallbackUsed ?? "disabled",
+        memoryBuildMs: tokenPayload.memoryMeta?.buildMs ?? 0,
+        activeThreadMessagesUsed:
+          tokenPayload.memoryMeta?.activeThreadMessagesUsed ?? 0,
+        crossChatMessagesUsed:
+          tokenPayload.memoryMeta?.crossChatMessagesUsed ?? 0,
+        profileApplied: Boolean(tokenPayload.memoryMeta?.profileApplied),
       });
 
       const resolvedConversationId = conversationId;
@@ -7145,6 +7682,7 @@ function App() {
             isConnecting={isLiveConnecting}
             onEndCall={handleEndCall}
             onProfile={() => {
+              setShowSettings(false);
               setShowOutputsHistory(false);
               setShowProfile(true);
             }}
@@ -7168,6 +7706,7 @@ function App() {
               <ProfileView
                 onClose={() => {
                   applyAppTheme(selectedTheme);
+                  setShowSettings(false);
                   setShowProfile(false);
                 }}
                 user={user}
@@ -7181,13 +7720,30 @@ function App() {
                 onUploadAvatar={handleUploadProfileAvatar}
                 onUploadZeeAvatar={handleUploadZeeAvatar}
                 onReplayOnboarding={handleReplayOnboarding}
+                onOpenSettings={() => setShowSettings(true)}
                 onOpenOutputsHistory={() => {
+                  setShowSettings(false);
                   setShowProfile(false);
                   setShowOutputsHistory(true);
                 }}
                 onLogout={logout}
                 quotaSummary={quotaSummary}
                 isQuotaLoading={isQuotaLoading}
+              />
+            )}
+          </AnimatePresence>
+
+          <AnimatePresence>
+            {showSettings && (
+              <SettingsView
+                onClose={() => setShowSettings(false)}
+                memorySettings={memorySettings}
+                isMemorySettingsLoading={isMemorySettingsLoading}
+                isSavingMemorySettings={updateMemorySettingsMutation.isPending}
+                onUpdateMemorySettings={handleUpdateMemorySettings}
+                memoryItems={memoryItems}
+                isMemoryItemsLoading={isMemoryItemsLoading}
+                onForgetMemoryItem={handleForgetMemoryItem}
               />
             )}
           </AnimatePresence>

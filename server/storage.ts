@@ -5,6 +5,7 @@ import {
   messageAttachments,
   userPreferences,
   userProfiles,
+  userMemoryItems,
   voiceSessions,
   usageEvents,
   agentTasks,
@@ -24,6 +25,8 @@ import {
   type InsertVoiceSession,
   type InsertUserProfile,
   type UserProfile,
+  type UserMemoryItem,
+  type InsertUserMemoryItem,
   type UsageEventMetric,
   type AgentTask,
   type InsertAgentTask,
@@ -37,12 +40,39 @@ import {
   type InsertAgentToolCall,
   type AgentTaskStatus,
   type AgentArtifactStatus,
+  type MemoryItemKind,
+  type MemorySensitivity,
 } from "@shared/schema";
 import { db } from "./db";
-import { and, asc, desc, eq, gte, inArray, isNull, sql } from "drizzle-orm";
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  gte,
+  ilike,
+  inArray,
+  isNull,
+  ne,
+  sql,
+} from "drizzle-orm";
 
 export interface MessageWithAttachments extends Message {
   attachments: MessageAttachment[];
+}
+
+export interface UserScopedMessage extends Message {
+  userId: string;
+}
+
+export interface UserMemoryItemCandidate {
+  kind: MemoryItemKind;
+  summary: string;
+  sensitivity: MemorySensitivity;
+  confidence: number;
+  sourceMessageId?: string | null;
+  sourceConversationId?: string | null;
+  metadata?: Record<string, unknown> | null;
 }
 
 export interface QuotaMetricSnapshot {
@@ -89,6 +119,11 @@ export interface IStorage {
 
   getMessages(conversationId: string): Promise<Message[]>;
   getMessagesWithAttachments(conversationId: string): Promise<MessageWithAttachments[]>;
+  getRecentMessagesForUser(params: {
+    userId: string;
+    limit: number;
+    excludeConversationId?: string;
+  }): Promise<UserScopedMessage[]>;
   createMessage(data: InsertMessage): Promise<Message>;
   createUserTurnMessage(data: {
     conversationId: string;
@@ -123,6 +158,21 @@ export interface IStorage {
 
   getUserPreferences(userId: string): Promise<UserPreferences | undefined>;
   upsertUserPreferences(data: InsertUserPreferences): Promise<UserPreferences>;
+  getUserMemoryItems(params: {
+    userId: string;
+    limit?: number;
+    offset?: number;
+    includeArchived?: boolean;
+    search?: string;
+  }): Promise<UserMemoryItem[]>;
+  upsertUserMemoryCandidate(params: {
+    userId: string;
+    candidate: UserMemoryItemCandidate;
+  }): Promise<UserMemoryItem>;
+  archiveUserMemoryItem(params: {
+    userId: string;
+    memoryItemId: string;
+  }): Promise<UserMemoryItem | undefined>;
   getUserProfile(userId: string): Promise<UserProfile | undefined>;
   upsertUserProfile(
     data: Partial<Omit<InsertUserProfile, "userId">> & { userId: string },
@@ -195,6 +245,207 @@ export interface IStorage {
 
 export class DatabaseStorage implements IStorage {
   private static readonly QUOTA_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
+  private static readonly MEMORY_MAX_SUMMARY_LENGTH = 220;
+  private static readonly MEMORY_MAX_CANDIDATES_PER_MESSAGE = 4;
+
+  private static readonly MEMORY_HIGH_SENSITIVITY_PATTERNS = [
+    /\b(password|passcode|api[_ -]?key|secret|token|private key)\b/i,
+    /\b\d{3}-\d{2}-\d{4}\b/,
+    /\b(?:\d[ -]?){13,16}\b/,
+  ];
+
+  private static readonly MEMORY_MEDIUM_SENSITIVITY_PATTERNS = [
+    /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i,
+    /\b(?:\+?1[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?)\d{3}[-.\s]?\d{4}\b/,
+    /\baddress\b/i,
+  ];
+
+  private normalizeWhitespace(value: string): string {
+    return value.replace(/\s+/g, " ").trim();
+  }
+
+  private normalizeMemorySummary(value: string): string {
+    return this.normalizeWhitespace(value.toLowerCase());
+  }
+
+  private truncateMemorySummary(value: string): string {
+    const normalized = this.normalizeWhitespace(value);
+    if (normalized.length <= DatabaseStorage.MEMORY_MAX_SUMMARY_LENGTH) {
+      return normalized;
+    }
+    return `${normalized
+      .slice(0, DatabaseStorage.MEMORY_MAX_SUMMARY_LENGTH - 3)
+      .trim()}...`;
+  }
+
+  private clampConfidence(value: number): number {
+    if (!Number.isFinite(value)) return 50;
+    return Math.min(100, Math.max(1, Math.round(value)));
+  }
+
+  private sensitivityRank(value: MemorySensitivity): number {
+    if (value === "high") return 3;
+    if (value === "medium") return 2;
+    return 1;
+  }
+
+  private maxSensitivity(
+    a: MemorySensitivity,
+    b: MemorySensitivity,
+  ): MemorySensitivity {
+    return this.sensitivityRank(a) >= this.sensitivityRank(b) ? a : b;
+  }
+
+  private inferSensitivity(value: string): MemorySensitivity {
+    for (const pattern of DatabaseStorage.MEMORY_HIGH_SENSITIVITY_PATTERNS) {
+      if (pattern.test(value)) return "high";
+    }
+    for (const pattern of DatabaseStorage.MEMORY_MEDIUM_SENSITIVITY_PATTERNS) {
+      if (pattern.test(value)) return "medium";
+    }
+    return "low";
+  }
+
+  private extractMemoryCandidatesFromMessage(message: Message): UserMemoryItemCandidate[] {
+    if (
+      (message.sender !== "user" && message.sender !== "assistant") ||
+      message.uiPayload
+    ) {
+      return [];
+    }
+
+    const normalizedText = this.normalizeWhitespace(message.text);
+    if (normalizedText.length < 12) {
+      return [];
+    }
+
+    const sentences = normalizedText
+      .split(/(?<=[.!?])\s+/)
+      .map((sentence) => this.normalizeWhitespace(sentence))
+      .filter((sentence) => sentence.length >= 12)
+      .slice(0, 8);
+
+    if (sentences.length === 0) {
+      sentences.push(normalizedText);
+    }
+
+    const candidates: UserMemoryItemCandidate[] = [];
+    const dedupe = new Set<string>();
+
+    const pushCandidate = (
+      kind: MemoryItemKind,
+      summary: string,
+      confidence: number,
+    ) => {
+      const clipped = this.truncateMemorySummary(summary);
+      if (clipped.length < 12) return;
+      const normalized = this.normalizeMemorySummary(clipped);
+      const dedupeKey = `${kind}:${normalized}`;
+      if (dedupe.has(dedupeKey)) return;
+      dedupe.add(dedupeKey);
+      candidates.push({
+        kind,
+        summary: clipped,
+        confidence: this.clampConfidence(confidence),
+        sensitivity: this.inferSensitivity(clipped),
+      });
+    };
+
+    for (const sentence of sentences) {
+      const lower = sentence.toLowerCase();
+      if (lower.includes("?")) continue;
+
+      if (message.sender === "user") {
+        if (
+          /\b(i (?:really )?(?:like|love|enjoy|prefer|hate|dislike)\b|my (?:favorite|favourite)\b)/i.test(
+            sentence,
+          )
+        ) {
+          pushCandidate("preference", sentence, 78);
+        }
+        if (
+          /\b(i (?:want|need|plan|intend|hope|am trying|trying) to\b|my goal is\b)/i.test(
+            sentence,
+          )
+        ) {
+          pushCandidate("goal", sentence, 76);
+        }
+        if (
+          /\b(i(?:'m| am) (?:working on|building|developing|creating)\b|my project\b)/i.test(
+            sentence,
+          )
+        ) {
+          pushCandidate("project", sentence, 74);
+        }
+        if (
+          /\b(my name is\b|call me\b|you can call me\b|i(?:'m| am) from\b|i live in\b|i work as\b)/i.test(
+            sentence,
+          )
+        ) {
+          pushCandidate("profile", sentence, 82);
+        }
+        if (
+          /\b(today|tomorrow|next week|on monday|on tuesday|on wednesday|on thursday|on friday|on saturday|on sunday|at \d{1,2}(?::\d{2})?\s?(?:am|pm)?)\b/i.test(
+            sentence,
+          )
+        ) {
+          pushCandidate("schedule", sentence, 68);
+        }
+        if (/^(?:i|my)\b/i.test(sentence) && sentence.length >= 24) {
+          pushCandidate("fact", sentence, 62);
+        }
+      } else {
+        if (
+          /\b(you said|you mentioned|you told me)\b/i.test(sentence) &&
+          sentence.length >= 20
+        ) {
+          pushCandidate("fact", sentence, 56);
+        }
+        if (/\b(you like|you prefer|your favorite)\b/i.test(sentence)) {
+          pushCandidate("preference", sentence, 58);
+        }
+        if (/\b(your goal|you want to|you need to)\b/i.test(sentence)) {
+          pushCandidate("goal", sentence, 56);
+        }
+      }
+
+      if (candidates.length >= DatabaseStorage.MEMORY_MAX_CANDIDATES_PER_MESSAGE) {
+        break;
+      }
+    }
+
+    return candidates.slice(0, DatabaseStorage.MEMORY_MAX_CANDIDATES_PER_MESSAGE);
+  }
+
+  private async ingestMessageMemory(params: {
+    message: Message;
+    conversationUserId?: string | null;
+  }): Promise<void> {
+    const candidates = this.extractMemoryCandidatesFromMessage(params.message);
+    if (candidates.length === 0) {
+      return;
+    }
+
+    let userId = params.conversationUserId ?? null;
+    if (!userId) {
+      const conversation = await this.getConversation(params.message.conversationId);
+      userId = conversation?.userId ?? null;
+    }
+    if (!userId) {
+      return;
+    }
+
+    for (const candidate of candidates) {
+      await this.upsertUserMemoryCandidate({
+        userId,
+        candidate: {
+          ...candidate,
+          sourceMessageId: params.message.id,
+          sourceConversationId: params.message.conversationId,
+        },
+      });
+    }
+  }
 
   private getQuotaWindowStart(): Date {
     return new Date(Date.now() - DatabaseStorage.QUOTA_WINDOW_MS);
@@ -313,12 +564,60 @@ export class DatabaseStorage implements IStorage {
     }));
   }
 
+  async getRecentMessagesForUser(params: {
+    userId: string;
+    limit: number;
+    excludeConversationId?: string;
+  }): Promise<UserScopedMessage[]> {
+    const normalizedLimit = Math.max(1, Math.min(300, Math.floor(params.limit)));
+    const whereClause = params.excludeConversationId
+      ? and(
+          eq(conversations.userId, params.userId),
+          ne(messages.conversationId, params.excludeConversationId),
+        )
+      : eq(conversations.userId, params.userId);
+
+    return db
+      .select({
+        id: messages.id,
+        conversationId: messages.conversationId,
+        sender: messages.sender,
+        turnId: messages.turnId,
+        partIndex: messages.partIndex,
+        text: messages.text,
+        uiPayload: messages.uiPayload,
+        createdAt: messages.createdAt,
+        userId: conversations.userId,
+      })
+      .from(messages)
+      .innerJoin(conversations, eq(conversations.id, messages.conversationId))
+      .where(whereClause)
+      .orderBy(desc(messages.createdAt), desc(messages.id))
+      .limit(normalizedLimit);
+  }
+
   async createMessage(data: InsertMessage): Promise<Message> {
     const [msg] = await db.insert(messages).values(data).returning();
+    const [conversation] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.id, data.conversationId))
+      .limit(1);
+
     await db
       .update(conversations)
       .set({ updatedAt: new Date() })
       .where(eq(conversations.id, data.conversationId));
+
+    try {
+      await this.ingestMessageMemory({
+        message: msg,
+        conversationUserId: conversation?.userId ?? null,
+      });
+    } catch {
+      // Memory ingestion is best-effort and must not block message writes.
+    }
+
     return msg;
   }
 
@@ -363,6 +662,23 @@ export class DatabaseStorage implements IStorage {
       .update(conversations)
       .set({ updatedAt: new Date() })
       .where(eq(conversations.id, data.conversationId));
+
+    const [conversation] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.id, data.conversationId))
+      .limit(1);
+
+    for (const message of created) {
+      try {
+        await this.ingestMessageMemory({
+          message,
+          conversationUserId: conversation?.userId ?? null,
+        });
+      } catch {
+        // Memory ingestion is best-effort and must not block message writes.
+      }
+    }
 
     return created.sort((a, b) => a.partIndex - b.partIndex);
   }
@@ -505,6 +821,130 @@ export class DatabaseStorage implements IStorage {
       })
       .returning();
     return prefs;
+  }
+
+  async getUserMemoryItems(params: {
+    userId: string;
+    limit?: number;
+    offset?: number;
+    includeArchived?: boolean;
+    search?: string;
+  }): Promise<UserMemoryItem[]> {
+    const normalizedLimit = Math.max(1, Math.min(100, params.limit ?? 30));
+    const normalizedOffset = Math.max(0, params.offset ?? 0);
+    const trimmedSearch = params.search?.trim();
+    const whereClause = and(
+      eq(userMemoryItems.userId, params.userId),
+      params.includeArchived ? undefined : eq(userMemoryItems.archived, false),
+      trimmedSearch ? ilike(userMemoryItems.summary, `%${trimmedSearch}%`) : undefined,
+    );
+
+    return db
+      .select()
+      .from(userMemoryItems)
+      .where(whereClause)
+      .orderBy(
+        desc(userMemoryItems.lastReinforcedAt),
+        desc(userMemoryItems.updatedAt),
+      )
+      .limit(normalizedLimit)
+      .offset(normalizedOffset);
+  }
+
+  async upsertUserMemoryCandidate(params: {
+    userId: string;
+    candidate: UserMemoryItemCandidate;
+  }): Promise<UserMemoryItem> {
+    const normalizedSummary = this.normalizeMemorySummary(params.candidate.summary);
+    const summary = this.truncateMemorySummary(params.candidate.summary);
+    const confidence = this.clampConfidence(params.candidate.confidence);
+    const sourceMessageId = params.candidate.sourceMessageId ?? null;
+    const sourceConversationId = params.candidate.sourceConversationId ?? null;
+    const now = new Date();
+
+    const [existing] = await db
+      .select()
+      .from(userMemoryItems)
+      .where(
+        and(
+          eq(userMemoryItems.userId, params.userId),
+          eq(userMemoryItems.kind, params.candidate.kind),
+          eq(userMemoryItems.archived, false),
+          sql`lower(${userMemoryItems.summary}) = ${normalizedSummary}`,
+        ),
+      )
+      .limit(1);
+
+    if (existing) {
+      const nextConfidence = Math.min(
+        100,
+        Math.max(existing.confidence ?? 0, confidence) + 3,
+      );
+      const nextSensitivity = this.maxSensitivity(
+        existing.sensitivity,
+        params.candidate.sensitivity,
+      );
+
+      const [updated] = await db
+        .update(userMemoryItems)
+        .set({
+          summary,
+          confidence: nextConfidence,
+          sensitivity: nextSensitivity,
+          sourceMessageId: sourceMessageId ?? existing.sourceMessageId,
+          sourceConversationId:
+            sourceConversationId ?? existing.sourceConversationId,
+          lastReinforcedAt: now,
+          metadata:
+            params.candidate.metadata === undefined
+              ? existing.metadata
+              : params.candidate.metadata,
+          updatedAt: now,
+        })
+        .where(eq(userMemoryItems.id, existing.id))
+        .returning();
+
+      return updated;
+    }
+
+    const insertData: InsertUserMemoryItem = {
+      userId: params.userId,
+      kind: params.candidate.kind,
+      summary,
+      sensitivity: params.candidate.sensitivity,
+      confidence,
+      sourceMessageId,
+      sourceConversationId,
+      lastReinforcedAt: now,
+      archived: false,
+      metadata: params.candidate.metadata ?? null,
+    };
+
+    const [created] = await db
+      .insert(userMemoryItems)
+      .values(insertData)
+      .returning();
+    return created;
+  }
+
+  async archiveUserMemoryItem(params: {
+    userId: string;
+    memoryItemId: string;
+  }): Promise<UserMemoryItem | undefined> {
+    const [updated] = await db
+      .update(userMemoryItems)
+      .set({
+        archived: true,
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(userMemoryItems.id, params.memoryItemId),
+          eq(userMemoryItems.userId, params.userId),
+        ),
+      )
+      .returning();
+    return updated;
   }
 
   async getUserProfile(userId: string): Promise<UserProfile | undefined> {

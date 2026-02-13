@@ -20,6 +20,7 @@ export type ResponseStylePreset =
   | "balanced"
   | "expressive"
   | "playful";
+export type LiveMemoryPolicy = "safe_selective" | "remember_everything";
 
 export interface TextPersonalizationProfile {
   displayName?: string | null;
@@ -746,6 +747,9 @@ export interface CreateLiveTokenInput {
   persona: Persona;
   responseModality?: "AUDIO" | "TEXT";
   voiceName?: LiveVoiceName;
+  memoryContextBlock?: string;
+  profileContext?: TextPersonalizationProfile | null;
+  memoryPolicy?: LiveMemoryPolicy;
 }
 
 export interface CreateLiveTokenResult {
@@ -759,6 +763,40 @@ export interface CreateLiveTokenResult {
   uses: number;
 }
 
+function composeLiveSystemInstruction(params: {
+  personaPrompt: string;
+  memoryContextBlock?: string;
+  profileContext?: TextPersonalizationProfile | null;
+  memoryPolicy: LiveMemoryPolicy;
+}): string {
+  const sections: string[] = [params.personaPrompt];
+
+  const profileBlock = buildProfileContext(params.profileContext ?? null);
+  if (profileBlock) {
+    sections.push(profileBlock);
+  }
+
+  sections.push(
+    [
+      "LIVE MEMORY BEHAVIOR:",
+      `- Memory mode: ${params.memoryPolicy}.`,
+      "- Prioritize continuity with the current conversation first, then relevant cross-chat context.",
+      "- If a memory is uncertain or ambiguous, ask a brief clarifying question before treating it as fact.",
+      params.memoryPolicy === "safe_selective"
+        ? "- Treat sensitive identifiers carefully. Avoid repeating highly sensitive details unless the user explicitly asks."
+        : "- User opted into broad continuity. Keep recall natural, precise, and context-appropriate.",
+      "- Keep replies grounded in provided memory context and current user signals.",
+    ].join("\n"),
+  );
+
+  const memoryBlock = cleanTextInput(params.memoryContextBlock);
+  if (memoryBlock) {
+    sections.push(`LIVE MEMORY CONTEXT:\n${memoryBlock}`);
+  }
+
+  return sections.join("\n\n");
+}
+
 export async function createLiveToken(
   input: CreateLiveTokenInput,
 ): Promise<CreateLiveTokenResult> {
@@ -767,6 +805,13 @@ export async function createLiveToken(
   const personaPrompt = await getPersonaPrompt(input.persona);
   const responseModality = input.responseModality ?? "AUDIO";
   const voiceName = input.voiceName ?? DEFAULT_LIVE_VOICE;
+  const memoryPolicy = input.memoryPolicy ?? "safe_selective";
+  const systemInstruction = composeLiveSystemInstruction({
+    personaPrompt,
+    memoryContextBlock: input.memoryContextBlock,
+    profileContext: input.profileContext ?? null,
+    memoryPolicy,
+  });
 
   const now = Date.now();
   const expireInMs = parsePositiveInt(
@@ -811,7 +856,7 @@ export async function createLiveToken(
               responseModalities: [
                 responseModality === "TEXT" ? Modality.TEXT : Modality.AUDIO,
               ],
-              systemInstruction: personaPrompt,
+              systemInstruction,
               speechConfig:
                 responseModality === "AUDIO"
                   ? {

@@ -40,11 +40,14 @@ Response:
 ## `POST /api/live/token`
 Creates an ephemeral token for Gemini Live sessions using constrained session config.
 
-Request body (optional):
+Request body:
 ```json
 {
-  "persona": "Maya",
-  "responseModality": "AUDIO"
+  "conversationId": "conversation-uuid",
+  "persona": "Zee",
+  "voice": "Aoede",
+  "responseModality": "AUDIO",
+  "memoryModeOverride": "safe_selective"
 }
 ```
 
@@ -58,7 +61,15 @@ Response:
   "generatedAt": "ISO",
   "expireTime": "ISO",
   "newSessionExpireTime": "ISO",
-  "uses": 1
+  "uses": 1,
+  "memoryMeta": {
+    "activeThreadMessagesUsed": 24,
+    "crossChatMessagesUsed": 8,
+    "profileApplied": true,
+    "mode": "safe_selective",
+    "buildMs": 412,
+    "fallbackUsed": "none"
+  }
 }
 ```
 
@@ -76,7 +87,16 @@ Request body:
 ## Shared Memory Stitching
 - Voice transcript entries and text-chat entries are persisted in the same `messages` table per `conversationId`.
 - `/api/chat/respond` loads persisted conversation history and sends recent turns to Gemini text generation.
-- This keeps text and voice context in one memory thread.
+- `/api/live/token` now requires `conversationId` and hydrates live memory from:
+  - active thread recent turns
+  - compressed older thread summary
+  - relevance-ranked cross-chat memories
+  - reinforced durable memory items
+  - profile context (when enabled)
+- If memory build times out, token creation gracefully falls back to active-thread-only, then persona-only.
+- Memory policy and cross-chat inclusion are controlled by:
+  - `GET /api/memory/settings`
+  - `PATCH /api/memory/settings`
 
 ## Live Frontend Wiring
 - `client/src/lib/gemini-live.ts` manages Live session lifecycle in browser.

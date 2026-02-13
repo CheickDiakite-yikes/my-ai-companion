@@ -42,6 +42,7 @@ import {
   splitAssistantReplyParts,
   splitAssistantReplyPartsWithDiagnostics,
   summarizeImageForMemory,
+  type LiveMemoryPolicy,
   type LiveVoiceName,
   type ResponseStylePreset,
   type TextPersonalizationProfile,
@@ -58,11 +59,35 @@ import { createSignedMediaPath, verifyMediaSignature } from "./media-signing";
 
 const personaInputSchema = z.string().trim().min(1).max(64);
 const liveVoiceSchema = z.enum(["Aoede", "Kore", "Charon", "Fenrir"]);
+const liveMemoryModeSchema = z.enum(["safe_selective", "remember_everything"]);
 
 const liveTokenSchema = z.object({
+  conversationId: z.string().min(1, "conversationId is required"),
   persona: personaInputSchema.optional(),
   responseModality: z.enum(["AUDIO", "TEXT"]).optional(),
   voice: liveVoiceSchema.optional(),
+  memoryModeOverride: liveMemoryModeSchema.optional(),
+});
+
+const memorySettingsPatchSchema = z
+  .object({
+    memoryMode: liveMemoryModeSchema.optional(),
+    crossChatMemoryEnabled: z.boolean().optional(),
+  })
+  .refine(
+    (value) =>
+      value.memoryMode !== undefined ||
+      value.crossChatMemoryEnabled !== undefined,
+    {
+      message: "At least one memory setting is required",
+    },
+  );
+
+const memoryItemsQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).optional().default(30),
+  offset: z.coerce.number().int().min(0).optional().default(0),
+  includeArchived: z.coerce.boolean().optional().default(false),
+  q: z.string().trim().max(120).optional(),
 });
 
 const chatRespondSchema = z
@@ -208,6 +233,22 @@ const ENABLE_PROFILE_PERSONALIZATION = parseBooleanFlag(
 const ENABLE_BETA_QUOTAS = parseBooleanFlag(
   process.env.ENABLE_BETA_QUOTAS,
   true,
+);
+const ENABLE_LIVE_MEMORY_CONTEXT = parseBooleanFlag(
+  process.env.ENABLE_LIVE_MEMORY_CONTEXT,
+  true,
+);
+const LIVE_MEMORY_BUILD_TIMEOUT_MS = parsePositiveInt(
+  process.env.LIVE_MEMORY_BUILD_TIMEOUT_MS,
+  1800,
+);
+const LIVE_MEMORY_ACTIVE_THREAD_MAX_MESSAGES = parsePositiveInt(
+  process.env.LIVE_MEMORY_ACTIVE_THREAD_MAX_MESSAGES,
+  60,
+);
+const LIVE_MEMORY_CROSS_CHAT_MAX_MESSAGES = parsePositiveInt(
+  process.env.LIVE_MEMORY_CROSS_CHAT_MAX_MESSAGES,
+  80,
 );
 const BETA_TEXT_QUOTA_30D = parsePositiveInt(process.env.BETA_TEXT_QUOTA_30D, 200);
 const BETA_VOICE_QUOTA_SECONDS_30D = parsePositiveInt(
@@ -470,6 +511,483 @@ function normalizePersona(_: unknown): "Zee" {
 function resolveLiveVoice(input: unknown): LiveVoiceName {
   const parsed = liveVoiceSchema.safeParse(input);
   return parsed.success ? parsed.data : DEFAULT_LIVE_VOICE;
+}
+
+type LiveMemoryFallbackUsed =
+  | "none"
+  | "active_thread_only"
+  | "persona_only"
+  | "disabled";
+
+type LiveTokenMemoryMeta = {
+  activeThreadMessagesUsed: number;
+  crossChatMessagesUsed: number;
+  profileApplied: boolean;
+  mode: LiveMemoryPolicy;
+  buildMs: number;
+  fallbackUsed: LiveMemoryFallbackUsed;
+};
+
+type MemorySourceMessage = {
+  sender: string;
+  text: string;
+  createdAt: Date | null;
+};
+
+type SanitizedMemoryText = {
+  text: string;
+  redactionCount: number;
+};
+
+const MEMORY_STOP_WORDS = new Set([
+  "about",
+  "after",
+  "again",
+  "already",
+  "also",
+  "and",
+  "are",
+  "because",
+  "been",
+  "before",
+  "being",
+  "between",
+  "both",
+  "but",
+  "can",
+  "did",
+  "does",
+  "doing",
+  "for",
+  "from",
+  "have",
+  "just",
+  "like",
+  "more",
+  "most",
+  "much",
+  "need",
+  "really",
+  "that",
+  "the",
+  "their",
+  "them",
+  "there",
+  "these",
+  "they",
+  "this",
+  "those",
+  "through",
+  "very",
+  "want",
+  "were",
+  "what",
+  "when",
+  "which",
+  "will",
+  "with",
+  "your",
+  "you",
+]);
+
+const MEMORY_WORD_PATTERN = /[a-z0-9][a-z0-9'_-]{2,}/gi;
+
+const MEMORY_SENSITIVE_PATTERNS = [
+  /(api[_ -]?key|access[_ -]?token|refresh[_ -]?token|session[_ -]?token|password|secret)\s*[:=]\s*[^\s,;]+/gi,
+  /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi,
+  /\b\d{3}-\d{2}-\d{4}\b/g,
+  /\b(?:\d[ -]?){13,16}\b/g,
+  /\b(?=[A-Za-z0-9_-]{24,})(?=.*[A-Za-z])(?=.*\d)[A-Za-z0-9_-]+\b/g,
+];
+
+function resolveLiveMemoryPolicy(
+  input: unknown,
+  fallbackInput?: unknown,
+): LiveMemoryPolicy {
+  const override = liveMemoryModeSchema.safeParse(input);
+  if (override.success) {
+    return override.data;
+  }
+
+  const fallback = liveMemoryModeSchema.safeParse(fallbackInput);
+  if (fallback.success) {
+    return fallback.data;
+  }
+
+  const envDefault = liveMemoryModeSchema.safeParse(
+    (process.env.LIVE_MEMORY_POLICY_DEFAULT ?? "").trim().toLowerCase(),
+  );
+  if (envDefault.success) {
+    return envDefault.data;
+  }
+  return "safe_selective";
+}
+
+function normalizeMemoryText(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function truncateMemoryText(value: string, maxLength: number): string {
+  if (value.length <= maxLength) return value;
+  return `${value.slice(0, Math.max(0, maxLength - 3)).trim()}...`;
+}
+
+function sanitizeMemoryText(
+  value: string,
+  memoryPolicy: LiveMemoryPolicy,
+): SanitizedMemoryText {
+  const normalized = normalizeMemoryText(value);
+  if (!normalized) {
+    return { text: "", redactionCount: 0 };
+  }
+
+  if (memoryPolicy === "remember_everything") {
+    return { text: normalized, redactionCount: 0 };
+  }
+
+  let redactionCount = 0;
+  let sanitized = normalized;
+  for (const pattern of MEMORY_SENSITIVE_PATTERNS) {
+    sanitized = sanitized.replace(pattern, (match) => {
+      if (!match.trim()) return match;
+      redactionCount += 1;
+      return "[redacted]";
+    });
+  }
+
+  return {
+    text: normalizeMemoryText(sanitized),
+    redactionCount,
+  };
+}
+
+function messageLabel(sender: string): "User" | "Zee" | "System" {
+  if (sender === "user") return "User";
+  if (sender === "assistant") return "Zee";
+  return "System";
+}
+
+function formatMemoryLine(sender: string, text: string): string {
+  return `- ${messageLabel(sender)}: ${text}`;
+}
+
+function toMemoryMessageText(message: MessageWithAttachments): string {
+  const base = normalizeMemoryText(message.text);
+  const attachmentSummaries = message.attachments
+    .map((attachment) => normalizeMemoryText(attachment.summaryText ?? ""))
+    .filter((text) => text.length > 0)
+    .slice(0, 2)
+    .map((text) => truncateMemoryText(text, 140));
+
+  if (attachmentSummaries.length === 0) {
+    return base;
+  }
+
+  if (base.length === 0) {
+    return `Image context: ${attachmentSummaries.join(" | ")}`;
+  }
+
+  return `${base} Image context: ${attachmentSummaries.join(" | ")}`;
+}
+
+function extractKeywords(text: string): string[] {
+  const matches = text.toLowerCase().match(MEMORY_WORD_PATTERN) ?? [];
+  const deduped = new Set<string>();
+
+  for (const token of matches) {
+    if (token.length < 4) continue;
+    if (MEMORY_STOP_WORDS.has(token)) continue;
+    deduped.add(token);
+    if (deduped.size >= 32) break;
+  }
+
+  return Array.from(deduped);
+}
+
+function scoreRelevance(text: string, keywords: Set<string>): number {
+  if (keywords.size === 0) return 0;
+  const tokens = extractKeywords(text);
+  let score = 0;
+  for (const token of tokens) {
+    if (keywords.has(token)) score += 1;
+  }
+  return score;
+}
+
+function buildProfileMemoryLines(
+  profile: TextPersonalizationProfile | null | undefined,
+  memoryPolicy: LiveMemoryPolicy,
+): SanitizedMemoryText {
+  if (!profile) {
+    return { text: "", redactionCount: 0 };
+  }
+
+  const entries: string[] = [];
+  if (profile.displayName?.trim()) {
+    entries.push(`- Preferred name: ${profile.displayName.trim()}`);
+  }
+  if (profile.location?.trim()) {
+    entries.push(`- Location: ${profile.location.trim()}`);
+  }
+  if (typeof profile.age === "number" && Number.isFinite(profile.age)) {
+    entries.push(`- Age: ${profile.age}`);
+  }
+  if (profile.profession?.trim()) {
+    entries.push(`- Profession: ${profile.profession.trim()}`);
+  }
+  if (profile.bio?.trim()) {
+    entries.push(`- Bio: ${profile.bio.trim()}`);
+  }
+  if (profile.responseStylePreset) {
+    entries.push(`- Preferred response style: ${profile.responseStylePreset}`);
+  }
+  if (profile.responseStyleNote?.trim()) {
+    entries.push(`- Response style note: ${profile.responseStyleNote.trim()}`);
+  }
+
+  const raw = entries.join("\n");
+  return sanitizeMemoryText(raw, memoryPolicy);
+}
+
+async function withTimeout<T>(
+  work: Promise<T>,
+  timeoutMs: number,
+  label: string,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(label));
+    }, timeoutMs);
+
+    work
+      .then((value) => {
+        clearTimeout(timer);
+        resolve(value);
+      })
+      .catch((error) => {
+        clearTimeout(timer);
+        reject(error);
+      });
+  });
+}
+
+function isMemoryTimeoutError(error: unknown): boolean {
+  return error instanceof Error && error.message === "live_memory_build_timeout";
+}
+
+type LiveMemoryBuildResult = {
+  memoryContextBlock: string;
+  activeThreadMessagesUsed: number;
+  crossChatMessagesUsed: number;
+  durableMemoryItemsUsed: number;
+  redactionCount: number;
+};
+
+async function buildLiveMemoryContext(params: {
+  userId: string;
+  conversationId: string;
+  profileContext?: TextPersonalizationProfile | null;
+  includeCrossChat: boolean;
+  memoryPolicy: LiveMemoryPolicy;
+  activeThreadMaxMessages: number;
+  crossChatMaxMessages: number;
+}): Promise<LiveMemoryBuildResult> {
+  const activeMessages = await storage.getMessagesWithAttachments(params.conversationId);
+  const activeHistory: MemorySourceMessage[] = activeMessages
+    .map((message) => ({
+      sender: message.sender,
+      text: toMemoryMessageText(message),
+      createdAt: message.createdAt ?? null,
+    }))
+    .filter((message) => message.text.trim().length > 0);
+
+  const recentActive = activeHistory.slice(
+    -Math.max(1, params.activeThreadMaxMessages),
+  );
+  const olderActive = activeHistory.slice(
+    0,
+    Math.max(0, activeHistory.length - recentActive.length),
+  );
+
+  let redactionCount = 0;
+  const currentThreadLines = recentActive
+    .map((message) => {
+      const sanitized = sanitizeMemoryText(message.text, params.memoryPolicy);
+      redactionCount += sanitized.redactionCount;
+      if (!sanitized.text) return null;
+      return formatMemoryLine(
+        message.sender,
+        truncateMemoryText(sanitized.text, 220),
+      );
+    })
+    .filter((line): line is string => Boolean(line));
+
+  const olderThreadSummaryLines = olderActive
+    .slice(-10)
+    .map((message) => {
+      const sanitized = sanitizeMemoryText(message.text, params.memoryPolicy);
+      redactionCount += sanitized.redactionCount;
+      if (!sanitized.text) return null;
+      return `- ${messageLabel(message.sender)} earlier: ${truncateMemoryText(
+        sanitized.text,
+        150,
+      )}`;
+    })
+    .filter((line): line is string => Boolean(line));
+
+  const crossChatLines: string[] = [];
+  const durableMemoryLines: string[] = [];
+  if (params.includeCrossChat && params.crossChatMaxMessages > 0) {
+    const retrievalLimit = Math.min(
+      240,
+      Math.max(
+        params.crossChatMaxMessages,
+        params.crossChatMaxMessages * 2,
+      ),
+    );
+    const crossChatMessages = (
+      await storage.getRecentMessagesForUser({
+        userId: params.userId,
+        limit: retrievalLimit,
+        excludeConversationId: params.conversationId,
+      })
+    )
+      .map((message) => ({
+        sender: message.sender,
+        text: normalizeMemoryText(message.text),
+        createdAt: message.createdAt ?? null,
+      }))
+      .filter((message) => message.text.length > 0);
+
+    const activeKeywords = new Set(
+      recentActive.flatMap((message) => extractKeywords(message.text)),
+    );
+
+    const rankedCrossChat = crossChatMessages.map((message) => ({
+      message,
+      score: scoreRelevance(message.text, activeKeywords),
+    }));
+
+    const selectedCrossChat = [
+      ...rankedCrossChat
+        .filter((entry) => entry.score > 0)
+        .sort(
+          (a, b) =>
+            b.score - a.score ||
+            (b.message.createdAt?.getTime() ?? 0) -
+              (a.message.createdAt?.getTime() ?? 0),
+        ),
+      ...rankedCrossChat
+        .filter((entry) => entry.score === 0)
+        .sort(
+          (a, b) =>
+            (b.message.createdAt?.getTime() ?? 0) -
+            (a.message.createdAt?.getTime() ?? 0),
+        ),
+    ].slice(0, Math.max(1, params.crossChatMaxMessages));
+
+    selectedCrossChat.sort(
+      (a, b) =>
+        (a.message.createdAt?.getTime() ?? 0) -
+        (b.message.createdAt?.getTime() ?? 0),
+    );
+
+    for (const entry of selectedCrossChat) {
+      const sanitized = sanitizeMemoryText(entry.message.text, params.memoryPolicy);
+      redactionCount += sanitized.redactionCount;
+      if (!sanitized.text) continue;
+      crossChatLines.push(
+        formatMemoryLine(
+          entry.message.sender,
+          truncateMemoryText(sanitized.text, 180),
+        ),
+      );
+    }
+
+    const durableMemoryItems = await storage.getUserMemoryItems({
+      userId: params.userId,
+      limit: Math.min(120, Math.max(params.crossChatMaxMessages * 2, 24)),
+      includeArchived: false,
+    });
+
+    const kindCounts = new Map<string, number>();
+    const rankedDurable = durableMemoryItems
+      .map((item) => {
+        const relevance = scoreRelevance(item.summary, activeKeywords);
+        const lastTouchedAt = item.lastReinforcedAt ?? item.updatedAt ?? item.createdAt;
+        const ageDays = Math.max(
+          0,
+          (Date.now() - (lastTouchedAt?.getTime() ?? Date.now())) /
+            (24 * 60 * 60 * 1000),
+        );
+        const recencyBonus = Math.max(0, 2.5 - ageDays / 14);
+        const confidenceBonus = Math.min(3, Math.max(0, item.confidence / 40));
+        const score = relevance * 4 + recencyBonus + confidenceBonus;
+        return { item, score, relevance };
+      })
+      .sort((a, b) => b.score - a.score);
+
+    for (const entry of rankedDurable) {
+      if (durableMemoryLines.length >= Math.min(12, params.crossChatMaxMessages)) {
+        break;
+      }
+      if (entry.relevance <= 0 && durableMemoryLines.length >= 4) {
+        continue;
+      }
+      const kindCount = kindCounts.get(entry.item.kind) ?? 0;
+      if (kindCount >= 3) {
+        continue;
+      }
+
+      const sanitized = sanitizeMemoryText(entry.item.summary, params.memoryPolicy);
+      redactionCount += sanitized.redactionCount;
+      if (!sanitized.text) continue;
+
+      durableMemoryLines.push(
+        `- [${entry.item.kind}] ${truncateMemoryText(sanitized.text, 170)}`,
+      );
+      kindCounts.set(entry.item.kind, kindCount + 1);
+    }
+  }
+
+  const profileFacts = buildProfileMemoryLines(
+    params.profileContext ?? null,
+    params.memoryPolicy,
+  );
+  redactionCount += profileFacts.redactionCount;
+
+  const sections: string[] = [];
+  if (currentThreadLines.length > 0) {
+    sections.push(
+      ["Current Thread (recent raw turns):", ...currentThreadLines].join("\n"),
+    );
+  }
+  if (olderThreadSummaryLines.length > 0) {
+    sections.push(
+      ["Thread Summary (older compressed points):", ...olderThreadSummaryLines].join(
+        "\n",
+      ),
+    );
+  }
+  if (crossChatLines.length > 0) {
+    sections.push(
+      ["Cross-Chat Relevant Memories:", ...crossChatLines].join("\n"),
+    );
+  }
+  if (durableMemoryLines.length > 0) {
+    sections.push(["Long-Term Memory Highlights:", ...durableMemoryLines].join("\n"));
+  }
+  if (profileFacts.text.length > 0) {
+    sections.push(["User Profile Facts:", profileFacts.text].join("\n"));
+  }
+
+  return {
+    memoryContextBlock: sections.join("\n\n").trim(),
+    activeThreadMessagesUsed: currentThreadLines.length,
+    crossChatMessagesUsed: crossChatLines.length + durableMemoryLines.length,
+    durableMemoryItemsUsed: durableMemoryLines.length,
+    redactionCount,
+  };
 }
 
 function isStorageProvider(value: string): value is StorageProvider {
@@ -1797,6 +2315,8 @@ export async function registerRoutes(
           selectedVoice: DEFAULT_LIVE_VOICE,
           selectedTheme: "sunset_path",
           onboardingCompleted: false,
+          memoryMode: "safe_selective",
+          crossChatMemoryEnabled: true,
         },
       );
     } catch (error) {
@@ -1818,6 +2338,157 @@ export async function registerRoutes(
       res.status(400).json({ message: "Invalid preferences data" });
     }
   });
+
+  app.get("/api/memory/settings", isAuthenticated, async (req: any, res) => {
+    const startedAt = Date.now();
+    try {
+      const prefs = await storage.getUserPreferences(req.session.userId);
+      const settings = {
+        memoryMode: resolveLiveMemoryPolicy(prefs?.memoryMode),
+        crossChatMemoryEnabled: prefs?.crossChatMemoryEnabled ?? true,
+      };
+
+      trace(req, "memory.settings.read", {
+        ...settings,
+        elapsedMs: elapsedMs(startedAt),
+      });
+
+      return res.status(200).json({
+        traceId: getTraceId(req),
+        settings,
+      });
+    } catch (error) {
+      traceError(req, "memory.settings.read.failed", error, {
+        elapsedMs: elapsedMs(startedAt),
+      });
+      return res.status(500).json({
+        message: "Failed to fetch memory settings",
+        traceId: getTraceId(req),
+      });
+    }
+  });
+
+  app.patch("/api/memory/settings", isAuthenticated, async (req: any, res) => {
+    const startedAt = Date.now();
+    try {
+      const parsed = memorySettingsPatchSchema.parse(req.body ?? {});
+      const updated = await storage.upsertUserPreferences({
+        userId: req.session.userId,
+        memoryMode: parsed.memoryMode,
+        crossChatMemoryEnabled: parsed.crossChatMemoryEnabled,
+      });
+
+      trace(req, "memory.settings.updated", {
+        memoryMode: updated.memoryMode,
+        crossChatMemoryEnabled: updated.crossChatMemoryEnabled,
+        elapsedMs: elapsedMs(startedAt),
+      });
+
+      return res.status(200).json({
+        traceId: getTraceId(req),
+        settings: {
+          memoryMode: updated.memoryMode,
+          crossChatMemoryEnabled: updated.crossChatMemoryEnabled,
+        },
+      });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({
+          message: error.errors[0]?.message ?? "Invalid memory settings payload",
+          traceId: getTraceId(req),
+        });
+      }
+      traceError(req, "memory.settings.update.failed", error, {
+        elapsedMs: elapsedMs(startedAt),
+      });
+      return res.status(500).json({
+        message: "Failed to update memory settings",
+        traceId: getTraceId(req),
+      });
+    }
+  });
+
+  app.get("/api/memory/items", isAuthenticated, async (req: any, res) => {
+    const startedAt = Date.now();
+    try {
+      const parsed = memoryItemsQuerySchema.parse(req.query ?? {});
+      const items = await storage.getUserMemoryItems({
+        userId: req.session.userId,
+        limit: parsed.limit,
+        offset: parsed.offset,
+        includeArchived: parsed.includeArchived,
+        search: parsed.q,
+      });
+
+      trace(req, "memory.items.list", {
+        count: items.length,
+        limit: parsed.limit,
+        offset: parsed.offset,
+        includeArchived: parsed.includeArchived,
+        elapsedMs: elapsedMs(startedAt),
+      });
+
+      return res.status(200).json({
+        traceId: getTraceId(req),
+        items,
+        paging: {
+          limit: parsed.limit,
+          offset: parsed.offset,
+          nextOffset: parsed.offset + items.length,
+        },
+      });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({
+          message: error.errors[0]?.message ?? "Invalid memory query",
+          traceId: getTraceId(req),
+        });
+      }
+      traceError(req, "memory.items.list.failed", error, {
+        elapsedMs: elapsedMs(startedAt),
+      });
+      return res.status(500).json({
+        message: "Failed to fetch memory items",
+        traceId: getTraceId(req),
+      });
+    }
+  });
+
+  app.delete(
+    "/api/memory/items/:id",
+    isAuthenticated,
+    async (req: any, res) => {
+      const startedAt = Date.now();
+      try {
+        const archived = await storage.archiveUserMemoryItem({
+          userId: req.session.userId,
+          memoryItemId: req.params.id,
+        });
+        if (!archived) {
+          return res.status(404).json({
+            message: "Memory item not found",
+            traceId: getTraceId(req),
+          });
+        }
+
+        trace(req, "memory.items.archived", {
+          memoryItemId: archived.id,
+          elapsedMs: elapsedMs(startedAt),
+        });
+
+        return res.status(204).end();
+      } catch (error) {
+        traceError(req, "memory.items.archive.failed", error, {
+          memoryItemId: req.params.id,
+          elapsedMs: elapsedMs(startedAt),
+        });
+        return res.status(500).json({
+          message: "Failed to archive memory item",
+          traceId: getTraceId(req),
+        });
+      }
+    },
+  );
 
   app.post("/api/voice-sessions", isAuthenticated, async (req: any, res) => {
     const startedAt = Date.now();
@@ -2282,9 +2953,119 @@ export async function registerRoutes(
     const startedAt = Date.now();
     try {
       const parsed = liveTokenSchema.parse(req.body ?? {});
+      const conversation = await requireConversationOwnership(
+        req,
+        res,
+        parsed.conversationId,
+      );
+      if (!conversation) return;
+
       const prefs = await storage.getUserPreferences(req.session.userId);
       const persona = normalizePersona(parsed.persona ?? prefs?.selectedPersona);
       const voice = resolveLiveVoice(parsed.voice ?? prefs?.selectedVoice);
+      const accountMemoryMode = resolveLiveMemoryPolicy(prefs?.memoryMode);
+      const memoryOverride =
+        process.env.NODE_ENV !== "production"
+          ? liveMemoryModeSchema.safeParse(parsed.memoryModeOverride)
+          : { success: false as const };
+      const memoryMode = memoryOverride.success
+        ? memoryOverride.data
+        : accountMemoryMode;
+      const crossChatMemoryEnabled = prefs?.crossChatMemoryEnabled ?? true;
+      const profileContext = ENABLE_PROFILE_PERSONALIZATION
+        ? toProfilePromptContext(await storage.getUserProfile(req.session.userId))
+        : undefined;
+
+      const memoryBuildStartedAt = Date.now();
+      const memoryMeta: LiveTokenMemoryMeta = {
+        activeThreadMessagesUsed: 0,
+        crossChatMessagesUsed: 0,
+        profileApplied: Boolean(profileContext),
+        mode: memoryMode,
+        buildMs: 0,
+        fallbackUsed: ENABLE_LIVE_MEMORY_CONTEXT ? "persona_only" : "disabled",
+      };
+      let memoryContextBlock: string | undefined;
+      let memoryRedactionCount = 0;
+      let memoryDurableItemsUsed = 0;
+
+      if (ENABLE_LIVE_MEMORY_CONTEXT) {
+        const deadlineAt = memoryBuildStartedAt + LIVE_MEMORY_BUILD_TIMEOUT_MS;
+        const runMemoryStage = async (
+          includeCrossChat: boolean,
+        ): Promise<LiveMemoryBuildResult> => {
+          const remainingMs = deadlineAt - Date.now();
+          if (remainingMs <= 0) {
+            throw new Error("live_memory_build_timeout");
+          }
+          return withTimeout(
+            buildLiveMemoryContext({
+              userId: req.session.userId,
+              conversationId: conversation.id,
+              profileContext,
+              includeCrossChat,
+              memoryPolicy: memoryMode,
+              activeThreadMaxMessages: LIVE_MEMORY_ACTIVE_THREAD_MAX_MESSAGES,
+              crossChatMaxMessages: LIVE_MEMORY_CROSS_CHAT_MAX_MESSAGES,
+            }),
+            remainingMs,
+            "live_memory_build_timeout",
+          );
+        };
+
+        try {
+          const fullContext = await runMemoryStage(crossChatMemoryEnabled);
+          memoryContextBlock = fullContext.memoryContextBlock || undefined;
+          memoryMeta.activeThreadMessagesUsed = fullContext.activeThreadMessagesUsed;
+          memoryMeta.crossChatMessagesUsed = fullContext.crossChatMessagesUsed;
+          memoryMeta.fallbackUsed = "none";
+          memoryRedactionCount = fullContext.redactionCount;
+          memoryDurableItemsUsed = fullContext.durableMemoryItemsUsed;
+        } catch (fullError) {
+          traceError(req, "live.memory.build.full.failed", fullError, {
+            conversationId: conversation.id,
+            mode: memoryMode,
+            timedOut: isMemoryTimeoutError(fullError),
+          });
+
+          try {
+            const activeOnlyContext = await runMemoryStage(false);
+            memoryContextBlock = activeOnlyContext.memoryContextBlock || undefined;
+            memoryMeta.activeThreadMessagesUsed =
+              activeOnlyContext.activeThreadMessagesUsed;
+            memoryMeta.crossChatMessagesUsed = 0;
+            memoryMeta.fallbackUsed = "active_thread_only";
+            memoryRedactionCount = activeOnlyContext.redactionCount;
+            memoryDurableItemsUsed = activeOnlyContext.durableMemoryItemsUsed;
+          } catch (activeOnlyError) {
+            traceError(req, "live.memory.build.active_only.failed", activeOnlyError, {
+              conversationId: conversation.id,
+              mode: memoryMode,
+              timedOut: isMemoryTimeoutError(activeOnlyError),
+            });
+            memoryMeta.fallbackUsed = "persona_only";
+            memoryContextBlock = undefined;
+            memoryRedactionCount = 0;
+            memoryDurableItemsUsed = 0;
+          }
+        }
+      }
+
+      memoryMeta.buildMs = elapsedMs(memoryBuildStartedAt);
+      trace(req, "live.memory.build.completed", {
+        conversationId: conversation.id,
+        mode: memoryMeta.mode,
+        activeThreadMessagesUsed: memoryMeta.activeThreadMessagesUsed,
+        crossChatMessagesUsed: memoryMeta.crossChatMessagesUsed,
+        profileApplied: memoryMeta.profileApplied,
+        buildMs: memoryMeta.buildMs,
+        fallbackUsed: memoryMeta.fallbackUsed,
+        redactionCount: memoryRedactionCount,
+        durableMemoryItemsUsed: memoryDurableItemsUsed,
+        crossChatMemoryEnabled,
+        accountMemoryMode,
+        memoryOverrideApplied: memoryOverride.success,
+      });
 
       if (ENABLE_BETA_QUOTAS) {
         const quota = await getQuotaSummaryResponseForUser(req.session.userId);
@@ -2311,22 +3092,31 @@ export async function registerRoutes(
       }
 
       trace(req, "live.token.requested", {
+        conversationId: conversation.id,
         persona,
         voice,
         responseModality: parsed.responseModality ?? "AUDIO",
+        memoryMode: memoryMeta.mode,
+        memoryFallback: memoryMeta.fallbackUsed,
       });
 
       const token = await createLiveToken({
         persona,
         responseModality: parsed.responseModality,
         voiceName: voice,
+        memoryContextBlock,
+        profileContext: profileContext ?? null,
+        memoryPolicy: memoryMeta.mode,
       });
 
       trace(req, "live.token.generated", {
+        conversationId: conversation.id,
         persona,
         voice: token.voiceName,
         model: token.model,
         responseModality: token.responseModality,
+        memoryFallback: memoryMeta.fallbackUsed,
+        memoryBuildMs: memoryMeta.buildMs,
         elapsedMs: elapsedMs(startedAt),
       });
 
@@ -2340,6 +3130,7 @@ export async function registerRoutes(
         expireTime: token.expireTime,
         newSessionExpireTime: token.newSessionExpireTime,
         uses: token.uses,
+        memoryMeta,
       });
     } catch (error) {
       if (error instanceof z.ZodError) {

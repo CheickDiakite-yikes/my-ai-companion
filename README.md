@@ -93,7 +93,9 @@ Client submit text/image
 ```text
 Client start voice
   -> POST /api/live/token
+     -> requires conversationId (ownership enforced)
      -> quota gate (voice remaining > 0)
+     -> build live memory context (thread + cross-chat + profile) with timeout fallback
      -> create ephemeral live token
   -> browser opens Gemini Live session (v1alpha)
   -> mic PCM stream -> sendRealtimeInput(audio)
@@ -232,6 +234,10 @@ All routes are same-origin under `/api/*` and (except auth routes) require sessi
 - `POST /api/profile/zee-avatar`
 - `GET /api/preferences`
 - `PUT /api/preferences`
+- `GET /api/memory/settings`
+- `PATCH /api/memory/settings`
+- `GET /api/memory/items`
+- `DELETE /api/memory/items/:id`
 
 ### AI + Live
 - `POST /api/live/token`

@@ -46,6 +46,11 @@ export const messages = pgTable(
   ],
 );
 
+export const memoryModeEnum = pgEnum("memory_mode", [
+  "safe_selective",
+  "remember_everything",
+]);
+
 export const messageAttachments = pgTable(
   "message_attachments",
   {
@@ -79,6 +84,12 @@ export const userPreferences = pgTable("user_preferences", {
   selectedVoice: varchar("selected_voice").notNull().default("Aoede"),
   selectedTheme: varchar("selected_theme").notNull().default("sunset_path"),
   onboardingCompleted: boolean("onboarding_completed").notNull().default(false),
+  memoryMode: memoryModeEnum("memory_mode")
+    .notNull()
+    .default("safe_selective"),
+  crossChatMemoryEnabled: boolean("cross_chat_memory_enabled")
+    .notNull()
+    .default(true),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -121,6 +132,22 @@ export const usageEventMetricEnum = pgEnum("usage_event_metric", [
   "text_message",
   "voice_second",
   "camera_second",
+]);
+
+export const memoryItemKindEnum = pgEnum("memory_item_kind", [
+  "preference",
+  "goal",
+  "profile",
+  "project",
+  "fact",
+  "schedule",
+  "relationship",
+]);
+
+export const memorySensitivityEnum = pgEnum("memory_sensitivity", [
+  "low",
+  "medium",
+  "high",
 ]);
 
 export const agentTaskStatusEnum = pgEnum("agent_task_status", [
@@ -296,6 +323,38 @@ export const usageEvents = pgTable(
   ],
 );
 
+export const userMemoryItems = pgTable(
+  "user_memory_items",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    userId: varchar("user_id").notNull(),
+    kind: memoryItemKindEnum("kind").notNull(),
+    summary: text("summary").notNull(),
+    sensitivity: memorySensitivityEnum("sensitivity").notNull().default("low"),
+    confidence: integer("confidence").notNull().default(50),
+    sourceMessageId: varchar("source_message_id"),
+    sourceConversationId: varchar("source_conversation_id"),
+    lastReinforcedAt: timestamp("last_reinforced_at").defaultNow(),
+    archived: boolean("archived").notNull().default(false),
+    metadata: jsonb("metadata"),
+    createdAt: timestamp("created_at").defaultNow(),
+    updatedAt: timestamp("updated_at").defaultNow(),
+  },
+  (table) => [
+    index("user_memory_items_user_archived_updated_idx").on(
+      table.userId,
+      table.archived,
+      table.updatedAt,
+    ),
+    index("user_memory_items_user_kind_archived_idx").on(
+      table.userId,
+      table.kind,
+      table.archived,
+    ),
+    index("user_memory_items_source_message_idx").on(table.sourceMessageId),
+  ],
+);
+
 export const conversationsRelations = relations(conversations, ({ many }) => ({
   messages: many(messages),
   attachments: many(messageAttachments),
@@ -334,6 +393,13 @@ export const userProfilesRelations = relations(userProfiles, ({ one }) => ({
   avatarAttachment: one(messageAttachments, {
     fields: [userProfiles.avatarAttachmentId],
     references: [messageAttachments.id],
+  }),
+}));
+
+export const userMemoryItemsRelations = relations(userMemoryItems, ({ one }) => ({
+  user: one(users, {
+    fields: [userMemoryItems.userId],
+    references: [users.id],
   }),
 }));
 
@@ -416,6 +482,12 @@ export const insertUsageEventSchema = createInsertSchema(usageEvents).omit({
   createdAt: true,
 });
 
+export const insertUserMemoryItemSchema = createInsertSchema(userMemoryItems).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
 export const insertAgentTaskSchema = createInsertSchema(agentTasks).omit({
   id: true,
   createdAt: true,
@@ -461,6 +533,8 @@ export type VoiceSession = typeof voiceSessions.$inferSelect;
 export type InsertUsageEvent = z.infer<typeof insertUsageEventSchema>;
 export type UsageEvent = typeof usageEvents.$inferSelect;
 export type UsageEventMetric = typeof usageEventMetricEnum.enumValues[number];
+export type InsertUserMemoryItem = z.infer<typeof insertUserMemoryItemSchema>;
+export type UserMemoryItem = typeof userMemoryItems.$inferSelect;
 export type InsertAgentTask = z.infer<typeof insertAgentTaskSchema>;
 export type AgentTask = typeof agentTasks.$inferSelect;
 export type InsertAgentStep = z.infer<typeof insertAgentStepSchema>;
@@ -478,3 +552,6 @@ export type AgentArtifactType = typeof agentArtifactTypeEnum.enumValues[number];
 export type AgentArtifactStatus = typeof agentArtifactStatusEnum.enumValues[number];
 export type AgentToolCallStatus = typeof agentToolCallStatusEnum.enumValues[number];
 export type TaskRiskLevel = typeof taskRiskLevelEnum.enumValues[number];
+export type MemoryMode = typeof memoryModeEnum.enumValues[number];
+export type MemoryItemKind = typeof memoryItemKindEnum.enumValues[number];
+export type MemorySensitivity = typeof memorySensitivityEnum.enumValues[number];
