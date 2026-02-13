@@ -118,6 +118,10 @@ const SUPPRESS_INPUT_COOLDOWN_MS = parseClientPositiveInt(
   liveClientEnv.VITE_LIVE_AUDIO_SUPPRESS_INPUT_COOLDOWN_MS,
   240,
 );
+const SUPPRESS_USER_TRANSCRIPT_DURING_ASSISTANT_SPEECH = parseClientBoolean(
+  liveClientEnv.VITE_LIVE_AUDIO_SUPPRESS_USER_TRANSCRIPT_DURING_ASSISTANT_SPEECH,
+  true,
+);
 
 function normalizeText(input: string | undefined): string {
   return (input ?? "").replace(/\s+/g, " ").trim();
@@ -372,6 +376,7 @@ export class GeminiLiveVoiceSession {
   private audioNoiseGateHangoverFrames = 0;
   private audioNoiseGateConsecutiveDrops = 0;
   private audioNoiseGateFailOpenFramesRemaining = 0;
+  private assistantTurnActive = false;
   private assistantPlaybackTailUntilMs = 0;
   private pendingTranscriptBySender: Record<TranscriptSender, string> = {
     user: "",
@@ -432,6 +437,7 @@ export class GeminiLiveVoiceSession {
     this.audioNoiseGateHangoverFrames = 0;
     this.audioNoiseGateConsecutiveDrops = 0;
     this.audioNoiseGateFailOpenFramesRemaining = 0;
+    this.assistantTurnActive = false;
     this.assistantPlaybackTailUntilMs = 0;
 
     this.session = await ai.live.connect({
@@ -470,6 +476,8 @@ export class GeminiLiveVoiceSession {
       suppressInputWhileAssistantSpeaking:
         SUPPRESS_INPUT_WHILE_ASSISTANT_SPEAKING,
       suppressInputCooldownMs: SUPPRESS_INPUT_COOLDOWN_MS,
+      suppressUserTranscriptDuringAssistantSpeech:
+        SUPPRESS_USER_TRANSCRIPT_DURING_ASSISTANT_SPEECH,
     });
 
     await this.startMicrophoneStream();
@@ -505,6 +513,7 @@ export class GeminiLiveVoiceSession {
     this.audioNoiseGateHangoverFrames = 0;
     this.audioNoiseGateConsecutiveDrops = 0;
     this.audioNoiseGateFailOpenFramesRemaining = 0;
+    this.assistantTurnActive = false;
     this.assistantPlaybackTailUntilMs = 0;
     this.clearPlaybackQueue();
     this.stopAudioContextKeepAlive();
@@ -787,6 +796,7 @@ export class GeminiLiveVoiceSession {
   private isAssistantSpeechWindowActive(): boolean {
     if (!SUPPRESS_INPUT_WHILE_ASSISTANT_SPEAKING) return false;
     return (
+      this.assistantTurnActive ||
       this.isAssistantAudioLikelyActive() ||
       Date.now() < this.assistantPlaybackTailUntilMs
     );
@@ -923,8 +933,21 @@ export class GeminiLiveVoiceSession {
       });
     }
 
+    if (audioPartCount > 0 || Boolean(serverContent.outputTranscription?.text)) {
+      this.assistantTurnActive = true;
+      this.assistantPlaybackTailUntilMs = Math.max(
+        this.assistantPlaybackTailUntilMs,
+        Date.now() + SUPPRESS_INPUT_COOLDOWN_MS,
+      );
+    }
+
     if (serverContent.interrupted) {
       this.debug("live.server.interrupted");
+      this.assistantTurnActive = false;
+      this.assistantPlaybackTailUntilMs = Math.max(
+        this.assistantPlaybackTailUntilMs,
+        Date.now() + SUPPRESS_INPUT_COOLDOWN_MS,
+      );
       this.clearPlaybackQueue();
     }
 
@@ -939,6 +962,11 @@ export class GeminiLiveVoiceSession {
     this.captureTranscript("assistant", serverContent.outputTranscription);
 
     if (serverContent.turnComplete) {
+      this.assistantTurnActive = false;
+      this.assistantPlaybackTailUntilMs = Math.max(
+        this.assistantPlaybackTailUntilMs,
+        Date.now() + SUPPRESS_INPUT_COOLDOWN_MS,
+      );
       this.flushPendingTranscript("user", "turn_complete");
       this.flushPendingTranscript("assistant", "turn_complete");
     }
@@ -1007,6 +1035,17 @@ export class GeminiLiveVoiceSession {
 
     const text = normalizeText(transcript.text);
     if (!text) return;
+
+    if (
+      sender === "user" &&
+      SUPPRESS_USER_TRANSCRIPT_DURING_ASSISTANT_SPEECH &&
+      this.isAssistantSpeechWindowActive()
+    ) {
+      this.debug("live.transcript.user_suppressed_during_assistant_speech", {
+        textLength: text.length,
+      });
+      return;
+    }
 
     const mergedText = mergeTranscriptText(
       this.pendingTranscriptBySender[sender],
