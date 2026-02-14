@@ -7,7 +7,7 @@ import {
   TurnCoverage,
   type GenerateContentResponseUsageMetadata,
 } from "@google/genai";
-import type { ChatTurnIntent } from "@shared/agent";
+import type { ArtifactIntentContract, ChatTurnIntent } from "@shared/agent";
 import { execFile } from "child_process";
 import { readFile } from "fs/promises";
 import { resolve } from "path";
@@ -1301,6 +1301,7 @@ export interface GeneratedDocDraft {
 export interface GenerateDocDraftInput {
   prompt: string;
   imageHints: string[];
+  intentContract?: ArtifactIntentContract;
 }
 
 export interface RepairDocDraftInput {
@@ -1309,6 +1310,7 @@ export interface RepairDocDraftInput {
   previousDraft: GeneratedDocDraft;
   qaFailures: string[];
   attempt: number;
+  intentContract?: ArtifactIntentContract;
 }
 
 export interface GenerateDocDraftResult {
@@ -1773,6 +1775,7 @@ function buildGenerateDocDraftPrompt(input: GenerateDocDraftInput): string {
   const imageHints = input.imageHints.length
     ? input.imageHints.map((hint) => `- ${hint}`).join("\n")
     : "- none";
+  const intentContractBlock = buildDocIntentContractBlock(input.intentContract);
   return [
     "Generate a polished markdown document for a personal AI companion workflow.",
     "Return strict JSON only with this exact schema:",
@@ -1792,6 +1795,9 @@ function buildGenerateDocDraftPrompt(input: GenerateDocDraftInput): string {
     "- Use concise structure with clear sections and bullet lists when helpful.",
     "- If the user asks for slides/presentation, use format='presentation' and produce 3-5 slide-style sections (for example: ## Slide 1: ...).",
     "- Do not include HTML in markdown output.",
+    "- Do not emit placeholder-heavy templates; produce a real draft ready for editing.",
+    "",
+    intentContractBlock,
     "",
     "Task request:",
     `- Prompt: ${input.prompt}`,
@@ -1804,6 +1810,7 @@ function buildRepairDocDraftPrompt(input: RepairDocDraftInput): string {
   const imageHints = input.imageHints.length
     ? input.imageHints.map((hint) => `- ${hint}`).join("\n")
     : "- none";
+  const intentContractBlock = buildDocIntentContractBlock(input.intentContract);
   const qaFailures = input.qaFailures.length
     ? input.qaFailures.map((failure) => `- ${failure}`).join("\n")
     : "- unknown";
@@ -1825,13 +1832,37 @@ function buildRepairDocDraftPrompt(input: RepairDocDraftInput): string {
     "Current doc draft JSON:",
     JSON.stringify(input.previousDraft),
     "",
+    intentContractBlock,
+    "",
     "Hard rules:",
     "- markdown must start with a top-level heading.",
     "- markdown must include section headings (## ...).",
     "- markdown must include formatting richness: use bold/italics and bullet or numbered lists.",
     "- If format='presentation', keep 3-5 slide sections and do not exceed 5.",
     "- Ensure actionable content and non-trivial depth (not empty template stubs).",
+    "- Preserve resolved docType, audience, tone, and required sections from the intent contract.",
     "- Keep formatting valid markdown with no HTML tags.",
+  ].join("\n");
+}
+
+function buildDocIntentContractBlock(
+  contract: ArtifactIntentContract | undefined,
+): string {
+  if (!contract) {
+    return "Resolved intent contract:\n- none";
+  }
+  const requiredSections =
+    Array.isArray(contract.requiredSections) && contract.requiredSections.length > 0
+      ? contract.requiredSections.map((section) => `- ${section}`).join("\n")
+      : "- none";
+  return [
+    "Resolved intent contract:",
+    `- docType: ${contract.docType ?? "document"}`,
+    `- audience: ${contract.audience ?? "general"}`,
+    `- tone: ${contract.tone ?? "balanced"}`,
+    `- purpose: ${contract.purpose ?? "unspecified"}`,
+    "- requiredSections:",
+    requiredSections,
   ].join("\n");
 }
 

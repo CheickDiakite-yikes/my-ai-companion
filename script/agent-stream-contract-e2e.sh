@@ -191,7 +191,7 @@ if [[ "$LOW_TASK_STATUS" != "200" ]]; then
 fi
 node -e "const fs=require('fs');const b=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));if(b?.task?.status!=='completed'){console.error('low_risk_not_completed',b?.task?.status);process.exit(1)};const artifacts=Array.isArray(b?.artifacts)?b.artifacts:[];if(!artifacts.some(a=>a.type==='mini_game')){console.error('low_risk_missing_game_artifact');process.exit(2)};console.log('[agent-contract] low-risk task completed artifacts=' + artifacts.length);" "$LOW_TASK_BODY"
 
-log "5/9 clarification gate contract"
+log "5/10 clarification gate contract"
 CLARIFY_STREAM_BODY="$(new_tmp)"
 CLARIFY_STREAM_STATUS="$(curl -sS -w "%{http_code}" -D "$HEADERS_FILE" -o "$CLARIFY_STREAM_BODY" -b "$COOKIE_FILE" -c "$COOKIE_FILE" \
   -H "Content-Type: application/json" \
@@ -203,7 +203,31 @@ if [[ "$CLARIFY_STREAM_STATUS" != "200" ]]; then
 fi
 node -e "const fs=require('fs');const lines=fs.readFileSync(process.argv[1],'utf8').trim().split(/\\n+/).filter(Boolean);if(lines.length===0){console.error('empty_stream');process.exit(2)};const events=lines.map(l=>JSON.parse(l));if(events[0]?.type!=='ack'){console.error('first_event_not_ack');process.exit(3)};if(events.some(e=>e.type==='task_created'||e.type==='task_step'||e.type==='task_artifact_ready'||e.type==='task_approval_required')){console.error('unexpected_task_events_for_clarification');process.exit(4)};const final=events.find(e=>e.type==='final');if(!final){console.error('missing_final_event');process.exit(5)};const messages=Array.isArray(final.assistantMessages)?final.assistantMessages:[];const text=(messages[0]?.text||final.assistantMessage?.text||'').toLowerCase();if(!text||!/(quick check|who is it for|company|role|tone)/.test(text)){console.error('clarification_text_missing_or_weak',text);process.exit(6)};console.log('[agent-contract] clarification gate ok');" "$CLARIFY_STREAM_BODY"
 
-log "6/9 high-risk stream contract"
+log "6/10 explicit scholarship doc request should not drift to prior cover-letter session"
+SCHOLAR_STREAM_BODY="$(new_tmp)"
+SCHOLAR_STREAM_STATUS="$(curl -sS -w "%{http_code}" -D "$HEADERS_FILE" -o "$SCHOLAR_STREAM_BODY" -b "$COOKIE_FILE" -c "$COOKIE_FILE" \
+  -H "Content-Type: application/json" \
+  -X POST "${BASE_URL}/api/chat/respond/stream" \
+  --data "{\"conversationId\":\"${CONV_ID}\",\"text\":\"create a document for me about scholarships\",\"persona\":\"Zee\"}")"
+if [[ "$SCHOLAR_STREAM_STATUS" != "200" ]]; then
+  echo "[agent-contract] scholarship_stream_failed status=${SCHOLAR_STREAM_STATUS} body=$(cat "$SCHOLAR_STREAM_BODY")"
+  exit 36
+fi
+SCHOLAR_TASK_ID="$(node -e "const fs=require('fs');const lines=fs.readFileSync(process.argv[1],'utf8').trim().split(/\\n+/).filter(Boolean);if(lines.length===0){console.error('empty_stream');process.exit(2)};const events=lines.map(l=>JSON.parse(l));if(events[0]?.type!=='ack'){console.error('first_event_not_ack');process.exit(3)};const final=events.find(e=>e.type==='final');if(!final){console.error('missing_final_event');process.exit(4)};const clarificationText=((final.assistantMessages?.[0]?.text)||(final.assistantMessage?.text)||'').toLowerCase();if(/cover\\s*letter/.test(clarificationText)){console.error('unexpected_cover_letter_drift',clarificationText);process.exit(5)};const created=events.find(e=>e.type==='task_created');process.stdout.write(String(created?.task?.id||''));" "$SCHOLAR_STREAM_BODY")"
+if [[ -n "$SCHOLAR_TASK_ID" ]]; then
+  SCHOLAR_TASK_BODY="$(new_tmp)"
+  SCHOLAR_TASK_STATUS="$(curl -sS -w "%{http_code}" -D "$HEADERS_FILE" -o "$SCHOLAR_TASK_BODY" -b "$COOKIE_FILE" -c "$COOKIE_FILE" \
+    "${BASE_URL}/api/agent/tasks/${SCHOLAR_TASK_ID}")"
+  if [[ "$SCHOLAR_TASK_STATUS" != "200" ]]; then
+    echo "[agent-contract] scholarship_task_fetch_failed status=${SCHOLAR_TASK_STATUS} body=$(cat "$SCHOLAR_TASK_BODY")"
+    exit 38
+  fi
+  node -e "const fs=require('fs');const b=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));if(b?.task?.status!=='completed'){console.error('scholarship_task_not_completed',b?.task?.status);process.exit(1)};const artifacts=Array.isArray(b?.artifacts)?b.artifacts:[];const doc=artifacts.find(a=>a.type==='doc_markdown');if(!doc){console.error('scholarship_doc_missing');process.exit(2)};const md=String(doc.markdownContent||'').toLowerCase();if(!/scholarship/.test(md)){console.error('scholarship_keyword_missing');process.exit(3)};console.log('[agent-contract] scholarship doc task completed without cover-letter drift');" "$SCHOLAR_TASK_BODY"
+else
+  echo "[agent-contract] scholarship request correctly stayed in clarification lane (no cover-letter drift)"
+fi
+
+log "7/10 high-risk stream contract"
 HIGH_STREAM_BODY="$(new_tmp)"
 HIGH_STREAM_STATUS="$(curl -sS -w "%{http_code}" -D "$HEADERS_FILE" -o "$HIGH_STREAM_BODY" -b "$COOKIE_FILE" -c "$COOKIE_FILE" \
   -H "Content-Type: application/json" \
@@ -220,7 +244,7 @@ if [[ -z "$HIGH_TASK_ID" ]]; then
 fi
 log "high-risk stream ok taskId=${HIGH_TASK_ID}"
 
-log "7/9 approve high-risk task"
+log "8/10 approve high-risk task"
 APPROVE_BODY="$(new_tmp)"
 APPROVE_STATUS="$(curl -sS -w "%{http_code}" -D "$HEADERS_FILE" -o "$APPROVE_BODY" -b "$COOKIE_FILE" -c "$COOKIE_FILE" \
   -H "Content-Type: application/json" \
@@ -231,7 +255,7 @@ if [[ "$APPROVE_STATUS" != "200" ]]; then
   exit 33
 fi
 
-log "8/9 wait for high-risk completion"
+log "9/10 wait for high-risk completion"
 HIGH_TASK_FINAL_BODY="$(new_tmp)"
 HIGH_DONE="0"
 for ((i = 1; i <= 20; i += 1)); do
@@ -254,7 +278,7 @@ if [[ "$HIGH_DONE" != "1" ]]; then
   exit 35
 fi
 
-log "9/9 verify high-risk approval + artifact"
+log "10/10 verify high-risk approval + artifact"
 node -e "const fs=require('fs');const b=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));const approvals=Array.isArray(b?.approvals)?b.approvals:[];const artifacts=Array.isArray(b?.artifacts)?b.artifacts:[];if(!approvals.some(a=>a.status==='approved')){console.error('missing_approved_decision');process.exit(1)};if(!artifacts.some(a=>a.type==='doc_markdown')){console.error('missing_doc_artifact');process.exit(2)};console.log('[agent-contract] high-risk task completed approvals=' + approvals.length + ' artifacts=' + artifacts.length);" "$HIGH_TASK_FINAL_BODY"
 
 log "PASS stream contract checks on ${BASE_URL}"

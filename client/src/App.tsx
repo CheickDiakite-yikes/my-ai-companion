@@ -590,11 +590,23 @@ const ENABLE_JSON_RENDER_ARTIFACT_VIEWER = parseClientBooleanFlag(
 const TASK_STATUS_PRECEDENCE: Record<AgentTaskSummary["status"], number> = {
   queued: 1,
   in_progress: 2,
-  completed: 3,
-  approval_required: 4,
+  approval_required: 3,
+  completed: 4,
   failed: 5,
   cancelled: 5,
 };
+
+function isLikelyAgentArtifactBodyLeak(text: string): boolean {
+  const normalized = text.trim();
+  if (!normalized) return false;
+  if (normalized.length > 320) return true;
+  if (/^#\s+/m.test(normalized) || /^##\s+/m.test(normalized)) return true;
+  if ((normalized.match(/\*\*[^*]+\*\*/g) ?? []).length >= 2) return true;
+  if (/artifact ready:|zee is crafting your|done\. your outputs are ready below/i.test(normalized)) {
+    return true;
+  }
+  return false;
+}
 
 function toIsoString(value: string | Date | null | undefined): string | null {
   if (!value) return null;
@@ -681,6 +693,7 @@ function toTaskKindLabel(taskKind: string): string {
 
 function toUnifiedTaskOutputSummary(card: UnifiedAgentTaskCardModel): string {
   const summary = card.summaryText?.trim() ?? "";
+  const summaryLooksLeakedArtifact = isLikelyAgentArtifactBodyLeak(summary);
   if (card.status === "failed") {
     return summary || "This task failed before publishing an output.";
   }
@@ -693,7 +706,7 @@ function toUnifiedTaskOutputSummary(card: UnifiedAgentTaskCardModel): string {
       summaryLower.includes("crafting") ||
       summaryLower.includes("task started") ||
       summaryLower.includes("queued");
-    if (summary.length > 0 && !isStaleCraftingCopy) {
+    if (summary.length > 0 && !isStaleCraftingCopy && !summaryLooksLeakedArtifact) {
       return summary;
     }
     if (card.artifact.type === "mini_game") {
@@ -702,6 +715,9 @@ function toUnifiedTaskOutputSummary(card: UnifiedAgentTaskCardModel): string {
     return "Your output is ready to open.";
   }
   if (summary.length > 0) {
+    if (summaryLooksLeakedArtifact) {
+      return card.latestStep?.detail ?? "Zee is preparing your output.";
+    }
     return summary;
   }
   return card.latestStep?.detail ?? "Zee is working through your request.";
@@ -776,7 +792,7 @@ function buildUnifiedAgentTaskCards(
     const aggregate = taskAggregates.get(taskId);
     if (!aggregate) continue;
 
-    if (message.text.trim().length > 0) {
+    if (message.text.trim().length > 0 && !isLikelyAgentArtifactBodyLeak(message.text)) {
       aggregate.summaryText = message.text.trim();
     }
 
@@ -3851,10 +3867,20 @@ const UnifiedAgentTaskCard = ({
     hasArtifact &&
     typeof card.artifact?.htmlContent === "string" &&
     card.artifact.htmlContent.trim().length > 0;
+  const artifactMetadata =
+    card.artifact?.metadata &&
+    typeof card.artifact.metadata === "object" &&
+    !Array.isArray(card.artifact.metadata)
+      ? (card.artifact.metadata as Record<string, unknown>)
+      : null;
+  const hasRenderSpec = Boolean(artifactMetadata?.render);
   const canRenderInlineGame =
     canRenderInlineHtml && card.artifact?.type === "mini_game";
   const canRenderInlineDocument =
-    canRenderInlineHtml && card.artifact?.type === "doc_markdown";
+    canRenderInlineHtml &&
+    card.artifact?.type === "doc_markdown" &&
+    !ENABLE_JSON_RENDER_ARTIFACT_VIEWER &&
+    !hasRenderSpec;
 
   const inlineIframeSrc = useMemo(() => {
     if (!canRenderInlineHtml || !card.artifact?.id) return null;
@@ -4216,7 +4242,10 @@ const UnifiedAgentTaskCard = ({
                       </button>
                     </div>
                   </div>
-                ) : hasArtifact && card.artifact && card.artifact.markdownContent ? (
+                ) : hasArtifact &&
+                  card.artifact &&
+                  card.artifact.markdownContent &&
+                  !hasRenderSpec ? (
                   <div
                     className="relative overflow-hidden rounded-xl border p-4"
                     style={{
@@ -7043,12 +7072,18 @@ function App() {
           taskId: event.taskId,
           conversationId: params.conversationId,
           updater: (snapshot) => {
+            const currentStatus = snapshot.task.status;
+            const nextStatus: AgentTaskSummary["status"] =
+              currentStatus === "completed" ||
+              currentStatus === "failed" ||
+              currentStatus === "cancelled"
+                ? currentStatus
+                : currentStatus === "approval_required"
+                  ? "approval_required"
+                  : "in_progress";
             const nextTask: AgentTaskSummary = {
               ...snapshot.task,
-              status:
-                snapshot.task.status === "approval_required"
-                  ? "approval_required"
-                  : "in_progress",
+              status: nextStatus,
               updatedAt: new Date(),
             };
             return {
@@ -7212,7 +7247,10 @@ function App() {
                 return {
                   ...snapshot,
                   task: nextTask,
-                  approval: nextTask.status === "approval_required" ? snapshot.approval : null,
+                  approval:
+                    nextTask.status === "approval_required" && !snapshot.artifact
+                      ? snapshot.approval
+                      : null,
                   latestStep: payload.latestStep ?? snapshot.latestStep,
                   timeline: appendLiveTimelineItem(snapshot.timeline, {
                   id: `final-status-${payload.task.status}`,

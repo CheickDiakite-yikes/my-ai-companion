@@ -25,6 +25,7 @@
     "test:agent": "npm run test:agent:smoke && npm run test:agent:flow && npm run test:agent:sandbox && npm run test:agent:theme",
     "test:agent:contract": "bash script/agent-stream-contract-e2e.sh",
     "test:agent:ui": "bash script/agent-ui-theme-playwright-e2e.sh",
+    "backfill:message-purpose": "tsx script/backfill-agent-ui-message-purpose.ts",
     "db:push": "drizzle-kit push"
   },
   "dependencies": {

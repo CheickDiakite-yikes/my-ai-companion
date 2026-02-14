@@ -84,6 +84,11 @@ export interface UserMemoryItemCandidate {
   metadata?: Record<string, unknown> | null;
 }
 
+export interface MessagePurposeBackfillResult {
+  updatedCount: number;
+  remainingCount: number;
+}
+
 export interface QuotaMetricSnapshot {
   used: number;
   oldestInWindowAt: Date | null;
@@ -181,6 +186,7 @@ export interface IStorage {
     limit: number;
     excludeConversationId?: string;
   }): Promise<UserScopedMessage[]>;
+  backfillLegacyAgentUiMessagePurpose(): Promise<MessagePurposeBackfillResult>;
   createMessage(data: InsertMessage): Promise<Message>;
   createUserTurnMessage(data: {
     conversationId: string;
@@ -714,6 +720,34 @@ export class DatabaseStorage implements IStorage {
       .where(whereClause)
       .orderBy(desc(messages.createdAt), desc(messages.id))
       .limit(normalizedLimit);
+  }
+
+  async backfillLegacyAgentUiMessagePurpose(): Promise<MessagePurposeBackfillResult> {
+    const legacyAgentUiWhereClause = and(
+      eq(messages.messagePurpose, "conversation"),
+      sql`jsonb_typeof(${messages.uiPayload}) = 'object'`,
+      sql`${messages.uiPayload} ->> 'kind' LIKE 'agent_%'`,
+    );
+
+    const updatedRows = await db
+      .update(messages)
+      .set({
+        messagePurpose: "agent_ui",
+      })
+      .where(legacyAgentUiWhereClause)
+      .returning({ id: messages.id });
+
+    const [remainingRow] = await db
+      .select({
+        count: sql<number>`COUNT(*)::int`,
+      })
+      .from(messages)
+      .where(legacyAgentUiWhereClause);
+
+    return {
+      updatedCount: updatedRows.length,
+      remainingCount: Number(remainingRow?.count ?? 0),
+    };
   }
 
   async createMessage(data: InsertMessage): Promise<Message> {

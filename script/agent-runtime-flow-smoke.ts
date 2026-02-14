@@ -12,6 +12,9 @@ if (!process.env.DATABASE_URL) {
 if (!process.env.ENABLE_AGENT_MODEL_GAME_GENERATOR) {
   process.env.ENABLE_AGENT_MODEL_GAME_GENERATOR = "false";
 }
+if (!process.env.GEMINI_API_KEY && !process.env.ENABLE_AGENT_MODEL_DOC_GENERATOR) {
+  process.env.ENABLE_AGENT_MODEL_DOC_GENERATOR = "false";
+}
 
 function assertSnakeMechanics(html: string): void {
   const checks = [
@@ -25,6 +28,18 @@ function assertSnakeMechanics(html: string): void {
   assert.ok(
     matched >= 3,
     `Expected snake-specific mechanics markers in output, got ${matched}/5`,
+  );
+}
+
+function assertDocumentHasStructure(markdown: string): void {
+  assert.match(markdown, /^#\s+/m, "Document should include an H1 heading");
+  assert.ok(
+    /^##\s+/m.test(markdown),
+    "Document should include at least one H2 section",
+  );
+  assert.ok(
+    /\*\*[^*]+\*\*/.test(markdown) || /^-\s+/m.test(markdown) || /^\d+\.\s+/m.test(markdown),
+    "Document should include emphasis or list formatting",
   );
 }
 
@@ -175,6 +190,100 @@ async function run(): Promise<void> {
   const snakeHtml = snakeArtifact?.htmlContent ?? "";
   assert.ok(snakeHtml, "Snake game artifact should include html");
   assertSnakeMechanics(snakeHtml);
+
+  const scholarshipUserId = `agent-smoke-scholarship-${randomUUID()}`;
+  const scholarshipConversation = await storage.createConversation({
+    userId: scholarshipUserId,
+    persona: "Zee",
+    title: "Agent Smoke Scholarship Doc",
+  });
+  const scholarshipMessage = await storage.createUserTurnMessage({
+    conversationId: scholarshipConversation.id,
+    text: "Create a scholarship document for a first-generation CS student",
+  });
+  const scholarshipRun = await runtime.startAgentTaskRun({
+    userId: scholarshipUserId,
+    conversationId: scholarshipConversation.id,
+    prompt:
+      "Create a scholarship document for a first-generation CS student applying to a STEM innovation fund",
+    requestedByMessageId: scholarshipMessage.id,
+    attachments: [],
+  });
+  assert.equal(
+    scholarshipRun.awaitingApproval,
+    false,
+    "Scholarship doc flow should not require approval",
+  );
+  const scholarshipTask = await storage.getAgentTaskWithDetails(scholarshipRun.task.id);
+  assert.equal(scholarshipTask?.status, "completed", "Scholarship doc task should complete");
+  const scholarshipArtifact = scholarshipTask?.artifacts.find(
+    (artifact) => artifact.type === "doc_markdown",
+  );
+  const scholarshipMarkdown = scholarshipArtifact?.markdownContent ?? "";
+  assert.ok(scholarshipMarkdown, "Scholarship doc should include markdown");
+  assertDocumentHasStructure(scholarshipMarkdown);
+  assert.match(
+    scholarshipMarkdown.toLowerCase(),
+    /scholarship|candidate narrative|financial context|academic/,
+    "Scholarship doc should include scholarship-specific semantics",
+  );
+  assert.ok(
+    !/\[hiring manager name\]/i.test(scholarshipMarkdown),
+    "Scholarship doc should not drift into cover-letter placeholders",
+  );
+  const scholarshipIntent = (scholarshipArtifact?.metadata as {
+    intent?: { docType?: string };
+  } | null)?.intent;
+  assert.equal(
+    scholarshipIntent?.docType,
+    "scholarship",
+    "Scholarship doc artifact should persist scholarship intent contract",
+  );
+
+  const coverLetterUserId = `agent-smoke-cover-${randomUUID()}`;
+  const coverLetterConversation = await storage.createConversation({
+    userId: coverLetterUserId,
+    persona: "Zee",
+    title: "Agent Smoke Cover Letter",
+  });
+  const coverLetterMessage = await storage.createUserTurnMessage({
+    conversationId: coverLetterConversation.id,
+    text: "Create a cover letter for Morgan Stanley AI PM",
+  });
+  const coverLetterRun = await runtime.startAgentTaskRun({
+    userId: coverLetterUserId,
+    conversationId: coverLetterConversation.id,
+    prompt:
+      "Create a bold technical cover letter for Morgan Stanley AI Product Manager role",
+    requestedByMessageId: coverLetterMessage.id,
+    attachments: [],
+  });
+  assert.equal(
+    coverLetterRun.awaitingApproval,
+    false,
+    "Cover-letter doc flow should not require approval",
+  );
+  const coverLetterTask = await storage.getAgentTaskWithDetails(coverLetterRun.task.id);
+  assert.equal(coverLetterTask?.status, "completed", "Cover-letter task should complete");
+  const coverLetterArtifact = coverLetterTask?.artifacts.find(
+    (artifact) => artifact.type === "doc_markdown",
+  );
+  const coverLetterMarkdown = coverLetterArtifact?.markdownContent ?? "";
+  assert.ok(coverLetterMarkdown, "Cover-letter doc should include markdown");
+  assertDocumentHasStructure(coverLetterMarkdown);
+  assert.match(
+    coverLetterMarkdown.toLowerCase(),
+    /dear hiring manager|sincerely|why i fit|opening/,
+    "Cover-letter doc should include cover-letter semantics",
+  );
+  const coverLetterIntent = (coverLetterArtifact?.metadata as {
+    intent?: { docType?: string };
+  } | null)?.intent;
+  assert.equal(
+    coverLetterIntent?.docType,
+    "cover_letter",
+    "Cover-letter artifact should persist cover-letter intent contract",
+  );
 
   const lowRiskPlanTrace = (lowRiskTask?.plan as { audit?: { traceId?: string } })
     ?.audit?.traceId;

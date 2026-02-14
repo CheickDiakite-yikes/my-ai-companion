@@ -33,6 +33,7 @@ import type {
   AgentArtifactSummary,
   AgentApprovalSummary,
   ArtifactRenderMetadata,
+  ArtifactQualitySummary,
   AgentIntentSessionSummary,
   AgentOfferSummary,
   ChatTurnIntent,
@@ -41,6 +42,7 @@ import type {
   AgentTaskEvent,
   AgentTaskSummary,
   TaskStateVersion,
+  TaskStateResolvedStatusSource,
   AgentToolCallSummary,
 } from "@shared/agent";
 import {
@@ -288,6 +290,10 @@ const ENABLE_AGENT_INTENT_SESSIONS = parseBooleanFlag(
 const ENABLE_CONTEXT_MESSAGE_PURPOSE_FILTER = parseBooleanFlag(
   process.env.ENABLE_CONTEXT_MESSAGE_PURPOSE_FILTER,
   true,
+);
+const ENABLE_AGENT_UI_PURPOSE_BACKFILL_ON_BOOT = parseBooleanFlag(
+  process.env.ENABLE_AGENT_UI_PURPOSE_BACKFILL_ON_BOOT,
+  false,
 );
 const ENABLE_AGENT_MODEL_INTENT_CLASSIFIER = parseBooleanFlag(
   process.env.ENABLE_AGENT_MODEL_INTENT_CLASSIFIER,
@@ -962,6 +968,10 @@ async function buildLiveMemoryContext(params: {
   const activeMessages = await storage.getMessagesWithAttachments(params.conversationId);
   const activeHistory: MemorySourceMessage[] = activeMessages
     .filter((message) => shouldIncludeMessageInConversationContext(message))
+    .filter(
+      (message) =>
+        !(message.sender === "assistant" && isAgentMessageUiPayload(message.uiPayload)),
+    )
     .map((message) => ({
       sender: message.sender,
       text: toMemoryMessageText(message),
@@ -1021,6 +1031,10 @@ async function buildLiveMemoryContext(params: {
       })
     )
       .filter((message) => shouldIncludeMessageInConversationContext(message))
+      .filter(
+        (message) =>
+          !(message.sender === "assistant" && isAgentMessageUiPayload(message.uiPayload)),
+      )
       .map((message) => ({
         sender: message.sender,
         text: normalizeMemoryText(message.text),
@@ -1598,6 +1612,98 @@ function toTaskStateVersion(params: {
   };
 }
 
+function isRecordLike(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function resolveTaskStatusSource(params: {
+  task: AgentTask;
+  approvals: AgentApproval[];
+  artifacts: AgentArtifact[];
+}): TaskStateResolvedStatusSource {
+  const hasPendingApproval = params.approvals.some(
+    (approval) => approval.status === "pending",
+  );
+  const hasActiveArtifact = params.artifacts.some(
+    (artifact) => artifact.status === "active",
+  );
+
+  if (params.task.status === "approval_required") {
+    if (hasPendingApproval) return "approval_state";
+    if (hasActiveArtifact) return "artifact_presence";
+    return "reconciled";
+  }
+
+  if (params.task.status === "completed" && hasActiveArtifact) {
+    return "artifact_presence";
+  }
+
+  return "task_status";
+}
+
+function toTaskQualitySummary(params: {
+  task: AgentTask;
+  artifacts: AgentArtifact[];
+}): ArtifactQualitySummary | null {
+  const latestArtifact = [...params.artifacts]
+    .sort(
+      (a, b) =>
+        (b.updatedAt?.getTime() ?? b.createdAt?.getTime() ?? 0) -
+        (a.updatedAt?.getTime() ?? a.createdAt?.getTime() ?? 0),
+    )
+    .find((artifact) => artifact.status !== "deleted");
+
+  if (!latestArtifact) return null;
+
+  const metadata = isRecordLike(latestArtifact.metadata)
+    ? latestArtifact.metadata
+    : null;
+  const generation = isRecordLike(metadata?.generation)
+    ? metadata.generation
+    : null;
+  const qa = isRecordLike(metadata?.qa) ? metadata.qa : null;
+  const intent = isRecordLike(metadata?.intent) ? metadata.intent : null;
+
+  const semanticChecks: string[] = [];
+  const issues: string[] = [];
+
+  if (latestArtifact.type === "doc_markdown") {
+    semanticChecks.push("doc_structured_markdown");
+    if (generation && typeof generation.format === "string") {
+      semanticChecks.push(`format:${generation.format}`);
+    }
+    if (intent && typeof intent.docType === "string") {
+      semanticChecks.push(`doc_type:${intent.docType}`);
+    }
+    if (generation && Array.isArray(generation.sections) && generation.sections.length > 0) {
+      semanticChecks.push("sections_present");
+    }
+    if (generation && Array.isArray(generation.qaFailures)) {
+      for (const failure of generation.qaFailures.slice(0, 3)) {
+        if (typeof failure === "string" && failure.trim().length > 0) {
+          issues.push(failure.trim());
+        }
+      }
+    }
+  } else if (latestArtifact.type === "mini_game") {
+    semanticChecks.push("playable_artifact");
+    if (generation && typeof generation.engine === "string") {
+      semanticChecks.push(`engine:${generation.engine}`);
+    }
+  }
+
+  const qaPassed =
+    qa && typeof qa.passed === "boolean" ? qa.passed : params.task.status === "completed";
+  const passed = qaPassed && issues.length === 0 && params.task.status !== "failed";
+
+  return {
+    passed,
+    semanticChecks,
+    issues,
+    score: passed ? 100 : Math.max(0, 100 - issues.length * 20),
+  };
+}
+
 async function renderArtifactHtmlToPdf(params: {
   html: string;
   title: string;
@@ -1646,14 +1752,11 @@ function shouldIncludeMessageInConversationContext(message: {
   uiPayload?: unknown;
   messagePurpose?: unknown;
 }): boolean {
-  if (!ENABLE_CONTEXT_MESSAGE_PURPOSE_FILTER) {
-    if (message.sender === "assistant" && isAgentMessageUiPayload(message.uiPayload)) {
-      return false;
-    }
-    return true;
+  if (message.sender === "assistant" && isAgentMessageUiPayload(message.uiPayload)) {
+    return false;
   }
 
-  if (message.messagePurpose === "conversation") {
+  if (!ENABLE_CONTEXT_MESSAGE_PURPOSE_FILTER) {
     return true;
   }
 
@@ -1661,8 +1764,18 @@ function shouldIncludeMessageInConversationContext(message: {
     return false;
   }
 
-  if (message.sender === "assistant" && isAgentMessageUiPayload(message.uiPayload)) {
+  const assistantText = (message.text ?? "").trim();
+  if (
+    message.sender === "assistant" &&
+    /^(?:zee is crafting your|artifact ready:|done\. your outputs are ready below|task failed:|approval required before continuing)/i.test(
+      assistantText,
+    )
+  ) {
     return false;
+  }
+
+  if (message.messagePurpose === "conversation") {
+    return true;
   }
 
   return true;
@@ -2272,17 +2385,39 @@ function buildTaskExecutionPrompt(input: {
     return normalizedUserText;
   }
 
+  const requestedDocType =
+    input.taskKind === "doc_markdown"
+      ? inferDocumentTypeHint(normalizedUserText)
+      : null;
+
   const contextRows: string[] = [];
   for (let idx = input.conversationMessages.length - 1; idx >= 0; idx -= 1) {
     if (contextRows.length >= 6) break;
     const message = input.conversationMessages[idx];
     if (message.id === input.sourceMessageId) continue;
-    if (message.sender !== "user" && message.sender !== "assistant") continue;
-    if (message.sender === "assistant" && isAgentMessageUiPayload(message.uiPayload)) continue;
+    if (message.sender !== "user") continue;
     const compactText = toCompactMessageText(message.text ?? "");
     if (compactText.length < 6) continue;
-    const speaker = message.sender === "user" ? "User" : "Zee";
-    contextRows.push(`${speaker}: ${trimContextSnippet(compactText)}`);
+
+    if (input.taskKind === "doc_markdown") {
+      const candidateDocType = inferDocumentTypeHint(compactText);
+      const candidateIsUnderSpecified = isUnderSpecifiedTaskPrompt({
+        userText: compactText,
+        taskKind: "doc_markdown",
+      });
+      if (
+        requestedDocType &&
+        requestedDocType !== "document" &&
+        candidateDocType !== requestedDocType
+      ) {
+        continue;
+      }
+      if (candidateIsUnderSpecified) {
+        continue;
+      }
+    }
+
+    contextRows.push(`User: ${trimContextSnippet(compactText)}`);
   }
 
   if (contextRows.length === 0) {
@@ -2292,7 +2427,7 @@ function buildTaskExecutionPrompt(input: {
   const orderedRows = contextRows.reverse();
   const guidance =
     input.taskKind === "doc_markdown"
-      ? "- Infer document type, audience, and tone from the conversation context.\n- Keep structure polished (headings, emphasis, lists) and aligned to the latest user intent."
+      ? "- Prioritize the latest user ask over older context.\n- Infer document type, audience, and tone from relevant user messages only.\n- Keep structure polished (headings, emphasis, lists) and aligned to the latest intent."
       : "- Align implementation choices to the latest user intent and conversation context.";
 
   return [
@@ -2410,9 +2545,10 @@ function buildClarificationQuestion(input: {
   recentUserTexts: string[];
   stylePreset?: ResponseStylePreset;
 }): string {
-  const combined = [input.userText, ...input.recentUserTexts].join(" ");
-  const typeHint = inferDocumentTypeHint(combined);
-  const domainHint = inferDomainHint(combined);
+  const recentContext = input.recentUserTexts.join(" ");
+  // Use the latest user turn as authoritative to avoid stale task-type carryover.
+  const typeHint = inferDocumentTypeHint(input.userText);
+  const domainHint = inferDomainHint(input.userText) ?? inferDomainHint(recentContext);
 
   if (input.taskKind === "mini_game") {
     return chooseClarificationTone(input.stylePreset, {
@@ -2574,6 +2710,15 @@ const INTENT_CASUAL_CHAT_PATTERNS = [
 const INTENT_AFFIRMATION_ONLY_PATTERNS = [
   /^\s*(yes|yeah|yep|sure|ok|okay|do it|go ahead|sounds good|let'?s do it|please do)\s*[.!?]*\s*$/i,
 ];
+const INTENT_AMBIGUOUS_BUILD_ACTION_PATTERNS = [
+  /\b(create|build|draft|write|make|develop|code|prototype)\b/i,
+  /\b(i need|i want|i should|i'?m trying|im trying|thinking of)\b/i,
+];
+const INTENT_AMBIGUOUS_DELIVERABLE_PATTERNS = [
+  /\b(document|doc|email|letter|cover letter|brief|report|proposal|summary)\b/i,
+  /\b(presentation|slides?|deck|pitch)\b/i,
+  /\b(app|website|landing page|mini(?:\s|-)?game|prototype|tool)\b/i,
+];
 const INTENT_TONE_PATTERNS =
   /\b(formal|warm|bold|friendly|technical|professional|casual|playful|concise)\b/i;
 const INTENT_AUDIENCE_PATTERNS =
@@ -2690,6 +2835,15 @@ function extractIntentSlotValuesFromText(input: {
     .split(",")
     .map((segment) => segment.trim())
     .filter((segment) => segment.length > 0);
+  const hasDocDetailSignal = TASK_CONTEXT_DETAIL_PATTERNS.some((pattern) =>
+    pattern.test(normalized),
+  );
+  const genericDocPrompt =
+    input.taskKind !== "mini_game" &&
+    TASK_CONTEXT_GENERIC_REQUEST_PATTERNS.some((pattern) =>
+      pattern.test(normalized),
+    ) &&
+    !hasDocDetailSignal;
 
   if (!affirmationOnly) {
     if (input.taskKind === "mini_game") {
@@ -2709,9 +2863,11 @@ function extractIntentSlotValuesFromText(input: {
         values.deck_must_haves = commaSegments.slice(2).join(", ");
       }
     } else {
-      values.details = normalized;
-      values.goal = normalized;
-      values.deck_goal = normalized;
+      if (!genericDocPrompt) {
+        values.details = normalized;
+        values.goal = normalized;
+        values.deck_goal = normalized;
+      }
     }
   }
 
@@ -2755,10 +2911,10 @@ function buildIntentSlotClarificationQuestion(input: {
   }
 
   return chooseClarificationTone(input.stylePreset, {
-    concise: `I need one detail to continue: ${slot.label}.`,
-    balanced: `Before I build it, I need one detail: ${slot.label}.`,
-    expressive: `I can do this. One quick detail before I start: ${slot.label}.`,
-    playful: `Quick one so I can ship it right: ${slot.label}.`,
+    concise: `Quick check: I need one detail to continue: ${slot.label}.`,
+    balanced: `Quick check before I build it: I need one detail: ${slot.label}.`,
+    expressive: `I can do this. Quick check before I start: ${slot.label}.`,
+    playful: `Quick check so I can ship it right: ${slot.label}.`,
   });
 }
 
@@ -2783,10 +2939,66 @@ function shouldInvokeModelIntentClassifier(input: {
     return false;
   }
 
+  const hasAmbiguousBuildSignal =
+    INTENT_AMBIGUOUS_BUILD_ACTION_PATTERNS.some((pattern) =>
+      pattern.test(input.userText),
+    ) &&
+    INTENT_AMBIGUOUS_DELIVERABLE_PATTERNS.some((pattern) =>
+      pattern.test(input.userText),
+    ) &&
+    !PROACTIVE_OFFER_EXPLICIT_REQUEST_PATTERNS.some((pattern) =>
+      pattern.test(input.userText),
+    );
+
   return (
-    input.hasRecentAgentActivity &&
-    INTENT_FOLLOW_UP_PATTERNS.some((pattern) => pattern.test(input.userText))
+    (input.hasRecentAgentActivity &&
+      INTENT_FOLLOW_UP_PATTERNS.some((pattern) => pattern.test(input.userText))) ||
+    hasAmbiguousBuildSignal
   );
+}
+
+function shouldSupersedeActiveIntentSession(input: {
+  userText: string;
+  hasImage: boolean;
+  activeSession: AgentIntentSession | null;
+}): boolean {
+  if (!input.activeSession) return false;
+  const compact = toCompactMessageText(input.userText);
+  if (!compact) return false;
+
+  if (
+    INTENT_AFFIRMATION_ONLY_PATTERNS.some((pattern) => pattern.test(compact)) ||
+    INTENT_FOLLOW_UP_PATTERNS.some((pattern) => pattern.test(compact))
+  ) {
+    return false;
+  }
+
+  const hasExplicitBuildRequest =
+    PROACTIVE_OFFER_EXPLICIT_REQUEST_PATTERNS.some((pattern) =>
+      pattern.test(compact),
+    ) ||
+    (INTENT_AMBIGUOUS_BUILD_ACTION_PATTERNS.some((pattern) =>
+      pattern.test(compact),
+    ) &&
+      INTENT_AMBIGUOUS_DELIVERABLE_PATTERNS.some((pattern) =>
+        pattern.test(compact),
+      ));
+
+  if (!hasExplicitBuildRequest) return false;
+
+  const sessionTaskKind = coerceTaskKind(input.activeSession.taskKind);
+  const requestedTaskKind = inferAgentTaskKind(compact, input.hasImage);
+  if (requestedTaskKind !== sessionTaskKind) return true;
+
+  if (requestedTaskKind === "doc_markdown" || requestedTaskKind === "mixed") {
+    const sessionDocType = inferDocumentTypeHint(input.activeSession.promptSeed);
+    const nextDocType = inferDocumentTypeHint(compact);
+    if (sessionDocType !== nextDocType) {
+      return true;
+    }
+  }
+
+  return true;
 }
 
 async function resolveTurnIntentWithFallback(input: {
@@ -2815,6 +3027,12 @@ async function resolveTurnIntentWithFallback(input: {
   let classifierModel: string | undefined;
   let classifierIntent: ChatTurnIntent | undefined;
   let classifierConfidence: number | undefined;
+  const shouldPreferCompanionOfferFlow =
+    PROACTIVE_OFFER_NEED_PATTERNS.some((pattern) => pattern.test(input.userText)) &&
+    PROACTIVE_OFFER_DELIVERABLE_PATTERNS.some((pattern) => pattern.test(input.userText)) &&
+    !PROACTIVE_OFFER_EXPLICIT_REQUEST_PATTERNS.some((pattern) =>
+      pattern.test(input.userText),
+    );
 
   const forceContinuation =
     input.hasActiveIntentSession &&
@@ -2845,7 +3063,10 @@ async function resolveTurnIntentWithFallback(input: {
       classifierConfidence = classified.confidence;
 
       if (classified.confidence >= AGENT_MODEL_INTENT_CLASSIFIER_MIN_CONFIDENCE) {
-        resolvedIntent = classified.intent;
+        resolvedIntent =
+          shouldPreferCompanionOfferFlow && classified.intent === "agent_task"
+            ? "companion_reply"
+            : classified.intent;
       }
     } catch (error) {
       traceError(input.req, "chat.turn.intent_classifier.failed", error, {
@@ -3281,6 +3502,10 @@ async function buildModelMessages(params: {
   const filteredMemory = stitchedMemory.filter((message) =>
     shouldIncludeMessageInConversationContext(message),
   );
+  const safeConversationMemory = filteredMemory.filter(
+    (message) =>
+      !(message.sender === "assistant" && isAgentMessageUiPayload(message.uiPayload)),
+  );
 
   const currentAttachmentById = new Map<string, string>();
   for (const attachment of params.boundAttachments) {
@@ -3294,7 +3519,7 @@ async function buildModelMessages(params: {
     currentAttachmentById.set(attachment.id, bytes.toString("base64"));
   }
 
-  return filteredMemory.map((message) => ({
+  return safeConversationMemory.map((message) => ({
     sender: message.sender,
     text: message.text,
     attachments: message.attachments
@@ -3388,6 +3613,17 @@ export async function registerRoutes(
   registerAuthRoutes(app);
 
   const mediaStore = getMediaStore();
+
+  if (ENABLE_AGENT_UI_PURPOSE_BACKFILL_ON_BOOT) {
+    try {
+      const result = await storage.backfillLegacyAgentUiMessagePurpose();
+      if (result.updatedCount > 0 || result.remainingCount > 0) {
+        console.info("[agent-memory] message purpose backfill", result);
+      }
+    } catch (error) {
+      console.warn("[agent-memory] message purpose backfill failed", error);
+    }
+  }
 
   const requireConversationOwnership = async (
     req: any,
@@ -4459,6 +4695,15 @@ export async function registerRoutes(
         artifacts: task.artifacts,
         toolCalls: task.toolCalls,
       });
+      const resolvedStatusSource = resolveTaskStatusSource({
+        task,
+        approvals: task.approvals,
+        artifacts: task.artifacts,
+      });
+      const qualitySummary = toTaskQualitySummary({
+        task,
+        artifacts: task.artifacts,
+      });
 
       return res.status(200).json({
         traceId: getTraceId(req),
@@ -4474,6 +4719,8 @@ export async function registerRoutes(
           toAgentToolCallSummary(toolCall),
         ),
         stateVersion,
+        resolvedStatusSource,
+        qualitySummary,
       });
     } catch (error) {
       traceError(req, "agent.task.read.failed", error, {
@@ -5811,12 +6058,50 @@ export async function registerRoutes(
       );
 
       const existingConversationMessages = await storage.getMessages(conversation.id);
-      const activeIntentSession = ENABLE_AGENT_INTENT_SESSIONS
+      let activeIntentSession = ENABLE_AGENT_INTENT_SESSIONS
         ? ((await storage.getActiveAgentIntentSessionForConversation({
             userId: req.session.userId,
             conversationId: conversation.id,
           })) ?? null)
         : null;
+      if (
+        ENABLE_AGENT_INTENT_SESSIONS &&
+        shouldSupersedeActiveIntentSession({
+          userText: parsed.text,
+          hasImage: boundAttachments.length > 0,
+          activeSession: activeIntentSession,
+        })
+      ) {
+        const sessionToSupersede = activeIntentSession;
+        if (!sessionToSupersede) {
+          activeIntentSession = null;
+        } else {
+        const existingMetadata =
+          sessionToSupersede.metadata &&
+          typeof sessionToSupersede.metadata === "object" &&
+          !Array.isArray(sessionToSupersede.metadata)
+            ? (sessionToSupersede.metadata as Record<string, unknown>)
+            : {};
+        await storage.updateAgentIntentSession({
+          sessionId: sessionToSupersede.id,
+          updates: {
+            status: "cancelled",
+            resolvedAt: new Date(),
+            metadata: {
+              ...existingMetadata,
+              cancelReason: "superseded_by_new_explicit_request",
+              supersededByMessageId: userMessage.id,
+            },
+          },
+        });
+        trace(req, "chat.intent_session.superseded", {
+          conversationId: conversation.id,
+          intentSessionId: sessionToSupersede.id,
+          sourceMessageId: userMessage.id,
+        });
+        activeIntentSession = null;
+        }
+      }
       const baseTurnIntentContext = inferRecentAgentIntentContext(
         existingConversationMessages,
         userMessage.id,
@@ -6462,12 +6747,50 @@ export async function registerRoutes(
       );
 
       const existingConversationMessages = await storage.getMessages(conversation.id);
-      const activeIntentSession = ENABLE_AGENT_INTENT_SESSIONS
+      let activeIntentSession = ENABLE_AGENT_INTENT_SESSIONS
         ? ((await storage.getActiveAgentIntentSessionForConversation({
             userId: req.session.userId,
             conversationId: conversation.id,
           })) ?? null)
         : null;
+      if (
+        ENABLE_AGENT_INTENT_SESSIONS &&
+        shouldSupersedeActiveIntentSession({
+          userText: parsed.text,
+          hasImage: boundAttachments.length > 0,
+          activeSession: activeIntentSession,
+        })
+      ) {
+        const sessionToSupersede = activeIntentSession;
+        if (!sessionToSupersede) {
+          activeIntentSession = null;
+        } else {
+        const existingMetadata =
+          sessionToSupersede.metadata &&
+          typeof sessionToSupersede.metadata === "object" &&
+          !Array.isArray(sessionToSupersede.metadata)
+            ? (sessionToSupersede.metadata as Record<string, unknown>)
+            : {};
+        await storage.updateAgentIntentSession({
+          sessionId: sessionToSupersede.id,
+          updates: {
+            status: "cancelled",
+            resolvedAt: new Date(),
+            metadata: {
+              ...existingMetadata,
+              cancelReason: "superseded_by_new_explicit_request",
+              supersededByMessageId: userMessage.id,
+            },
+          },
+        });
+        trace(req, "chat.intent_session.superseded", {
+          conversationId: conversation.id,
+          intentSessionId: sessionToSupersede.id,
+          sourceMessageId: userMessage.id,
+        });
+        activeIntentSession = null;
+        }
+      }
       const baseTurnIntentContext = inferRecentAgentIntentContext(
         existingConversationMessages,
         userMessage.id,

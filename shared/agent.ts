@@ -121,6 +121,37 @@ export interface TaskStateVersion {
   resolvedFromSnapshot: boolean;
 }
 
+export type ArtifactDocType =
+  | "cover_letter"
+  | "scholarship"
+  | "email"
+  | "brief"
+  | "report"
+  | "document"
+  | "presentation";
+
+export interface ArtifactIntentContract {
+  docType?: ArtifactDocType;
+  audience?: string | null;
+  tone?: string | null;
+  purpose?: string | null;
+  requiredSections?: string[];
+  codingScope?: "web_app" | "mini_game" | "mini_saas";
+}
+
+export interface ArtifactQualitySummary {
+  passed: boolean;
+  semanticChecks: string[];
+  issues: string[];
+  score?: number;
+}
+
+export type TaskStateResolvedStatusSource =
+  | "task_status"
+  | "artifact_presence"
+  | "approval_state"
+  | "reconciled";
+
 export interface OfferDecision {
   offerId: string;
   accept: boolean;
@@ -165,6 +196,8 @@ export interface AgentTaskDetailResponse {
   artifacts: AgentArtifactSummary[];
   toolCalls?: AgentToolCallSummary[];
   stateVersion?: TaskStateVersion;
+  resolvedStatusSource?: TaskStateResolvedStatusSource;
+  qualitySummary?: ArtifactQualitySummary | null;
 }
 
 export interface UnifiedAgentTaskTimelineItem {

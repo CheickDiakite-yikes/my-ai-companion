@@ -5,6 +5,7 @@ import type { MessageAttachment, TaskRiskLevel } from "@shared/schema";
 import type {
   AgentArtifactSummary,
   AgentApprovalSummary,
+  ArtifactIntentContract,
   AgentMessageUiPayload,
   AgentStepSummary,
   AgentTaskEvent,
@@ -207,6 +208,7 @@ export interface AgentExecutor {
     prompt: string;
     imageHints: string[];
     attempt: number;
+    intentContract: ArtifactIntentContract;
   }): Promise<GeneratedDocArtifact>;
   repairDoc(input: {
     prompt: string;
@@ -214,6 +216,7 @@ export interface AgentExecutor {
     previousDoc: GeneratedDocArtifact;
     qaFailures: string[];
     attempt: number;
+    intentContract: ArtifactIntentContract;
   }): Promise<GeneratedDocArtifact>;
 }
 
@@ -455,12 +458,14 @@ class GeminiPrimaryAgentAdapter implements AgentPlanner, AgentExecutor {
     prompt: string;
     imageHints: string[];
     attempt: number;
+    intentContract: ArtifactIntentContract;
   }): Promise<GeneratedDocArtifact> {
     if (!isModelDocGeneratorEnabled()) {
       return buildDeterministicRecoveryDoc({
         prompt: input.prompt,
         imageHints: input.imageHints,
         attempt: input.attempt,
+        intentContract: input.intentContract,
       });
     }
 
@@ -470,6 +475,7 @@ class GeminiPrimaryAgentAdapter implements AgentPlanner, AgentExecutor {
         const generatedViaCli = await generateDocDraftViaGeminiCli({
           prompt: input.prompt,
           imageHints: input.imageHints,
+          intentContract: input.intentContract,
         });
         return coerceModelDoc({
           draft: generatedViaCli.draft,
@@ -486,6 +492,7 @@ class GeminiPrimaryAgentAdapter implements AgentPlanner, AgentExecutor {
         const generatedViaApi = await generateDocDraft({
           prompt: input.prompt,
           imageHints: input.imageHints,
+          intentContract: input.intentContract,
         });
         return coerceModelDoc({
           draft: generatedViaApi.draft,
@@ -500,6 +507,7 @@ class GeminiPrimaryAgentAdapter implements AgentPlanner, AgentExecutor {
     const generated = await generateDocDraft({
       prompt: input.prompt,
       imageHints: input.imageHints,
+      intentContract: input.intentContract,
     });
     return coerceModelDoc({
       draft: generated.draft,
@@ -516,12 +524,14 @@ class GeminiPrimaryAgentAdapter implements AgentPlanner, AgentExecutor {
     previousDoc: GeneratedDocArtifact;
     qaFailures: string[];
     attempt: number;
+    intentContract: ArtifactIntentContract;
   }): Promise<GeneratedDocArtifact> {
     if (!isModelDocGeneratorEnabled()) {
       return buildDeterministicRecoveryDoc({
         prompt: input.prompt,
         imageHints: input.imageHints,
         attempt: input.attempt,
+        intentContract: input.intentContract,
       });
     }
 
@@ -542,6 +552,7 @@ class GeminiPrimaryAgentAdapter implements AgentPlanner, AgentExecutor {
           previousDraft,
           qaFailures: input.qaFailures,
           attempt: input.attempt,
+          intentContract: input.intentContract,
         });
         return coerceModelDoc({
           draft: repairedViaCli.draft,
@@ -561,6 +572,7 @@ class GeminiPrimaryAgentAdapter implements AgentPlanner, AgentExecutor {
           previousDraft,
           qaFailures: input.qaFailures,
           attempt: input.attempt,
+          intentContract: input.intentContract,
         });
         return coerceModelDoc({
           draft: repairedViaApi.draft,
@@ -578,6 +590,7 @@ class GeminiPrimaryAgentAdapter implements AgentPlanner, AgentExecutor {
       previousDraft,
       qaFailures: input.qaFailures,
       attempt: input.attempt,
+      intentContract: input.intentContract,
     });
     return coerceModelDoc({
       draft: repaired.draft,
@@ -905,11 +918,11 @@ interface GameGenerationAttemptResult {
 }
 
 function isModelGameGeneratorEnabled(): boolean {
-  return parseBooleanFlag(process.env.ENABLE_AGENT_MODEL_GAME_GENERATOR, false);
+  return parseBooleanFlag(process.env.ENABLE_AGENT_MODEL_GAME_GENERATOR, true);
 }
 
 function isModelDocGeneratorEnabled(): boolean {
-  return parseBooleanFlag(process.env.ENABLE_AGENT_MODEL_DOC_GENERATOR, false);
+  return parseBooleanFlag(process.env.ENABLE_AGENT_MODEL_DOC_GENERATOR, true);
 }
 
 function isAgentCodeWorkerEnabled(): boolean {
@@ -1201,18 +1214,106 @@ function coerceModelDoc(params: {
   };
 }
 
+function inferDocIntentContract(prompt: string): ArtifactIntentContract {
+  const normalized = prompt.replace(/\s+/g, " ").trim();
+  const lower = normalized.toLowerCase();
+
+  const docType: NonNullable<ArtifactIntentContract["docType"]> =
+    /\bcover\s*letter\b/.test(lower)
+      ? "cover_letter"
+      : /\bscholar(?:ship|ships)\b/.test(lower)
+        ? "scholarship"
+        : /\bemail\b/.test(lower)
+          ? "email"
+          : /\b(presentation|slides?|deck|pitch)\b/.test(lower)
+            ? "presentation"
+            : /\breport\b/.test(lower)
+              ? "report"
+              : /\bbrief\b/.test(lower)
+                ? "brief"
+                : "document";
+
+  const toneMatch = lower.match(
+    /\b(formal|warm|bold|technical|friendly|professional|concise|casual)\b/,
+  );
+  const audienceMatch = normalized.match(
+    /\b(?:for|to)\s+([a-z0-9&.,' -]{3,80})/i,
+  );
+
+  const requiredSectionsByType: Record<
+    NonNullable<ArtifactIntentContract["docType"]>,
+    string[]
+  > = {
+    cover_letter: ["Opening", "Why I Fit", "Relevant Impact", "Close"],
+    scholarship: [
+      "Objective",
+      "Candidate Narrative",
+      "Academic and Project Highlights",
+      "Financial Context and Impact",
+      "Next Steps",
+    ],
+    email: ["Subject", "Draft"],
+    brief: ["Objective", "Context", "Key Points", "Next Steps"],
+    report: ["Executive Summary", "Analysis", "Recommendations"],
+    document: ["Objective", "Key Points", "Next Steps"],
+    presentation: ["Slide 1", "Slide 2", "Slide 3"],
+  };
+
+  return {
+    docType,
+    audience: audienceMatch?.[1]?.trim() ?? null,
+    tone: toneMatch?.[1]?.trim() ?? null,
+    purpose: extractSubject(normalized, "document"),
+    requiredSections: requiredSectionsByType[docType],
+    codingScope: "web_app",
+  };
+}
+
 function buildDeterministicRecoveryDoc(input: {
   prompt: string;
   imageHints: string[];
   attempt: number;
+  intentContract: ArtifactIntentContract;
 }): GeneratedDocArtifact {
-  const subject = extractSubject(input.prompt, "project");
-  const title = toTitleCase(`${subject} brief`);
-  const wantsPresentation = /\b(slides?|presentation|deck)\b/i.test(input.prompt);
+  const normalizedPrompt = input.prompt.replace(/\s+/g, " ").trim();
+  const lowerPrompt = normalizedPrompt.toLowerCase();
+  const docType = input.intentContract.docType ?? "document";
+  const wantsPresentation = docType === "presentation";
+  const wantsCoverLetter = docType === "cover_letter";
+  const wantsEmail = docType === "email";
+  const wantsScholarship = docType === "scholarship";
+  const wantsResume = /\b(resume|cv)\b/i.test(lowerPrompt);
+  const subject = extractSubject(normalizedPrompt, "document");
+  const topicHintMatch = normalizedPrompt.match(
+    /\b(?:about|on|for)\s+([a-z0-9&.,' -]{3,80})/i,
+  );
+  const topicHint = topicHintMatch?.[1]?.trim() ?? null;
+  const audienceLine =
+    input.intentContract.audience?.trim() ?? "the intended reader";
+  const toneLine = input.intentContract.tone?.trim() ?? "professional and clear";
+  const title = truncate(
+    wantsPresentation
+      ? toTitleCase(`${extractSubject(normalizedPrompt, "investor")} presentation`)
+      : wantsCoverLetter
+        ? "Cover Letter Draft"
+        : wantsEmail
+          ? "Email Draft"
+          : wantsScholarship
+            ? "Scholarship Document Draft"
+            : wantsResume
+              ? "Resume Draft"
+              : topicHint
+                ? `${toTitleCase(topicHint)} Brief`
+                : /\b(brief|report|proposal|summary)\b/i.test(lowerPrompt)
+                  ? "Project Brief"
+                  : "Document Draft",
+    80,
+  );
   const imageLine = input.imageHints[0]
     ? `- Visual note: ${input.imageHints[0]}`
     : "- Visual note: No image input attached";
 
+  let sections = ["Overview", "Key Points", "Next Steps"];
   const markdown = wantsPresentation
     ? `# ${title}
 
@@ -1221,7 +1322,7 @@ function buildDeterministicRecoveryDoc(input: {
 - *Hook:* why this matters right now.
 
 ## Slide 2: Context
-- ${input.prompt.trim()}
+- ${normalizedPrompt}
 - ${imageLine.replace(/^- /, "")}
 
 ## Slide 3: Solution
@@ -1234,29 +1335,120 @@ function buildDeterministicRecoveryDoc(input: {
 - [ ] Validate assumptions quickly
 - [ ] Prepare launch checklist
 `
-    : `# ${title}
+    : wantsCoverLetter
+      ? `# ${title}
 
-## Goal
-- Convert your request into a practical output that is easy to share and iterate.
+**Audience:** ${audienceLine}  
+**Tone:** ${toneLine}
 
-## User Request
-- ${input.prompt.trim()}
+## Opening
+Dear Hiring Manager,
+
+I am excited to apply for this role and contribute immediately with strong execution across product and engineering. Your team’s work aligns with my focus on building reliable systems that create measurable business impact.
+
+## Why I Fit
+- I build and ship production systems end-to-end, from architecture through delivery.
+- I translate complex technical work into business impact and cross-functional clarity.
+- I move quickly while maintaining quality, observability, and reliability.
+
+## Relevant Impact
+- **Technical depth:** Built and scaled production services with strict reliability expectations.
+- **Product execution:** Converted ambiguous requirements into shipped features with clear owner alignment.
+- **Collaboration:** Led cross-functional execution across engineering, product, and operations.
+
+## Close
+I would value the opportunity to contribute and help accelerate outcomes for your team. Thank you for your time and consideration.
+
+Sincerely,  
+Your Name
+`
+      : wantsEmail
+        ? `# ${title}
+
+## Subject
+Follow-up on ${subject}
+
+## Draft
+Hi ${audienceLine},
+
+I am reaching out regarding ${subject}.  
+The key goal is to align on next steps and keep momentum.
+
+- **Context:** ${normalizedPrompt}
+- **Decision needed:** Confirmation on scope, ownership, and timeline.
+- **Timeline:** Please reply with a preferred time this week.
+
+Thanks,  
+Your Name
+`
+        : wantsScholarship
+          ? `# ${title}
+
+## Objective
+Prepare a polished scholarship-ready document that is clear, specific, and credible.
+
+## Candidate Narrative
+- Core motivation: Build practical systems that create measurable impact.
+- Long-term goal: Lead high-impact technical initiatives with social and economic value.
+- Fit with scholarship: This scholarship directly accelerates focused execution and outcomes.
+
+## Academic and Project Highlights
+- Achievement 1: Delivered projects with clear technical outcomes and strong follow-through.
+- Achievement 2: Balanced rigorous technical work with effective communication and ownership.
+- Leadership/initiative: Drove execution across ambiguous goals with consistent delivery.
+
+## Financial Context and Impact
+- Need summary: This support would unlock focused execution without financial distraction.
+- How funds will be used: Tuition, learning resources, and project delivery costs.
+- Expected impact: Faster progress toward high-impact outcomes and measurable community value.
+
+## Recommended Supporting Materials
+- Resume/CV
+- Transcript
+- 1-2 recommendation letters
+- Project portfolio links (if applicable)
+
+## Next Steps
+- [ ] Customize this draft for the exact scholarship prompt.
+- [ ] Add concrete achievements, dates, and outcomes.
+- [ ] Proofread for tone, clarity, and factual accuracy.
+`
+          : `# ${title}
+
+## Objective
+Deliver a structured, professional document based on your latest request.
+
+## Topic
+- ${topicHint ?? subject}
 ${imageLine}
 
-## Proposed Output
-1. Core narrative and framing for the idea.
-2. Action checklist to execute quickly.
-3. Next iteration notes for follow-up with Zee.
+## Draft Structure
+1. Context and purpose.
+2. Core points and supporting details.
+3. Actionable next steps.
 
-## Action Checklist
-- [ ] Confirm target audience.
-- [ ] Finalize the tone and depth.
-- [ ] Review deliverable for completeness.
-- [ ] Share or publish the output.
-
-## Notes
-- This draft is optimized for fast collaboration and can be expanded in follow-up turns.
+## Next Steps
+- [ ] Confirm audience and tone.
+- [ ] Add specifics (names, dates, metrics).
+- [ ] Final review before sharing.
 `;
+
+  if (wantsPresentation) {
+    sections = ["Slide 1: Vision", "Slide 2: Context", "Slide 3: Solution", "Slide 4: Plan"];
+  } else if (wantsCoverLetter) {
+    sections = ["Opening", "Why I Am a Strong Fit", "Relevant Highlights", "Close"];
+  } else if (wantsEmail) {
+    sections = ["Subject", "Draft"];
+  } else if (wantsScholarship) {
+    sections = [
+      "Objective",
+      "Candidate Narrative",
+      "Academic and Project Highlights",
+      "Financial Context and Impact",
+      "Recommended Supporting Materials",
+      "Next Steps",
+    ];
+  }
 
   return {
     markdown,
@@ -1265,7 +1457,7 @@ ${imageLine}
     generationMetadata: {
       mode: "deterministic_recovery",
       format: wantsPresentation ? "presentation" : "document",
-      sections: ["Goal", "User Request", "Proposed Output", "Action Checklist"],
+      sections,
       attempt: input.attempt,
       model: "deterministic_recovery",
       backend: "deterministic_recovery",
@@ -2805,6 +2997,7 @@ async function runTaskExecution(state: RuntimeState): Promise<void> {
     }
 
     if (taskKind === "doc_markdown" || taskKind === "mixed") {
+      const docIntentContract = inferDocIntentContract(state.prompt);
       await assertRuntimeToolExecutionAllowed({
         taskId: task.id,
         taskRiskLevel: task.riskLevel,
@@ -2821,6 +3014,7 @@ async function runTaskExecution(state: RuntimeState): Promise<void> {
           imageHintCount: effectiveImageHints.length,
           sandboxJobId: sandboxJob.id,
           traceId: auditTraceId,
+          docType: docIntentContract.docType ?? "document",
         },
         status: "started",
         outputSummary: null,
@@ -2862,6 +3056,7 @@ async function runTaskExecution(state: RuntimeState): Promise<void> {
                   prompt: state.prompt,
                   imageHints: effectiveImageHints,
                   attempt,
+                  intentContract: docIntentContract,
                 })
               : await adapter.repairDoc({
                   prompt: state.prompt,
@@ -2869,6 +3064,7 @@ async function runTaskExecution(state: RuntimeState): Promise<void> {
                   previousDoc: generatedDoc,
                   qaFailures: docQaFailures,
                   attempt,
+                  intentContract: docIntentContract,
                 });
 
           await writeSandboxFile({
@@ -2906,6 +3102,7 @@ async function runTaskExecution(state: RuntimeState): Promise<void> {
           const qaPassed = runDocChecks(
             persistedMarkdown,
             generatedDoc.generationMetadata.format,
+            docIntentContract,
           );
           if (!qaPassed.ok) {
             docQaFailures.push(qaPassed.reason);
@@ -3099,10 +3296,21 @@ async function runTaskExecution(state: RuntimeState): Promise<void> {
             presentationImageFallbackReason,
             qaFailures: docQaFailures.slice(0, 6),
           },
+          intent: docIntentContract,
           render: artifactRenderMetadata,
           qa: {
             mode: "deterministic_smoke",
             passed: true,
+            qualitySummary: {
+              passed: true,
+              semanticChecks: [
+                `doc_type:${docIntentContract.docType ?? "document"}`,
+                "heading_hierarchy",
+                "markdown_formatting",
+              ],
+              issues: [],
+              score: 100,
+            },
           },
         },
       });
@@ -3834,6 +4042,7 @@ async function runMiniGameChecks(
 function runDocChecks(
   markdown: string,
   format: DocOutputFormat,
+  intentContract?: ArtifactIntentContract,
 ): { ok: true } | { ok: false; reason: string } {
   if (!markdown.trim()) {
     return { ok: false, reason: "Document is empty" };
@@ -3852,6 +4061,13 @@ function runDocChecks(
   if (!hasRichFormattingSignal) {
     return { ok: false, reason: "Document missing list/emphasis formatting" };
   }
+  const placeholderCount = (markdown.match(/\[[^\]]{2,48}\]/g) ?? []).length;
+  if (placeholderCount > 4) {
+    return {
+      ok: false,
+      reason: "Document still contains too many template placeholders",
+    };
+  }
   if (format === "presentation") {
     const maxSlides = resolveAgentPresentationMaxSlides();
     const slides = extractPresentationSlideDrafts(markdown, maxSlides + 5);
@@ -3865,6 +4081,82 @@ function runDocChecks(
       };
     }
   }
+  if (intentContract) {
+    const semantic = runDocIntentChecks(markdown, intentContract);
+    if (!semantic.ok) {
+      return semantic;
+    }
+  }
+  return { ok: true };
+}
+
+function escapeRegExp(input: string): string {
+  return input.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function runDocIntentChecks(
+  markdown: string,
+  contract: ArtifactIntentContract,
+): { ok: true } | { ok: false; reason: string } {
+  const docType = contract.docType ?? "document";
+  const requiredSections = (contract.requiredSections ?? []).filter(
+    (section) => section.trim().length > 0,
+  );
+  const missingSections = requiredSections.filter((section) => {
+    const sectionPattern = new RegExp(
+      `^##\\s+.*${escapeRegExp(section)}`,
+      "im",
+    );
+    return !sectionPattern.test(markdown);
+  });
+  if (missingSections.length > 0 && missingSections.length >= Math.ceil(requiredSections.length / 2)) {
+    return {
+      ok: false,
+      reason: `Document intent mismatch: missing section(s) ${missingSections
+        .slice(0, 3)
+        .join(", ")}`,
+    };
+  }
+
+  if (docType === "cover_letter") {
+    if (!/dear\s+[a-z]/i.test(markdown) || !/(sincerely|best regards|regards)/i.test(markdown)) {
+      return {
+        ok: false,
+        reason: "Cover letter intent mismatch: greeting or close is missing",
+      };
+    }
+  }
+
+  if (docType === "email") {
+    if (!/^##\s+subject/im.test(markdown)) {
+      return {
+        ok: false,
+        reason: "Email intent mismatch: subject section is missing",
+      };
+    }
+    if (!/\b(hi|hello|dear)\b/i.test(markdown)) {
+      return {
+        ok: false,
+        reason: "Email intent mismatch: greeting is missing",
+      };
+    }
+  }
+
+  if (docType === "scholarship") {
+    const scholarshipSignals = [
+      /\bscholar(?:ship|ships)\b/i,
+      /\bacademic\b/i,
+      /\bfinancial\b/i,
+      /\bimpact\b/i,
+    ].filter((pattern) => pattern.test(markdown)).length;
+    if (scholarshipSignals < 2) {
+      return {
+        ok: false,
+        reason: "Scholarship intent mismatch: draft does not read scholarship-specific",
+      };
+    }
+  }
+
   return { ok: true };
 }
 
