@@ -53,7 +53,7 @@ export function registerAuthRoutes(app: Express) {
     try {
       const parsed = registerSchema.safeParse(req.body);
       if (!parsed.success) {
-        return res.status(400).json({ message: parsed.error.errors[0].message });
+        return res.status(400).json({ message: parsed.error.issues[0].message });
       }
 
       const { email, password, firstName, lastName, profession, referralSource } = parsed.data;
@@ -91,7 +91,7 @@ export function registerAuthRoutes(app: Express) {
     try {
       const parsed = loginSchema.safeParse(req.body);
       if (!parsed.success) {
-        return res.status(400).json({ message: parsed.error.errors[0].message });
+        return res.status(400).json({ message: parsed.error.issues[0].message });
       }
 
       const { email, password } = parsed.data;

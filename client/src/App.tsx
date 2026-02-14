@@ -87,6 +87,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { JsonRenderArtifactViewer } from "@/components/artifacts/JsonRenderArtifactViewer";
 
 // --- Types ---
 type Mode = "voice" | "text" | "profile";
@@ -557,6 +558,10 @@ function toTaskStatusLabel(status: AgentTaskSummary["status"]): string {
   return "Queued";
 }
 
+function isTerminalTaskStatus(status: AgentTaskSummary["status"]): boolean {
+  return status === "completed" || status === "failed" || status === "cancelled";
+}
+
 function parseClientBooleanFlag(value: unknown, fallback: boolean): boolean {
   if (typeof value === "boolean") {
     return value;
@@ -573,6 +578,12 @@ function parseClientBooleanFlag(value: unknown, fallback: boolean): boolean {
 const ENABLE_UNIFIED_AGENT_TASK_CARD = parseClientBooleanFlag(
   (import.meta.env as Record<string, unknown>).VITE_ENABLE_UNIFIED_AGENT_TASK_CARD ??
     (import.meta.env as Record<string, unknown>).ENABLE_UNIFIED_AGENT_TASK_CARD,
+  true,
+);
+
+const ENABLE_JSON_RENDER_ARTIFACT_VIEWER = parseClientBooleanFlag(
+  (import.meta.env as Record<string, unknown>).VITE_ENABLE_JSON_RENDER_ARTIFACT_VIEWER ??
+    (import.meta.env as Record<string, unknown>).ENABLE_JSON_RENDER_ARTIFACT_VIEWER,
   true,
 );
 
@@ -861,8 +872,19 @@ function buildUnifiedAgentTaskCards(
       return [{ kind: "message", message }];
     }
 
+    if (
+      aggregate.approval?.status === "pending" &&
+      (Boolean(aggregate.artifact) ||
+        Boolean(aggregate.task?.status && isTerminalTaskStatus(aggregate.task.status)))
+    ) {
+      aggregate.approval = null;
+    }
+
+    const hasTerminalTaskStatus = Boolean(
+      aggregate.task?.status && isTerminalTaskStatus(aggregate.task.status),
+    );
     const inferredStatusFromApproval =
-      aggregate.approval?.status === "pending"
+      !hasTerminalTaskStatus && !aggregate.artifact && aggregate.approval?.status === "pending"
         ? "approval_required"
         : aggregate.approval?.status === "denied"
           ? "failed"
@@ -4841,7 +4863,7 @@ const TextView = ({
                         className="space-y-2"
                         data-testid="agent-offer-card"
                         data-agent-offer-status={msg.uiPayload.offer.status}
-                        data-agent-offer-id={msg.id}
+                        data-agent-offer-id={msg.uiPayload.offer.id}
                       >
                         <div className="flex items-center justify-between gap-2">
                           <span className="text-[11px] font-semibold uppercase tracking-wide opacity-75">
@@ -4864,7 +4886,11 @@ const TextView = ({
                             <button
                               type="button"
                               onClick={() => {
-                                void onResolveOffer(msg.id, true);
+                                const offerPayload = msg.uiPayload as Extract<
+                                  AgentMessageUiPayload,
+                                  { kind: "agent_offer" }
+                                >;
+                                void onResolveOffer(offerPayload.offer.id, true);
                               }}
                               className="rounded-lg border px-2.5 py-1.5 text-xs font-semibold"
                               style={{
@@ -4878,7 +4904,11 @@ const TextView = ({
                             <button
                               type="button"
                               onClick={() => {
-                                void onResolveOffer(msg.id, false);
+                                const offerPayload = msg.uiPayload as Extract<
+                                  AgentMessageUiPayload,
+                                  { kind: "agent_offer" }
+                                >;
+                                void onResolveOffer(offerPayload.offer.id, false);
                               }}
                               className="rounded-lg border px-2.5 py-1.5 text-xs font-semibold"
                               style={{
@@ -5080,8 +5110,22 @@ const ArtifactViewer = ({
   onRetry: () => void;
 }) => {
   const isGame = artifact?.type === "mini_game";
-  const canRenderIframe =
+  const isDocArtifact = artifact?.type === "doc_markdown";
+  const hasHtmlContent =
     typeof artifact?.htmlContent === "string" && artifact.htmlContent.trim().length > 0;
+  const hasRenderSpec = Boolean(
+    artifact?.metadata &&
+      typeof artifact.metadata === "object" &&
+      !Array.isArray(artifact.metadata) &&
+      (artifact.metadata as Record<string, unknown>).render,
+  );
+  const shouldUseJsonRenderViewer =
+    Boolean(artifact) &&
+    !isGame &&
+    isDocArtifact &&
+    ENABLE_JSON_RENDER_ARTIFACT_VIEWER &&
+    hasRenderSpec;
+  const canRenderIframe = hasHtmlContent && (isGame || !shouldUseJsonRenderViewer);
   const markdown = artifact?.markdownContent ?? "";
   const [iframeKey, setIframeKey] = useState(0);
   const [isExportingPdf, setIsExportingPdf] = useState(false);
@@ -5090,6 +5134,11 @@ const ArtifactViewer = ({
     | { generation?: { format?: string } }
     | undefined)?.generation;
   const isPresentation = generationMetadata?.format === "presentation";
+  const artifactLabel = isGame
+    ? "Mini Game"
+    : isPresentation
+      ? "Presentation"
+      : "Document";
 
   const iframeSrc = useMemo(() => {
     if (!canRenderIframe || !artifact?.id) return null;
@@ -5160,7 +5209,7 @@ const ArtifactViewer = ({
       >
         <div>
           <p className="text-xs uppercase tracking-wide opacity-70">
-            {isGame ? "Mini Game" : "Document"}
+            {artifactLabel}
           </p>
           <h3 className="text-base font-semibold">{artifact?.title ?? "Loading..."}</h3>
         </div>
@@ -5231,6 +5280,8 @@ const ArtifactViewer = ({
               }}
             />
           </div>
+        ) : shouldUseJsonRenderViewer && artifact ? (
+          <JsonRenderArtifactViewer metadata={artifact.metadata} />
         ) : canRenderIframe && iframeSrc ? (
           <iframe
             key={iframeKey}
@@ -6327,7 +6378,22 @@ function App() {
         });
       }
     } catch (error) {
-      setComposerError(getErrorMessage(error) || "Failed to process offer decision.");
+      const message = getErrorMessage(error);
+      if (
+        message.toLowerCase().includes("offer is no longer pending") ||
+        message.toLowerCase().includes("already accepted") ||
+        message.toLowerCase().includes("already declined") ||
+        message.toLowerCase().includes("alreadyaccepted") ||
+        message.toLowerCase().includes("alreadydeclined")
+      ) {
+        if (activeConversationId) {
+          queryClient.invalidateQueries({
+            queryKey: getConversationMessagesKey(activeConversationId),
+          });
+        }
+        return;
+      }
+      setComposerError(message || "Failed to process offer decision.");
     }
   };
 
@@ -7050,6 +7116,7 @@ function App() {
               updatedAt: new Date(),
               completedAt: new Date(),
             },
+            approval: null,
             artifact: event.artifact,
             timeline: appendLiveTimelineItem(snapshot.timeline, {
               id: `artifact-${event.artifact.id}`,
@@ -7087,6 +7154,7 @@ function App() {
               updatedAt: new Date(),
               completedAt: new Date(),
             },
+            approval: null,
             timeline: appendLiveTimelineItem(snapshot.timeline, {
               id: `failed-${event.taskId}`,
               title: "Task failed",
@@ -7138,11 +7206,15 @@ function App() {
             upsertLiveTaskSnapshot({
               taskId: payload.task.id,
               conversationId: params.conversationId,
-              updater: (snapshot) => ({
-                ...snapshot,
-                task: pickLatestTaskSummary(snapshot.task, payload.task) ?? payload.task,
-                latestStep: payload.latestStep ?? snapshot.latestStep,
-                timeline: appendLiveTimelineItem(snapshot.timeline, {
+              updater: (snapshot) => {
+                const nextTask =
+                  pickLatestTaskSummary(snapshot.task, payload.task) ?? payload.task;
+                return {
+                  ...snapshot,
+                  task: nextTask,
+                  approval: nextTask.status === "approval_required" ? snapshot.approval : null,
+                  latestStep: payload.latestStep ?? snapshot.latestStep,
+                  timeline: appendLiveTimelineItem(snapshot.timeline, {
                   id: `final-status-${payload.task.status}`,
                   title: toTaskStatusLabel(payload.task.status),
                   detail: payload.text ?? assistantMessage.text,
@@ -7160,8 +7232,9 @@ function App() {
                     toIsoString(payload.task.updatedAt) ??
                     toIsoString(assistantMessage.createdAt) ??
                     new Date().toISOString(),
-                }),
-              }),
+                  }),
+                };
+              },
             });
             continue;
           }
@@ -7170,10 +7243,24 @@ function App() {
             upsertLiveTaskSnapshot({
               taskId: payload.taskId,
               conversationId: params.conversationId,
-              updater: (snapshot) => ({
-                ...snapshot,
-                approval: payload.approval,
-                timeline: appendLiveTimelineItem(snapshot.timeline, {
+              updater: (snapshot) => {
+                const nextStatus: AgentTaskSummary["status"] =
+                  payload.approval.status === "pending"
+                    ? "approval_required"
+                    : payload.approval.status === "denied"
+                      ? "failed"
+                      : "in_progress";
+                return {
+                  ...snapshot,
+                  task: {
+                    ...snapshot.task,
+                    status: nextStatus,
+                    updatedAt: new Date(),
+                    completedAt:
+                      nextStatus === "failed" ? new Date() : snapshot.task.completedAt,
+                  },
+                  approval: payload.approval.status === "pending" ? payload.approval : null,
+                  timeline: appendLiveTimelineItem(snapshot.timeline, {
                   id: `approval-${payload.approval.id}`,
                   title:
                     payload.approval.status === "pending"
@@ -7186,8 +7273,9 @@ function App() {
                     toIsoString(payload.approval.respondedAt) ??
                     toIsoString(payload.approval.createdAt) ??
                     new Date().toISOString(),
-                }),
-              }),
+                  }),
+                };
+              },
             });
             continue;
           }
@@ -7198,6 +7286,13 @@ function App() {
               conversationId: params.conversationId,
               updater: (snapshot) => ({
                 ...snapshot,
+                task: {
+                  ...snapshot.task,
+                  status: snapshot.task.status === "failed" ? "failed" : "completed",
+                  updatedAt: new Date(),
+                  completedAt: new Date(),
+                },
+                approval: null,
                 artifact: payload.artifact,
                 timeline: appendLiveTimelineItem(snapshot.timeline, {
                   id: `artifact-${payload.artifact.id}`,

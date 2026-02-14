@@ -13,6 +13,8 @@ import {
   agentApprovals,
   agentArtifacts,
   agentToolCalls,
+  agentOffers,
+  agentIntentSessions,
   type Conversation,
   type InsertConversation,
   type Message,
@@ -38,8 +40,15 @@ import {
   type InsertAgentArtifact,
   type AgentToolCall,
   type InsertAgentToolCall,
+  type AgentOffer,
+  type InsertAgentOffer,
+  type AgentIntentSession,
+  type InsertAgentIntentSession,
   type AgentTaskStatus,
   type AgentArtifactStatus,
+  type AgentOfferStatus,
+  type AgentIntentSessionStatus,
+  type MessagePurpose,
   type MemoryItemKind,
   type MemorySensitivity,
 } from "@shared/schema";
@@ -110,6 +119,50 @@ export interface AgentTaskWithDetails extends AgentTask {
   approvals: AgentApproval[];
   artifacts: AgentArtifact[];
   toolCalls: AgentToolCall[];
+}
+
+export interface AgentIntentSessionUpdate {
+  status?: AgentIntentSessionStatus;
+  taskKind?: string;
+  sourceMessageId?: string | null;
+  offerId?: string | null;
+  promptSeed?: string;
+  clarificationQuestion?: string | null;
+  slotSchema?: unknown;
+  slotValues?: unknown;
+  missingSlots?: unknown;
+  lastUserMessageId?: string | null;
+  acceptedTaskId?: string | null;
+  metadata?: unknown;
+  resolvedAt?: Date | null;
+}
+
+function inferMessagePurpose(data: InsertMessage): MessagePurpose {
+  if (
+    data.messagePurpose === "conversation" ||
+    data.messagePurpose === "agent_ui" ||
+    data.messagePurpose === "system"
+  ) {
+    return data.messagePurpose;
+  }
+
+  if (
+    data.uiPayload &&
+    typeof data.uiPayload === "object" &&
+    !Array.isArray(data.uiPayload) &&
+    typeof (data.uiPayload as Record<string, unknown>).kind === "string" &&
+    ((data.uiPayload as Record<string, unknown>).kind as string).startsWith(
+      "agent_",
+    )
+  ) {
+    return "agent_ui";
+  }
+
+  if (data.sender === "system") {
+    return "system";
+  }
+
+  return "conversation";
 }
 
 export interface IStorage {
@@ -250,6 +303,38 @@ export interface IStorage {
     status?: AgentToolCall["status"];
     outputSummary?: string | null;
   }): Promise<AgentToolCall | undefined>;
+  createAgentOffer(data: InsertAgentOffer): Promise<AgentOffer>;
+  getAgentOfferById(offerId: string): Promise<AgentOffer | undefined>;
+  getAgentOfferByMessageId(messageId: string): Promise<AgentOffer | undefined>;
+  getPendingAgentOfferForConversation(params: {
+    userId: string;
+    conversationId: string;
+  }): Promise<AgentOffer | undefined>;
+  updateAgentOffer(params: {
+    offerId: string;
+    updates: {
+      messageId?: string | null;
+      status?: AgentOfferStatus;
+      acceptedTaskId?: string | null;
+      intentSessionId?: string | null;
+      metadata?: unknown;
+      resolvedAt?: Date | null;
+    };
+  }): Promise<AgentOffer | undefined>;
+  createAgentIntentSession(
+    data: InsertAgentIntentSession,
+  ): Promise<AgentIntentSession>;
+  getAgentIntentSessionById(
+    sessionId: string,
+  ): Promise<AgentIntentSession | undefined>;
+  getActiveAgentIntentSessionForConversation(params: {
+    userId: string;
+    conversationId: string;
+  }): Promise<AgentIntentSession | undefined>;
+  updateAgentIntentSession(params: {
+    sessionId: string;
+    updates: AgentIntentSessionUpdate;
+  }): Promise<AgentIntentSession | undefined>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -586,6 +671,7 @@ export class DatabaseStorage implements IStorage {
         partIndex: messages.partIndex,
         text: messages.text,
         uiPayload: messages.uiPayload,
+        messagePurpose: messages.messagePurpose,
         createdAt: messages.createdAt,
         userId: conversations.userId,
       })
@@ -619,6 +705,7 @@ export class DatabaseStorage implements IStorage {
         partIndex: messages.partIndex,
         text: messages.text,
         uiPayload: messages.uiPayload,
+        messagePurpose: messages.messagePurpose,
         createdAt: messages.createdAt,
         userId: conversations.userId,
       })
@@ -630,7 +717,13 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createMessage(data: InsertMessage): Promise<Message> {
-    const [msg] = await db.insert(messages).values(data).returning();
+    const [msg] = await db
+      .insert(messages)
+      .values({
+        ...data,
+        messagePurpose: inferMessagePurpose(data),
+      })
+      .returning();
     const [conversation] = await db
       .select()
       .from(conversations)
@@ -723,6 +816,16 @@ export class DatabaseStorage implements IStorage {
   }): Promise<Message | undefined> {
     const updates: Partial<typeof messages.$inferInsert> = {
       uiPayload: params.uiPayload,
+      messagePurpose:
+        params.uiPayload &&
+        typeof params.uiPayload === "object" &&
+        !Array.isArray(params.uiPayload) &&
+        typeof (params.uiPayload as Record<string, unknown>).kind === "string" &&
+        ((params.uiPayload as Record<string, unknown>).kind as string).startsWith(
+          "agent_",
+        )
+          ? "agent_ui"
+          : "conversation",
     };
     if (params.text !== undefined) {
       updates.text = params.text;
@@ -1337,6 +1440,194 @@ export class DatabaseStorage implements IStorage {
       .where(eq(agentToolCalls.id, params.toolCallId))
       .returning();
     return toolCall;
+  }
+
+  async createAgentOffer(data: InsertAgentOffer): Promise<AgentOffer> {
+    const [offer] = await db.insert(agentOffers).values(data).returning();
+    await db
+      .update(conversations)
+      .set({ updatedAt: new Date() })
+      .where(eq(conversations.id, data.conversationId));
+    return offer;
+  }
+
+  async getAgentOfferById(offerId: string): Promise<AgentOffer | undefined> {
+    const [offer] = await db
+      .select()
+      .from(agentOffers)
+      .where(eq(agentOffers.id, offerId))
+      .limit(1);
+    return offer;
+  }
+
+  async getAgentOfferByMessageId(
+    messageId: string,
+  ): Promise<AgentOffer | undefined> {
+    const [offer] = await db
+      .select()
+      .from(agentOffers)
+      .where(eq(agentOffers.messageId, messageId))
+      .limit(1);
+    return offer;
+  }
+
+  async getPendingAgentOfferForConversation(params: {
+    userId: string;
+    conversationId: string;
+  }): Promise<AgentOffer | undefined> {
+    const [offer] = await db
+      .select()
+      .from(agentOffers)
+      .where(
+        and(
+          eq(agentOffers.userId, params.userId),
+          eq(agentOffers.conversationId, params.conversationId),
+          eq(agentOffers.status, "pending"),
+        ),
+      )
+      .orderBy(desc(agentOffers.updatedAt), desc(agentOffers.createdAt))
+      .limit(1);
+    return offer;
+  }
+
+  async updateAgentOffer(params: {
+    offerId: string;
+    updates: {
+      messageId?: string | null;
+      status?: AgentOfferStatus;
+      acceptedTaskId?: string | null;
+      intentSessionId?: string | null;
+      metadata?: unknown;
+      resolvedAt?: Date | null;
+    };
+  }): Promise<AgentOffer | undefined> {
+    const updates: Partial<typeof agentOffers.$inferInsert> = {
+      updatedAt: new Date(),
+    };
+    if (params.updates.messageId !== undefined) {
+      updates.messageId = params.updates.messageId;
+    }
+    if (params.updates.status !== undefined) {
+      updates.status = params.updates.status;
+    }
+    if (params.updates.acceptedTaskId !== undefined) {
+      updates.acceptedTaskId = params.updates.acceptedTaskId;
+    }
+    if (params.updates.intentSessionId !== undefined) {
+      updates.intentSessionId = params.updates.intentSessionId;
+    }
+    if (params.updates.metadata !== undefined) {
+      updates.metadata = params.updates.metadata;
+    }
+    if (params.updates.resolvedAt !== undefined) {
+      updates.resolvedAt = params.updates.resolvedAt;
+    }
+
+    const [offer] = await db
+      .update(agentOffers)
+      .set(updates)
+      .where(eq(agentOffers.id, params.offerId))
+      .returning();
+    return offer;
+  }
+
+  async createAgentIntentSession(
+    data: InsertAgentIntentSession,
+  ): Promise<AgentIntentSession> {
+    const [session] = await db
+      .insert(agentIntentSessions)
+      .values(data)
+      .returning();
+    await db
+      .update(conversations)
+      .set({ updatedAt: new Date() })
+      .where(eq(conversations.id, data.conversationId));
+    return session;
+  }
+
+  async getAgentIntentSessionById(
+    sessionId: string,
+  ): Promise<AgentIntentSession | undefined> {
+    const [session] = await db
+      .select()
+      .from(agentIntentSessions)
+      .where(eq(agentIntentSessions.id, sessionId))
+      .limit(1);
+    return session;
+  }
+
+  async getActiveAgentIntentSessionForConversation(params: {
+    userId: string;
+    conversationId: string;
+  }): Promise<AgentIntentSession | undefined> {
+    const [session] = await db
+      .select()
+      .from(agentIntentSessions)
+      .where(
+        and(
+          eq(agentIntentSessions.userId, params.userId),
+          eq(agentIntentSessions.conversationId, params.conversationId),
+          eq(agentIntentSessions.status, "active"),
+        ),
+      )
+      .orderBy(desc(agentIntentSessions.updatedAt), desc(agentIntentSessions.createdAt))
+      .limit(1);
+    return session;
+  }
+
+  async updateAgentIntentSession(params: {
+    sessionId: string;
+    updates: AgentIntentSessionUpdate;
+  }): Promise<AgentIntentSession | undefined> {
+    const updates: Partial<typeof agentIntentSessions.$inferInsert> = {
+      updatedAt: new Date(),
+    };
+    if (params.updates.status !== undefined) {
+      updates.status = params.updates.status;
+    }
+    if (params.updates.taskKind !== undefined) {
+      updates.taskKind = params.updates.taskKind;
+    }
+    if (params.updates.sourceMessageId !== undefined) {
+      updates.sourceMessageId = params.updates.sourceMessageId;
+    }
+    if (params.updates.offerId !== undefined) {
+      updates.offerId = params.updates.offerId;
+    }
+    if (params.updates.promptSeed !== undefined) {
+      updates.promptSeed = params.updates.promptSeed;
+    }
+    if (params.updates.clarificationQuestion !== undefined) {
+      updates.clarificationQuestion = params.updates.clarificationQuestion;
+    }
+    if (params.updates.slotSchema !== undefined) {
+      updates.slotSchema = params.updates.slotSchema;
+    }
+    if (params.updates.slotValues !== undefined) {
+      updates.slotValues = params.updates.slotValues;
+    }
+    if (params.updates.missingSlots !== undefined) {
+      updates.missingSlots = params.updates.missingSlots;
+    }
+    if (params.updates.lastUserMessageId !== undefined) {
+      updates.lastUserMessageId = params.updates.lastUserMessageId;
+    }
+    if (params.updates.acceptedTaskId !== undefined) {
+      updates.acceptedTaskId = params.updates.acceptedTaskId;
+    }
+    if (params.updates.metadata !== undefined) {
+      updates.metadata = params.updates.metadata;
+    }
+    if (params.updates.resolvedAt !== undefined) {
+      updates.resolvedAt = params.updates.resolvedAt;
+    }
+
+    const [session] = await db
+      .update(agentIntentSessions)
+      .set(updates)
+      .where(eq(agentIntentSessions.id, params.sessionId))
+      .returning();
+    return session;
   }
 
   async getQuotaSummary(userId: string): Promise<QuotaSummary> {

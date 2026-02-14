@@ -31,6 +31,8 @@
     "@google/genai": "^1.40.0",
     "@hookform/resolvers": "^3.10.0",
     "@jridgewell/trace-mapping": "^0.3.25",
+    "@json-render/core": "^0.6.0",
+    "@json-render/react": "^0.6.0",
     "@radix-ui/react-accordion": "^1.2.12",
     "@radix-ui/react-alert-dialog": "^1.1.15",
     "@radix-ui/react-aspect-ratio": "^1.1.8",
@@ -103,7 +105,7 @@
     "vaul": "^1.1.2",
     "wouter": "^3.3.5",
     "ws": "^8.18.0",
-    "zod": "^3.25.76",
+    "zod": "^4.3.6",
     "zod-validation-error": "^3.4.0"
   },
   "devDependencies": {
@@ -125,8 +127,8 @@
     "autoprefixer": "^10.4.21",
     "drizzle-kit": "^0.31.4",
     "esbuild": "^0.25.0",
-    "postcss": "^8.5.6",
     "playwright": "^1.56.1",
+    "postcss": "^8.5.6",
     "tailwindcss": "^4.1.14",
     "tsx": "^4.20.5",
     "typescript": "5.6.3",

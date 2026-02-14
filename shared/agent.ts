@@ -1,6 +1,8 @@
 import type {
   AgentApproval,
   AgentArtifact,
+  AgentIntentSession,
+  AgentOffer,
   AgentToolCall,
   AgentStep,
   AgentTask,
@@ -10,7 +12,8 @@ import type {
 export type ChatTurnIntent = "companion_reply" | "agent_task";
 
 export type AgentTaskKind = "mini_game" | "doc_markdown" | "mixed";
-export type AgentOfferStatus = "pending" | "accepted" | "declined" | "expired";
+export type AgentOfferStatus = AgentOffer["status"];
+export type AgentIntentSessionStatus = AgentIntentSession["status"];
 
 export interface AgentTaskSummary {
   id: string;
@@ -74,6 +77,7 @@ export interface AgentToolCallSummary {
 export interface AgentOfferSummary {
   id: string;
   conversationId: string;
+  messageId?: string | null;
   sourceMessageId: string | null;
   status: AgentOfferStatus;
   title: string;
@@ -86,6 +90,73 @@ export interface AgentOfferSummary {
   resolvedAt: Date | null;
 }
 
+export interface IntentSlot {
+  key: string;
+  label: string;
+  required: boolean;
+  value: string | null;
+  status: "filled" | "missing";
+}
+
+export interface AgentIntentSessionSummary {
+  id: string;
+  userId: string;
+  conversationId: string;
+  status: AgentIntentSessionStatus;
+  taskKind: AgentTaskKind;
+  sourceMessageId: string | null;
+  offerId: string | null;
+  promptSeed: string;
+  clarificationQuestion: string | null;
+  slots: IntentSlot[];
+  acceptedTaskId: string | null;
+  createdAt: Date | null;
+  updatedAt: Date | null;
+  resolvedAt: Date | null;
+}
+
+export interface TaskStateVersion {
+  value: string;
+  lastEventAt: string | null;
+  resolvedFromSnapshot: boolean;
+}
+
+export interface OfferDecision {
+  offerId: string;
+  accept: boolean;
+  reason?: string | null;
+}
+
+export interface ArtifactGenerationContract {
+  format: "document" | "presentation" | "mini_game";
+  strictPublish: boolean;
+  maxSlides?: number;
+  imageOnlySlides?: boolean;
+}
+
+export type ArtifactRenderEngine = "json_render";
+
+export interface ArtifactRenderElementV1 {
+  type: string;
+  props: Record<string, unknown>;
+  children?: string[];
+}
+
+export interface ArtifactRenderSpecV1 {
+  root: string;
+  elements: Record<string, ArtifactRenderElementV1>;
+  state?: Record<string, unknown>;
+}
+
+export interface ArtifactRenderMetadata {
+  engine: ArtifactRenderEngine;
+  version: "v1";
+  catalog: "zee_doc_v1" | "zee_presentation_v1";
+  spec: ArtifactRenderSpecV1;
+  validatedAt: string;
+  validationErrors?: string[];
+}
+
 export interface AgentTaskDetailResponse {
   traceId?: string;
   task: AgentTaskSummary;
@@ -93,6 +164,7 @@ export interface AgentTaskDetailResponse {
   approvals: AgentApprovalSummary[];
   artifacts: AgentArtifactSummary[];
   toolCalls?: AgentToolCallSummary[];
+  stateVersion?: TaskStateVersion;
 }
 
 export interface UnifiedAgentTaskTimelineItem {

@@ -42,6 +42,10 @@ import {
   type EphemeralSandboxJob,
   writeSandboxFile,
 } from "./agent-sandbox";
+import {
+  buildDocumentRenderPayload,
+  buildPresentationRenderPayload,
+} from "./artifact-render-spec";
 
 const AGENT_ACTION_PATTERN =
   /\b(create|build|generate|make|draft|write|design|code|develop|plan|send|email|connect|control|automate|research|organize|prepare|summari[sz]e)\b/i;
@@ -2830,6 +2834,7 @@ async function runTaskExecution(state: RuntimeState): Promise<void> {
       let generatedDoc: GeneratedDocArtifact | null = null;
       let persistedMarkdown: string | null = null;
       let docPreviewHtml = "";
+      let artifactRenderMetadata: unknown = null;
       let presentationSlideCount = 0;
       let presentationImageModel: string | null = null;
       let presentationImageFallbackReason: string | null = null;
@@ -2841,6 +2846,7 @@ async function runTaskExecution(state: RuntimeState): Promise<void> {
         presentationSlideCount = 0;
         presentationImageModel = null;
         presentationImageFallbackReason = null;
+        artifactRenderMetadata = null;
         if (buildStep) {
           await markStepInProgress(
             buildStep.id,
@@ -2937,16 +2943,63 @@ async function runTaskExecution(state: RuntimeState): Promise<void> {
               }
             }
 
-            docPreviewHtml = buildDocPreviewHtml({
+            const presentationRenderPayload = buildPresentationRenderPayload({
               title: generatedDoc.title,
-              markdown: persistedMarkdown,
-              presentationSlides: presentationSlides.slides,
+              subtitle: generatedDoc.summary,
+              slides: presentationSlides.slides.map((slide) => ({
+                index: slide.index,
+                title: slide.title,
+                body: slide.body,
+                imageDataUrl: slide.imageDataUrl,
+              })),
             });
+            if (!presentationRenderPayload.valid) {
+              const reason =
+                "Render spec validation failed for presentation: " +
+                truncate(
+                  presentationRenderPayload.validationErrors.join("; "),
+                  280,
+                );
+              docQaFailures.push(reason);
+              finalDocFailureReason = reason;
+              if (attempt < docAttemptBudget) {
+                continue;
+              }
+              break;
+            }
+            docPreviewHtml = presentationRenderPayload.html;
+            artifactRenderMetadata = presentationRenderPayload.metadata;
           } else {
-            docPreviewHtml = buildDocPreviewHtml({
+            const documentRenderPayload = buildDocumentRenderPayload({
               title: generatedDoc.title,
               markdown: persistedMarkdown,
             });
+            if (!documentRenderPayload.valid) {
+              const reason =
+                "Render spec validation failed for document: " +
+                truncate(
+                  documentRenderPayload.validationErrors.join("; "),
+                  280,
+                );
+              docQaFailures.push(reason);
+              finalDocFailureReason = reason;
+              if (attempt < docAttemptBudget) {
+                continue;
+              }
+              break;
+            }
+            docPreviewHtml = documentRenderPayload.html;
+            artifactRenderMetadata = documentRenderPayload.metadata;
+          }
+
+          if (!artifactRenderMetadata) {
+            const reason = "Render spec metadata missing after generation";
+            docQaFailures.push(reason);
+            finalDocFailureReason = reason;
+            if (attempt < docAttemptBudget) {
+              continue;
+            }
+            break;
           }
 
           await writeSandboxFile({
@@ -2969,7 +3022,12 @@ async function runTaskExecution(state: RuntimeState): Promise<void> {
         }
       }
 
-      if (!generatedDoc || !persistedMarkdown || finalDocFailureReason) {
+      if (
+        !generatedDoc ||
+        !persistedMarkdown ||
+        !artifactRenderMetadata ||
+        finalDocFailureReason
+      ) {
         const failureReason =
           finalDocFailureReason ||
           docQaFailures[docQaFailures.length - 1] ||
@@ -3041,6 +3099,7 @@ async function runTaskExecution(state: RuntimeState): Promise<void> {
             presentationImageFallbackReason,
             qaFailures: docQaFailures.slice(0, 6),
           },
+          render: artifactRenderMetadata,
           qa: {
             mode: "deterministic_smoke",
             passed: true,

@@ -6,6 +6,7 @@ import { z } from "zod";
 import { eq } from "drizzle-orm";
 import {
   storage,
+  type AgentIntentSessionUpdate,
   type MessageWithAttachments,
   type QuotaMetricSnapshot,
   type QuotaSummary,
@@ -19,6 +20,8 @@ import {
   insertUserPreferencesSchema,
   type AgentArtifact,
   type AgentApproval,
+  type AgentIntentSession,
+  type AgentOffer,
   type AgentToolCall,
   type AgentStep,
   type AgentTask,
@@ -29,15 +32,19 @@ import {
 import type {
   AgentArtifactSummary,
   AgentApprovalSummary,
+  ArtifactRenderMetadata,
+  AgentIntentSessionSummary,
   AgentOfferSummary,
   ChatTurnIntent,
   AgentStepSummary,
   AgentTaskKind,
   AgentTaskEvent,
   AgentTaskSummary,
+  TaskStateVersion,
   AgentToolCallSummary,
 } from "@shared/agent";
 import {
+  classifyTurnIntentWithModel,
   createLiveToken,
   DEFAULT_LIVE_VOICE,
   DEFAULT_PERSONA,
@@ -121,6 +128,10 @@ const agentApprovalDecisionSchema = z.object({
 });
 
 const agentOfferDecisionSchema = z.object({
+  reason: z.string().trim().max(400).optional().nullable(),
+});
+
+const agentIntentSessionCancelSchema = z.object({
   reason: z.string().trim().max(400).optional().nullable(),
 });
 
@@ -264,6 +275,43 @@ const ENABLE_LIVE_MEMORY_CONTEXT = parseBooleanFlag(
 );
 const ENABLE_AGENT_PROACTIVE_OFFERS = parseBooleanFlag(
   process.env.ENABLE_AGENT_PROACTIVE_OFFERS,
+  true,
+);
+const ENABLE_AGENT_OFFERS_V2 = parseBooleanFlag(
+  process.env.ENABLE_AGENT_OFFERS_V2,
+  true,
+);
+const ENABLE_AGENT_INTENT_SESSIONS = parseBooleanFlag(
+  process.env.ENABLE_AGENT_INTENT_SESSIONS,
+  true,
+);
+const ENABLE_CONTEXT_MESSAGE_PURPOSE_FILTER = parseBooleanFlag(
+  process.env.ENABLE_CONTEXT_MESSAGE_PURPOSE_FILTER,
+  true,
+);
+const ENABLE_AGENT_MODEL_INTENT_CLASSIFIER = parseBooleanFlag(
+  process.env.ENABLE_AGENT_MODEL_INTENT_CLASSIFIER,
+  true,
+);
+const AGENT_MODEL_INTENT_CLASSIFIER_MIN_CONFIDENCE = Math.min(
+  1,
+  Math.max(
+    0,
+    Number.parseFloat(
+      process.env.AGENT_MODEL_INTENT_CLASSIFIER_MIN_CONFIDENCE ?? "0.65",
+    ) || 0.65,
+  ),
+);
+const AGENT_OFFER_COOLDOWN_MS = parsePositiveInt(
+  process.env.AGENT_OFFER_COOLDOWN_MS,
+  2 * 60 * 1000,
+);
+const ENABLE_DOC_STRICT_PUBLISH = parseBooleanFlag(
+  process.env.ENABLE_DOC_STRICT_PUBLISH,
+  true,
+);
+const ENABLE_PRESENTATION_IMAGE_STRICT = parseBooleanFlag(
+  process.env.ENABLE_PRESENTATION_IMAGE_STRICT,
   true,
 );
 const LIVE_MEMORY_BUILD_TIMEOUT_MS = parsePositiveInt(
@@ -913,6 +961,7 @@ async function buildLiveMemoryContext(params: {
 }): Promise<LiveMemoryBuildResult> {
   const activeMessages = await storage.getMessagesWithAttachments(params.conversationId);
   const activeHistory: MemorySourceMessage[] = activeMessages
+    .filter((message) => shouldIncludeMessageInConversationContext(message))
     .map((message) => ({
       sender: message.sender,
       text: toMemoryMessageText(message),
@@ -971,6 +1020,7 @@ async function buildLiveMemoryContext(params: {
         excludeConversationId: params.conversationId,
       })
     )
+      .filter((message) => shouldIncludeMessageInConversationContext(message))
       .map((message) => ({
         sender: message.sender,
         text: normalizeMemoryText(message.text),
@@ -1349,6 +1399,49 @@ function toAgentArtifactSummary(artifact: AgentArtifact): AgentArtifactSummary {
   };
 }
 
+function toArtifactRenderMetadata(
+  metadata: unknown,
+): ArtifactRenderMetadata | null {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+    return null;
+  }
+  const render = (metadata as Record<string, unknown>).render;
+  if (!render || typeof render !== "object" || Array.isArray(render)) {
+    return null;
+  }
+
+  const candidate = render as Record<string, unknown>;
+  const engine = candidate.engine;
+  const version = candidate.version;
+  const catalog = candidate.catalog;
+  const spec = candidate.spec;
+  const validatedAt = candidate.validatedAt;
+  const validationErrors = candidate.validationErrors;
+
+  if (engine !== "json_render" || version !== "v1") return null;
+  if (catalog !== "zee_doc_v1" && catalog !== "zee_presentation_v1") return null;
+  if (!spec || typeof spec !== "object" || Array.isArray(spec)) return null;
+  if (typeof validatedAt !== "string" || validatedAt.trim().length === 0) return null;
+  if (
+    validationErrors !== undefined &&
+    (!Array.isArray(validationErrors) ||
+      validationErrors.some((item) => typeof item !== "string"))
+  ) {
+    return null;
+  }
+
+  return {
+    engine,
+    version,
+    catalog,
+    spec: spec as ArtifactRenderMetadata["spec"],
+    validatedAt,
+    validationErrors: Array.isArray(validationErrors)
+      ? (validationErrors as string[])
+      : undefined,
+  };
+}
+
 function toAgentToolCallSummary(toolCall: AgentToolCall): AgentToolCallSummary {
   return {
     id: toolCall.id,
@@ -1359,6 +1452,149 @@ function toAgentToolCallSummary(toolCall: AgentToolCall): AgentToolCallSummary {
     status: toolCall.status,
     outputSummary: toolCall.outputSummary ?? null,
     createdAt: toolCall.createdAt,
+  };
+}
+
+function toAgentOfferSummary(offer: AgentOffer): AgentOfferSummary {
+  return {
+    id: offer.id,
+    conversationId: offer.conversationId,
+    messageId: offer.messageId ?? null,
+    sourceMessageId: offer.sourceMessageId ?? null,
+    status: offer.status,
+    title: offer.title,
+    summary: offer.summary,
+    proposedPrompt: offer.proposedPrompt,
+    taskKind:
+      offer.taskKind === "mini_game" ||
+      offer.taskKind === "doc_markdown" ||
+      offer.taskKind === "mixed"
+        ? offer.taskKind
+        : "doc_markdown",
+    riskLevel: offer.riskLevel,
+    acceptedTaskId: offer.acceptedTaskId ?? null,
+    createdAt: offer.createdAt,
+    resolvedAt: offer.resolvedAt,
+  };
+}
+
+function toIntentSlots(session: AgentIntentSession) {
+  const valuesRecord =
+    session.slotValues &&
+    typeof session.slotValues === "object" &&
+    !Array.isArray(session.slotValues)
+      ? (session.slotValues as Record<string, unknown>)
+      : {};
+  const schemaItems = Array.isArray(session.slotSchema)
+    ? session.slotSchema
+    : [];
+  const fallbackSlots = Array.isArray(session.missingSlots)
+    ? session.missingSlots
+    : [];
+
+  const slots = schemaItems
+    .map((item) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) {
+        return null;
+      }
+      const row = item as Record<string, unknown>;
+      const key =
+        typeof row.key === "string" && row.key.trim().length > 0
+          ? row.key.trim()
+          : null;
+      if (!key) return null;
+      const value = valuesRecord[key];
+      const valueText =
+        typeof value === "string" && value.trim().length > 0
+          ? value.trim()
+          : null;
+      return {
+        key,
+        label:
+          typeof row.label === "string" && row.label.trim().length > 0
+            ? row.label.trim()
+            : key,
+        required:
+          typeof row.required === "boolean"
+            ? row.required
+            : !fallbackSlots.includes(key),
+        value: valueText,
+        status: valueText ? ("filled" as const) : ("missing" as const),
+      };
+    })
+    .filter((slot): slot is NonNullable<typeof slot> => Boolean(slot));
+
+  if (slots.length > 0) return slots;
+  return fallbackSlots.map((slot) => ({
+    key: String(slot),
+    label: String(slot),
+    required: true,
+    value: null,
+    status: "missing" as const,
+  }));
+}
+
+function toAgentIntentSessionSummary(
+  session: AgentIntentSession,
+): AgentIntentSessionSummary {
+  return {
+    id: session.id,
+    userId: session.userId,
+    conversationId: session.conversationId,
+    status: session.status,
+    taskKind:
+      session.taskKind === "mini_game" ||
+      session.taskKind === "doc_markdown" ||
+      session.taskKind === "mixed"
+        ? session.taskKind
+        : "doc_markdown",
+    sourceMessageId: session.sourceMessageId ?? null,
+    offerId: session.offerId ?? null,
+    promptSeed: session.promptSeed,
+    clarificationQuestion: session.clarificationQuestion ?? null,
+    slots: toIntentSlots(session),
+    acceptedTaskId: session.acceptedTaskId ?? null,
+    createdAt: session.createdAt,
+    updatedAt: session.updatedAt,
+    resolvedAt: session.resolvedAt,
+  };
+}
+
+function toTaskStateVersion(params: {
+  task: AgentTask;
+  steps: AgentStep[];
+  approvals: AgentApproval[];
+  artifacts: AgentArtifact[];
+  toolCalls: AgentToolCall[];
+}): TaskStateVersion {
+  const eventTimes = [
+    params.task.updatedAt,
+    params.task.completedAt,
+    ...params.steps.flatMap((step) => [step.updatedAt, step.createdAt]),
+    ...params.approvals.flatMap((approval) => [approval.respondedAt, approval.createdAt]),
+    ...params.artifacts.flatMap((artifact) => [artifact.updatedAt, artifact.createdAt]),
+    ...params.toolCalls.flatMap((toolCall) => [toolCall.createdAt]),
+  ]
+    .filter((value): value is Date => value instanceof Date)
+    .map((value) => value.getTime());
+  const lastEventAtMs = eventTimes.length > 0 ? Math.max(...eventTimes) : null;
+  const lastEventAt =
+    lastEventAtMs && Number.isFinite(lastEventAtMs)
+      ? new Date(lastEventAtMs).toISOString()
+      : null;
+  const value = [
+    params.task.id,
+    params.task.status,
+    String(lastEventAtMs ?? 0),
+    String(params.steps.length),
+    String(params.approvals.length),
+    String(params.artifacts.length),
+    String(params.toolCalls.length),
+  ].join(":");
+  return {
+    value,
+    lastEventAt,
+    resolvedFromSnapshot: false,
   };
 }
 
@@ -1402,6 +1638,34 @@ function isAgentMessageUiPayload(
   if (!value || typeof value !== "object") return false;
   const kind = (value as Record<string, unknown>).kind;
   return typeof kind === "string" && kind.startsWith("agent_");
+}
+
+function shouldIncludeMessageInConversationContext(message: {
+  sender: string;
+  text?: string | null;
+  uiPayload?: unknown;
+  messagePurpose?: unknown;
+}): boolean {
+  if (!ENABLE_CONTEXT_MESSAGE_PURPOSE_FILTER) {
+    if (message.sender === "assistant" && isAgentMessageUiPayload(message.uiPayload)) {
+      return false;
+    }
+    return true;
+  }
+
+  if (message.messagePurpose === "conversation") {
+    return true;
+  }
+
+  if (message.messagePurpose === "agent_ui" || message.messagePurpose === "system") {
+    return false;
+  }
+
+  if (message.sender === "assistant" && isAgentMessageUiPayload(message.uiPayload)) {
+    return false;
+  }
+
+  return true;
 }
 
 const TURN_INTENT_CONTEXT_LOOKBACK = 12;
@@ -1490,6 +1754,7 @@ function parseAgentOfferFromMessage(
   return {
     id: offer.id,
     conversationId: offer.conversationId,
+    messageId: message.id,
     sourceMessageId:
       typeof offer.sourceMessageId === "string" ? offer.sourceMessageId : null,
     status: offer.status,
@@ -1619,13 +1884,48 @@ function inferProactiveOfferOpportunity(input: {
 }
 
 async function maybeCreateProactiveOfferMessage(input: {
+  userId: string;
   conversationId: string;
   userMessage: Message;
   userText: string;
   conversationMessages: Message[];
 }): Promise<Message | null> {
   if (!ENABLE_AGENT_PROACTIVE_OFFERS) return null;
-  if (findPendingOfferMessage(input.conversationMessages)) {
+  if (ENABLE_AGENT_OFFERS_V2) {
+    const pendingOffer = await storage.getPendingAgentOfferForConversation({
+      userId: input.userId,
+      conversationId: input.conversationId,
+    });
+    if (pendingOffer) {
+      const ageMs = Date.now() - (pendingOffer.updatedAt?.getTime() ?? 0);
+      if (ageMs < AGENT_OFFER_COOLDOWN_MS) {
+        return null;
+      }
+      await storage.updateAgentOffer({
+        offerId: pendingOffer.id,
+        updates: {
+          status: "expired",
+          resolvedAt: new Date(),
+        },
+      });
+      if (pendingOffer.messageId) {
+        const expiredSummary = toAgentOfferSummary({
+          ...pendingOffer,
+          status: "expired",
+          resolvedAt: new Date(),
+        } as AgentOffer);
+        await storage.updateMessageUiPayload({
+          messageId: pendingOffer.messageId,
+          text: "Offer expired",
+          uiPayload: {
+            kind: "agent_offer",
+            offer: expiredSummary,
+            text: "Offer expired",
+          },
+        });
+      }
+    }
+  } else if (findPendingOfferMessage(input.conversationMessages)) {
     return null;
   }
 
@@ -1636,17 +1936,239 @@ async function maybeCreateProactiveOfferMessage(input: {
   });
   if (!offer) return null;
 
-  return storage.createMessage({
+  let persistedOffer: AgentOffer | null = null;
+  if (ENABLE_AGENT_OFFERS_V2) {
+    persistedOffer = await storage.createAgentOffer({
+      userId: input.userId,
+      conversationId: offer.conversationId,
+      messageId: null,
+      sourceMessageId: offer.sourceMessageId,
+      status: offer.status,
+      title: offer.title,
+      summary: offer.summary,
+      proposedPrompt: offer.proposedPrompt,
+      taskKind: offer.taskKind,
+      riskLevel: offer.riskLevel,
+      acceptedTaskId: null,
+      intentSessionId: null,
+      metadata: {
+        source: "proactive_offer_v2",
+      },
+    });
+  }
+
+  const offerForUi = persistedOffer ? toAgentOfferSummary(persistedOffer) : offer;
+
+  const offerMessage = await storage.createMessage({
     conversationId: input.conversationId,
     sender: "assistant",
     text: "Want me to build this?",
     partIndex: 0,
     uiPayload: {
       kind: "agent_offer",
-      offer,
+      offer: offerForUi,
       text: "Want me to build this?",
     },
   });
+
+  if (persistedOffer) {
+    const updated = await storage.updateAgentOffer({
+      offerId: persistedOffer.id,
+      updates: {
+        messageId: offerMessage.id,
+      },
+    });
+    if (updated) {
+      await storage.updateMessageUiPayload({
+        messageId: offerMessage.id,
+        uiPayload: {
+          kind: "agent_offer",
+          offer: toAgentOfferSummary(updated),
+          text: "Want me to build this?",
+        },
+      });
+    }
+  }
+
+  return offerMessage;
+}
+
+async function resolveOfferFromRequest(params: {
+  offerIdOrMessageId: string;
+  userId: string;
+}): Promise<{
+  offer: AgentOfferSummary;
+  offerRecord: AgentOffer | null;
+  offerMessage: Message | null;
+} | null> {
+  if (ENABLE_AGENT_OFFERS_V2) {
+    const directById = await storage.getAgentOfferById(params.offerIdOrMessageId);
+    const byMessageId = directById
+      ? null
+      : await storage.getAgentOfferByMessageId(params.offerIdOrMessageId);
+    const offerRecord = directById ?? byMessageId;
+    if (offerRecord && offerRecord.userId === params.userId) {
+      const offerMessage = offerRecord.messageId
+        ? await storage.getUserMessageById(offerRecord.messageId, params.userId)
+        : undefined;
+      return {
+        offer: toAgentOfferSummary(offerRecord),
+        offerRecord,
+        offerMessage: (offerMessage as unknown as Message | undefined) ?? null,
+      };
+    }
+  }
+
+  const legacyMessage = await storage.getUserMessageById(
+    params.offerIdOrMessageId,
+    params.userId,
+  );
+  if (!legacyMessage || legacyMessage.sender !== "assistant") {
+    return null;
+  }
+  const offer = parseAgentOfferFromMessage(legacyMessage);
+  if (!offer) {
+    return null;
+  }
+  return {
+    offer,
+    offerRecord: null,
+    offerMessage: legacyMessage as unknown as Message,
+  };
+}
+
+function coerceTaskKind(value: string): AgentTaskKind {
+  if (value === "mini_game" || value === "doc_markdown" || value === "mixed") {
+    return value;
+  }
+  return "doc_markdown";
+}
+
+function buildIntentExecutionPromptFromSession(input: {
+  sessionPromptSeed: string;
+  slotValues: Record<string, string>;
+  latestUserText: string;
+  sourceMessageId: string;
+  taskKind: AgentTaskKind;
+  conversationMessages: Message[];
+}): string {
+  const slotLines = Object.entries(input.slotValues)
+    .filter(([, value]) => value.trim().length > 0)
+    .map(([key, value]) => `- ${key}: ${value.trim()}`);
+  const mergedPrompt = [
+    input.sessionPromptSeed.trim(),
+    slotLines.length > 0 ? "\nClarified details:\n" : "",
+    slotLines.length > 0 ? slotLines.join("\n") : "",
+    input.latestUserText.trim().length > 0
+      ? `\nLatest user reply: ${input.latestUserText.trim()}`
+      : "",
+  ]
+    .filter((line) => line.length > 0)
+    .join("\n");
+
+  return buildTaskExecutionPrompt({
+    userText: mergedPrompt,
+    sourceMessageId: input.sourceMessageId,
+    taskKind: input.taskKind,
+    conversationMessages: input.conversationMessages,
+  });
+}
+
+async function upsertIntentSessionForClarification(input: {
+  userId: string;
+  conversationId: string;
+  taskKind: AgentTaskKind;
+  sourceMessageId: string;
+  offerId?: string | null;
+  promptSeed: string;
+  clarificationQuestion: string;
+  slotSchema: IntentSlotSchemaItem[];
+  slotValues: Record<string, string>;
+  missingSlots: string[];
+  existingSession: AgentIntentSession | null;
+}): Promise<AgentIntentSessionSummary | null> {
+  if (!ENABLE_AGENT_INTENT_SESSIONS) return null;
+
+  if (input.existingSession) {
+    const updates: AgentIntentSessionUpdate = {
+      status: "active",
+      taskKind: input.taskKind,
+      sourceMessageId: input.sourceMessageId,
+      offerId: input.offerId ?? input.existingSession.offerId ?? null,
+      promptSeed: input.promptSeed,
+      clarificationQuestion: input.clarificationQuestion,
+      slotSchema: input.slotSchema,
+      slotValues: input.slotValues,
+      missingSlots: input.missingSlots,
+      lastUserMessageId: input.sourceMessageId,
+      resolvedAt: null,
+    };
+    const updated = await storage.updateAgentIntentSession({
+      sessionId: input.existingSession.id,
+      updates,
+    });
+    return updated ? toAgentIntentSessionSummary(updated) : null;
+  }
+
+  const created = await storage.createAgentIntentSession({
+    userId: input.userId,
+    conversationId: input.conversationId,
+    status: "active",
+    taskKind: input.taskKind,
+    sourceMessageId: input.sourceMessageId,
+    offerId: input.offerId ?? null,
+    promptSeed: input.promptSeed,
+    clarificationQuestion: input.clarificationQuestion,
+    slotSchema: input.slotSchema,
+    slotValues: input.slotValues,
+    missingSlots: input.missingSlots,
+    lastUserMessageId: input.sourceMessageId,
+    acceptedTaskId: null,
+    metadata: {
+      source: "clarification_guardrail",
+    },
+  });
+  return toAgentIntentSessionSummary(created);
+}
+
+function hydrateIntentSessionFromUserReply(input: {
+  session: AgentIntentSession;
+  taskKind: AgentTaskKind;
+  userText: string;
+}): {
+  slotSchema: IntentSlotSchemaItem[];
+  slotValues: Record<string, string>;
+  missingSlots: string[];
+} {
+  const fallbackSchema = buildIntentSlotSchema({
+    taskKind: input.taskKind,
+    promptSeed: input.session.promptSeed,
+  });
+  const slotSchema = Array.isArray(input.session.slotSchema)
+    ? (input.session.slotSchema
+        .map((row) => {
+          if (!row || typeof row !== "object" || Array.isArray(row)) return null;
+          const record = row as Record<string, unknown>;
+          const key =
+            typeof record.key === "string" ? record.key.trim() : "";
+          const label =
+            typeof record.label === "string" ? record.label.trim() : key;
+          const required = typeof record.required === "boolean" ? record.required : true;
+          if (!key) return null;
+          return { key, label: label || key, required };
+        })
+        .filter((row): row is IntentSlotSchemaItem => Boolean(row)) as IntentSlotSchemaItem[])
+    : fallbackSchema;
+
+  const currentValues = coerceSlotValues(input.session.slotValues);
+  const incomingValues = extractIntentSlotValuesFromText({
+    taskKind: input.taskKind,
+    text: input.userText,
+    slotSchema,
+  });
+  const slotValues = mergeIntentSlotValues(currentValues, incomingValues);
+  const missingSlots = computeMissingIntentSlots(slotSchema, slotValues);
+  return { slotSchema, slotValues, missingSlots };
 }
 
 function toTaskKindOrNull(value: unknown): AgentTaskKind | null {
@@ -2037,6 +2559,309 @@ function maybeBuildTaskClarification(input: {
     reason: needsDocClarification
       ? "underspecified_document_task"
       : "underspecified_game_task",
+  };
+}
+
+const INTENT_FOLLOW_UP_PATTERNS = [
+  /\b(it|that|this|same one|another one|again|redo|retry|revise|update|improve|fix)\b/i,
+  /\b(more|less)\s+(technical|formal|casual|short|detailed|bold|friendly)\b/i,
+  /\b(add|change|swap|adjust|make it|turn it into)\b/i,
+];
+const INTENT_CASUAL_CHAT_PATTERNS = [
+  /^\s*(hi|hello|hey|yo|sup|wyd|how are you|what'?s up)\b/i,
+  /\b(thanks|thank you|lol|lmao|haha|good morning|good night)\b/i,
+];
+const INTENT_AFFIRMATION_ONLY_PATTERNS = [
+  /^\s*(yes|yeah|yep|sure|ok|okay|do it|go ahead|sounds good|let'?s do it|please do)\s*[.!?]*\s*$/i,
+];
+const INTENT_TONE_PATTERNS =
+  /\b(formal|warm|bold|friendly|technical|professional|casual|playful|concise)\b/i;
+const INTENT_AUDIENCE_PATTERNS =
+  /\b(for|to)\s+([a-z0-9&.,'\- ]{3,80})\b/i;
+
+type IntentSlotSchemaItem = {
+  key: string;
+  label: string;
+  required: boolean;
+};
+
+function buildIntentSlotSchema(input: {
+  taskKind: AgentTaskKind;
+  promptSeed: string;
+}): IntentSlotSchemaItem[] {
+  const normalized = input.promptSeed.toLowerCase();
+
+  if (input.taskKind === "mini_game") {
+    return [
+      { key: "game_details", label: "Game style/mechanics", required: true },
+      { key: "game_mode", label: "2D or light 3D", required: false },
+    ];
+  }
+
+  if (/\b(presentation|slides|deck|pitch)\b/i.test(normalized)) {
+    return [
+      { key: "deck_goal", label: "Deck goal/topic", required: true },
+      { key: "deck_audience", label: "Audience", required: true },
+      { key: "deck_must_haves", label: "3-5 required points", required: false },
+      { key: "tone", label: "Tone", required: false },
+    ];
+  }
+
+  if (/\b(email)\b/i.test(normalized)) {
+    return [
+      { key: "recipient", label: "Recipient", required: true },
+      { key: "goal", label: "Goal", required: true },
+      { key: "tone", label: "Tone", required: false },
+    ];
+  }
+
+  return [
+    { key: "details", label: "Core details", required: true },
+    { key: "tone", label: "Tone", required: false },
+  ];
+}
+
+function coerceSlotValues(
+  value: unknown,
+): Record<string, string> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  const record = value as Record<string, unknown>;
+  const normalized: Record<string, string> = {};
+  for (const [key, raw] of Object.entries(record)) {
+    if (typeof raw !== "string") continue;
+    const compact = raw.trim();
+    if (!compact) continue;
+    normalized[key] = compact;
+  }
+  return normalized;
+}
+
+function mergeIntentSlotValues(
+  current: Record<string, string>,
+  incoming: Record<string, string>,
+): Record<string, string> {
+  const merged: Record<string, string> = { ...current };
+  for (const [key, value] of Object.entries(incoming)) {
+    const compact = value.trim();
+    if (!compact) continue;
+    merged[key] = compact;
+  }
+  return merged;
+}
+
+function computeMissingIntentSlots(
+  slotSchema: IntentSlotSchemaItem[],
+  slotValues: Record<string, string>,
+): string[] {
+  return slotSchema
+    .filter((slot) => slot.required)
+    .map((slot) => slot.key)
+    .filter((key) => !slotValues[key] || slotValues[key].trim().length === 0);
+}
+
+function extractIntentSlotValuesFromText(input: {
+  taskKind: AgentTaskKind;
+  text: string;
+  slotSchema: IntentSlotSchemaItem[];
+}): Record<string, string> {
+  const normalized = toCompactMessageText(input.text);
+  if (!normalized) return {};
+
+  const values: Record<string, string> = {};
+  const lower = normalized.toLowerCase();
+  const affirmationOnly = INTENT_AFFIRMATION_ONLY_PATTERNS.some((pattern) =>
+    pattern.test(normalized),
+  );
+
+  const toneMatch = lower.match(INTENT_TONE_PATTERNS);
+  if (toneMatch?.[1]) {
+    values.tone = toneMatch[1];
+  }
+
+  const audienceMatch = normalized.match(INTENT_AUDIENCE_PATTERNS);
+  if (audienceMatch?.[2]) {
+    values.deck_audience = audienceMatch[2].trim();
+    values.recipient = audienceMatch[2].trim();
+  }
+
+  const commaSegments = normalized
+    .split(",")
+    .map((segment) => segment.trim())
+    .filter((segment) => segment.length > 0);
+
+  if (!affirmationOnly) {
+    if (input.taskKind === "mini_game") {
+      values.game_details = normalized;
+      if (/\b(light\s*3d|3d|three\.?js)\b/i.test(lower)) {
+        values.game_mode = "light_3d";
+      } else if (/\b2d\b/i.test(lower)) {
+        values.game_mode = "2d";
+      }
+    } else if (commaSegments.length >= 2 && /\b(email)\b/i.test(lower)) {
+      values.recipient = values.recipient ?? commaSegments[0] ?? "";
+      values.goal = commaSegments[1] ?? normalized;
+    } else if (commaSegments.length >= 2 && /\b(slides?|presentation|deck|pitch)\b/i.test(lower)) {
+      values.deck_goal = commaSegments[0] ?? normalized;
+      values.deck_audience = values.deck_audience ?? commaSegments[1] ?? "";
+      if (commaSegments.length >= 3) {
+        values.deck_must_haves = commaSegments.slice(2).join(", ");
+      }
+    } else {
+      values.details = normalized;
+      values.goal = normalized;
+      values.deck_goal = normalized;
+    }
+  }
+
+  const filtered: Record<string, string> = {};
+  const allowedKeys = new Set(input.slotSchema.map((slot) => slot.key));
+  for (const [key, value] of Object.entries(values)) {
+    if (!allowedKeys.has(key)) continue;
+    const compact = value.trim();
+    if (!compact) continue;
+    filtered[key] = compact;
+  }
+  return filtered;
+}
+
+function buildIntentSlotClarificationQuestion(input: {
+  slotSchema: IntentSlotSchemaItem[];
+  missingSlotKeys: string[];
+  stylePreset?: ResponseStylePreset;
+  fallbackQuestion: string;
+}): string {
+  const firstMissing = input.missingSlotKeys[0];
+  if (!firstMissing) {
+    return input.fallbackQuestion;
+  }
+
+  if (firstMissing === "tone") {
+    return chooseClarificationTone(input.stylePreset, {
+      concise: "What tone should I use (formal, warm, bold, technical, or concise)?",
+      balanced:
+        "Quick check: what tone should I use (formal, warm, bold, technical, or concise)?",
+      expressive:
+        "Quick check so I match your style: what tone should I use (formal, warm, bold, technical, or concise)?",
+      playful:
+        "Got it. What tone are we vibing with: formal, warm, bold, technical, or concise?",
+    });
+  }
+
+  const slot = input.slotSchema.find((row) => row.key === firstMissing);
+  if (!slot) {
+    return input.fallbackQuestion;
+  }
+
+  return chooseClarificationTone(input.stylePreset, {
+    concise: `I need one detail to continue: ${slot.label}.`,
+    balanced: `Before I build it, I need one detail: ${slot.label}.`,
+    expressive: `I can do this. One quick detail before I start: ${slot.label}.`,
+    playful: `Quick one so I can ship it right: ${slot.label}.`,
+  });
+}
+
+function shouldInvokeModelIntentClassifier(input: {
+  userText: string;
+  deterministicIntent: ChatTurnIntent;
+  hasRecentAgentActivity: boolean;
+  hasActiveIntentSession: boolean;
+}): boolean {
+  if (!ENABLE_AGENT_MODEL_INTENT_CLASSIFIER) return false;
+  if (!input.userText.trim()) return false;
+
+  if (input.hasActiveIntentSession) {
+    return true;
+  }
+
+  if (input.deterministicIntent === "agent_task") {
+    return false;
+  }
+
+  if (INTENT_CASUAL_CHAT_PATTERNS.some((pattern) => pattern.test(input.userText))) {
+    return false;
+  }
+
+  return (
+    input.hasRecentAgentActivity &&
+    INTENT_FOLLOW_UP_PATTERNS.some((pattern) => pattern.test(input.userText))
+  );
+}
+
+async function resolveTurnIntentWithFallback(input: {
+  req: any;
+  userText: string;
+  turnIntentContext: {
+    hasRecentAgentActivity: boolean;
+    recentTaskKind: AgentTaskKind | null;
+  };
+  hasActiveIntentSession: boolean;
+}): Promise<{
+  intent: ChatTurnIntent;
+  deterministicIntent: ChatTurnIntent;
+  classifierUsed: boolean;
+  classifierModel?: string;
+  classifierIntent?: ChatTurnIntent;
+  classifierConfidence?: number;
+}> {
+  const deterministicIntent = classifyChatTurnIntent(
+    input.userText,
+    input.turnIntentContext,
+  );
+
+  let resolvedIntent: ChatTurnIntent = deterministicIntent;
+  let classifierUsed = false;
+  let classifierModel: string | undefined;
+  let classifierIntent: ChatTurnIntent | undefined;
+  let classifierConfidence: number | undefined;
+
+  const forceContinuation =
+    input.hasActiveIntentSession &&
+    (INTENT_AFFIRMATION_ONLY_PATTERNS.some((pattern) => pattern.test(input.userText)) ||
+      INTENT_FOLLOW_UP_PATTERNS.some((pattern) => pattern.test(input.userText)));
+  if (forceContinuation) {
+    resolvedIntent = "agent_task";
+  }
+
+  if (
+    shouldInvokeModelIntentClassifier({
+      userText: input.userText,
+      deterministicIntent,
+      hasRecentAgentActivity: input.turnIntentContext.hasRecentAgentActivity,
+      hasActiveIntentSession: input.hasActiveIntentSession,
+    })
+  ) {
+    try {
+      const classified = await classifyTurnIntentWithModel({
+        userText: input.userText,
+        hasRecentAgentActivity: input.turnIntentContext.hasRecentAgentActivity,
+        hasActiveIntentSession: input.hasActiveIntentSession,
+        recentTaskKind: input.turnIntentContext.recentTaskKind,
+      });
+      classifierUsed = true;
+      classifierModel = classified.model;
+      classifierIntent = classified.intent;
+      classifierConfidence = classified.confidence;
+
+      if (classified.confidence >= AGENT_MODEL_INTENT_CLASSIFIER_MIN_CONFIDENCE) {
+        resolvedIntent = classified.intent;
+      }
+    } catch (error) {
+      traceError(input.req, "chat.turn.intent_classifier.failed", error, {
+        hasActiveIntentSession: input.hasActiveIntentSession,
+        hasRecentAgentActivity: input.turnIntentContext.hasRecentAgentActivity,
+      });
+    }
+  }
+
+  return {
+    intent: resolvedIntent,
+    deterministicIntent,
+    classifierUsed,
+    classifierModel,
+    classifierIntent,
+    classifierConfidence,
   };
 }
 
@@ -2453,6 +3278,9 @@ async function buildModelMessages(params: {
   const stitchedMemory = await storage.getMessagesWithAttachments(
     params.conversationId,
   );
+  const filteredMemory = stitchedMemory.filter((message) =>
+    shouldIncludeMessageInConversationContext(message),
+  );
 
   const currentAttachmentById = new Map<string, string>();
   for (const attachment of params.boundAttachments) {
@@ -2466,7 +3294,7 @@ async function buildModelMessages(params: {
     currentAttachmentById.set(attachment.id, bytes.toString("base64"));
   }
 
-  return stitchedMemory.map((message) => ({
+  return filteredMemory.map((message) => ({
     sender: message.sender,
     text: message.text,
     attachments: message.attachments
@@ -2634,10 +3462,19 @@ export async function registerRoutes(
         );
         if (!conversation) return;
 
-        const data = insertMessageSchema.parse({
+        const parsedMessage = insertMessageSchema.parse({
           ...req.body,
           conversationId: req.params.id,
         });
+        const data = {
+          ...parsedMessage,
+          messagePurpose:
+            parsedMessage.messagePurpose === "conversation" ||
+            parsedMessage.messagePurpose === "agent_ui" ||
+            parsedMessage.messagePurpose === "system"
+              ? parsedMessage.messagePurpose
+              : undefined,
+        };
         const msg = await storage.createMessage(data);
         res.status(201).json(msg);
       } catch (error) {
@@ -3010,7 +3847,7 @@ export async function registerRoutes(
     } catch (error) {
       if (error instanceof z.ZodError) {
         return res.status(400).json({
-          message: error.errors[0]?.message ?? "Invalid profile payload",
+          message: error.issues[0]?.message ?? "Invalid profile payload",
           traceId: getTraceId(req),
         });
       }
@@ -3125,7 +3962,7 @@ export async function registerRoutes(
 
       if (error instanceof z.ZodError) {
         return res.status(400).json({
-          message: error.errors[0]?.message ?? "Invalid avatar payload",
+          message: error.issues[0]?.message ?? "Invalid avatar payload",
           traceId: getTraceId(req),
         });
       }
@@ -3240,7 +4077,7 @@ export async function registerRoutes(
 
       if (error instanceof z.ZodError) {
         return res.status(400).json({
-          message: error.errors[0]?.message ?? "Invalid Zee avatar payload",
+          message: error.issues[0]?.message ?? "Invalid Zee avatar payload",
           traceId: getTraceId(req),
         });
       }
@@ -3310,7 +4147,15 @@ export async function registerRoutes(
       if (rawTheme !== undefined && !appThemeSchema.safeParse(rawTheme).success) {
         return res.status(400).json({ message: "Invalid preferences data" });
       }
-      const data = insertUserPreferencesSchema.parse({ ...req.body, userId });
+      const parsedPrefs = insertUserPreferencesSchema.parse({ ...req.body, userId });
+      const data = {
+        ...parsedPrefs,
+        memoryMode:
+          parsedPrefs.memoryMode === "safe_selective" ||
+          parsedPrefs.memoryMode === "remember_everything"
+            ? parsedPrefs.memoryMode
+            : undefined,
+      };
       const prefs = await storage.upsertUserPreferences(data);
       res.json(prefs);
     } catch (error) {
@@ -3373,7 +4218,7 @@ export async function registerRoutes(
     } catch (error) {
       if (error instanceof z.ZodError) {
         return res.status(400).json({
-          message: error.errors[0]?.message ?? "Invalid memory settings payload",
+          message: error.issues[0]?.message ?? "Invalid memory settings payload",
           traceId: getTraceId(req),
         });
       }
@@ -3419,7 +4264,7 @@ export async function registerRoutes(
     } catch (error) {
       if (error instanceof z.ZodError) {
         return res.status(400).json({
-          message: error.errors[0]?.message ?? "Invalid memory query",
+          message: error.issues[0]?.message ?? "Invalid memory query",
           traceId: getTraceId(req),
         });
       }
@@ -3563,7 +4408,7 @@ export async function registerRoutes(
     } catch (error) {
       if (error instanceof z.ZodError) {
         return res.status(400).json({
-          message: error.errors[0]?.message ?? "Invalid voice session data",
+          message: error.issues[0]?.message ?? "Invalid voice session data",
           traceId: getTraceId(req),
         });
       }
@@ -3607,6 +4452,14 @@ export async function registerRoutes(
         elapsedMs: elapsedMs(startedAt),
       });
 
+      const stateVersion = toTaskStateVersion({
+        task,
+        steps: task.steps,
+        approvals: task.approvals,
+        artifacts: task.artifacts,
+        toolCalls: task.toolCalls,
+      });
+
       return res.status(200).json({
         traceId: getTraceId(req),
         task: toAgentTaskSummary(task),
@@ -3620,6 +4473,7 @@ export async function registerRoutes(
         toolCalls: task.toolCalls.map((toolCall) =>
           toAgentToolCallSummary(toolCall),
         ),
+        stateVersion,
       });
     } catch (error) {
       traceError(req, "agent.task.read.failed", error, {
@@ -3760,7 +4614,7 @@ export async function registerRoutes(
       } catch (error) {
         if (error instanceof z.ZodError) {
           return res.status(400).json({
-            message: error.errors[0]?.message ?? "Invalid approval request",
+            message: error.issues[0]?.message ?? "Invalid approval request",
             traceId: getTraceId(req),
           });
         }
@@ -3782,27 +4636,22 @@ export async function registerRoutes(
     async (req: any, res) => {
       const startedAt = Date.now();
       let offerMessageIdForRecovery: string | null = null;
-      let pendingOfferForRecovery: AgentOfferSummary | null = null;
+      let offerForRecovery: AgentOfferSummary | null = null;
       let offerLocked = false;
       try {
-        const offerMessage = await storage.getUserMessageById(
-          req.params.offerId,
-          req.session.userId,
-        );
-        if (!offerMessage || offerMessage.sender !== "assistant") {
+        const resolved = await resolveOfferFromRequest({
+          offerIdOrMessageId: req.params.offerId,
+          userId: req.session.userId,
+        });
+        if (!resolved) {
           return res.status(404).json({
             message: "Offer not found",
             traceId: getTraceId(req),
           });
         }
-
-        const offer = parseAgentOfferFromMessage(offerMessage);
-        if (!offer) {
-          return res.status(404).json({
-            message: "Offer not found",
-            traceId: getTraceId(req),
-          });
-        }
+        let { offer } = resolved;
+        const offerRecord = resolved.offerRecord;
+        const offerMessage = resolved.offerMessage;
 
         if (offer.status === "accepted" && offer.acceptedTaskId) {
           const existingTask = await storage.getAgentTaskById(offer.acceptedTaskId);
@@ -3826,66 +4675,233 @@ export async function registerRoutes(
             traceId: getTraceId(req),
           });
         }
-        offerMessageIdForRecovery = offerMessage.id;
-        pendingOfferForRecovery = offer;
+        offerMessageIdForRecovery = offerMessage?.id ?? null;
+        offerForRecovery = offer;
 
         const acceptingOffer: AgentOfferSummary = {
           ...offer,
           status: "accepted",
           resolvedAt: new Date(),
         };
-        await storage.updateMessageUiPayload({
-          messageId: offerMessage.id,
-          text: "Great — I’ll build this now.",
-          uiPayload: {
-            kind: "agent_offer",
-            offer: acceptingOffer,
-            text: "Offer accepted",
-          },
-        });
+
+        if (offerRecord) {
+          const updatedOffer = await storage.updateAgentOffer({
+            offerId: offerRecord.id,
+            updates: {
+              status: "accepted",
+              resolvedAt: acceptingOffer.resolvedAt,
+            },
+          });
+          if (updatedOffer) {
+            offer = toAgentOfferSummary(updatedOffer);
+          }
+        }
+
+        if (offerMessage?.id) {
+          await storage.updateMessageUiPayload({
+            messageId: offerMessage.id,
+            text: "Great — I’ll build this now.",
+            uiPayload: {
+              kind: "agent_offer",
+              offer: offerRecord ? offer : acceptingOffer,
+              text: "Offer accepted",
+            },
+          });
+        }
         offerLocked = true;
 
         const sourceAttachments = offer.sourceMessageId
           ? (await storage.getAttachmentsForConversation(offer.conversationId)).filter(
               (attachment) =>
                 attachment.messageId === offer.sourceMessageId &&
-                attachment.status !== "deleted",
+                  attachment.status !== "deleted",
             )
           : [];
         const conversationMessages = await storage.getMessages(offer.conversationId);
+        const taskKind = coerceTaskKind(offer.taskKind);
+        const existingIntentSession = ENABLE_AGENT_INTENT_SESSIONS
+          ? offerRecord?.intentSessionId
+            ? ((await storage.getAgentIntentSessionById(
+                offerRecord.intentSessionId,
+              )) ?? null)
+            : ((await storage.getActiveAgentIntentSessionForConversation({
+                userId: req.session.userId,
+                conversationId: offer.conversationId,
+              })) ?? null)
+          : null;
+
+        const sessionHydration = existingIntentSession
+          ? hydrateIntentSessionFromUserReply({
+              session: existingIntentSession,
+              taskKind,
+              userText: "",
+            })
+          : (() => {
+              const slotSchema = buildIntentSlotSchema({
+                taskKind,
+                promptSeed: offer.proposedPrompt,
+              });
+              const slotValues = extractIntentSlotValuesFromText({
+                taskKind,
+                text: offer.proposedPrompt,
+                slotSchema,
+              });
+              const missingSlots = computeMissingIntentSlots(slotSchema, slotValues);
+              return { slotSchema, slotValues, missingSlots };
+            })();
+
+        const clarificationStylePreset = await resolveClarificationStylePreset({
+          req,
+          userId: req.session.userId,
+        });
+        const fallbackClarification = maybeBuildTaskClarification({
+          taskKind,
+          userText: offer.proposedPrompt,
+          sourceMessageId: offer.sourceMessageId ?? offerMessage?.id ?? req.params.offerId,
+          conversationMessages,
+          hasImage: sourceAttachments.length > 0,
+          stylePreset: clarificationStylePreset,
+        });
+
+        if (fallbackClarification || sessionHydration.missingSlots.length > 0) {
+          const clarificationQuestion = buildIntentSlotClarificationQuestion({
+            slotSchema: sessionHydration.slotSchema,
+            missingSlotKeys: sessionHydration.missingSlots,
+            stylePreset: clarificationStylePreset,
+            fallbackQuestion:
+              fallbackClarification?.question ??
+              "Before I start, share one more detail so I can get this right.",
+          });
+
+          const intentSession = await upsertIntentSessionForClarification({
+            userId: req.session.userId,
+            conversationId: offer.conversationId,
+            taskKind,
+            sourceMessageId: offer.sourceMessageId ?? offerMessage?.id ?? req.params.offerId,
+            offerId: offer.id,
+            promptSeed: existingIntentSession?.promptSeed ?? offer.proposedPrompt,
+            clarificationQuestion,
+            slotSchema: sessionHydration.slotSchema,
+            slotValues: sessionHydration.slotValues,
+            missingSlots: sessionHydration.missingSlots,
+            existingSession: existingIntentSession,
+          });
+
+          if (offerRecord && intentSession) {
+            const updatedOffer = await storage.updateAgentOffer({
+              offerId: offerRecord.id,
+              updates: {
+                intentSessionId: intentSession.id,
+              },
+            });
+            if (updatedOffer) {
+              offer = toAgentOfferSummary(updatedOffer);
+            }
+          }
+
+          const clarificationMessages = await storage.createAssistantTurnParts({
+            conversationId: offer.conversationId,
+            textParts: [clarificationQuestion],
+          });
+
+          trace(req, "agent.offer.accepted.awaiting_clarification", {
+            offerId: offer.id,
+            intentSessionId: intentSession?.id ?? null,
+            missingSlots: sessionHydration.missingSlots,
+            elapsedMs: elapsedMs(startedAt),
+          });
+
+          return res.status(200).json({
+            traceId: getTraceId(req),
+            accepted: true,
+            awaitingClarification: true,
+            offer,
+            intentSession,
+            clarification: {
+              message: clarificationQuestion,
+              messages: clarificationMessages,
+            },
+            task: null,
+            awaitingApproval: false,
+          });
+        }
+
         const offerIntentContext = inferRecentAgentIntentContext(
           conversationMessages,
-          offerMessage.id,
+          offerMessage?.id ?? req.params.offerId,
         );
-        const executionPrompt = buildTaskExecutionPrompt({
-          userText: offer.proposedPrompt,
-          sourceMessageId: offer.sourceMessageId ?? offerMessage.id,
-          taskKind: offer.taskKind,
-          conversationMessages,
-        });
+        const executionPrompt = existingIntentSession
+          ? buildIntentExecutionPromptFromSession({
+              sessionPromptSeed: existingIntentSession.promptSeed,
+              slotValues: sessionHydration.slotValues,
+              latestUserText: "",
+              sourceMessageId: offer.sourceMessageId ?? offerMessage?.id ?? req.params.offerId,
+              taskKind,
+              conversationMessages,
+            })
+          : buildTaskExecutionPrompt({
+              userText: offer.proposedPrompt,
+              sourceMessageId: offer.sourceMessageId ?? offerMessage?.id ?? req.params.offerId,
+              taskKind,
+              conversationMessages,
+            });
         const run = await startAgentTaskRun({
           userId: req.session.userId,
           conversationId: offer.conversationId,
           prompt: offer.proposedPrompt,
           executionPrompt,
-          requestedByMessageId: offer.sourceMessageId ?? offerMessage.id,
+          requestedByMessageId:
+            offer.sourceMessageId ?? offerMessage?.id ?? req.params.offerId,
           attachments: sourceAttachments,
           intentContext: offerIntentContext,
         });
 
-        const completedOffer: AgentOfferSummary = {
-          ...acceptingOffer,
+        let completedOffer: AgentOfferSummary = {
+          ...(offerRecord ? offer : acceptingOffer),
           acceptedTaskId: run.task.id,
         };
-        await storage.updateMessageUiPayload({
-          messageId: offerMessage.id,
-          text: "Approved. I started building this.",
-          uiPayload: {
-            kind: "agent_offer",
-            offer: completedOffer,
-            text: "Offer accepted",
-          },
-        });
+
+        if (offerRecord) {
+          const updatedOffer = await storage.updateAgentOffer({
+            offerId: offerRecord.id,
+            updates: {
+              acceptedTaskId: run.task.id,
+              status: "accepted",
+              resolvedAt: new Date(),
+              intentSessionId:
+                existingIntentSession?.id ?? offerRecord.intentSessionId ?? null,
+            },
+          });
+          if (updatedOffer) {
+            completedOffer = toAgentOfferSummary(updatedOffer);
+          }
+        }
+
+        if (existingIntentSession) {
+          await storage.updateAgentIntentSession({
+            sessionId: existingIntentSession.id,
+            updates: {
+              status: "completed",
+              acceptedTaskId: run.task.id,
+              missingSlots: [],
+              resolvedAt: new Date(),
+              clarificationQuestion: null,
+              slotValues: sessionHydration.slotValues,
+            },
+          });
+        }
+
+        if (offerMessage?.id) {
+          await storage.updateMessageUiPayload({
+            messageId: offerMessage.id,
+            text: "Approved. I started building this.",
+            uiPayload: {
+              kind: "agent_offer",
+              offer: completedOffer,
+              text: "Offer accepted",
+            },
+          });
+        }
 
         trace(req, "agent.offer.accepted", {
           offerId: offer.id,
@@ -3902,14 +4918,26 @@ export async function registerRoutes(
           awaitingApproval: run.awaitingApproval,
         });
       } catch (error) {
-        if (offerLocked && offerMessageIdForRecovery && pendingOfferForRecovery) {
+        if (offerLocked && offerForRecovery) {
+          if (ENABLE_AGENT_OFFERS_V2) {
+            await storage.updateAgentOffer({
+              offerId: offerForRecovery.id,
+              updates: {
+                status: "pending",
+                acceptedTaskId: null,
+                resolvedAt: null,
+              },
+            });
+          }
+        }
+        if (offerLocked && offerMessageIdForRecovery && offerForRecovery) {
           await storage.updateMessageUiPayload({
             messageId: offerMessageIdForRecovery,
             text: "Want me to build this?",
             uiPayload: {
               kind: "agent_offer",
               offer: {
-                ...pendingOfferForRecovery,
+                ...offerForRecovery,
                 status: "pending",
                 resolvedAt: null,
               },
@@ -3936,24 +4964,19 @@ export async function registerRoutes(
       const startedAt = Date.now();
       try {
         const parsed = agentOfferDecisionSchema.parse(req.body ?? {});
-        const offerMessage = await storage.getUserMessageById(
-          req.params.offerId,
-          req.session.userId,
-        );
-        if (!offerMessage || offerMessage.sender !== "assistant") {
+        const resolved = await resolveOfferFromRequest({
+          offerIdOrMessageId: req.params.offerId,
+          userId: req.session.userId,
+        });
+        if (!resolved) {
           return res.status(404).json({
             message: "Offer not found",
             traceId: getTraceId(req),
           });
         }
-
-        const offer = parseAgentOfferFromMessage(offerMessage);
-        if (!offer) {
-          return res.status(404).json({
-            message: "Offer not found",
-            traceId: getTraceId(req),
-          });
-        }
+        let { offer } = resolved;
+        const offerRecord = resolved.offerRecord;
+        const offerMessage = resolved.offerMessage;
 
         if (offer.status === "declined") {
           return res.status(200).json({
@@ -3979,15 +5002,45 @@ export async function registerRoutes(
         const declineText = parsed.reason?.trim()
           ? `No worries — skipped for now (${parsed.reason.trim()}).`
           : "No worries — skipped for now.";
-        await storage.updateMessageUiPayload({
-          messageId: offerMessage.id,
-          text: declineText,
-          uiPayload: {
-            kind: "agent_offer",
-            offer: declinedOffer,
-            text: "Offer declined",
-          },
-        });
+        if (offerRecord) {
+          const updatedOffer = await storage.updateAgentOffer({
+            offerId: offerRecord.id,
+            updates: {
+              status: "declined",
+              resolvedAt: declinedOffer.resolvedAt,
+            },
+          });
+          if (updatedOffer) {
+            offer = toAgentOfferSummary(updatedOffer);
+          }
+          if (offerRecord.intentSessionId) {
+            await storage.updateAgentIntentSession({
+              sessionId: offerRecord.intentSessionId,
+              updates: {
+                status: "cancelled",
+                resolvedAt: new Date(),
+                metadata: {
+                  cancelReason: parsed.reason?.trim() || "declined_offer",
+                },
+              },
+            });
+          }
+        }
+
+        if (offerMessage?.id) {
+          await storage.updateMessageUiPayload({
+            messageId: offerMessage.id,
+            text: declineText,
+            uiPayload: {
+              kind: "agent_offer",
+              offer: {
+                ...declinedOffer,
+                ...(offerRecord ? offer : {}),
+              },
+              text: "Offer declined",
+            },
+          });
+        }
 
         trace(req, "agent.offer.declined", {
           offerId: offer.id,
@@ -3997,12 +5050,12 @@ export async function registerRoutes(
         return res.status(200).json({
           traceId: getTraceId(req),
           declined: true,
-          offer: declinedOffer,
+          offer: offerRecord ? offer : declinedOffer,
         });
       } catch (error) {
         if (error instanceof z.ZodError) {
           return res.status(400).json({
-            message: error.errors[0]?.message ?? "Invalid decline request",
+            message: error.issues[0]?.message ?? "Invalid decline request",
             traceId: getTraceId(req),
           });
         }
@@ -4012,6 +5065,116 @@ export async function registerRoutes(
         });
         return res.status(500).json({
           message: "Failed to decline offer",
+          traceId: getTraceId(req),
+        });
+      }
+    },
+  );
+
+  app.get(
+    "/api/agent/intent-sessions/:sessionId",
+    isAuthenticated,
+    async (req: any, res) => {
+      const startedAt = Date.now();
+      try {
+        const session = await storage.getAgentIntentSessionById(req.params.sessionId);
+        if (!session || session.userId !== req.session.userId) {
+          return res.status(404).json({
+            message: "Intent session not found",
+            traceId: getTraceId(req),
+          });
+        }
+
+        trace(req, "agent.intent_session.read", {
+          sessionId: session.id,
+          status: session.status,
+          conversationId: session.conversationId,
+          elapsedMs: elapsedMs(startedAt),
+        });
+
+        return res.status(200).json({
+          traceId: getTraceId(req),
+          session: toAgentIntentSessionSummary(session),
+        });
+      } catch (error) {
+        traceError(req, "agent.intent_session.read.failed", error, {
+          sessionId: req.params.sessionId,
+          elapsedMs: elapsedMs(startedAt),
+        });
+        return res.status(500).json({
+          message: "Failed to fetch intent session",
+          traceId: getTraceId(req),
+        });
+      }
+    },
+  );
+
+  app.post(
+    "/api/agent/intent-sessions/:sessionId/cancel",
+    isAuthenticated,
+    async (req: any, res) => {
+      const startedAt = Date.now();
+      try {
+        const parsed = agentIntentSessionCancelSchema.parse(req.body ?? {});
+        const session = await storage.getAgentIntentSessionById(req.params.sessionId);
+        if (!session || session.userId !== req.session.userId) {
+          return res.status(404).json({
+            message: "Intent session not found",
+            traceId: getTraceId(req),
+          });
+        }
+
+        if (session.status !== "active") {
+          return res.status(200).json({
+            traceId: getTraceId(req),
+            cancelled: false,
+            alreadyResolved: true,
+            session: toAgentIntentSessionSummary(session),
+          });
+        }
+
+        const updated = await storage.updateAgentIntentSession({
+          sessionId: session.id,
+          updates: {
+            status: "cancelled",
+            resolvedAt: new Date(),
+            clarificationQuestion: null,
+            metadata: {
+              cancelReason: parsed.reason?.trim() || "user_cancelled",
+            },
+          },
+        });
+        if (!updated) {
+          return res.status(404).json({
+            message: "Intent session not found",
+            traceId: getTraceId(req),
+          });
+        }
+
+        trace(req, "agent.intent_session.cancelled", {
+          sessionId: updated.id,
+          conversationId: updated.conversationId,
+          elapsedMs: elapsedMs(startedAt),
+        });
+
+        return res.status(200).json({
+          traceId: getTraceId(req),
+          cancelled: true,
+          session: toAgentIntentSessionSummary(updated),
+        });
+      } catch (error) {
+        if (error instanceof z.ZodError) {
+          return res.status(400).json({
+            message: error.issues[0]?.message ?? "Invalid cancel request",
+            traceId: getTraceId(req),
+          });
+        }
+        traceError(req, "agent.intent_session.cancel.failed", error, {
+          sessionId: req.params.sessionId,
+          elapsedMs: elapsedMs(startedAt),
+        });
+        return res.status(500).json({
+          message: "Failed to cancel intent session",
           traceId: getTraceId(req),
         });
       }
@@ -4040,7 +5203,7 @@ export async function registerRoutes(
     } catch (error) {
       if (error instanceof z.ZodError) {
         return res.status(400).json({
-          message: error.errors[0]?.message ?? "Invalid artifacts query",
+          message: error.issues[0]?.message ?? "Invalid artifacts query",
           traceId: getTraceId(req),
         });
       }
@@ -4088,6 +5251,58 @@ export async function registerRoutes(
   );
 
   app.get(
+    "/api/agent/artifacts/:artifactId/render-spec",
+    isAuthenticated,
+    async (req: any, res) => {
+      const startedAt = Date.now();
+      try {
+        const artifact = await storage.getAgentArtifactById(req.params.artifactId);
+        if (!artifact || artifact.userId !== req.session.userId) {
+          return res.status(404).json({
+            message: "Artifact not found",
+            traceId: getTraceId(req),
+          });
+        }
+        if (artifact.status === "deleted") {
+          return res.status(404).json({
+            message: "Artifact was deleted",
+            traceId: getTraceId(req),
+          });
+        }
+
+        const renderMetadata = toArtifactRenderMetadata(artifact.metadata);
+        if (!renderMetadata) {
+          return res.status(404).json({
+            message: "Artifact render spec not available",
+            traceId: getTraceId(req),
+          });
+        }
+
+        trace(req, "agent.artifact.render_spec.read", {
+          artifactId: artifact.id,
+          catalog: renderMetadata.catalog,
+          elapsedMs: elapsedMs(startedAt),
+        });
+
+        return res.status(200).json({
+          traceId: getTraceId(req),
+          artifactId: artifact.id,
+          render: renderMetadata,
+        });
+      } catch (error) {
+        traceError(req, "agent.artifact.render_spec.read.failed", error, {
+          artifactId: req.params.artifactId,
+          elapsedMs: elapsedMs(startedAt),
+        });
+        return res.status(500).json({
+          message: "Failed to fetch artifact render spec",
+          traceId: getTraceId(req),
+        });
+      }
+    },
+  );
+
+  app.get(
     "/api/agent/artifacts/:artifactId/export.pdf",
     isAuthenticated,
     async (req: any, res) => {
@@ -4103,6 +5318,19 @@ export async function registerRoutes(
         if (artifact.status === "deleted") {
           return res.status(404).json({
             message: "Artifact was deleted",
+            traceId: getTraceId(req),
+          });
+        }
+        const renderMetadata = toArtifactRenderMetadata(artifact.metadata);
+        if (
+          artifact.type === "doc_markdown" &&
+          renderMetadata &&
+          renderMetadata.validationErrors &&
+          renderMetadata.validationErrors.length > 0
+        ) {
+          return res.status(400).json({
+            message:
+              "Artifact render model is invalid and cannot be exported. Please regenerate the artifact.",
             traceId: getTraceId(req),
           });
         }
@@ -4471,7 +5699,7 @@ export async function registerRoutes(
           elapsedMs: elapsedMs(startedAt),
         });
         return res.status(400).json({
-          message: error.errors[0]?.message ?? "Invalid live token request",
+          message: error.issues[0]?.message ?? "Invalid live token request",
           traceId: getTraceId(req),
         });
       }
@@ -4583,88 +5811,254 @@ export async function registerRoutes(
       );
 
       const existingConversationMessages = await storage.getMessages(conversation.id);
-      const turnIntentContext = inferRecentAgentIntentContext(
+      const activeIntentSession = ENABLE_AGENT_INTENT_SESSIONS
+        ? ((await storage.getActiveAgentIntentSessionForConversation({
+            userId: req.session.userId,
+            conversationId: conversation.id,
+          })) ?? null)
+        : null;
+      const baseTurnIntentContext = inferRecentAgentIntentContext(
         existingConversationMessages,
         userMessage.id,
       );
-      const turnIntent = classifyChatTurnIntent(parsed.text, turnIntentContext);
+      const turnIntentContext = {
+        hasRecentAgentActivity:
+          baseTurnIntentContext.hasRecentAgentActivity ||
+          Boolean(activeIntentSession),
+        recentTaskKind:
+          baseTurnIntentContext.recentTaskKind ??
+          (activeIntentSession ? coerceTaskKind(activeIntentSession.taskKind) : null),
+      };
+      const intentResolution = await resolveTurnIntentWithFallback({
+        req,
+        userText: parsed.text,
+        turnIntentContext,
+        hasActiveIntentSession: Boolean(activeIntentSession),
+      });
       const proactiveOpportunity = inferProactiveOfferOpportunity({
         conversationId: conversation.id,
         sourceMessageId: userMessage.id,
         userText: parsed.text,
       });
+      const hasPendingOffer = ENABLE_AGENT_OFFERS_V2
+        ? Boolean(
+            await storage.getPendingAgentOfferForConversation({
+              userId: req.session.userId,
+              conversationId: conversation.id,
+            }),
+          )
+        : Boolean(findPendingOfferMessage(existingConversationMessages));
       const shouldDeferToProactiveOffer =
-        turnIntent === "agent_task" &&
+        intentResolution.intent === "agent_task" &&
         Boolean(proactiveOpportunity) &&
-        !findPendingOfferMessage(existingConversationMessages);
+        !hasPendingOffer &&
+        !activeIntentSession;
       const effectiveTurnIntent: ChatTurnIntent = shouldDeferToProactiveOffer
         ? "companion_reply"
-        : turnIntent;
+        : intentResolution.intent;
       trace(req, "chat.turn.classified", {
         conversationId: conversation.id,
-        intent: turnIntent,
+        intent: intentResolution.intent,
+        deterministicIntent: intentResolution.deterministicIntent,
+        classifierUsed: intentResolution.classifierUsed,
+        classifierModel: intentResolution.classifierModel,
+        classifierIntent: intentResolution.classifierIntent,
+        classifierConfidence: intentResolution.classifierConfidence,
         effectiveIntent: effectiveTurnIntent,
         deferredToProactiveOffer: shouldDeferToProactiveOffer,
         attachmentCount: boundAttachments.length,
         recentAgentContext: turnIntentContext.hasRecentAgentActivity,
         recentAgentTaskKind: turnIntentContext.recentTaskKind,
+        hasActiveIntentSession: Boolean(activeIntentSession),
       });
 
       if (effectiveTurnIntent === "agent_task") {
-        const taskKind = inferAgentTaskKind(
-          parsed.text,
-          boundAttachments.length > 0,
-          turnIntentContext,
-        );
+        const taskKind = activeIntentSession
+          ? coerceTaskKind(activeIntentSession.taskKind)
+          : inferAgentTaskKind(
+              parsed.text,
+              boundAttachments.length > 0,
+              turnIntentContext,
+            );
         const clarificationStylePreset = await resolveClarificationStylePreset({
           req,
           userId: req.session.userId,
         });
-        const clarification = maybeBuildTaskClarification({
-          taskKind,
-          userText: parsed.text,
-          sourceMessageId: userMessage.id,
-          conversationMessages: existingConversationMessages,
-          hasImage: boundAttachments.length > 0,
-          stylePreset: clarificationStylePreset,
-        });
-        if (clarification) {
-          const clarificationMessages = await storage.createAssistantTurnParts({
-            conversationId: conversation.id,
-            textParts: [clarification.question],
-          });
-          const legacyClarificationMessage = makeLegacyAssistantMessage(
-            clarificationMessages,
-          );
-          trace(req, "chat.task.clarification_requested", {
-            conversationId: conversation.id,
+        let sessionForRun = activeIntentSession;
+        let executionPrompt: string | null = null;
+
+        if (sessionForRun) {
+          const hydratedSession = hydrateIntentSessionFromUserReply({
+            session: sessionForRun,
             taskKind,
-            reason: clarification.reason,
-            stylePreset: clarificationStylePreset,
-            sourceMessageId: userMessage.id,
+            userText: parsed.text,
           });
-          return res.status(201).json({
-            traceId: getTraceId(req),
-            conversationId: conversation.id,
-            userMessage: {
-              ...userMessage,
-              attachments: boundAttachments.map((attachment) =>
-                toAttachmentResponse(attachment, req.session.userId),
-              ),
+          if (hydratedSession.missingSlots.length > 0) {
+            const clarificationQuestion = buildIntentSlotClarificationQuestion({
+              slotSchema: hydratedSession.slotSchema,
+              missingSlotKeys: hydratedSession.missingSlots,
+              stylePreset: clarificationStylePreset,
+              fallbackQuestion:
+                sessionForRun.clarificationQuestion ??
+                "Give me one more detail so I can continue.",
+            });
+            const updatedIntentSession = await upsertIntentSessionForClarification({
+              userId: req.session.userId,
+              conversationId: conversation.id,
+              taskKind,
+              sourceMessageId: userMessage.id,
+              offerId: sessionForRun.offerId,
+              promptSeed: sessionForRun.promptSeed,
+              clarificationQuestion,
+              slotSchema: hydratedSession.slotSchema,
+              slotValues: hydratedSession.slotValues,
+              missingSlots: hydratedSession.missingSlots,
+              existingSession: sessionForRun,
+            });
+            const clarificationMessages = await storage.createAssistantTurnParts({
+              conversationId: conversation.id,
+              textParts: [clarificationQuestion],
+            });
+            const legacyClarificationMessage = makeLegacyAssistantMessage(
+              clarificationMessages,
+            );
+            trace(req, "chat.task.clarification_requested", {
+              conversationId: conversation.id,
+              taskKind,
+              reason: "intent_session_missing_slots",
+              stylePreset: clarificationStylePreset,
+              sourceMessageId: userMessage.id,
+              intentSessionId: sessionForRun.id,
+              missingSlots: hydratedSession.missingSlots,
+            });
+            return res.status(201).json({
+              traceId: getTraceId(req),
+              conversationId: conversation.id,
+              userMessage: {
+                ...userMessage,
+                attachments: boundAttachments.map((attachment) =>
+                  toAttachmentResponse(attachment, req.session.userId),
+                ),
+              },
+              assistantMessage: legacyClarificationMessage,
+              assistantMessages: clarificationMessages,
+              model: "clarification_guardrail_v2",
+              usage: null,
+              intentSession: updatedIntentSession,
+              elapsedMs: elapsedMs(startedAt),
+            });
+          }
+
+          executionPrompt = buildIntentExecutionPromptFromSession({
+            sessionPromptSeed: sessionForRun.promptSeed,
+            slotValues: hydratedSession.slotValues,
+            latestUserText: parsed.text,
+            sourceMessageId: userMessage.id,
+            taskKind,
+            conversationMessages: existingConversationMessages,
+          });
+
+          await storage.updateAgentIntentSession({
+            sessionId: sessionForRun.id,
+            updates: {
+              slotSchema: hydratedSession.slotSchema,
+              slotValues: hydratedSession.slotValues,
+              missingSlots: [],
+              clarificationQuestion: null,
+              lastUserMessageId: userMessage.id,
             },
-            assistantMessage: legacyClarificationMessage,
-            assistantMessages: clarificationMessages,
-            model: "clarification_guardrail_v1",
-            usage: null,
-            elapsedMs: elapsedMs(startedAt),
+          });
+        } else {
+          const clarification = maybeBuildTaskClarification({
+            taskKind,
+            userText: parsed.text,
+            sourceMessageId: userMessage.id,
+            conversationMessages: existingConversationMessages,
+            hasImage: boundAttachments.length > 0,
+            stylePreset: clarificationStylePreset,
+          });
+          const slotSchema = buildIntentSlotSchema({
+            taskKind,
+            promptSeed: parsed.text,
+          });
+          const slotValues = extractIntentSlotValuesFromText({
+            taskKind,
+            text: parsed.text,
+            slotSchema,
+          });
+          const missingSlots = computeMissingIntentSlots(slotSchema, slotValues);
+
+          if (clarification || missingSlots.length > 0) {
+            const clarificationQuestion = buildIntentSlotClarificationQuestion({
+              slotSchema,
+              missingSlotKeys: missingSlots,
+              stylePreset: clarificationStylePreset,
+              fallbackQuestion:
+                clarification?.question ??
+                "Share one more detail and I’ll start building it.",
+            });
+            const intentSession = await upsertIntentSessionForClarification({
+              userId: req.session.userId,
+              conversationId: conversation.id,
+              taskKind,
+              sourceMessageId: userMessage.id,
+              promptSeed: parsed.text,
+              clarificationQuestion,
+              slotSchema,
+              slotValues,
+              missingSlots,
+              existingSession: null,
+            });
+
+            const clarificationMessages = await storage.createAssistantTurnParts({
+              conversationId: conversation.id,
+              textParts: [clarificationQuestion],
+            });
+            const legacyClarificationMessage = makeLegacyAssistantMessage(
+              clarificationMessages,
+            );
+            trace(req, "chat.task.clarification_requested", {
+              conversationId: conversation.id,
+              taskKind,
+              reason:
+                clarification?.reason ??
+                (missingSlots.length > 0
+                  ? "intent_session_missing_slots"
+                  : "underspecified_task"),
+              stylePreset: clarificationStylePreset,
+              sourceMessageId: userMessage.id,
+              intentSessionId: intentSession?.id ?? null,
+              missingSlots,
+            });
+            return res.status(201).json({
+              traceId: getTraceId(req),
+              conversationId: conversation.id,
+              userMessage: {
+                ...userMessage,
+                attachments: boundAttachments.map((attachment) =>
+                  toAttachmentResponse(attachment, req.session.userId),
+                ),
+              },
+              assistantMessage: legacyClarificationMessage,
+              assistantMessages: clarificationMessages,
+              model: "clarification_guardrail_v2",
+              usage: null,
+              intentSession,
+              elapsedMs: elapsedMs(startedAt),
+            });
+          }
+
+          executionPrompt = buildTaskExecutionPrompt({
+            userText: parsed.text,
+            sourceMessageId: userMessage.id,
+            taskKind,
+            conversationMessages: existingConversationMessages,
           });
         }
-        const executionPrompt = buildTaskExecutionPrompt({
-          userText: parsed.text,
-          sourceMessageId: userMessage.id,
-          taskKind,
-          conversationMessages: existingConversationMessages,
-        });
+
+        if (!executionPrompt) {
+          throw new Error("Agent execution prompt was not resolved");
+        }
         const run = await startAgentTaskRun({
           userId: req.session.userId,
           conversationId: conversation.id,
@@ -4674,6 +6068,19 @@ export async function registerRoutes(
           attachments: boundAttachments,
           intentContext: turnIntentContext,
         });
+
+        if (sessionForRun) {
+          await storage.updateAgentIntentSession({
+            sessionId: sessionForRun.id,
+            updates: {
+              status: "completed",
+              acceptedTaskId: run.task.id,
+              resolvedAt: new Date(),
+              clarificationQuestion: null,
+              missingSlots: [],
+            },
+          });
+        }
 
         const allMessages = mapMessagesWithSignedAttachments(
           await storage.getMessagesWithAttachments(conversation.id),
@@ -4893,6 +6300,7 @@ export async function registerRoutes(
       let responseAssistantMessages = finalizedAssistantMessages;
 
       const proactiveOfferMessage = await maybeCreateProactiveOfferMessage({
+        userId: req.session.userId,
         conversationId: conversation.id,
         userMessage,
         userText: parsed.text,
@@ -4947,7 +6355,7 @@ export async function registerRoutes(
           elapsedMs: elapsedMs(startedAt),
         });
         return res.status(400).json({
-          message: error.errors[0]?.message ?? "Invalid chat request",
+          message: error.issues[0]?.message ?? "Invalid chat request",
           traceId: getTraceId(req),
         });
       }
@@ -5054,31 +6462,65 @@ export async function registerRoutes(
       );
 
       const existingConversationMessages = await storage.getMessages(conversation.id);
-      const turnIntentContext = inferRecentAgentIntentContext(
+      const activeIntentSession = ENABLE_AGENT_INTENT_SESSIONS
+        ? ((await storage.getActiveAgentIntentSessionForConversation({
+            userId: req.session.userId,
+            conversationId: conversation.id,
+          })) ?? null)
+        : null;
+      const baseTurnIntentContext = inferRecentAgentIntentContext(
         existingConversationMessages,
         userMessage.id,
       );
-      const turnIntent = classifyChatTurnIntent(parsed.text, turnIntentContext);
+      const turnIntentContext = {
+        hasRecentAgentActivity:
+          baseTurnIntentContext.hasRecentAgentActivity ||
+          Boolean(activeIntentSession),
+        recentTaskKind:
+          baseTurnIntentContext.recentTaskKind ??
+          (activeIntentSession ? coerceTaskKind(activeIntentSession.taskKind) : null),
+      };
+      const intentResolution = await resolveTurnIntentWithFallback({
+        req,
+        userText: parsed.text,
+        turnIntentContext,
+        hasActiveIntentSession: Boolean(activeIntentSession),
+      });
       const proactiveOpportunity = inferProactiveOfferOpportunity({
         conversationId: conversation.id,
         sourceMessageId: userMessage.id,
         userText: parsed.text,
       });
+      const hasPendingOffer = ENABLE_AGENT_OFFERS_V2
+        ? Boolean(
+            await storage.getPendingAgentOfferForConversation({
+              userId: req.session.userId,
+              conversationId: conversation.id,
+            }),
+          )
+        : Boolean(findPendingOfferMessage(existingConversationMessages));
       const shouldDeferToProactiveOffer =
-        turnIntent === "agent_task" &&
+        intentResolution.intent === "agent_task" &&
         Boolean(proactiveOpportunity) &&
-        !findPendingOfferMessage(existingConversationMessages);
+        !hasPendingOffer &&
+        !activeIntentSession;
       const effectiveTurnIntent: ChatTurnIntent = shouldDeferToProactiveOffer
         ? "companion_reply"
-        : turnIntent;
+        : intentResolution.intent;
       trace(req, "chat.turn.classified", {
         conversationId: conversation.id,
-        intent: turnIntent,
+        intent: intentResolution.intent,
+        deterministicIntent: intentResolution.deterministicIntent,
+        classifierUsed: intentResolution.classifierUsed,
+        classifierModel: intentResolution.classifierModel,
+        classifierIntent: intentResolution.classifierIntent,
+        classifierConfidence: intentResolution.classifierConfidence,
         effectiveIntent: effectiveTurnIntent,
         deferredToProactiveOffer: shouldDeferToProactiveOffer,
         attachmentCount: boundAttachments.length,
         recentAgentContext: turnIntentContext.hasRecentAgentActivity,
         recentAgentTaskKind: turnIntentContext.recentTaskKind,
+        hasActiveIntentSession: Boolean(activeIntentSession),
       });
 
       res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
@@ -5108,55 +6550,178 @@ export async function registerRoutes(
           attachmentCount: boundAttachments.length,
         });
 
-        const taskKind = inferAgentTaskKind(
-          parsed.text,
-          boundAttachments.length > 0,
-          turnIntentContext,
-        );
+        const taskKind = activeIntentSession
+          ? coerceTaskKind(activeIntentSession.taskKind)
+          : inferAgentTaskKind(
+              parsed.text,
+              boundAttachments.length > 0,
+              turnIntentContext,
+            );
         const clarificationStylePreset = await resolveClarificationStylePreset({
           req,
           userId: req.session.userId,
         });
-        const clarification = maybeBuildTaskClarification({
-          taskKind,
-          userText: parsed.text,
-          sourceMessageId: userMessage.id,
-          conversationMessages: existingConversationMessages,
-          hasImage: boundAttachments.length > 0,
-          stylePreset: clarificationStylePreset,
-        });
-        if (clarification) {
-          const clarificationMessages = await storage.createAssistantTurnParts({
-            conversationId: conversation.id,
-            textParts: [clarification.question],
-          });
-          const legacyClarificationMessage = makeLegacyAssistantMessage(
-            clarificationMessages,
-          );
-          writeEvent({
-            type: "final",
-            assistantMessage: legacyClarificationMessage,
-            assistantMessages: clarificationMessages,
-            model: "clarification_guardrail_v1",
-            usage: null,
-            elapsedMs: elapsedMs(startedAt),
-          });
-          trace(req, "chat.stream.task.clarification_requested", {
-            conversationId: conversation.id,
+        let sessionForRun = activeIntentSession;
+        let executionPrompt: string | null = null;
+
+        if (sessionForRun) {
+          const hydratedSession = hydrateIntentSessionFromUserReply({
+            session: sessionForRun,
             taskKind,
-            reason: clarification.reason,
-            stylePreset: clarificationStylePreset,
-            sourceMessageId: userMessage.id,
+            userText: parsed.text,
           });
-          res.end();
-          return;
+          if (hydratedSession.missingSlots.length > 0) {
+            const clarificationQuestion = buildIntentSlotClarificationQuestion({
+              slotSchema: hydratedSession.slotSchema,
+              missingSlotKeys: hydratedSession.missingSlots,
+              stylePreset: clarificationStylePreset,
+              fallbackQuestion:
+                sessionForRun.clarificationQuestion ??
+                "Give me one more detail so I can continue.",
+            });
+            const updatedIntentSession = await upsertIntentSessionForClarification({
+              userId: req.session.userId,
+              conversationId: conversation.id,
+              taskKind,
+              sourceMessageId: userMessage.id,
+              offerId: sessionForRun.offerId,
+              promptSeed: sessionForRun.promptSeed,
+              clarificationQuestion,
+              slotSchema: hydratedSession.slotSchema,
+              slotValues: hydratedSession.slotValues,
+              missingSlots: hydratedSession.missingSlots,
+              existingSession: sessionForRun,
+            });
+            const clarificationMessages = await storage.createAssistantTurnParts({
+              conversationId: conversation.id,
+              textParts: [clarificationQuestion],
+            });
+            const legacyClarificationMessage = makeLegacyAssistantMessage(
+              clarificationMessages,
+            );
+            trace(req, "chat.stream.task.clarification_requested", {
+              conversationId: conversation.id,
+              taskKind,
+              reason: "intent_session_missing_slots",
+              stylePreset: clarificationStylePreset,
+              sourceMessageId: userMessage.id,
+              intentSessionId: sessionForRun.id,
+              missingSlots: hydratedSession.missingSlots,
+            });
+            writeEvent({
+              type: "final",
+              assistantMessage: legacyClarificationMessage,
+              assistantMessages: clarificationMessages,
+              model: "clarification_guardrail_v2",
+              usage: null,
+              elapsedMs: elapsedMs(startedAt),
+              intentSession: updatedIntentSession,
+            });
+            res.end();
+            return;
+          }
+
+          executionPrompt = buildIntentExecutionPromptFromSession({
+            sessionPromptSeed: sessionForRun.promptSeed,
+            slotValues: hydratedSession.slotValues,
+            latestUserText: parsed.text,
+            sourceMessageId: userMessage.id,
+            taskKind,
+            conversationMessages: existingConversationMessages,
+          });
+
+          await storage.updateAgentIntentSession({
+            sessionId: sessionForRun.id,
+            updates: {
+              slotSchema: hydratedSession.slotSchema,
+              slotValues: hydratedSession.slotValues,
+              missingSlots: [],
+              clarificationQuestion: null,
+              lastUserMessageId: userMessage.id,
+            },
+          });
+        } else {
+          const clarification = maybeBuildTaskClarification({
+            taskKind,
+            userText: parsed.text,
+            sourceMessageId: userMessage.id,
+            conversationMessages: existingConversationMessages,
+            hasImage: boundAttachments.length > 0,
+            stylePreset: clarificationStylePreset,
+          });
+          const slotSchema = buildIntentSlotSchema({
+            taskKind,
+            promptSeed: parsed.text,
+          });
+          const slotValues = extractIntentSlotValuesFromText({
+            taskKind,
+            text: parsed.text,
+            slotSchema,
+          });
+          const missingSlots = computeMissingIntentSlots(slotSchema, slotValues);
+          if (clarification || missingSlots.length > 0) {
+            const clarificationQuestion = buildIntentSlotClarificationQuestion({
+              slotSchema,
+              missingSlotKeys: missingSlots,
+              stylePreset: clarificationStylePreset,
+              fallbackQuestion:
+                clarification?.question ??
+                "Share one more detail and I’ll start building it.",
+            });
+            const intentSession = await upsertIntentSessionForClarification({
+              userId: req.session.userId,
+              conversationId: conversation.id,
+              taskKind,
+              sourceMessageId: userMessage.id,
+              promptSeed: parsed.text,
+              clarificationQuestion,
+              slotSchema,
+              slotValues,
+              missingSlots,
+              existingSession: null,
+            });
+            const clarificationMessages = await storage.createAssistantTurnParts({
+              conversationId: conversation.id,
+              textParts: [clarificationQuestion],
+            });
+            const legacyClarificationMessage = makeLegacyAssistantMessage(
+              clarificationMessages,
+            );
+            trace(req, "chat.stream.task.clarification_requested", {
+              conversationId: conversation.id,
+              taskKind,
+              reason:
+                clarification?.reason ??
+                (missingSlots.length > 0
+                  ? "intent_session_missing_slots"
+                  : "underspecified_task"),
+              stylePreset: clarificationStylePreset,
+              sourceMessageId: userMessage.id,
+              intentSessionId: intentSession?.id ?? null,
+              missingSlots,
+            });
+            writeEvent({
+              type: "final",
+              assistantMessage: legacyClarificationMessage,
+              assistantMessages: clarificationMessages,
+              model: "clarification_guardrail_v2",
+              usage: null,
+              elapsedMs: elapsedMs(startedAt),
+              intentSession,
+            });
+            res.end();
+            return;
+          }
+          executionPrompt = buildTaskExecutionPrompt({
+            userText: parsed.text,
+            sourceMessageId: userMessage.id,
+            taskKind,
+            conversationMessages: existingConversationMessages,
+          });
         }
-        const executionPrompt = buildTaskExecutionPrompt({
-          userText: parsed.text,
-          sourceMessageId: userMessage.id,
-          taskKind,
-          conversationMessages: existingConversationMessages,
-        });
+        if (!executionPrompt) {
+          throw new Error("Agent execution prompt was not resolved");
+        }
         const run = await startAgentTaskRun({
           userId: req.session.userId,
           conversationId: conversation.id,
@@ -5169,6 +6734,19 @@ export async function registerRoutes(
             writeEvent(event as unknown as Record<string, unknown>);
           },
         });
+
+        if (sessionForRun) {
+          await storage.updateAgentIntentSession({
+            sessionId: sessionForRun.id,
+            updates: {
+              status: "completed",
+              acceptedTaskId: run.task.id,
+              resolvedAt: new Date(),
+              clarificationQuestion: null,
+              missingSlots: [],
+            },
+          });
+        }
 
         const allMessages = mapMessagesWithSignedAttachments(
           await storage.getMessagesWithAttachments(conversation.id),
@@ -5527,6 +7105,7 @@ export async function registerRoutes(
 
       let responseAssistantMessages = finalizedAssistantMessages;
       const proactiveOfferMessage = await maybeCreateProactiveOfferMessage({
+        userId: req.session.userId,
         conversationId: conversation.id,
         userMessage,
         userText: parsed.text,
@@ -5615,7 +7194,7 @@ export async function registerRoutes(
 
       if (error instanceof z.ZodError) {
         return res.status(400).json({
-          message: error.errors[0]?.message ?? "Invalid chat request",
+          message: error.issues[0]?.message ?? "Invalid chat request",
           traceId: getTraceId(req),
         });
       }
@@ -5661,7 +7240,7 @@ export async function registerRoutes(
             elapsedMs: elapsedMs(startedAt),
           });
           return res.status(400).json({
-            message: error.errors[0]?.message ?? "Invalid transcript payload",
+            message: error.issues[0]?.message ?? "Invalid transcript payload",
             traceId: getTraceId(req),
           });
         }

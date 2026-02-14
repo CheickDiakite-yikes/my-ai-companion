@@ -11,7 +11,6 @@ import {
   jsonb,
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
-import { z } from "zod";
 import { users } from "./models/auth";
 
 export * from "./models/auth";
@@ -25,6 +24,12 @@ export const conversations = pgTable("conversations", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
+export const messagePurposeEnum = pgEnum("message_purpose", [
+  "conversation",
+  "agent_ui",
+  "system",
+]);
+
 export const messages = pgTable(
   "messages",
   {
@@ -35,6 +40,9 @@ export const messages = pgTable(
     partIndex: integer("part_index").notNull().default(0),
     text: text("text").notNull(),
     uiPayload: jsonb("ui_payload"),
+    messagePurpose: messagePurposeEnum("message_purpose")
+      .notNull()
+      .default("conversation"),
     createdAt: timestamp("created_at").defaultNow(),
   },
   (table) => [
@@ -43,6 +51,11 @@ export const messages = pgTable(
       table.createdAt,
     ),
     index("messages_turn_part_idx").on(table.turnId, table.partIndex),
+    index("messages_conversation_purpose_created_idx").on(
+      table.conversationId,
+      table.messagePurpose,
+      table.createdAt,
+    ),
   ],
 );
 
@@ -193,6 +206,20 @@ export const agentToolCallStatusEnum = pgEnum("agent_tool_call_status", [
   "skipped",
 ]);
 
+export const agentOfferStatusEnum = pgEnum("agent_offer_status", [
+  "pending",
+  "accepted",
+  "declined",
+  "expired",
+]);
+
+export const agentIntentSessionStatusEnum = pgEnum("agent_intent_session_status", [
+  "active",
+  "completed",
+  "cancelled",
+  "expired",
+]);
+
 export const agentTasks = pgTable(
   "agent_tasks",
   {
@@ -299,6 +326,72 @@ export const agentToolCalls = pgTable(
   (table) => [
     index("agent_tool_calls_task_created_idx").on(table.taskId, table.createdAt),
     index("agent_tool_calls_status_idx").on(table.status),
+  ],
+);
+
+export const agentOffers = pgTable(
+  "agent_offers",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    userId: varchar("user_id").notNull(),
+    conversationId: varchar("conversation_id").notNull(),
+    messageId: varchar("message_id"),
+    sourceMessageId: varchar("source_message_id"),
+    status: agentOfferStatusEnum("status").notNull().default("pending"),
+    title: varchar("title").notNull(),
+    summary: text("summary").notNull(),
+    proposedPrompt: text("proposed_prompt").notNull(),
+    taskKind: varchar("task_kind").notNull(),
+    riskLevel: taskRiskLevelEnum("risk_level").notNull().default("low"),
+    acceptedTaskId: varchar("accepted_task_id"),
+    intentSessionId: varchar("intent_session_id"),
+    metadata: jsonb("metadata"),
+    createdAt: timestamp("created_at").defaultNow(),
+    updatedAt: timestamp("updated_at").defaultNow(),
+    resolvedAt: timestamp("resolved_at"),
+  },
+  (table) => [
+    index("agent_offers_user_created_idx").on(table.userId, table.createdAt),
+    index("agent_offers_conversation_status_updated_idx").on(
+      table.conversationId,
+      table.status,
+      table.updatedAt,
+    ),
+    index("agent_offers_message_idx").on(table.messageId),
+  ],
+);
+
+export const agentIntentSessions = pgTable(
+  "agent_intent_sessions",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    userId: varchar("user_id").notNull(),
+    conversationId: varchar("conversation_id").notNull(),
+    status: agentIntentSessionStatusEnum("status").notNull().default("active"),
+    taskKind: varchar("task_kind").notNull(),
+    sourceMessageId: varchar("source_message_id"),
+    offerId: varchar("offer_id"),
+    promptSeed: text("prompt_seed").notNull(),
+    clarificationQuestion: text("clarification_question"),
+    slotSchema: jsonb("slot_schema"),
+    slotValues: jsonb("slot_values"),
+    missingSlots: jsonb("missing_slots"),
+    lastUserMessageId: varchar("last_user_message_id"),
+    acceptedTaskId: varchar("accepted_task_id"),
+    metadata: jsonb("metadata"),
+    createdAt: timestamp("created_at").defaultNow(),
+    updatedAt: timestamp("updated_at").defaultNow(),
+    resolvedAt: timestamp("resolved_at"),
+  },
+  (table) => [
+    index("agent_intent_sessions_user_conversation_status_updated_idx").on(
+      table.userId,
+      table.conversationId,
+      table.status,
+      table.updatedAt,
+    ),
+    index("agent_intent_sessions_offer_idx").on(table.offerId),
+    index("agent_intent_sessions_accepted_task_idx").on(table.acceptedTaskId),
   ],
 );
 
@@ -442,6 +535,31 @@ export const agentToolCallsRelations = relations(agentToolCalls, ({ one }) => ({
   }),
 }));
 
+export const agentOffersRelations = relations(agentOffers, ({ one }) => ({
+  task: one(agentTasks, {
+    fields: [agentOffers.acceptedTaskId],
+    references: [agentTasks.id],
+  }),
+  message: one(messages, {
+    fields: [agentOffers.messageId],
+    references: [messages.id],
+  }),
+}));
+
+export const agentIntentSessionsRelations = relations(
+  agentIntentSessions,
+  ({ one }) => ({
+    task: one(agentTasks, {
+      fields: [agentIntentSessions.acceptedTaskId],
+      references: [agentTasks.id],
+    }),
+    offer: one(agentOffers, {
+      fields: [agentIntentSessions.offerId],
+      references: [agentOffers.id],
+    }),
+  }),
+);
+
 export const insertConversationSchema = createInsertSchema(conversations).omit({
   id: true,
   createdAt: true,
@@ -518,40 +636,64 @@ export const insertAgentToolCallSchema = createInsertSchema(agentToolCalls).omit
   createdAt: true,
 });
 
-export type InsertConversation = z.infer<typeof insertConversationSchema>;
+export const insertAgentOfferSchema = createInsertSchema(agentOffers).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+  resolvedAt: true,
+});
+
+export const insertAgentIntentSessionSchema = createInsertSchema(
+  agentIntentSessions,
+).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+  resolvedAt: true,
+});
+
+export type InsertConversation = typeof conversations.$inferInsert;
 export type Conversation = typeof conversations.$inferSelect;
-export type InsertMessage = z.infer<typeof insertMessageSchema>;
+export type InsertMessage = typeof messages.$inferInsert;
 export type Message = typeof messages.$inferSelect;
-export type InsertMessageAttachment = z.infer<typeof insertMessageAttachmentSchema>;
+export type InsertMessageAttachment = typeof messageAttachments.$inferInsert;
 export type MessageAttachment = typeof messageAttachments.$inferSelect;
-export type InsertUserPreferences = z.infer<typeof insertUserPreferencesSchema>;
+export type InsertUserPreferences = typeof userPreferences.$inferInsert;
 export type UserPreferences = typeof userPreferences.$inferSelect;
-export type InsertUserProfile = z.infer<typeof insertUserProfileSchema>;
+export type InsertUserProfile = typeof userProfiles.$inferInsert;
 export type UserProfile = typeof userProfiles.$inferSelect;
-export type InsertVoiceSession = z.infer<typeof insertVoiceSessionSchema>;
+export type InsertVoiceSession = typeof voiceSessions.$inferInsert;
 export type VoiceSession = typeof voiceSessions.$inferSelect;
-export type InsertUsageEvent = z.infer<typeof insertUsageEventSchema>;
+export type InsertUsageEvent = typeof usageEvents.$inferInsert;
 export type UsageEvent = typeof usageEvents.$inferSelect;
 export type UsageEventMetric = typeof usageEventMetricEnum.enumValues[number];
-export type InsertUserMemoryItem = z.infer<typeof insertUserMemoryItemSchema>;
+export type InsertUserMemoryItem = typeof userMemoryItems.$inferInsert;
 export type UserMemoryItem = typeof userMemoryItems.$inferSelect;
-export type InsertAgentTask = z.infer<typeof insertAgentTaskSchema>;
+export type InsertAgentTask = typeof agentTasks.$inferInsert;
 export type AgentTask = typeof agentTasks.$inferSelect;
-export type InsertAgentStep = z.infer<typeof insertAgentStepSchema>;
+export type InsertAgentStep = typeof agentSteps.$inferInsert;
 export type AgentStep = typeof agentSteps.$inferSelect;
-export type InsertAgentApproval = z.infer<typeof insertAgentApprovalSchema>;
+export type InsertAgentApproval = typeof agentApprovals.$inferInsert;
 export type AgentApproval = typeof agentApprovals.$inferSelect;
-export type InsertAgentArtifact = z.infer<typeof insertAgentArtifactSchema>;
+export type InsertAgentArtifact = typeof agentArtifacts.$inferInsert;
 export type AgentArtifact = typeof agentArtifacts.$inferSelect;
-export type InsertAgentToolCall = z.infer<typeof insertAgentToolCallSchema>;
+export type InsertAgentToolCall = typeof agentToolCalls.$inferInsert;
 export type AgentToolCall = typeof agentToolCalls.$inferSelect;
+export type InsertAgentOffer = typeof agentOffers.$inferInsert;
+export type AgentOffer = typeof agentOffers.$inferSelect;
+export type InsertAgentIntentSession = typeof agentIntentSessions.$inferInsert;
+export type AgentIntentSession = typeof agentIntentSessions.$inferSelect;
 export type AgentTaskStatus = typeof agentTaskStatusEnum.enumValues[number];
 export type AgentStepStatus = typeof agentStepStatusEnum.enumValues[number];
 export type AgentApprovalStatus = typeof agentApprovalStatusEnum.enumValues[number];
 export type AgentArtifactType = typeof agentArtifactTypeEnum.enumValues[number];
 export type AgentArtifactStatus = typeof agentArtifactStatusEnum.enumValues[number];
 export type AgentToolCallStatus = typeof agentToolCallStatusEnum.enumValues[number];
+export type AgentOfferStatus = typeof agentOfferStatusEnum.enumValues[number];
+export type AgentIntentSessionStatus =
+  typeof agentIntentSessionStatusEnum.enumValues[number];
 export type TaskRiskLevel = typeof taskRiskLevelEnum.enumValues[number];
 export type MemoryMode = typeof memoryModeEnum.enumValues[number];
 export type MemoryItemKind = typeof memoryItemKindEnum.enumValues[number];
 export type MemorySensitivity = typeof memorySensitivityEnum.enumValues[number];
+export type MessagePurpose = typeof messagePurposeEnum.enumValues[number];

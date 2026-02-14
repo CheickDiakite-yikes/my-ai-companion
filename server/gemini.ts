@@ -7,6 +7,7 @@ import {
   TurnCoverage,
   type GenerateContentResponseUsageMetadata,
 } from "@google/genai";
+import type { ChatTurnIntent } from "@shared/agent";
 import { execFile } from "child_process";
 import { readFile } from "fs/promises";
 import { resolve } from "path";
@@ -1217,6 +1218,20 @@ export interface GenerateTextReplyStreamResult {
   stream: AsyncGenerator<GenerateTextReplyStreamChunk>;
 }
 
+export interface ClassifyTurnIntentWithModelInput {
+  userText: string;
+  hasRecentAgentActivity?: boolean;
+  hasActiveIntentSession?: boolean;
+  recentTaskKind?: string | null;
+}
+
+export interface ClassifyTurnIntentWithModelResult {
+  model: string;
+  intent: ChatTurnIntent;
+  confidence: number;
+  rawJson: string;
+}
+
 export interface GenerateAgentPlannerDraftInput {
   prompt: string;
   hasImage: boolean;
@@ -1904,6 +1919,21 @@ function buildTextGenerationConfig(personaPrompt: string) {
   };
 }
 
+function resolveIntentClassifierModel(): string {
+  return normalizeModelId(
+    process.env.AGENT_INTENT_CLASSIFIER_MODEL ??
+      process.env.GEMINI_TEXT_MODEL ??
+      DEFAULT_TEXT_MODEL,
+  );
+}
+
+function clampIntentConfidence(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return 0;
+  }
+  return Math.min(1, Math.max(0, value));
+}
+
 export async function generateTextReply(
   input: GenerateTextReplyInput,
 ): Promise<GenerateTextReplyResult> {
@@ -1942,6 +1972,81 @@ export async function generateTextReply(
     replyText,
     responseId: response.responseId,
     usage: compactUsage(response.usageMetadata),
+  };
+}
+
+export async function classifyTurnIntentWithModel(
+  input: ClassifyTurnIntentWithModelInput,
+): Promise<ClassifyTurnIntentWithModelResult> {
+  const normalizedText = input.userText.trim();
+  const model = resolveIntentClassifierModel();
+  if (!normalizedText) {
+    return {
+      model,
+      intent: "companion_reply",
+      confidence: 0,
+      rawJson: '{"intent":"companion_reply","confidence":0}',
+    };
+  }
+
+  const ai = getGeminiClient();
+  const prompt = [
+    "Classify whether the user's latest message should trigger normal companion chat or an agent task run.",
+    "Return strict JSON only:",
+    '{ "intent": "companion_reply" | "agent_task", "confidence": number, "reason": string }',
+    "",
+    "Decision policy:",
+    "- Use agent_task for direct execution asks (build/create/draft/make) and for follow-up revisions to an active task-clarification flow.",
+    "- Use companion_reply for normal chat, brainstorming, emotional support, and discussion without explicit execution intent.",
+    "- If uncertain, choose companion_reply with lower confidence.",
+    "",
+    "Context:",
+    `- hasRecentAgentActivity: ${input.hasRecentAgentActivity ? "true" : "false"}`,
+    `- hasActiveIntentSession: ${input.hasActiveIntentSession ? "true" : "false"}`,
+    `- recentTaskKind: ${input.recentTaskKind ?? "none"}`,
+    "",
+    "User message:",
+    normalizedText,
+  ].join("\n");
+
+  const response = await ai.models.generateContent({
+    model,
+    contents: [{ role: "user", parts: [{ text: prompt }] }],
+    config: {
+      temperature: 0.05,
+      maxOutputTokens: 240,
+      responseMimeType: "application/json",
+      systemInstruction:
+        "You are a strict intent classifier for a companion + agent runtime. Return JSON only.",
+    },
+  });
+
+  const rawJson = stripJsonCodeFence((response.text ?? "").trim());
+  if (!rawJson) {
+    throw new Error("Intent classifier returned an empty response");
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawJson);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Intent classifier JSON parse failed: ${message}`);
+  }
+
+  const record =
+    parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {};
+  const intent: ChatTurnIntent =
+    record.intent === "agent_task" ? "agent_task" : "companion_reply";
+  const confidence = clampIntentConfidence(record.confidence);
+
+  return {
+    model,
+    intent,
+    confidence,
+    rawJson,
   };
 }
 

@@ -268,10 +268,25 @@ async function runUiAssertions(params: {
   await page.waitForSelector('[data-testid="button-open-history-artifact"]', {
     timeout: 10_000,
   });
-  await page.getByTestId("button-open-history-artifact").first().click();
+  const docHistoryCard = page.locator(
+    '[data-testid="outputs-history-artifact-card"][data-agent-artifact-type="doc_markdown"]',
+  );
+  if ((await docHistoryCard.count()) > 0) {
+    await docHistoryCard
+      .first()
+      .locator('[data-testid="button-open-history-artifact"]')
+      .click();
+  } else {
+    await page.getByTestId("button-open-history-artifact").first().click();
+  }
   await page.waitForSelector('[data-testid="button-close-artifact-viewer"]', {
     timeout: 10_000,
   });
+  if ((await docHistoryCard.count()) > 0) {
+    await page.waitForSelector('[data-testid="json-render-artifact-viewer"]', {
+      timeout: 10_000,
+    });
+  }
   await page.getByTestId("button-close-artifact-viewer").click();
   await page.waitForTimeout(200);
 
