@@ -12,6 +12,7 @@ import type {
   AgentTaskKind,
   AgentTaskSummary,
   ChatTurnIntent,
+  TaskInputResolution,
 } from "@shared/agent";
 import { storage } from "./storage";
 import {
@@ -51,7 +52,7 @@ import {
 const AGENT_ACTION_PATTERN =
   /\b(create|build|generate|make|draft|write|design|code|develop|plan|send|email|connect|control|automate|research|organize|prepare|summari[sz]e)\b/i;
 const AGENT_DELIVERABLE_PATTERN =
-  /\b(game|mini\s*game|document|doc|brief|summary|report|presentation|slides|artifact|prototype|app|website|email|draft|checklist)\b/i;
+  /\b(game|mini\s*game|document|doc|brief|summary|report|presentation|slides|artifact|prototype|app|website|landing\s*page|email|draft|checklist|letter|cover\s*letter|resume|cv|essay|statement|memo|proposal)\b/i;
 const TASK_DIRECTIVE_PATTERNS = [
   /^\s*(can|could|would)\s+you\b/i,
   /^\s*please\b/i,
@@ -61,6 +62,11 @@ const TASK_DIRECTIVE_PATTERNS = [
 ];
 const TASK_IMPERATIVE_PATTERNS = [
   /^\s*(create|build|generate|make|draft|write|design|code|develop|plan|send|email|connect|control|automate|research|organize|prepare|summari[sz]e)\b/i,
+];
+const EXPLICIT_BUILD_COMMAND_PATTERNS = [
+  /\b(?:create|build|generate|make|draft|write|design|code|develop)\s+.+\s+(?:for\s+me|now)\b/i,
+  /^\s*(?:create|build|generate|make|draft|write|design|code|develop)\b/i,
+  /\b(?:can|could|would|will)\s+you\s+(?:create|build|generate|make|draft|write|design|code|develop)\b/i,
 ];
 const SELF_INTENT_PATTERNS = [
   /\bi\s+(need|want|have\s+to|gotta|should|plan\s+to|am\s+going\s+to|trying\s+to)\b/i,
@@ -97,7 +103,7 @@ const LOW_RISK_EMAIL_DRAFT_PATTERNS = [
 ];
 
 const DOC_HINT_PATTERNS = [
-  /\b(doc|document|notes|brief|summary|write[- ]?up|presentation|slides|email|letter)\b/i,
+  /\b(doc|document|notes|brief|summary|write[- ]?up|presentation|slides|email|letter|cover\s*letter|resume|cv|essay|statement|memo|proposal|landing\s*page|website)\b/i,
 ];
 const GAME_HINT_PATTERNS = [/\b(game|mini\s*game|playable)\b/i];
 const GAME_GENRE_HINT_PATTERNS = [
@@ -607,6 +613,7 @@ export interface StartAgentTaskParams {
   conversationId: string;
   prompt: string;
   executionPrompt?: string;
+  taskInputResolution?: TaskInputResolution | null;
   requestedByMessageId: string;
   attachments: MessageAttachment[];
   intentContext?: ChatTurnIntentContext;
@@ -650,6 +657,7 @@ interface StoredTaskPlan extends AgentExecutionPlan {
   context?: {
     imageHints?: string[];
     executionPrompt?: string;
+    taskInputResolution?: TaskInputResolution;
   };
 }
 
@@ -2304,6 +2312,7 @@ export function classifyChatTurnIntent(
     pattern.test(normalized),
   );
   const hasExplicitTaskRequest = hasDirective || hasImperativeStart;
+  const hasExplicitBuildCommand = isExplicitBuildCommand(normalized);
 
   if (
     hasSelfIntentSignal &&
@@ -2315,6 +2324,9 @@ export function classifyChatTurnIntent(
   }
 
   if (hasHighRiskSignal && hasExplicitTaskRequest) {
+    return "agent_task";
+  }
+  if (hasExplicitBuildCommand && (hasDeliverable || hasGameIntentSignal)) {
     return "agent_task";
   }
   if (
@@ -2358,17 +2370,44 @@ export function inferAgentTaskKind(
   const normalized = text.toLowerCase();
   const wantsGame = hasGameRequestSignal(normalized);
   const wantsDoc = DOC_HINT_PATTERNS.some((pattern) => pattern.test(normalized));
+  const hasExplicitDocSignal =
+    wantsDoc &&
+    /\b(doc|document|brief|summary|report|presentation|slides|deck|email|letter|cover\s*letter|resume|cv|essay|statement|memo|proposal)\b/i.test(
+      normalized,
+    );
   const likelyGameFollowUp =
     context?.hasRecentAgentActivity &&
     context.recentTaskKind === "mini_game" &&
+    !hasExplicitDocSignal &&
     (AGENT_FOLLOW_UP_REFERENCE_PATTERNS.some((pattern) => pattern.test(normalized)) ||
       MINI_GAME_TUNING_PATTERNS.some((pattern) => pattern.test(normalized)));
 
-  if ((wantsGame || likelyGameFollowUp) && wantsDoc) return "mixed";
+  if (wantsGame && wantsDoc) return "mixed";
   if (wantsGame || likelyGameFollowUp) return "mini_game";
   if (wantsDoc) return "doc_markdown";
   if (hasImage) return "mini_game";
   return "doc_markdown";
+}
+
+export function isExplicitBuildCommand(text: string): boolean {
+  const normalized = text.trim();
+  if (!normalized) return false;
+  const hasDirective = TASK_DIRECTIVE_PATTERNS.some((pattern) =>
+    pattern.test(normalized),
+  );
+  const hasImperativeStart = TASK_IMPERATIVE_PATTERNS.some((pattern) =>
+    pattern.test(normalized),
+  );
+  const hasActionVerb = AGENT_ACTION_PATTERN.test(normalized);
+  const hasDeliverable = AGENT_DELIVERABLE_PATTERN.test(normalized);
+  const hasGameIntentSignal = hasGameRequestSignal(normalized);
+  const hasExplicitCommandShape = EXPLICIT_BUILD_COMMAND_PATTERNS.some((pattern) =>
+    pattern.test(normalized),
+  );
+
+  if (!hasActionVerb) return false;
+  if (!hasDeliverable && !hasGameIntentSignal) return false;
+  return hasDirective || hasImperativeStart || hasExplicitCommandShape;
 }
 
 function hasGameRequestSignal(text: string): boolean {
@@ -2473,6 +2512,7 @@ export async function startAgentTaskRun(
       imageHints,
       executionPrompt:
         executionPrompt !== params.prompt ? executionPrompt : undefined,
+      taskInputResolution: params.taskInputResolution ?? undefined,
     },
   };
 
@@ -2635,6 +2675,11 @@ async function runTaskExecution(state: RuntimeState): Promise<void> {
   const taskKind =
     plan?.taskKind ??
     inferAgentTaskKind(state.prompt, effectiveImageHints.length > 0);
+  const taskInputResolution =
+    plan?.context?.taskInputResolution &&
+    typeof plan.context.taskInputResolution === "object"
+      ? (plan.context.taskInputResolution as TaskInputResolution)
+      : null;
 
   await storage.updateAgentTaskStatus({
     taskId: task.id,
@@ -2672,10 +2717,19 @@ async function runTaskExecution(state: RuntimeState): Promise<void> {
   try {
     const planningStep = stepStates.get("plan");
     if (planningStep) {
+      const assumptionsLine =
+        taskInputResolution &&
+        Array.isArray(taskInputResolution.assumptionsUsed) &&
+        taskInputResolution.assumptionsUsed.length > 0
+          ? ` Assumptions used: ${taskInputResolution.assumptionsUsed
+              .slice(0, 4)
+              .map((assumption) => `${assumption.key}=${assumption.value}`)
+              .join("; ")}.`
+          : "";
       await markStepInProgress(
         planningStep.id,
         state,
-        `Plan locked (trace ${auditTraceId.slice(0, 8)}). Preparing sandbox run (${sandboxJob.id.slice(0, 8)}).`,
+        `Plan locked (trace ${auditTraceId.slice(0, 8)}). Preparing sandbox run (${sandboxJob.id.slice(0, 8)}).${assumptionsLine}`,
       );
       await markStepCompleted(planningStep.id, state, "Plan ready.");
     }

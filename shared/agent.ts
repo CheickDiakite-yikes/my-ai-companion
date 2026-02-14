@@ -10,6 +10,11 @@ import type {
 } from "./schema";
 
 export type ChatTurnIntent = "companion_reply" | "agent_task";
+export type IntentDecisionPath =
+  | "companion_reply"
+  | "offer_required"
+  | "collecting_slots"
+  | "agent_task";
 
 export type AgentTaskKind = "mini_game" | "doc_markdown" | "mixed";
 export type AgentOfferStatus = AgentOffer["status"];
@@ -121,6 +126,18 @@ export interface TaskStateVersion {
   resolvedFromSnapshot: boolean;
 }
 
+export interface TaskAssumption {
+  key: string;
+  value: string;
+  reason: string;
+}
+
+export interface TaskInputResolution {
+  resolvedSlots: Record<string, string>;
+  assumptionsUsed: TaskAssumption[];
+  questionCount: number;
+}
+
 export type ArtifactDocType =
   | "cover_letter"
   | "scholarship"
@@ -198,6 +215,7 @@ export interface AgentTaskDetailResponse {
   stateVersion?: TaskStateVersion;
   resolvedStatusSource?: TaskStateResolvedStatusSource;
   qualitySummary?: ArtifactQualitySummary | null;
+  assumptionsUsed?: TaskAssumption[];
 }
 
 export interface UnifiedAgentTaskTimelineItem {
@@ -219,6 +237,7 @@ export interface UnifiedAgentTaskCardModel {
   approval: AgentApprovalSummary | null;
   artifact: AgentArtifactSummary | null;
   timeline: UnifiedAgentTaskTimelineItem[];
+  autoCollapsed?: boolean;
 }
 
 export type AgentTaskEvent =

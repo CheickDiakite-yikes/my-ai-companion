@@ -42,6 +42,17 @@ extract_trace() {
   awk 'BEGIN{IGNORECASE=1} /^x-trace-id:/ {print $2}' "$1" | tr -d '\r'
 }
 
+parse_stream_outcome() {
+  local stream_file="$1"
+  local expected_mode="${2:-task}"
+  node -e "const fs=require('fs');const file=process.argv[1];const expected=process.argv[2]||'task';const lines=fs.readFileSync(file,'utf8').trim().split(/\\n+/).filter(Boolean);if(lines.length===0){console.error('empty_stream');process.exit(2)};const events=lines.map((line)=>JSON.parse(line));if(events[0]?.type!=='ack'){console.error('first_event_not_ack');process.exit(3)};const idx=(t)=>events.findIndex((e)=>e.type===t);const created=idx('task_created');const step=idx('task_step');const artifact=idx('task_artifact_ready');const approval=idx('task_approval_required');const final=idx('final');if(created>=0){const taskId=events[created]?.task?.id;if(!taskId){console.error('task_id_missing');process.exit(4)};if(expected==='task'){if(step<0||artifact<0||final<0){console.error('missing_required_events');process.exit(5)};if(!(created<step&&step<artifact&&artifact<final)){console.error('event_order_invalid');process.exit(6)};if(approval>=0){console.error('unexpected_approval_event');process.exit(7)};process.stdout.write('task:' + taskId);process.exit(0)};if(expected==='approval'){if(approval<0||final<0){console.error('missing_required_events');process.exit(8)};if(!(created<approval&&approval<final)){console.error('event_order_invalid');process.exit(9)};if(artifact>=0 && artifact<approval){console.error('artifact_ready_before_approval');process.exit(10)};process.stdout.write('task_approval:' + taskId);process.exit(0)};process.stdout.write('task:' + taskId);process.exit(0)};const finalEvent=events.find((e)=>e.type==='final');if(!finalEvent){console.error('missing_final_event');process.exit(11)};const assistantMessages=Array.isArray(finalEvent.assistantMessages)?finalEvent.assistantMessages:[];const decisionPath=typeof finalEvent.decisionPath==='string'?finalEvent.decisionPath:'';const hasOfferCard=assistantMessages.some((m)=>m&&typeof m==='object'&&m.uiPayload&&typeof m.uiPayload==='object'&&m.uiPayload.kind==='agent_offer');if(decisionPath==='offer_required' || hasOfferCard){process.stdout.write('offer');process.exit(0)};if(decisionPath==='collecting_slots'){process.stdout.write('clarify');process.exit(0)};process.stdout.write('final_only');" "$stream_file" "$expected_mode"
+}
+
+extract_task_id_from_stream() {
+  local stream_file="$1"
+  node -e "const fs=require('fs');const lines=fs.readFileSync(process.argv[1],'utf8').trim().split(/\\n+/).filter(Boolean);const events=lines.map((line)=>JSON.parse(line));const created=events.find((e)=>e.type==='task_created');process.stdout.write(String(created?.task?.id||''));" "$stream_file"
+}
+
 cleanup() {
   local status=$?
 
@@ -174,10 +185,42 @@ if [[ "$LOW_STREAM_STATUS" != "200" ]]; then
   echo "[agent-contract] low_risk_stream_failed status=${LOW_STREAM_STATUS} body=$(cat "$LOW_STREAM_BODY")"
   exit 21
 fi
-LOW_TASK_ID="$(node -e "const fs=require('fs');const lines=fs.readFileSync(process.argv[1],'utf8').trim().split(/\\n+/).filter(Boolean);if(lines.length===0){console.error('empty_stream');process.exit(2)};const events=lines.map(l=>JSON.parse(l));if(events[0]?.type!=='ack'){console.error('first_event_not_ack');process.exit(3)};const idx=(t)=>events.findIndex(e=>e.type===t);const created=idx('task_created');const step=idx('task_step');const artifact=idx('task_artifact_ready');const final=idx('final');if(created<0||step<0||artifact<0||final<0){console.error('missing_required_events');process.exit(4)};if(!(created<step&&step<artifact&&artifact<final)){console.error('event_order_invalid');process.exit(5)};if(events.some(e=>e.type==='task_approval_required')){console.error('unexpected_approval_event');process.exit(6)};const taskId=events[created]?.task?.id; if(!taskId){console.error('task_id_missing');process.exit(7)};process.stdout.write(String(taskId));" "$LOW_STREAM_BODY")"
+LOW_TASK_ID=""
+LOW_OUTCOME="$(parse_stream_outcome "$LOW_STREAM_BODY" "task")"
+if [[ "$LOW_OUTCOME" == task:* ]]; then
+  LOW_TASK_ID="${LOW_OUTCOME#task:}"
+elif [[ "$LOW_OUTCOME" == "offer" ]]; then
+  LOW_ACCEPT_BODY="$(new_tmp)"
+  LOW_ACCEPT_STATUS="$(curl -sS -w "%{http_code}" -D "$HEADERS_FILE" -o "$LOW_ACCEPT_BODY" -b "$COOKIE_FILE" -c "$COOKIE_FILE" \
+    -H "Content-Type: application/json" \
+    -X POST "${BASE_URL}/api/chat/respond/stream" \
+    --data "{\"conversationId\":\"${CONV_ID}\",\"text\":\"yes, build it\",\"persona\":\"Zee\"}")"
+  if [[ "$LOW_ACCEPT_STATUS" != "200" ]]; then
+    echo "[agent-contract] low_risk_accept_stream_failed status=${LOW_ACCEPT_STATUS} body=$(cat "$LOW_ACCEPT_BODY")"
+    exit 22
+  fi
+  LOW_ACCEPT_OUTCOME="$(parse_stream_outcome "$LOW_ACCEPT_BODY" "task")"
+  if [[ "$LOW_ACCEPT_OUTCOME" == task:* ]]; then
+    LOW_TASK_ID="${LOW_ACCEPT_OUTCOME#task:}"
+  elif [[ "$LOW_ACCEPT_OUTCOME" == "clarify" ]]; then
+    LOW_DETAIL_BODY="$(new_tmp)"
+    LOW_DETAIL_STATUS="$(curl -sS -w "%{http_code}" -D "$HEADERS_FILE" -o "$LOW_DETAIL_BODY" -b "$COOKIE_FILE" -c "$COOKIE_FILE" \
+      -H "Content-Type: application/json" \
+      -X POST "${BASE_URL}/api/chat/respond/stream" \
+      --data "{\"conversationId\":\"${CONV_ID}\",\"text\":\"2D neon snake game, arrow controls, food pellets, obstacles, self-collision\",\"persona\":\"Zee\"}")"
+    if [[ "$LOW_DETAIL_STATUS" != "200" ]]; then
+      echo "[agent-contract] low_risk_detail_stream_failed status=${LOW_DETAIL_STATUS} body=$(cat "$LOW_DETAIL_BODY")"
+      exit 23
+    fi
+    LOW_DETAIL_OUTCOME="$(parse_stream_outcome "$LOW_DETAIL_BODY" "task")"
+    if [[ "$LOW_DETAIL_OUTCOME" == task:* ]]; then
+      LOW_TASK_ID="${LOW_DETAIL_OUTCOME#task:}"
+    fi
+  fi
+fi
 if [[ -z "$LOW_TASK_ID" ]]; then
   echo "[agent-contract] low_risk_task_id_missing body=$(cat "$LOW_STREAM_BODY")"
-  exit 22
+  exit 24
 fi
 log "low-risk stream ok taskId=${LOW_TASK_ID}"
 
@@ -191,17 +234,44 @@ if [[ "$LOW_TASK_STATUS" != "200" ]]; then
 fi
 node -e "const fs=require('fs');const b=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));if(b?.task?.status!=='completed'){console.error('low_risk_not_completed',b?.task?.status);process.exit(1)};const artifacts=Array.isArray(b?.artifacts)?b.artifacts:[];if(!artifacts.some(a=>a.type==='mini_game')){console.error('low_risk_missing_game_artifact');process.exit(2)};console.log('[agent-contract] low-risk task completed artifacts=' + artifacts.length);" "$LOW_TASK_BODY"
 
-log "5/10 clarification gate contract"
+log "5/10 confirmation gate contract"
 CLARIFY_STREAM_BODY="$(new_tmp)"
 CLARIFY_STREAM_STATUS="$(curl -sS -w "%{http_code}" -D "$HEADERS_FILE" -o "$CLARIFY_STREAM_BODY" -b "$COOKIE_FILE" -c "$COOKIE_FILE" \
   -H "Content-Type: application/json" \
   -X POST "${BASE_URL}/api/chat/respond/stream" \
   --data "{\"conversationId\":\"${CONV_ID}\",\"text\":\"can you create a document?\",\"persona\":\"Zee\"}")"
 if [[ "$CLARIFY_STREAM_STATUS" != "200" ]]; then
-  echo "[agent-contract] clarification_stream_failed status=${CLARIFY_STREAM_STATUS} body=$(cat "$CLARIFY_STREAM_BODY")"
+  echo "[agent-contract] confirmation_stream_failed status=${CLARIFY_STREAM_STATUS} body=$(cat "$CLARIFY_STREAM_BODY")"
   exit 30
 fi
-node -e "const fs=require('fs');const lines=fs.readFileSync(process.argv[1],'utf8').trim().split(/\\n+/).filter(Boolean);if(lines.length===0){console.error('empty_stream');process.exit(2)};const events=lines.map(l=>JSON.parse(l));if(events[0]?.type!=='ack'){console.error('first_event_not_ack');process.exit(3)};if(events.some(e=>e.type==='task_created'||e.type==='task_step'||e.type==='task_artifact_ready'||e.type==='task_approval_required')){console.error('unexpected_task_events_for_clarification');process.exit(4)};const final=events.find(e=>e.type==='final');if(!final){console.error('missing_final_event');process.exit(5)};const messages=Array.isArray(final.assistantMessages)?final.assistantMessages:[];const text=(messages[0]?.text||final.assistantMessage?.text||'').toLowerCase();if(!text||!/(quick check|who is it for|company|role|tone)/.test(text)){console.error('clarification_text_missing_or_weak',text);process.exit(6)};console.log('[agent-contract] clarification gate ok');" "$CLARIFY_STREAM_BODY"
+node -e "const fs=require('fs');const lines=fs.readFileSync(process.argv[1],'utf8').trim().split(/\\n+/).filter(Boolean);if(lines.length===0){console.error('empty_stream');process.exit(2)};const events=lines.map(l=>JSON.parse(l));if(events[0]?.type!=='ack'){console.error('first_event_not_ack');process.exit(3)};if(events.some(e=>e.type==='task_created'||e.type==='task_step'||e.type==='task_artifact_ready'||e.type==='task_approval_required')){console.error('unexpected_task_events_for_confirmation');process.exit(4)};const final=events.find(e=>e.type==='final');if(!final){console.error('missing_final_event');process.exit(5)};const messages=Array.isArray(final.assistantMessages)?final.assistantMessages:[];const text=[(messages[0]?.text||''),(messages[1]?.text||''),(final.assistantMessage?.text||'')].join(' ').toLowerCase();const hasOfferCard=messages.some((m)=>m&&typeof m==='object'&&m.uiPayload&&typeof m.uiPayload==='object'&&m.uiPayload.kind==='agent_offer');if(final.decisionPath!=='offer_required' && !hasOfferCard){console.error('expected_offer_required_path',final.decisionPath);process.exit(6)};if(!/(want me to build|yes, build it|quick check before i start|i can build that for you)/.test(text)){console.error('weak_confirmation_copy',text);process.exit(7)};console.log('[agent-contract] confirmation gate ok');" "$CLARIFY_STREAM_BODY"
+
+log "5b/10 explicit request supersedes active intent session"
+CLARIFY_ACCEPT_BODY="$(new_tmp)"
+CLARIFY_ACCEPT_STATUS="$(curl -sS -w "%{http_code}" -D "$HEADERS_FILE" -o "$CLARIFY_ACCEPT_BODY" -b "$COOKIE_FILE" -c "$COOKIE_FILE" \
+  -H "Content-Type: application/json" \
+  -X POST "${BASE_URL}/api/chat/respond/stream" \
+  --data "{\"conversationId\":\"${CONV_ID}\",\"text\":\"yes, build it\",\"persona\":\"Zee\"}")"
+if [[ "$CLARIFY_ACCEPT_STATUS" != "200" ]]; then
+  echo "[agent-contract] clarification_accept_failed status=${CLARIFY_ACCEPT_STATUS} body=$(cat "$CLARIFY_ACCEPT_BODY")"
+  exit 31
+fi
+CLARIFY_ACCEPT_OUTCOME="$(parse_stream_outcome "$CLARIFY_ACCEPT_BODY" "task")"
+if [[ "$CLARIFY_ACCEPT_OUTCOME" != "clarify" && "$CLARIFY_ACCEPT_OUTCOME" != task:* ]]; then
+  echo "[agent-contract] unexpected_accept_outcome value=${CLARIFY_ACCEPT_OUTCOME} body=$(cat "$CLARIFY_ACCEPT_BODY")"
+  exit 32
+fi
+
+SUPERSEDE_STREAM_BODY="$(new_tmp)"
+SUPERSEDE_STREAM_STATUS="$(curl -sS -w "%{http_code}" -D "$HEADERS_FILE" -o "$SUPERSEDE_STREAM_BODY" -b "$COOKIE_FILE" -c "$COOKIE_FILE" \
+  -H "Content-Type: application/json" \
+  -X POST "${BASE_URL}/api/chat/respond/stream" \
+  --data "{\"conversationId\":\"${CONV_ID}\",\"text\":\"okay now try again, create a cover letter for me\",\"persona\":\"Zee\"}")"
+if [[ "$SUPERSEDE_STREAM_STATUS" != "200" ]]; then
+  echo "[agent-contract] supersede_stream_failed status=${SUPERSEDE_STREAM_STATUS} body=$(cat "$SUPERSEDE_STREAM_BODY")"
+  exit 33
+fi
+node -e "const fs=require('fs');const lines=fs.readFileSync(process.argv[1],'utf8').trim().split(/\\n+/).filter(Boolean);if(lines.length===0){console.error('empty_stream');process.exit(2)};const events=lines.map((line)=>JSON.parse(line));if(events[0]?.type!=='ack'){console.error('first_event_not_ack');process.exit(3)};if(events.some((e)=>e.type==='task_created'||e.type==='task_step'||e.type==='task_artifact_ready'||e.type==='task_approval_required')){console.error('unexpected_task_events_on_supersede');process.exit(4)};const final=events.find((e)=>e.type==='final');if(!final){console.error('missing_final_event');process.exit(5)};const messages=Array.isArray(final.assistantMessages)?final.assistantMessages:[];const offerMessage=messages.find((m)=>m&&typeof m==='object'&&m.uiPayload&&typeof m.uiPayload==='object'&&m.uiPayload.kind==='agent_offer');const text=[(messages[0]?.text||''),(messages[1]?.text||''),(final.assistantMessage?.text||'')].join(' ').toLowerCase();const offerTitle=offerMessage?.uiPayload?.offer?.title?String(offerMessage.uiPayload.offer.title).toLowerCase():'';if(final.decisionPath!=='offer_required' && !offerMessage){console.error('expected_offer_required_on_supersede',final.decisionPath);process.exit(6)};if(!/(cover letter)/.test(text) && !/(cover letter)/.test(offerTitle)){console.error('missing_cover_letter_signal_after_supersede',text,offerTitle);process.exit(7)};console.log('[agent-contract] supersede path routed to new explicit offer');" "$SUPERSEDE_STREAM_BODY"
 
 log "6/10 explicit scholarship doc request should not drift to prior cover-letter session"
 SCHOLAR_STREAM_BODY="$(new_tmp)"
@@ -237,10 +307,42 @@ if [[ "$HIGH_STREAM_STATUS" != "200" ]]; then
   echo "[agent-contract] high_risk_stream_failed status=${HIGH_STREAM_STATUS} body=$(cat "$HIGH_STREAM_BODY")"
   exit 31
 fi
-HIGH_TASK_ID="$(node -e "const fs=require('fs');const lines=fs.readFileSync(process.argv[1],'utf8').trim().split(/\\n+/).filter(Boolean);if(lines.length===0){console.error('empty_stream');process.exit(2)};const events=lines.map(l=>JSON.parse(l));if(events[0]?.type!=='ack'){console.error('first_event_not_ack');process.exit(3)};const idx=(t)=>events.findIndex(e=>e.type===t);const created=idx('task_created');const approval=idx('task_approval_required');const final=idx('final');if(created<0||approval<0||final<0){console.error('missing_required_events');process.exit(4)};if(!(created<approval&&approval<final)){console.error('event_order_invalid');process.exit(5)};if(events.some(e=>e.type==='task_artifact_ready')){console.error('artifact_ready_before_approval');process.exit(6)};const taskId=events[created]?.task?.id; if(!taskId){console.error('task_id_missing');process.exit(7)};process.stdout.write(String(taskId));" "$HIGH_STREAM_BODY")"
+HIGH_TASK_ID=""
+HIGH_OUTCOME="$(parse_stream_outcome "$HIGH_STREAM_BODY" "approval")"
+if [[ "$HIGH_OUTCOME" == task_approval:* ]]; then
+  HIGH_TASK_ID="${HIGH_OUTCOME#task_approval:}"
+elif [[ "$HIGH_OUTCOME" == "offer" ]]; then
+  HIGH_ACCEPT_BODY="$(new_tmp)"
+  HIGH_ACCEPT_STATUS="$(curl -sS -w "%{http_code}" -D "$HEADERS_FILE" -o "$HIGH_ACCEPT_BODY" -b "$COOKIE_FILE" -c "$COOKIE_FILE" \
+    -H "Content-Type: application/json" \
+    -X POST "${BASE_URL}/api/chat/respond/stream" \
+    --data "{\"conversationId\":\"${CONV_ID}\",\"text\":\"yes, build it\",\"persona\":\"Zee\"}")"
+  if [[ "$HIGH_ACCEPT_STATUS" != "200" ]]; then
+    echo "[agent-contract] high_risk_accept_stream_failed status=${HIGH_ACCEPT_STATUS} body=$(cat "$HIGH_ACCEPT_BODY")"
+    exit 32
+  fi
+  HIGH_ACCEPT_OUTCOME="$(parse_stream_outcome "$HIGH_ACCEPT_BODY" "approval")"
+  if [[ "$HIGH_ACCEPT_OUTCOME" == task_approval:* ]]; then
+    HIGH_TASK_ID="${HIGH_ACCEPT_OUTCOME#task_approval:}"
+  elif [[ "$HIGH_ACCEPT_OUTCOME" == "clarify" ]]; then
+    HIGH_DETAIL_BODY="$(new_tmp)"
+    HIGH_DETAIL_STATUS="$(curl -sS -w "%{http_code}" -D "$HEADERS_FILE" -o "$HIGH_DETAIL_BODY" -b "$COOKIE_FILE" -c "$COOKIE_FILE" \
+      -H "Content-Type: application/json" \
+      -X POST "${BASE_URL}/api/chat/respond/stream" \
+      --data "{\"conversationId\":\"${CONV_ID}\",\"text\":\"Recipient: my team, goal: send a concise meeting brief by email, tone: professional\",\"persona\":\"Zee\"}")"
+    if [[ "$HIGH_DETAIL_STATUS" != "200" ]]; then
+      echo "[agent-contract] high_risk_detail_stream_failed status=${HIGH_DETAIL_STATUS} body=$(cat "$HIGH_DETAIL_BODY")"
+      exit 33
+    fi
+    HIGH_DETAIL_OUTCOME="$(parse_stream_outcome "$HIGH_DETAIL_BODY" "approval")"
+    if [[ "$HIGH_DETAIL_OUTCOME" == task_approval:* ]]; then
+      HIGH_TASK_ID="${HIGH_DETAIL_OUTCOME#task_approval:}"
+    fi
+  fi
+fi
 if [[ -z "$HIGH_TASK_ID" ]]; then
   echo "[agent-contract] high_risk_task_id_missing body=$(cat "$HIGH_STREAM_BODY")"
-  exit 32
+  exit 34
 fi
 log "high-risk stream ok taskId=${HIGH_TASK_ID}"
 

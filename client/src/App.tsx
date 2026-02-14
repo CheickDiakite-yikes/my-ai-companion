@@ -59,11 +59,15 @@ import {
 import type {
   AgentArtifactSummary,
   AgentApprovalSummary,
+  ArtifactQualitySummary,
   AgentOfferSummary,
   AgentToolCallSummary,
   AgentMessageUiPayload,
   AgentStepSummary,
   AgentTaskSummary,
+  TaskAssumption,
+  TaskStateResolvedStatusSource,
+  TaskStateVersion,
   UnifiedAgentTaskCardModel,
   UnifiedAgentTaskTimelineItem,
 } from "@shared/agent";
@@ -351,6 +355,10 @@ interface AgentTaskResponse {
   approvals?: AgentApprovalSummary[];
   artifacts?: AgentArtifactSummary[];
   toolCalls?: AgentToolCallSummary[];
+  stateVersion?: TaskStateVersion;
+  resolvedStatusSource?: TaskStateResolvedStatusSource;
+  qualitySummary?: ArtifactQualitySummary | null;
+  assumptionsUsed?: TaskAssumption[];
 }
 
 interface AgentOfferResponse {
@@ -871,7 +879,7 @@ function buildUnifiedAgentTaskCards(
     }
   }
 
-  return messages.flatMap((message): TextRenderItem[] => {
+  return messages.flatMap((message, messageIndex): TextRenderItem[] => {
     const taskId =
       message.sender === "assistant"
         ? extractAgentTaskIdFromPayload(message.uiPayload)
@@ -946,6 +954,11 @@ function buildUnifiedAgentTaskCards(
       approval: aggregate.approval,
       artifact: aggregate.artifact,
       timeline,
+      autoCollapsed:
+        isTerminalTaskStatus(resolvedStatus) &&
+        messages
+          .slice(messageIndex + 1)
+          .filter((entry) => entry.sender === "user").length >= 2,
     };
 
     return [{ kind: "agent_unified_task", message, card }];
@@ -3765,7 +3778,19 @@ const UnifiedAgentTaskCard = ({
   const [isResolvingApproval, setIsResolvingApproval] = useState(false);
   const [inlineIframeKey, setInlineIframeKey] = useState(0);
   const [hasRevealedIframe, setHasRevealedIframe] = useState(false);
-  const [isCollapsed, setIsCollapsed] = useState(false);
+  const [isCollapsed, setIsCollapsed] = useState(Boolean(card.autoCollapsed));
+  const [hasManualCollapseOverride, setHasManualCollapseOverride] = useState(false);
+
+  useEffect(() => {
+    setHasManualCollapseOverride(false);
+    setIsCollapsed(Boolean(card.autoCollapsed));
+  }, [card.taskId]);
+
+  useEffect(() => {
+    if (!hasManualCollapseOverride) {
+      setIsCollapsed(Boolean(card.autoCollapsed));
+    }
+  }, [card.autoCollapsed, hasManualCollapseOverride]);
 
   const taskDetailQuery = useQuery<AgentTaskResponse>({
     queryKey: [`/api/agent/tasks/${card.taskId}`],
@@ -3996,7 +4021,10 @@ const UnifiedAgentTaskCard = ({
               <TooltipTrigger asChild>
                 <button
                   type="button"
-                  onClick={() => setIsCollapsed((c) => !c)}
+                  onClick={() => {
+                    setHasManualCollapseOverride(true);
+                    setIsCollapsed((c) => !c);
+                  }}
                   className="mt-0.5 rounded-lg border p-1.5 transition-all hover:opacity-90"
                   style={{
                     borderColor: "var(--app-soft-card-border)",
