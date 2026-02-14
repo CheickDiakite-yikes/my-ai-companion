@@ -1804,6 +1804,54 @@ function collectRecentUserTexts(input: {
   return rows.reverse();
 }
 
+function coerceResponseStylePreset(
+  value: unknown,
+): ResponseStylePreset {
+  if (
+    value === "concise" ||
+    value === "balanced" ||
+    value === "expressive" ||
+    value === "playful"
+  ) {
+    return value;
+  }
+  return "balanced";
+}
+
+async function resolveClarificationStylePreset(params: {
+  req: any;
+  userId: string;
+}): Promise<ResponseStylePreset> {
+  if (!ENABLE_PROFILE_PERSONALIZATION) {
+    return "balanced";
+  }
+  try {
+    const profile = await storage.getUserProfile(params.userId);
+    return coerceResponseStylePreset(profile?.responseStylePreset);
+  } catch (error) {
+    traceError(
+      params.req,
+      "chat.task.clarification_style.read.failed",
+      error,
+      { userId: params.userId },
+    );
+    return "balanced";
+  }
+}
+
+function chooseClarificationTone(
+  stylePreset: ResponseStylePreset | undefined,
+  variants: {
+    concise: string;
+    balanced: string;
+    expressive: string;
+    playful: string;
+  },
+): string {
+  const style = coerceResponseStylePreset(stylePreset);
+  return variants[style];
+}
+
 function inferDocumentTypeHint(text: string): string {
   const normalized = text.toLowerCase();
   if (/\bcover\s*letter\b/.test(normalized)) return "cover letter";
@@ -1838,36 +1886,112 @@ function buildClarificationQuestion(input: {
   taskKind: AgentTaskKind;
   userText: string;
   recentUserTexts: string[];
+  stylePreset?: ResponseStylePreset;
 }): string {
   const combined = [input.userText, ...input.recentUserTexts].join(" ");
   const typeHint = inferDocumentTypeHint(combined);
   const domainHint = inferDomainHint(combined);
 
   if (input.taskKind === "mini_game") {
-    return "Yesss, I can build that. Quick check: what vibe do you want, and should I make it 2D or light 3D?";
+    return chooseClarificationTone(input.stylePreset, {
+      concise:
+        "I can build it. Quick check: what style do you want, and 2D or light 3D?",
+      balanced:
+        "I can build that. Quick check: what vibe do you want, and should I make it 2D or light 3D?",
+      expressive:
+        "I love this idea. Quick check before I start: what vibe are we going for, and do you want 2D or light 3D?",
+      playful:
+        "I am in. Quick check: what vibe should we cook up, and are we going 2D or light 3D?",
+    });
   }
 
   if (input.taskKind === "mixed") {
-    return "I can do both. Want me to start with the doc or the game first?";
+    return chooseClarificationTone(input.stylePreset, {
+      concise:
+        "I can do both. Which first: document or game?",
+      balanced:
+        "I can do both. Want me to start with the doc or the game first?",
+      expressive:
+        "I can absolutely do both. Which one should I start first, the document or the game?",
+      playful:
+        "We can do both. You call it: doc first or game first?",
+    });
   }
 
   if (typeHint === "cover letter") {
-    return domainHint
-      ? `Love this. Want a ${domainHint} cover letter? Send the company, role, and tone (formal, warm, or bold), and I’ll draft it.`
-      : "Love this. Want a cover letter draft? Send the company, role, and tone (formal, warm, or bold), and I’ll draft it.";
+    if (domainHint) {
+      return chooseClarificationTone(input.stylePreset, {
+        concise:
+          `I can draft a ${domainHint} cover letter. Share company, role, and tone (formal, warm, or bold).`,
+        balanced:
+          `Want a ${domainHint} cover letter draft? Send the company, role, and tone (formal, warm, or bold), and I will draft it.`,
+        expressive:
+          `Great direction. I can draft a strong ${domainHint} cover letter. Share the company, role, and your preferred tone (formal, warm, or bold).`,
+        playful:
+          `Love this move. I can draft a ${domainHint} cover letter. Drop the company, role, and tone (formal, warm, or bold).`,
+      });
+    }
+    return chooseClarificationTone(input.stylePreset, {
+      concise:
+        "I can draft it. Share company, role, and tone (formal, warm, or bold).",
+      balanced:
+        "Want a cover letter draft? Send the company, role, and tone (formal, warm, or bold), and I will draft it.",
+      expressive:
+        "Absolutely. I can draft this cover letter. Share the company, role, and your preferred tone (formal, warm, or bold).",
+      playful:
+        "Say less. I can draft the cover letter. Send company, role, and tone (formal, warm, or bold).",
+    });
   }
 
   if (typeHint === "email") {
-    return "Yep. Before I draft it, who is it to, what’s the goal, and what tone do you want?";
+    return chooseClarificationTone(input.stylePreset, {
+      concise:
+        "I can draft it. Who is it to, what is the goal, and what tone do you want?",
+      balanced:
+        "Before I draft it, who is it to, what is the goal, and what tone do you want?",
+      expressive:
+        "Perfect. Before I draft it, tell me who it is for, the exact goal, and the tone you want me to hit.",
+      playful:
+        "Yep, I got you. Quick check: who is it to, what is the goal, and what tone are we using?",
+    });
   }
 
   if (typeHint === "presentation") {
-    return "Awesome. Before I build the deck, who’s the audience, what’s the goal, and what 3-5 points must be included?";
+    return chooseClarificationTone(input.stylePreset, {
+      concise:
+        "I can build the deck. Who is the audience, what is the goal, and what 3-5 points are required?",
+      balanced:
+        "Before I build the deck, who is the audience, what is the goal, and what 3-5 points must be included?",
+      expressive:
+        "Awesome. I can build this deck. Tell me the audience, the core goal, and the 3-5 points that must be on the slides.",
+      playful:
+        "Nice, deck mode. Give me audience, core goal, and 3-5 must-have points, and I will build it.",
+    });
   }
 
-  return domainHint
-    ? `Totally. I can make that ${domainHint} ${typeHint}. Quick check: who is it for, what’s the goal, and what tone should I use?`
-    : "Totally. I can make that. Quick check so I nail it: what type of document is it, who is it for, and what tone should I use?";
+  if (domainHint) {
+    return chooseClarificationTone(input.stylePreset, {
+      concise:
+        `I can create that ${domainHint} ${typeHint}. Who is it for, what is the goal, and what tone should I use?`,
+      balanced:
+        `I can create that ${domainHint} ${typeHint}. Quick check: who is it for, what is the goal, and what tone should I use?`,
+      expressive:
+        `I can absolutely create that ${domainHint} ${typeHint}. Quick check so I get it right: who is it for, what is the goal, and what tone should I use?`,
+      playful:
+        `I can make that ${domainHint} ${typeHint}. Quick check: who is it for, what is the goal, and what tone are we going for?`,
+    });
+  }
+
+  return chooseClarificationTone(input.stylePreset, {
+    concise:
+      "I can create it. What type of document is this, who is it for, and what tone should I use?",
+    balanced:
+      "I can create that. Quick check so I nail it: what type of document is it, who is it for, and what tone should I use?",
+    expressive:
+      "I can absolutely create that. Quick check so I get it right: what type of document do you want, who is it for, and what tone should I use?",
+    playful:
+      "I can make that. Quick check: what kind of doc are we making, who is it for, and what tone do you want?",
+  });
 }
 
 function maybeBuildTaskClarification(input: {
@@ -1876,6 +2000,7 @@ function maybeBuildTaskClarification(input: {
   sourceMessageId: string;
   conversationMessages: Message[];
   hasImage: boolean;
+  stylePreset?: ResponseStylePreset;
 }): { question: string; reason: string } | null {
   const normalized = toCompactMessageText(input.userText);
   if (!normalized) return null;
@@ -1907,6 +2032,7 @@ function maybeBuildTaskClarification(input: {
       taskKind: input.taskKind,
       userText: normalized,
       recentUserTexts,
+      stylePreset: input.stylePreset,
     }),
     reason: needsDocClarification
       ? "underspecified_document_task"
@@ -4490,12 +4616,17 @@ export async function registerRoutes(
           boundAttachments.length > 0,
           turnIntentContext,
         );
+        const clarificationStylePreset = await resolveClarificationStylePreset({
+          req,
+          userId: req.session.userId,
+        });
         const clarification = maybeBuildTaskClarification({
           taskKind,
           userText: parsed.text,
           sourceMessageId: userMessage.id,
           conversationMessages: existingConversationMessages,
           hasImage: boundAttachments.length > 0,
+          stylePreset: clarificationStylePreset,
         });
         if (clarification) {
           const clarificationMessages = await storage.createAssistantTurnParts({
@@ -4509,6 +4640,7 @@ export async function registerRoutes(
             conversationId: conversation.id,
             taskKind,
             reason: clarification.reason,
+            stylePreset: clarificationStylePreset,
             sourceMessageId: userMessage.id,
           });
           return res.status(201).json({
@@ -4981,12 +5113,17 @@ export async function registerRoutes(
           boundAttachments.length > 0,
           turnIntentContext,
         );
+        const clarificationStylePreset = await resolveClarificationStylePreset({
+          req,
+          userId: req.session.userId,
+        });
         const clarification = maybeBuildTaskClarification({
           taskKind,
           userText: parsed.text,
           sourceMessageId: userMessage.id,
           conversationMessages: existingConversationMessages,
           hasImage: boundAttachments.length > 0,
+          stylePreset: clarificationStylePreset,
         });
         if (clarification) {
           const clarificationMessages = await storage.createAssistantTurnParts({
@@ -5008,6 +5145,7 @@ export async function registerRoutes(
             conversationId: conversation.id,
             taskKind,
             reason: clarification.reason,
+            stylePreset: clarificationStylePreset,
             sourceMessageId: userMessage.id,
           });
           res.end();
