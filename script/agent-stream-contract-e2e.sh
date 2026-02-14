@@ -134,7 +134,7 @@ HEADERS_FILE="$(new_tmp)"
 EMAIL="agent.contract.$(date +%s)@example.com"
 PASSWORD="TestPass123!"
 
-log "1/8 register"
+log "1/9 register"
 REGISTER_BODY="$(new_tmp)"
 REGISTER_STATUS="$(curl -sS -w "%{http_code}" -D "$HEADERS_FILE" -o "$REGISTER_BODY" -c "$COOKIE_FILE" \
   -H "Content-Type: application/json" \
@@ -147,7 +147,7 @@ fi
 REGISTER_TRACE="$(extract_trace "$HEADERS_FILE")"
 log "register ok traceId=${REGISTER_TRACE}"
 
-log "2/8 create conversation"
+log "2/9 create conversation"
 CONV_BODY="$(new_tmp)"
 CONV_STATUS="$(curl -sS -w "%{http_code}" -D "$HEADERS_FILE" -o "$CONV_BODY" -b "$COOKIE_FILE" -c "$COOKIE_FILE" \
   -H "Content-Type: application/json" \
@@ -164,7 +164,7 @@ if [[ -z "$CONV_ID" ]]; then
 fi
 log "conversation ok id=${CONV_ID}"
 
-log "3/8 low-risk stream contract"
+log "3/9 low-risk stream contract"
 LOW_STREAM_BODY="$(new_tmp)"
 LOW_STREAM_STATUS="$(curl -sS -w "%{http_code}" -D "$HEADERS_FILE" -o "$LOW_STREAM_BODY" -b "$COOKIE_FILE" -c "$COOKIE_FILE" \
   -H "Content-Type: application/json" \
@@ -181,7 +181,7 @@ if [[ -z "$LOW_TASK_ID" ]]; then
 fi
 log "low-risk stream ok taskId=${LOW_TASK_ID}"
 
-log "4/8 verify low-risk task state"
+log "4/9 verify low-risk task state"
 LOW_TASK_BODY="$(new_tmp)"
 LOW_TASK_STATUS="$(curl -sS -w "%{http_code}" -D "$HEADERS_FILE" -o "$LOW_TASK_BODY" -b "$COOKIE_FILE" -c "$COOKIE_FILE" \
   "${BASE_URL}/api/agent/tasks/${LOW_TASK_ID}")"
@@ -191,7 +191,19 @@ if [[ "$LOW_TASK_STATUS" != "200" ]]; then
 fi
 node -e "const fs=require('fs');const b=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));if(b?.task?.status!=='completed'){console.error('low_risk_not_completed',b?.task?.status);process.exit(1)};const artifacts=Array.isArray(b?.artifacts)?b.artifacts:[];if(!artifacts.some(a=>a.type==='mini_game')){console.error('low_risk_missing_game_artifact');process.exit(2)};console.log('[agent-contract] low-risk task completed artifacts=' + artifacts.length);" "$LOW_TASK_BODY"
 
-log "5/8 high-risk stream contract"
+log "5/9 clarification gate contract"
+CLARIFY_STREAM_BODY="$(new_tmp)"
+CLARIFY_STREAM_STATUS="$(curl -sS -w "%{http_code}" -D "$HEADERS_FILE" -o "$CLARIFY_STREAM_BODY" -b "$COOKIE_FILE" -c "$COOKIE_FILE" \
+  -H "Content-Type: application/json" \
+  -X POST "${BASE_URL}/api/chat/respond/stream" \
+  --data "{\"conversationId\":\"${CONV_ID}\",\"text\":\"can you create a document?\",\"persona\":\"Zee\"}")"
+if [[ "$CLARIFY_STREAM_STATUS" != "200" ]]; then
+  echo "[agent-contract] clarification_stream_failed status=${CLARIFY_STREAM_STATUS} body=$(cat "$CLARIFY_STREAM_BODY")"
+  exit 30
+fi
+node -e "const fs=require('fs');const lines=fs.readFileSync(process.argv[1],'utf8').trim().split(/\\n+/).filter(Boolean);if(lines.length===0){console.error('empty_stream');process.exit(2)};const events=lines.map(l=>JSON.parse(l));if(events[0]?.type!=='ack'){console.error('first_event_not_ack');process.exit(3)};if(events.some(e=>e.type==='task_created'||e.type==='task_step'||e.type==='task_artifact_ready'||e.type==='task_approval_required')){console.error('unexpected_task_events_for_clarification');process.exit(4)};const final=events.find(e=>e.type==='final');if(!final){console.error('missing_final_event');process.exit(5)};const messages=Array.isArray(final.assistantMessages)?final.assistantMessages:[];const text=(messages[0]?.text||final.assistantMessage?.text||'').toLowerCase();if(!text||!/(quick check|who is it for|company|role|tone)/.test(text)){console.error('clarification_text_missing_or_weak',text);process.exit(6)};console.log('[agent-contract] clarification gate ok');" "$CLARIFY_STREAM_BODY"
+
+log "6/9 high-risk stream contract"
 HIGH_STREAM_BODY="$(new_tmp)"
 HIGH_STREAM_STATUS="$(curl -sS -w "%{http_code}" -D "$HEADERS_FILE" -o "$HIGH_STREAM_BODY" -b "$COOKIE_FILE" -c "$COOKIE_FILE" \
   -H "Content-Type: application/json" \
@@ -208,7 +220,7 @@ if [[ -z "$HIGH_TASK_ID" ]]; then
 fi
 log "high-risk stream ok taskId=${HIGH_TASK_ID}"
 
-log "6/8 approve high-risk task"
+log "7/9 approve high-risk task"
 APPROVE_BODY="$(new_tmp)"
 APPROVE_STATUS="$(curl -sS -w "%{http_code}" -D "$HEADERS_FILE" -o "$APPROVE_BODY" -b "$COOKIE_FILE" -c "$COOKIE_FILE" \
   -H "Content-Type: application/json" \
@@ -219,7 +231,7 @@ if [[ "$APPROVE_STATUS" != "200" ]]; then
   exit 33
 fi
 
-log "7/8 wait for high-risk completion"
+log "8/9 wait for high-risk completion"
 HIGH_TASK_FINAL_BODY="$(new_tmp)"
 HIGH_DONE="0"
 for ((i = 1; i <= 20; i += 1)); do
@@ -242,7 +254,7 @@ if [[ "$HIGH_DONE" != "1" ]]; then
   exit 35
 fi
 
-log "8/8 verify high-risk approval + artifact"
+log "9/9 verify high-risk approval + artifact"
 node -e "const fs=require('fs');const b=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));const approvals=Array.isArray(b?.approvals)?b.approvals:[];const artifacts=Array.isArray(b?.artifacts)?b.artifacts:[];if(!approvals.some(a=>a.status==='approved')){console.error('missing_approved_decision');process.exit(1)};if(!artifacts.some(a=>a.type==='doc_markdown')){console.error('missing_doc_artifact');process.exit(2)};console.log('[agent-contract] high-risk task completed approvals=' + approvals.length + ' artifacts=' + artifacts.length);" "$HIGH_TASK_FINAL_BODY"
 
 log "PASS stream contract checks on ${BASE_URL}"

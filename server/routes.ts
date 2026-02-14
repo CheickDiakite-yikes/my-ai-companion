@@ -1427,6 +1427,10 @@ const TASK_CONTEXT_DETAIL_PATTERNS = [
   /\b(?:for|about|regarding|focused on|targeting|to\s+[a-z]|with|including)\b/i,
   /\b(?:cover letter|job|role|company|investor|pitch|subject line|roadmap|follow[- ]up)\b/i,
 ];
+const TASK_GENERIC_GAME_REQUEST_PATTERNS = [
+  /^\s*(?:can|could|would|will)\s+you\s+(?:create|make|build|generate)\s+(?:a|an)?\s*(?:mini\s*game|game)\b.*\??\s*$/i,
+  /^\s*(?:create|make|build|generate)\s+(?:a|an)?\s*(?:mini\s*game|game)\b.*$/i,
+];
 
 function toDateOrNull(value: unknown): Date | null {
   if (!value) return null;
@@ -1779,6 +1783,135 @@ function buildTaskExecutionPrompt(input: {
     guidance,
     "- If context is still ambiguous, ask one short clarification instead of guessing.",
   ].join("\n");
+}
+
+function collectRecentUserTexts(input: {
+  messages: Message[];
+  excludeMessageId: string;
+  limit?: number;
+}): string[] {
+  const maxItems = Math.max(1, Math.min(input.limit ?? 6, 10));
+  const rows: string[] = [];
+  for (let idx = input.messages.length - 1; idx >= 0; idx -= 1) {
+    if (rows.length >= maxItems) break;
+    const message = input.messages[idx];
+    if (message.id === input.excludeMessageId) continue;
+    if (message.sender !== "user") continue;
+    const compact = toCompactMessageText(message.text ?? "");
+    if (compact.length < 4) continue;
+    rows.push(compact);
+  }
+  return rows.reverse();
+}
+
+function inferDocumentTypeHint(text: string): string {
+  const normalized = text.toLowerCase();
+  if (/\bcover\s*letter\b/.test(normalized)) return "cover letter";
+  if (/\bemail\b/.test(normalized)) return "email";
+  if (/\b(presentation|slides|deck|pitch)\b/.test(normalized)) {
+    return "presentation";
+  }
+  if (/\b(proposal|brief|plan|report|summary)\b/.test(normalized)) {
+    return "brief";
+  }
+  return "document";
+}
+
+function inferDomainHint(text: string): string | null {
+  const normalized = text.toLowerCase();
+  if (/\b(ai|artificial intelligence|machine learning)\b/.test(normalized)) {
+    return "AI";
+  }
+  if (/\b(fintech|finance|bank|payments?)\b/.test(normalized)) {
+    return "fintech";
+  }
+  if (/\b(health|biotech|bio|medical)\b/.test(normalized)) {
+    return "health/biotech";
+  }
+  if (/\b(investor|fundraising|pitch)\b/.test(normalized)) {
+    return "investor update";
+  }
+  return null;
+}
+
+function buildClarificationQuestion(input: {
+  taskKind: AgentTaskKind;
+  userText: string;
+  recentUserTexts: string[];
+}): string {
+  const combined = [input.userText, ...input.recentUserTexts].join(" ");
+  const typeHint = inferDocumentTypeHint(combined);
+  const domainHint = inferDomainHint(combined);
+
+  if (input.taskKind === "mini_game") {
+    return "Yesss, I can build that. Quick check: what vibe do you want, and should I make it 2D or light 3D?";
+  }
+
+  if (input.taskKind === "mixed") {
+    return "I can do both. Want me to start with the doc or the game first?";
+  }
+
+  if (typeHint === "cover letter") {
+    return domainHint
+      ? `Love this. Want a ${domainHint} cover letter? Send the company, role, and tone (formal, warm, or bold), and I’ll draft it.`
+      : "Love this. Want a cover letter draft? Send the company, role, and tone (formal, warm, or bold), and I’ll draft it.";
+  }
+
+  if (typeHint === "email") {
+    return "Yep. Before I draft it, who is it to, what’s the goal, and what tone do you want?";
+  }
+
+  if (typeHint === "presentation") {
+    return "Awesome. Before I build the deck, who’s the audience, what’s the goal, and what 3-5 points must be included?";
+  }
+
+  return domainHint
+    ? `Totally. I can make that ${domainHint} ${typeHint}. Quick check: who is it for, what’s the goal, and what tone should I use?`
+    : "Totally. I can make that. Quick check so I nail it: what type of document is it, who is it for, and what tone should I use?";
+}
+
+function maybeBuildTaskClarification(input: {
+  taskKind: AgentTaskKind;
+  userText: string;
+  sourceMessageId: string;
+  conversationMessages: Message[];
+  hasImage: boolean;
+}): { question: string; reason: string } | null {
+  const normalized = toCompactMessageText(input.userText);
+  if (!normalized) return null;
+
+  const needsDocClarification =
+    (input.taskKind === "doc_markdown" || input.taskKind === "mixed") &&
+    isUnderSpecifiedTaskPrompt({
+      userText: normalized,
+      taskKind: input.taskKind,
+    });
+
+  const needsGameClarification =
+    input.taskKind === "mini_game" &&
+    !input.hasImage &&
+    TASK_GENERIC_GAME_REQUEST_PATTERNS.some((pattern) => pattern.test(normalized));
+
+  if (!needsDocClarification && !needsGameClarification) {
+    return null;
+  }
+
+  const recentUserTexts = collectRecentUserTexts({
+    messages: input.conversationMessages,
+    excludeMessageId: input.sourceMessageId,
+    limit: 6,
+  });
+
+  return {
+    question: buildClarificationQuestion({
+      taskKind: input.taskKind,
+      userText: normalized,
+      recentUserTexts,
+    }),
+    reason: needsDocClarification
+      ? "underspecified_document_task"
+      : "underspecified_game_task",
+  };
 }
 
 function normalizeOptionalString(value: unknown): string | null | undefined {
@@ -4357,6 +4490,43 @@ export async function registerRoutes(
           boundAttachments.length > 0,
           turnIntentContext,
         );
+        const clarification = maybeBuildTaskClarification({
+          taskKind,
+          userText: parsed.text,
+          sourceMessageId: userMessage.id,
+          conversationMessages: existingConversationMessages,
+          hasImage: boundAttachments.length > 0,
+        });
+        if (clarification) {
+          const clarificationMessages = await storage.createAssistantTurnParts({
+            conversationId: conversation.id,
+            textParts: [clarification.question],
+          });
+          const legacyClarificationMessage = makeLegacyAssistantMessage(
+            clarificationMessages,
+          );
+          trace(req, "chat.task.clarification_requested", {
+            conversationId: conversation.id,
+            taskKind,
+            reason: clarification.reason,
+            sourceMessageId: userMessage.id,
+          });
+          return res.status(201).json({
+            traceId: getTraceId(req),
+            conversationId: conversation.id,
+            userMessage: {
+              ...userMessage,
+              attachments: boundAttachments.map((attachment) =>
+                toAttachmentResponse(attachment, req.session.userId),
+              ),
+            },
+            assistantMessage: legacyClarificationMessage,
+            assistantMessages: clarificationMessages,
+            model: "clarification_guardrail_v1",
+            usage: null,
+            elapsedMs: elapsedMs(startedAt),
+          });
+        }
         const executionPrompt = buildTaskExecutionPrompt({
           userText: parsed.text,
           sourceMessageId: userMessage.id,
@@ -4811,6 +4981,38 @@ export async function registerRoutes(
           boundAttachments.length > 0,
           turnIntentContext,
         );
+        const clarification = maybeBuildTaskClarification({
+          taskKind,
+          userText: parsed.text,
+          sourceMessageId: userMessage.id,
+          conversationMessages: existingConversationMessages,
+          hasImage: boundAttachments.length > 0,
+        });
+        if (clarification) {
+          const clarificationMessages = await storage.createAssistantTurnParts({
+            conversationId: conversation.id,
+            textParts: [clarification.question],
+          });
+          const legacyClarificationMessage = makeLegacyAssistantMessage(
+            clarificationMessages,
+          );
+          writeEvent({
+            type: "final",
+            assistantMessage: legacyClarificationMessage,
+            assistantMessages: clarificationMessages,
+            model: "clarification_guardrail_v1",
+            usage: null,
+            elapsedMs: elapsedMs(startedAt),
+          });
+          trace(req, "chat.stream.task.clarification_requested", {
+            conversationId: conversation.id,
+            taskKind,
+            reason: clarification.reason,
+            sourceMessageId: userMessage.id,
+          });
+          res.end();
+          return;
+        }
         const executionPrompt = buildTaskExecutionPrompt({
           userText: parsed.text,
           sourceMessageId: userMessage.id,
