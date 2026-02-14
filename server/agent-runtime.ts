@@ -589,6 +589,7 @@ export interface StartAgentTaskParams {
   userId: string;
   conversationId: string;
   prompt: string;
+  executionPrompt?: string;
   requestedByMessageId: string;
   attachments: MessageAttachment[];
   intentContext?: ChatTurnIntentContext;
@@ -631,6 +632,7 @@ interface StoredTaskPlan extends AgentExecutionPlan {
   };
   context?: {
     imageHints?: string[];
+    executionPrompt?: string;
   };
 }
 
@@ -2239,12 +2241,16 @@ export async function startAgentTaskRun(
   task: AgentTaskSummary;
   awaitingApproval: boolean;
 }> {
+  const executionPrompt =
+    params.executionPrompt && params.executionPrompt.trim().length > 0
+      ? params.executionPrompt.trim()
+      : params.prompt;
   const imageHints = params.attachments
     .map((attachment) => attachment.summaryText?.trim())
     .filter((value): value is string => Boolean(value));
 
   const planned = await adapter.buildPlan({
-    prompt: params.prompt,
+    prompt: executionPrompt,
     hasImage: params.attachments.length > 0,
     intentContext: params.intentContext,
   });
@@ -2269,6 +2275,8 @@ export async function startAgentTaskRun(
     },
     context: {
       imageHints,
+      executionPrompt:
+        executionPrompt !== params.prompt ? executionPrompt : undefined,
     },
   };
 
@@ -2345,7 +2353,7 @@ export async function startAgentTaskRun(
     taskId: task.id,
     conversationId: task.conversationId,
     userId: task.userId,
-    prompt: task.prompt,
+    prompt: executionPrompt,
     imageHints,
     onEvent: params.onEvent,
   });
@@ -2388,12 +2396,17 @@ export async function approveAndContinueAgentTask(
 
   const storedPlan = (task.plan ?? null) as StoredTaskPlan | null;
   const storedImageHints = coerceStringArray(storedPlan?.context?.imageHints);
+  const storedExecutionPrompt =
+    typeof storedPlan?.context?.executionPrompt === "string" &&
+    storedPlan.context.executionPrompt.trim().length > 0
+      ? storedPlan.context.executionPrompt.trim()
+      : task.prompt;
 
   await runTaskExecution({
     taskId: task.id,
     conversationId: task.conversationId,
     userId: task.userId,
-    prompt: task.prompt,
+    prompt: storedExecutionPrompt,
     imageHints: storedImageHints,
     onEvent: params.onEvent,
   });
@@ -2425,7 +2438,7 @@ async function runTaskExecution(state: RuntimeState): Promise<void> {
       : coerceStringArray(plan?.context?.imageHints);
   const taskKind =
     plan?.taskKind ??
-    inferAgentTaskKind(task.prompt, effectiveImageHints.length > 0);
+    inferAgentTaskKind(state.prompt, effectiveImageHints.length > 0);
 
   await storage.updateAgentTaskStatus({
     taskId: task.id,
@@ -4066,7 +4079,7 @@ function buildDocPreviewHtml(params: {
 }
 
 function markdownToSimpleHtml(markdown: string): string {
-  const lines = markdown.split(/\\r?\\n/);
+  const lines = markdown.split(/\r?\n/);
   const html: string[] = [];
   let inList = false;
   let inParagraph = false;
@@ -4090,7 +4103,7 @@ function markdownToSimpleHtml(markdown: string): string {
       continue;
     }
 
-    const heading = line.match(/^(#{1,4})\\s+(.*)$/);
+    const heading = line.match(/^(#{1,4})\s+(.*)$/);
     if (heading) {
       closeParagraph();
       closeList();
@@ -4099,7 +4112,7 @@ function markdownToSimpleHtml(markdown: string): string {
       continue;
     }
 
-    const listItem = line.match(/^[-*]\\s+(.*)$/);
+    const listItem = line.match(/^[-*]\s+(.*)$/);
     if (listItem) {
       closeParagraph();
       if (!inList) {
@@ -4129,8 +4142,8 @@ function inlineMarkdownToHtml(input: string): string {
   const escaped = escapeHtml(input);
   return escaped
     .replace(/`([^`]+)`/g, "<code>$1</code>")
-    .replace(/\\*\\*([^*]+)\\*\\*/g, "<strong>$1</strong>")
-    .replace(/\\*([^*]+)\\*/g, "<em>$1</em>");
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/\*([^*\n]+)\*/g, "<em>$1</em>");
 }
 
 function extractSubject(prompt: string, fallback: string): string {

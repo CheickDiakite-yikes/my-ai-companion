@@ -578,8 +578,8 @@ const ENABLE_UNIFIED_AGENT_TASK_CARD = parseClientBooleanFlag(
 
 const TASK_STATUS_PRECEDENCE: Record<AgentTaskSummary["status"], number> = {
   queued: 1,
-  completed: 2,
-  in_progress: 3,
+  in_progress: 2,
+  completed: 3,
   approval_required: 4,
   failed: 5,
   cancelled: 5,
@@ -3825,15 +3825,19 @@ const UnifiedAgentTaskCard = ({
     }
   };
 
-  const canRenderInline =
+  const canRenderInlineHtml =
     hasArtifact &&
-    card.artifact?.htmlContent &&
+    typeof card.artifact?.htmlContent === "string" &&
     card.artifact.htmlContent.trim().length > 0;
+  const canRenderInlineGame =
+    canRenderInlineHtml && card.artifact?.type === "mini_game";
+  const canRenderInlineDocument =
+    canRenderInlineHtml && card.artifact?.type === "doc_markdown";
 
   const inlineIframeSrc = useMemo(() => {
-    if (!canRenderInline || !card.artifact?.id) return null;
+    if (!canRenderInlineHtml || !card.artifact?.id) return null;
     return `/api/agent/artifacts/${card.artifact.id}/render?v=${inlineIframeKey}`;
-  }, [canRenderInline, card.artifact?.id, inlineIframeKey]);
+  }, [canRenderInlineHtml, card.artifact?.id, inlineIframeKey]);
 
   const terminalLines = useMemo(() => {
     const lines: { text: string; type: "info" | "success" | "warn" | "cmd" }[] = [];
@@ -4049,7 +4053,7 @@ const UnifiedAgentTaskCard = ({
                 transition={{ duration: 0.2 }}
                 className="p-3"
               >
-                {canRenderInline && inlineIframeSrc ? (
+                {canRenderInlineGame && inlineIframeSrc ? (
                   <div className="space-y-2">
                     <div
                       className="relative overflow-hidden rounded-xl border group cursor-pointer"
@@ -4123,6 +4127,62 @@ const UnifiedAgentTaskCard = ({
                         type="button"
                         onClick={() => setInlineIframeKey((k) => k + 1)}
                         className="inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-[11px] font-semibold transition-colors hover:opacity-90"
+                        style={{
+                          borderColor: "var(--app-soft-card-border)",
+                          backgroundColor: "var(--app-soft-card-bg)",
+                          color: "var(--app-on-dark)",
+                        }}
+                        data-testid="button-reload-inline-artifact"
+                      >
+                        Reload
+                      </button>
+                    </div>
+                  </div>
+                ) : canRenderInlineDocument && inlineIframeSrc ? (
+                  <div className="space-y-2">
+                    <div
+                      className="rounded-xl border p-2"
+                      style={{
+                        borderColor: "var(--app-soft-card-border)",
+                        backgroundColor:
+                          "color-mix(in srgb, var(--app-soft-card-bg) 80%, transparent)",
+                      }}
+                    >
+                      <div className="mb-2 inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide opacity-75">
+                        <FileText className="h-3 w-3" />
+                        Document Preview
+                      </div>
+                      <iframe
+                        key={inlineIframeKey}
+                        title={card.artifact?.title ?? "Document"}
+                        sandbox="allow-scripts"
+                        src={inlineIframeSrc}
+                        className="h-[280px] w-full rounded-lg border"
+                        style={{
+                          backgroundColor: "#ffffff",
+                          borderColor: "var(--app-soft-card-border)",
+                        }}
+                        data-testid="agent-inline-document-iframe"
+                      />
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => onOpenArtifact(card.artifact!.id)}
+                        className="rounded-lg border px-3 py-1.5 text-[11px] font-semibold transition-colors hover:opacity-90"
+                        style={{
+                          borderColor: "var(--app-soft-card-border)",
+                          backgroundColor: "var(--app-soft-card-bg)",
+                          color: "var(--app-accent)",
+                        }}
+                        data-testid="button-open-agent-artifact"
+                      >
+                        View
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setInlineIframeKey((k) => k + 1)}
+                        className="rounded-lg border px-3 py-1.5 text-[11px] font-semibold transition-colors hover:opacity-90"
                         style={{
                           borderColor: "var(--app-soft-card-border)",
                           backgroundColor: "var(--app-soft-card-bg)",
@@ -6984,6 +7044,12 @@ function App() {
           conversationId: params.conversationId,
           updater: (snapshot) => ({
             ...snapshot,
+            task: {
+              ...snapshot.task,
+              status: snapshot.task.status === "failed" ? "failed" : "completed",
+              updatedAt: new Date(),
+              completedAt: new Date(),
+            },
             artifact: event.artifact,
             timeline: appendLiveTimelineItem(snapshot.timeline, {
               id: `artifact-${event.artifact.id}`,

@@ -1411,13 +1411,21 @@ const PROACTIVE_OFFER_EXPLICIT_REQUEST_PATTERNS = [
   /\b(?:make me|build me|create me)\b/i,
 ];
 const PROACTIVE_OFFER_NEED_PATTERNS = [
-  /\b(?:i need to|i should|i want to|i have to|i'm thinking of|im thinking of)\b/i,
+  /\b(?:i need(?: to)?|i should|i want to|i have to|i'm thinking of|im thinking of)\b/i,
   /\b(?:i'm trying to|im trying to|help me|not sure how to)\b/i,
 ];
 const PROACTIVE_OFFER_DELIVERABLE_PATTERNS = [
   /\b(?:email|document|doc|brief|report|proposal|summary|plan|checklist)\b/i,
   /\b(?:presentation|slides|deck|pitch)\b/i,
   /\b(?:landing page|website|app|prototype|mini game|game)\b/i,
+];
+const TASK_CONTEXT_GENERIC_REQUEST_PATTERNS = [
+  /^\s*(?:can|could|would|will)\s+you\s+(?:create|make|draft|write|build)\s+(?:a|an)?\s*(?:document|doc|email|letter|cover letter|presentation|slides?|deck)\b.*\??\s*$/i,
+  /^\s*(?:create|make|draft|write|build)\s+(?:a|an)?\s*(?:document|doc|email|letter|cover letter|presentation|slides?|deck)\b.*$/i,
+];
+const TASK_CONTEXT_DETAIL_PATTERNS = [
+  /\b(?:for|about|regarding|focused on|targeting|to\s+[a-z]|with|including)\b/i,
+  /\b(?:cover letter|job|role|company|investor|pitch|subject line|roadmap|follow[- ]up)\b/i,
 ];
 
 function toDateOrNull(value: unknown): Date | null {
@@ -1694,6 +1702,83 @@ function inferRecentAgentIntentContext(messages: Message[], excludeMessageId: st
     hasRecentAgentActivity: false,
     recentTaskKind: null,
   };
+}
+
+function toCompactMessageText(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function trimContextSnippet(value: string, maxLength = 260): string {
+  if (value.length <= maxLength) return value;
+  return `${value.slice(0, Math.max(0, maxLength - 3)).trim()}...`;
+}
+
+function isUnderSpecifiedTaskPrompt(input: {
+  userText: string;
+  taskKind: AgentTaskKind;
+}): boolean {
+  const normalized = toCompactMessageText(input.userText);
+  if (!normalized) return true;
+
+  const hasGenericShape = TASK_CONTEXT_GENERIC_REQUEST_PATTERNS.some((pattern) =>
+    pattern.test(normalized),
+  );
+  const hasDetailSignal = TASK_CONTEXT_DETAIL_PATTERNS.some((pattern) =>
+    pattern.test(normalized),
+  );
+  const shortAndVague = normalized.length <= 52 && !hasDetailSignal;
+  const explicitQuestion = /\?\s*$/.test(normalized);
+
+  if (input.taskKind === "doc_markdown") {
+    return hasGenericShape || shortAndVague || (explicitQuestion && !hasDetailSignal);
+  }
+  return hasGenericShape && !hasDetailSignal;
+}
+
+function buildTaskExecutionPrompt(input: {
+  userText: string;
+  sourceMessageId: string;
+  taskKind: AgentTaskKind;
+  conversationMessages: Message[];
+}): string {
+  const normalizedUserText = toCompactMessageText(input.userText);
+  if (!isUnderSpecifiedTaskPrompt({ userText: normalizedUserText, taskKind: input.taskKind })) {
+    return normalizedUserText;
+  }
+
+  const contextRows: string[] = [];
+  for (let idx = input.conversationMessages.length - 1; idx >= 0; idx -= 1) {
+    if (contextRows.length >= 6) break;
+    const message = input.conversationMessages[idx];
+    if (message.id === input.sourceMessageId) continue;
+    if (message.sender !== "user" && message.sender !== "assistant") continue;
+    if (message.sender === "assistant" && isAgentMessageUiPayload(message.uiPayload)) continue;
+    const compactText = toCompactMessageText(message.text ?? "");
+    if (compactText.length < 6) continue;
+    const speaker = message.sender === "user" ? "User" : "Zee";
+    contextRows.push(`${speaker}: ${trimContextSnippet(compactText)}`);
+  }
+
+  if (contextRows.length === 0) {
+    return normalizedUserText;
+  }
+
+  const orderedRows = contextRows.reverse();
+  const guidance =
+    input.taskKind === "doc_markdown"
+      ? "- Infer document type, audience, and tone from the conversation context.\n- Keep structure polished (headings, emphasis, lists) and aligned to the latest user intent."
+      : "- Align implementation choices to the latest user intent and conversation context.";
+
+  return [
+    normalizedUserText,
+    "",
+    "Recent conversation context:",
+    ...orderedRows.map((row) => `- ${row}`),
+    "",
+    "Execution guidance:",
+    guidance,
+    "- If context is still ambiguous, ask one short clarification instead of guessing.",
+  ].join("\n");
 }
 
 function normalizeOptionalString(value: unknown): string | null | undefined {
@@ -3509,16 +3594,24 @@ export async function registerRoutes(
             )
           : [];
         const conversationMessages = await storage.getMessages(offer.conversationId);
+        const offerIntentContext = inferRecentAgentIntentContext(
+          conversationMessages,
+          offerMessage.id,
+        );
+        const executionPrompt = buildTaskExecutionPrompt({
+          userText: offer.proposedPrompt,
+          sourceMessageId: offer.sourceMessageId ?? offerMessage.id,
+          taskKind: offer.taskKind,
+          conversationMessages,
+        });
         const run = await startAgentTaskRun({
           userId: req.session.userId,
           conversationId: offer.conversationId,
           prompt: offer.proposedPrompt,
+          executionPrompt,
           requestedByMessageId: offer.sourceMessageId ?? offerMessage.id,
           attachments: sourceAttachments,
-          intentContext: inferRecentAgentIntentContext(
-            conversationMessages,
-            offerMessage.id,
-          ),
+          intentContext: offerIntentContext,
         });
 
         const completedOffer: AgentOfferSummary = {
@@ -4259,10 +4352,22 @@ export async function registerRoutes(
       });
 
       if (effectiveTurnIntent === "agent_task") {
+        const taskKind = inferAgentTaskKind(
+          parsed.text,
+          boundAttachments.length > 0,
+          turnIntentContext,
+        );
+        const executionPrompt = buildTaskExecutionPrompt({
+          userText: parsed.text,
+          sourceMessageId: userMessage.id,
+          taskKind,
+          conversationMessages: existingConversationMessages,
+        });
         const run = await startAgentTaskRun({
           userId: req.session.userId,
           conversationId: conversation.id,
           prompt: parsed.text,
+          executionPrompt,
           requestedByMessageId: userMessage.id,
           attachments: boundAttachments,
           intentContext: turnIntentContext,
@@ -4701,10 +4806,22 @@ export async function registerRoutes(
           attachmentCount: boundAttachments.length,
         });
 
+        const taskKind = inferAgentTaskKind(
+          parsed.text,
+          boundAttachments.length > 0,
+          turnIntentContext,
+        );
+        const executionPrompt = buildTaskExecutionPrompt({
+          userText: parsed.text,
+          sourceMessageId: userMessage.id,
+          taskKind,
+          conversationMessages: existingConversationMessages,
+        });
         const run = await startAgentTaskRun({
           userId: req.session.userId,
           conversationId: conversation.id,
           prompt: parsed.text,
+          executionPrompt,
           requestedByMessageId: userMessage.id,
           attachments: boundAttachments,
           intentContext: turnIntentContext,

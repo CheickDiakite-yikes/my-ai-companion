@@ -87,17 +87,33 @@ async function dismissOnboardingIfPresent(page: Page): Promise<void> {
 }
 
 async function loginOrRegister(page: Page, args: CliArgs): Promise<void> {
+  const waitForAuthenticatedApp = async () => {
+    const input = page.getByTestId("input-message");
+    const skip = page.getByTestId("button-skip-onboarding");
+    for (let attempt = 0; attempt < 25; attempt += 1) {
+      if (await input.isVisible({ timeout: 500 }).catch(() => false)) {
+        return;
+      }
+      if (await skip.isVisible({ timeout: 500 }).catch(() => false)) {
+        await skip.click();
+      }
+      await page.waitForTimeout(300);
+    }
+    throw new Error("Authenticated app shell did not become visible");
+  };
+
   await page.goto(args.baseUrl, { waitUntil: "networkidle" });
   await page.getByTestId("button-sign-in").click();
   await page.getByTestId("input-login-email").fill(args.email);
   await page.getByTestId("input-login-password").fill(args.password);
   await page.getByTestId("button-login-submit").click();
 
-  const loggedIn = await page
-    .getByTestId("input-message")
-    .isVisible({ timeout: 6_000 })
-    .catch(() => false);
-  if (loggedIn) return;
+  try {
+    await waitForAuthenticatedApp();
+    return;
+  } catch {
+    // Continue to register flow.
+  }
 
   const switchToRegisterVisible = await page
     .getByTestId("button-switch-to-register")
@@ -121,7 +137,7 @@ async function loginOrRegister(page: Page, args: CliArgs): Promise<void> {
   await page.getByTestId("input-register-password").fill(args.password);
   await page.getByTestId("input-register-confirm-password").fill(args.password);
   await page.getByTestId("button-register-submit").click();
-  await page.getByTestId("input-message").waitFor({ state: "visible", timeout: 20_000 });
+  await waitForAuthenticatedApp();
 }
 
 async function ensureTextMode(page: Page): Promise<void> {
