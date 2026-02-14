@@ -29,6 +29,8 @@ import {
 import type {
   AgentArtifactSummary,
   AgentApprovalSummary,
+  AgentOfferSummary,
+  ChatTurnIntent,
   AgentStepSummary,
   AgentTaskKind,
   AgentTaskEvent,
@@ -54,6 +56,8 @@ import {
 import {
   approveAndContinueAgentTask,
   classifyChatTurnIntent,
+  inferAgentTaskKind,
+  inferTaskRiskLevel,
   startAgentTaskRun,
 } from "./agent-runtime";
 import { elapsedMs, getTraceId, trace, traceError } from "./observability";
@@ -113,6 +117,10 @@ const chatRespondSchema = z
 
 const agentApprovalDecisionSchema = z.object({
   approve: z.boolean(),
+  reason: z.string().trim().max(400).optional().nullable(),
+});
+
+const agentOfferDecisionSchema = z.object({
   reason: z.string().trim().max(400).optional().nullable(),
 });
 
@@ -252,6 +260,10 @@ const ENABLE_BETA_QUOTAS = parseBooleanFlag(
 );
 const ENABLE_LIVE_MEMORY_CONTEXT = parseBooleanFlag(
   process.env.ENABLE_LIVE_MEMORY_CONTEXT,
+  true,
+);
+const ENABLE_AGENT_PROACTIVE_OFFERS = parseBooleanFlag(
+  process.env.ENABLE_AGENT_PROACTIVE_OFFERS,
   true,
 );
 const LIVE_MEMORY_BUILD_TIMEOUT_MS = parsePositiveInt(
@@ -1350,6 +1362,40 @@ function toAgentToolCallSummary(toolCall: AgentToolCall): AgentToolCallSummary {
   };
 }
 
+async function renderArtifactHtmlToPdf(params: {
+  html: string;
+  title: string;
+}): Promise<Buffer> {
+  const playwrightModuleName = "playwright";
+  const playwright = (await import(playwrightModuleName as string)) as any;
+  if (!playwright?.chromium) {
+    throw new Error("Playwright is unavailable");
+  }
+
+  const browser = await playwright.chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage({
+      viewport: { width: 1366, height: 768 },
+    });
+    await page.setContent(params.html, { waitUntil: "networkidle" });
+    await page.emulateMedia({ media: "screen" });
+    const pdf = await page.pdf({
+      format: "A4",
+      printBackground: true,
+      margin: {
+        top: "0.35in",
+        right: "0.35in",
+        bottom: "0.35in",
+        left: "0.35in",
+      },
+      displayHeaderFooter: false,
+    });
+    return Buffer.from(pdf);
+  } finally {
+    await browser.close();
+  }
+}
+
 function isAgentMessageUiPayload(
   value: unknown,
 ): value is { kind: string; [key: string]: unknown } {
@@ -1359,6 +1405,237 @@ function isAgentMessageUiPayload(
 }
 
 const TURN_INTENT_CONTEXT_LOOKBACK = 12;
+const OFFER_INTENT_CONTEXT_LOOKBACK = 32;
+const PROACTIVE_OFFER_EXPLICIT_REQUEST_PATTERNS = [
+  /\b(?:can you|could you|would you|will you|please)\b/i,
+  /\b(?:make me|build me|create me)\b/i,
+];
+const PROACTIVE_OFFER_NEED_PATTERNS = [
+  /\b(?:i need to|i should|i want to|i have to|i'm thinking of|im thinking of)\b/i,
+  /\b(?:i'm trying to|im trying to|help me|not sure how to)\b/i,
+];
+const PROACTIVE_OFFER_DELIVERABLE_PATTERNS = [
+  /\b(?:email|document|doc|brief|report|proposal|summary|plan|checklist)\b/i,
+  /\b(?:presentation|slides|deck|pitch)\b/i,
+  /\b(?:landing page|website|app|prototype|mini game|game)\b/i,
+];
+
+function toDateOrNull(value: unknown): Date | null {
+  if (!value) return null;
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value;
+  }
+  if (typeof value === "string") {
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+  return null;
+}
+
+function isAgentOfferStatus(
+  value: unknown,
+): value is AgentOfferSummary["status"] {
+  return (
+    value === "pending" ||
+    value === "accepted" ||
+    value === "declined" ||
+    value === "expired"
+  );
+}
+
+function parseAgentOfferFromMessage(
+  message: Message,
+): AgentOfferSummary | null {
+  if (!isAgentMessageUiPayload(message.uiPayload)) return null;
+  const payload = message.uiPayload as Record<string, unknown>;
+  if (payload.kind !== "agent_offer") return null;
+  const offer =
+    payload.offer && typeof payload.offer === "object"
+      ? (payload.offer as Record<string, unknown>)
+      : null;
+  if (!offer) return null;
+
+  if (
+    typeof offer.id !== "string" ||
+    typeof offer.conversationId !== "string" ||
+    typeof offer.title !== "string" ||
+    typeof offer.summary !== "string" ||
+    typeof offer.proposedPrompt !== "string" ||
+    typeof offer.taskKind !== "string" ||
+    !isAgentOfferStatus(offer.status)
+  ) {
+    return null;
+  }
+
+  const taskKind =
+    offer.taskKind === "mini_game" ||
+    offer.taskKind === "doc_markdown" ||
+    offer.taskKind === "mixed"
+      ? offer.taskKind
+      : "doc_markdown";
+  const riskLevel = offer.riskLevel === "high" ? "high" : "low";
+
+  return {
+    id: offer.id,
+    conversationId: offer.conversationId,
+    sourceMessageId:
+      typeof offer.sourceMessageId === "string" ? offer.sourceMessageId : null,
+    status: offer.status,
+    title: offer.title,
+    summary: offer.summary,
+    proposedPrompt: offer.proposedPrompt,
+    taskKind,
+    riskLevel,
+    acceptedTaskId:
+      typeof offer.acceptedTaskId === "string" ? offer.acceptedTaskId : null,
+    createdAt: toDateOrNull(offer.createdAt) ?? message.createdAt ?? null,
+    resolvedAt: toDateOrNull(offer.resolvedAt),
+  };
+}
+
+function findPendingOfferMessage(messages: Message[]): {
+  message: Message;
+  offer: AgentOfferSummary;
+} | null {
+  let scanned = 0;
+  for (let idx = messages.length - 1; idx >= 0; idx -= 1) {
+    const message = messages[idx];
+    scanned += 1;
+    if (scanned > OFFER_INTENT_CONTEXT_LOOKBACK) break;
+    if (message.sender !== "assistant") continue;
+    const offer = parseAgentOfferFromMessage(message);
+    if (!offer) continue;
+    if (offer.status !== "pending") continue;
+    return { message, offer };
+  }
+  return null;
+}
+
+function buildProactiveOfferPrompt(input: {
+  userText: string;
+  taskKind: AgentTaskKind;
+}): string {
+  const normalized = input.userText.replace(/\s+/g, " ").trim();
+  const quoted =
+    normalized.length > 280
+      ? `${normalized.slice(0, 277).trim()}...`
+      : normalized;
+
+  if (/\b(presentation|slides|deck|pitch)\b/i.test(normalized)) {
+    return [
+      `Create a polished presentation based on: "${quoted}"`,
+      "Keep the deck between 3 and 5 slides.",
+      "Use image-first slides and include a downloadable PDF export.",
+    ].join(" ");
+  }
+  if (/\b(email)\b/i.test(normalized)) {
+    return [
+      `Draft a polished email based on: "${quoted}"`,
+      "Include a clear subject line, concise body, and a strong close.",
+    ].join(" ");
+  }
+  if (input.taskKind === "mini_game") {
+    return `Create a playable mini-game inspired by: "${quoted}"`;
+  }
+
+  return [
+    `Create a well-formatted document based on: "${quoted}"`,
+    "Use headings, bullet points, and emphasis where it improves readability.",
+  ].join(" ");
+}
+
+function inferProactiveOfferOpportunity(input: {
+  conversationId: string;
+  sourceMessageId: string;
+  userText: string;
+}): AgentOfferSummary | null {
+  if (!ENABLE_AGENT_PROACTIVE_OFFERS) return null;
+  const normalized = input.userText.replace(/\s+/g, " ").trim();
+  if (normalized.length < 16) return null;
+
+  const hasNeedSignal = PROACTIVE_OFFER_NEED_PATTERNS.some((pattern) =>
+    pattern.test(normalized),
+  );
+  const hasDeliverableSignal = PROACTIVE_OFFER_DELIVERABLE_PATTERNS.some((pattern) =>
+    pattern.test(normalized),
+  );
+  const hasExplicitRequest = PROACTIVE_OFFER_EXPLICIT_REQUEST_PATTERNS.some((pattern) =>
+    pattern.test(normalized),
+  );
+
+  if (!hasNeedSignal || !hasDeliverableSignal || hasExplicitRequest) {
+    return null;
+  }
+
+  const taskKind = inferAgentTaskKind(normalized, false);
+  const riskLevel = inferTaskRiskLevel(normalized);
+  const proposedPrompt = buildProactiveOfferPrompt({
+    userText: normalized,
+    taskKind,
+  });
+
+  let title = "Quick Build";
+  let summary = "I can turn this into a usable artifact for you.";
+  if (/\b(email)\b/i.test(normalized)) {
+    title = "Email Draft";
+    summary = "I can draft this email for you with clean structure and tone.";
+  } else if (/\b(presentation|slides|deck|pitch)\b/i.test(normalized)) {
+    title = "Presentation Deck";
+    summary = "I can build a polished slide deck (max 5 slides) and export it to PDF.";
+  } else if (taskKind === "mini_game") {
+    title = "Mini Game";
+    summary = "I can build a playable game draft you can launch right away.";
+  } else if (/\b(landing page|website|app|prototype)\b/i.test(normalized)) {
+    title = "Prototype Build";
+    summary = "I can create a first-pass prototype from this idea.";
+  }
+
+  return {
+    id: randomUUID(),
+    conversationId: input.conversationId,
+    sourceMessageId: input.sourceMessageId,
+    status: "pending",
+    title,
+    summary,
+    proposedPrompt,
+    taskKind,
+    riskLevel,
+    acceptedTaskId: null,
+    createdAt: new Date(),
+    resolvedAt: null,
+  };
+}
+
+async function maybeCreateProactiveOfferMessage(input: {
+  conversationId: string;
+  userMessage: Message;
+  userText: string;
+  conversationMessages: Message[];
+}): Promise<Message | null> {
+  if (!ENABLE_AGENT_PROACTIVE_OFFERS) return null;
+  if (findPendingOfferMessage(input.conversationMessages)) {
+    return null;
+  }
+
+  const offer = inferProactiveOfferOpportunity({
+    conversationId: input.conversationId,
+    sourceMessageId: input.userMessage.id,
+    userText: input.userText,
+  });
+  if (!offer) return null;
+
+  return storage.createMessage({
+    conversationId: input.conversationId,
+    sender: "assistant",
+    text: "Want me to build this?",
+    partIndex: 0,
+    uiPayload: {
+      kind: "agent_offer",
+      offer,
+      text: "Want me to build this?",
+    },
+  });
+}
 
 function toTaskKindOrNull(value: unknown): AgentTaskKind | null {
   if (value === "mini_game" || value === "doc_markdown" || value === "mixed") {
@@ -3029,9 +3306,17 @@ export async function registerRoutes(
 
         const pendingApproval = await storage.getPendingAgentApproval(task.id);
         if (!pendingApproval) {
-          return res.status(409).json({
-            message: "No pending approval for this task",
+          trace(req, "agent.task.approval.no_pending", {
+            taskId: task.id,
+            status: task.status,
+            elapsedMs: elapsedMs(startedAt),
+          });
+          return res.status(200).json({
             traceId: getTraceId(req),
+            approved: false,
+            alreadyResolved: true,
+            task: toAgentTaskSummary(task),
+            message: "Approval already resolved",
           });
         }
 
@@ -3089,10 +3374,33 @@ export async function registerRoutes(
           });
         }
 
-        const resumed = await approveAndContinueAgentTask({
-          taskId: task.id,
-          userId: req.session.userId,
-        });
+        let resumed: Awaited<ReturnType<typeof approveAndContinueAgentTask>>;
+        try {
+          resumed = await approveAndContinueAgentTask({
+            taskId: task.id,
+            userId: req.session.userId,
+          });
+        } catch (approvalError) {
+          const message =
+            approvalError instanceof Error
+              ? approvalError.message
+              : String(approvalError);
+          if (/no pending approval/i.test(message)) {
+            const refreshed = await storage.getAgentTaskById(task.id);
+            trace(req, "agent.task.approval.idempotent", {
+              taskId: task.id,
+              elapsedMs: elapsedMs(startedAt),
+            });
+            return res.status(200).json({
+              traceId: getTraceId(req),
+              approved: false,
+              alreadyResolved: true,
+              task: toAgentTaskSummary(refreshed ?? task),
+              message: "Approval already resolved",
+            });
+          }
+          throw approvalError;
+        }
 
         trace(req, "agent.task.approval.approved", {
           taskId: task.id,
@@ -3118,6 +3426,240 @@ export async function registerRoutes(
         });
         return res.status(500).json({
           message: "Failed to process approval",
+          traceId: getTraceId(req),
+        });
+      }
+    },
+  );
+
+  app.post(
+    "/api/agent/offers/:offerId/accept",
+    isAuthenticated,
+    async (req: any, res) => {
+      const startedAt = Date.now();
+      let offerMessageIdForRecovery: string | null = null;
+      let pendingOfferForRecovery: AgentOfferSummary | null = null;
+      let offerLocked = false;
+      try {
+        const offerMessage = await storage.getUserMessageById(
+          req.params.offerId,
+          req.session.userId,
+        );
+        if (!offerMessage || offerMessage.sender !== "assistant") {
+          return res.status(404).json({
+            message: "Offer not found",
+            traceId: getTraceId(req),
+          });
+        }
+
+        const offer = parseAgentOfferFromMessage(offerMessage);
+        if (!offer) {
+          return res.status(404).json({
+            message: "Offer not found",
+            traceId: getTraceId(req),
+          });
+        }
+
+        if (offer.status === "accepted" && offer.acceptedTaskId) {
+          const existingTask = await storage.getAgentTaskById(offer.acceptedTaskId);
+          trace(req, "agent.offer.accept.idempotent", {
+            offerId: offer.id,
+            acceptedTaskId: offer.acceptedTaskId,
+            elapsedMs: elapsedMs(startedAt),
+          });
+          return res.status(200).json({
+            traceId: getTraceId(req),
+            accepted: true,
+            alreadyAccepted: true,
+            offer,
+            task: existingTask ? toAgentTaskSummary(existingTask) : null,
+          });
+        }
+
+        if (offer.status !== "pending") {
+          return res.status(409).json({
+            message: "Offer is no longer pending",
+            traceId: getTraceId(req),
+          });
+        }
+        offerMessageIdForRecovery = offerMessage.id;
+        pendingOfferForRecovery = offer;
+
+        const acceptingOffer: AgentOfferSummary = {
+          ...offer,
+          status: "accepted",
+          resolvedAt: new Date(),
+        };
+        await storage.updateMessageUiPayload({
+          messageId: offerMessage.id,
+          text: "Great — I’ll build this now.",
+          uiPayload: {
+            kind: "agent_offer",
+            offer: acceptingOffer,
+            text: "Offer accepted",
+          },
+        });
+        offerLocked = true;
+
+        const sourceAttachments = offer.sourceMessageId
+          ? (await storage.getAttachmentsForConversation(offer.conversationId)).filter(
+              (attachment) =>
+                attachment.messageId === offer.sourceMessageId &&
+                attachment.status !== "deleted",
+            )
+          : [];
+        const conversationMessages = await storage.getMessages(offer.conversationId);
+        const run = await startAgentTaskRun({
+          userId: req.session.userId,
+          conversationId: offer.conversationId,
+          prompt: offer.proposedPrompt,
+          requestedByMessageId: offer.sourceMessageId ?? offerMessage.id,
+          attachments: sourceAttachments,
+          intentContext: inferRecentAgentIntentContext(
+            conversationMessages,
+            offerMessage.id,
+          ),
+        });
+
+        const completedOffer: AgentOfferSummary = {
+          ...acceptingOffer,
+          acceptedTaskId: run.task.id,
+        };
+        await storage.updateMessageUiPayload({
+          messageId: offerMessage.id,
+          text: "Approved. I started building this.",
+          uiPayload: {
+            kind: "agent_offer",
+            offer: completedOffer,
+            text: "Offer accepted",
+          },
+        });
+
+        trace(req, "agent.offer.accepted", {
+          offerId: offer.id,
+          taskId: run.task.id,
+          awaitingApproval: run.awaitingApproval,
+          elapsedMs: elapsedMs(startedAt),
+        });
+
+        return res.status(200).json({
+          traceId: getTraceId(req),
+          accepted: true,
+          offer: completedOffer,
+          task: run.task,
+          awaitingApproval: run.awaitingApproval,
+        });
+      } catch (error) {
+        if (offerLocked && offerMessageIdForRecovery && pendingOfferForRecovery) {
+          await storage.updateMessageUiPayload({
+            messageId: offerMessageIdForRecovery,
+            text: "Want me to build this?",
+            uiPayload: {
+              kind: "agent_offer",
+              offer: {
+                ...pendingOfferForRecovery,
+                status: "pending",
+                resolvedAt: null,
+              },
+              text: "Want me to build this?",
+            },
+          });
+        }
+        traceError(req, "agent.offer.accept.failed", error, {
+          offerId: req.params.offerId,
+          elapsedMs: elapsedMs(startedAt),
+        });
+        return res.status(500).json({
+          message: "Failed to accept offer",
+          traceId: getTraceId(req),
+        });
+      }
+    },
+  );
+
+  app.post(
+    "/api/agent/offers/:offerId/decline",
+    isAuthenticated,
+    async (req: any, res) => {
+      const startedAt = Date.now();
+      try {
+        const parsed = agentOfferDecisionSchema.parse(req.body ?? {});
+        const offerMessage = await storage.getUserMessageById(
+          req.params.offerId,
+          req.session.userId,
+        );
+        if (!offerMessage || offerMessage.sender !== "assistant") {
+          return res.status(404).json({
+            message: "Offer not found",
+            traceId: getTraceId(req),
+          });
+        }
+
+        const offer = parseAgentOfferFromMessage(offerMessage);
+        if (!offer) {
+          return res.status(404).json({
+            message: "Offer not found",
+            traceId: getTraceId(req),
+          });
+        }
+
+        if (offer.status === "declined") {
+          return res.status(200).json({
+            traceId: getTraceId(req),
+            declined: true,
+            alreadyDeclined: true,
+            offer,
+          });
+        }
+
+        if (offer.status !== "pending") {
+          return res.status(409).json({
+            message: "Offer is no longer pending",
+            traceId: getTraceId(req),
+          });
+        }
+
+        const declinedOffer: AgentOfferSummary = {
+          ...offer,
+          status: "declined",
+          resolvedAt: new Date(),
+        };
+        const declineText = parsed.reason?.trim()
+          ? `No worries — skipped for now (${parsed.reason.trim()}).`
+          : "No worries — skipped for now.";
+        await storage.updateMessageUiPayload({
+          messageId: offerMessage.id,
+          text: declineText,
+          uiPayload: {
+            kind: "agent_offer",
+            offer: declinedOffer,
+            text: "Offer declined",
+          },
+        });
+
+        trace(req, "agent.offer.declined", {
+          offerId: offer.id,
+          elapsedMs: elapsedMs(startedAt),
+        });
+
+        return res.status(200).json({
+          traceId: getTraceId(req),
+          declined: true,
+          offer: declinedOffer,
+        });
+      } catch (error) {
+        if (error instanceof z.ZodError) {
+          return res.status(400).json({
+            message: error.errors[0]?.message ?? "Invalid decline request",
+            traceId: getTraceId(req),
+          });
+        }
+        traceError(req, "agent.offer.decline.failed", error, {
+          offerId: req.params.offerId,
+          elapsedMs: elapsedMs(startedAt),
+        });
+        return res.status(500).json({
+          message: "Failed to decline offer",
           traceId: getTraceId(req),
         });
       }
@@ -3189,6 +3731,68 @@ export async function registerRoutes(
           artifactId: req.params.artifactId,
         });
         return res.status(500).send("Failed to render artifact");
+      }
+    },
+  );
+
+  app.get(
+    "/api/agent/artifacts/:artifactId/export.pdf",
+    isAuthenticated,
+    async (req: any, res) => {
+      const startedAt = Date.now();
+      try {
+        const artifact = await storage.getAgentArtifactById(req.params.artifactId);
+        if (!artifact || artifact.userId !== req.session.userId) {
+          return res.status(404).json({
+            message: "Artifact not found",
+            traceId: getTraceId(req),
+          });
+        }
+        if (artifact.status === "deleted") {
+          return res.status(404).json({
+            message: "Artifact was deleted",
+            traceId: getTraceId(req),
+          });
+        }
+        const html = artifact.htmlContent;
+        if (!html || typeof html !== "string" || html.trim().length === 0) {
+          return res.status(400).json({
+            message: "Artifact does not have exportable HTML content",
+            traceId: getTraceId(req),
+          });
+        }
+
+        const pdf = await renderArtifactHtmlToPdf({
+          html,
+          title: artifact.title,
+        });
+        const safeFilename = `${artifact.title
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, "-")
+          .replace(/^-+|-+$/g, "") || "artifact"}.pdf`;
+
+        trace(req, "agent.artifact.export_pdf", {
+          artifactId: artifact.id,
+          bytes: pdf.byteLength,
+          elapsedMs: elapsedMs(startedAt),
+        });
+
+        res.setHeader("Content-Type", "application/pdf");
+        res.setHeader(
+          "Content-Disposition",
+          `attachment; filename="${safeFilename}"`,
+        );
+        res.setHeader("Cache-Control", "no-store");
+        return res.status(200).send(pdf);
+      } catch (error) {
+        traceError(req, "agent.artifact.export_pdf.failed", error, {
+          artifactId: req.params.artifactId,
+          elapsedMs: elapsedMs(startedAt),
+        });
+        return res.status(500).json({
+          message: "Failed to export PDF",
+          traceId: getTraceId(req),
+        });
       }
     },
   );
@@ -3626,20 +4230,35 @@ export async function registerRoutes(
         parsed.attachmentIds,
       );
 
+      const existingConversationMessages = await storage.getMessages(conversation.id);
       const turnIntentContext = inferRecentAgentIntentContext(
-        await storage.getMessages(conversation.id),
+        existingConversationMessages,
         userMessage.id,
       );
       const turnIntent = classifyChatTurnIntent(parsed.text, turnIntentContext);
+      const proactiveOpportunity = inferProactiveOfferOpportunity({
+        conversationId: conversation.id,
+        sourceMessageId: userMessage.id,
+        userText: parsed.text,
+      });
+      const shouldDeferToProactiveOffer =
+        turnIntent === "agent_task" &&
+        Boolean(proactiveOpportunity) &&
+        !findPendingOfferMessage(existingConversationMessages);
+      const effectiveTurnIntent: ChatTurnIntent = shouldDeferToProactiveOffer
+        ? "companion_reply"
+        : turnIntent;
       trace(req, "chat.turn.classified", {
         conversationId: conversation.id,
         intent: turnIntent,
+        effectiveIntent: effectiveTurnIntent,
+        deferredToProactiveOffer: shouldDeferToProactiveOffer,
         attachmentCount: boundAttachments.length,
         recentAgentContext: turnIntentContext.hasRecentAgentActivity,
         recentAgentTaskKind: turnIntentContext.recentTaskKind,
       });
 
-      if (turnIntent === "agent_task") {
+      if (effectiveTurnIntent === "agent_task") {
         const run = await startAgentTaskRun({
           userId: req.session.userId,
           conversationId: conversation.id,
@@ -3864,9 +4483,33 @@ export async function registerRoutes(
               textParts: [groundedReplyText],
             });
 
-      const legacyAssistantMessage = makeLegacyAssistantMessage(
-        finalizedAssistantMessages,
-      );
+      let responseAssistantMessages = finalizedAssistantMessages;
+
+      const proactiveOfferMessage = await maybeCreateProactiveOfferMessage({
+        conversationId: conversation.id,
+        userMessage,
+        userText: parsed.text,
+        conversationMessages: await storage.getMessages(conversation.id),
+      });
+      if (proactiveOfferMessage) {
+        trace(req, "chat.proactive_offer.created", {
+          conversationId: conversation.id,
+          offerMessageId: proactiveOfferMessage.id,
+          sourceMessageId: userMessage.id,
+        });
+        const allMessages = mapMessagesWithSignedAttachments(
+          await storage.getMessagesWithAttachments(conversation.id),
+          req.session.userId,
+        );
+        const offerMessage = allMessages.find(
+          (message) => message.id === proactiveOfferMessage.id,
+        );
+        if (offerMessage) {
+          responseAssistantMessages = [...finalizedAssistantMessages, offerMessage];
+        }
+      }
+
+      const legacyAssistantMessage = makeLegacyAssistantMessage(responseAssistantMessages);
 
       void summarizeAndPersistAttachments({
         req,
@@ -3886,7 +4529,7 @@ export async function registerRoutes(
           ),
         },
         assistantMessage: legacyAssistantMessage,
-        assistantMessages: finalizedAssistantMessages,
+        assistantMessages: responseAssistantMessages,
         model: aiResponse.model,
         usage: aiResponse.usage,
         elapsedMs: elapsedMs(startedAt),
@@ -4003,14 +4646,29 @@ export async function registerRoutes(
         parsed.attachmentIds,
       );
 
+      const existingConversationMessages = await storage.getMessages(conversation.id);
       const turnIntentContext = inferRecentAgentIntentContext(
-        await storage.getMessages(conversation.id),
+        existingConversationMessages,
         userMessage.id,
       );
       const turnIntent = classifyChatTurnIntent(parsed.text, turnIntentContext);
+      const proactiveOpportunity = inferProactiveOfferOpportunity({
+        conversationId: conversation.id,
+        sourceMessageId: userMessage.id,
+        userText: parsed.text,
+      });
+      const shouldDeferToProactiveOffer =
+        turnIntent === "agent_task" &&
+        Boolean(proactiveOpportunity) &&
+        !findPendingOfferMessage(existingConversationMessages);
+      const effectiveTurnIntent: ChatTurnIntent = shouldDeferToProactiveOffer
+        ? "companion_reply"
+        : turnIntent;
       trace(req, "chat.turn.classified", {
         conversationId: conversation.id,
         intent: turnIntent,
+        effectiveIntent: effectiveTurnIntent,
+        deferredToProactiveOffer: shouldDeferToProactiveOffer,
         attachmentCount: boundAttachments.length,
         recentAgentContext: turnIntentContext.hasRecentAgentActivity,
         recentAgentTaskKind: turnIntentContext.recentTaskKind,
@@ -4037,7 +4695,7 @@ export async function registerRoutes(
         },
       });
 
-      if (turnIntent === "agent_task") {
+      if (effectiveTurnIntent === "agent_task") {
         trace(req, "chat.stream.agent_task.started", {
           conversationId: conversation.id,
           attachmentCount: boundAttachments.length,
@@ -4410,6 +5068,31 @@ export async function registerRoutes(
               turnId: streamTurnId,
             });
 
+      let responseAssistantMessages = finalizedAssistantMessages;
+      const proactiveOfferMessage = await maybeCreateProactiveOfferMessage({
+        conversationId: conversation.id,
+        userMessage,
+        userText: parsed.text,
+        conversationMessages: await storage.getMessages(conversation.id),
+      });
+      if (proactiveOfferMessage) {
+        trace(req, "chat.proactive_offer.created", {
+          conversationId: conversation.id,
+          offerMessageId: proactiveOfferMessage.id,
+          sourceMessageId: userMessage.id,
+        });
+        const allMessages = mapMessagesWithSignedAttachments(
+          await storage.getMessagesWithAttachments(conversation.id),
+          req.session.userId,
+        );
+        const offerMessage = allMessages.find(
+          (message) => message.id === proactiveOfferMessage.id,
+        );
+        if (offerMessage) {
+          responseAssistantMessages = [...finalizedAssistantMessages, offerMessage];
+        }
+      }
+
       if (finalizedAssistantMessages.length === 1 && syntheticPartCount <= 1) {
         trace(req, "chat.multipart.fallback_single", {
           conversationId: conversation.id,
@@ -4425,9 +5108,7 @@ export async function registerRoutes(
         });
       }
 
-      const legacyAssistantMessage = makeLegacyAssistantMessage(
-        finalizedAssistantMessages,
-      );
+      const legacyAssistantMessage = makeLegacyAssistantMessage(responseAssistantMessages);
 
       void summarizeAndPersistAttachments({
         req,
@@ -4443,7 +5124,7 @@ export async function registerRoutes(
         responseId,
         usage,
         rawReplyLength: normalizedReply.length,
-        partCount: finalizedAssistantMessages.length,
+        partCount: responseAssistantMessages.length,
         syntheticPartCount,
         elapsedMs: elapsedMs(startedAt),
       });
@@ -4451,7 +5132,7 @@ export async function registerRoutes(
       writeEvent({
         type: "final",
         assistantMessage: legacyAssistantMessage,
-        assistantMessages: finalizedAssistantMessages,
+        assistantMessages: responseAssistantMessages,
         model,
         usage,
         elapsedMs: elapsedMs(startedAt),

@@ -10,6 +10,7 @@ import type {
 export type ChatTurnIntent = "companion_reply" | "agent_task";
 
 export type AgentTaskKind = "mini_game" | "doc_markdown" | "mixed";
+export type AgentOfferStatus = "pending" | "accepted" | "declined" | "expired";
 
 export interface AgentTaskSummary {
   id: string;
@@ -68,6 +69,21 @@ export interface AgentToolCallSummary {
   status: AgentToolCall["status"];
   outputSummary: string | null;
   createdAt: Date | null;
+}
+
+export interface AgentOfferSummary {
+  id: string;
+  conversationId: string;
+  sourceMessageId: string | null;
+  status: AgentOfferStatus;
+  title: string;
+  summary: string;
+  proposedPrompt: string;
+  taskKind: AgentTaskKind;
+  riskLevel: TaskRiskLevel;
+  acceptedTaskId: string | null;
+  createdAt: Date | null;
+  resolvedAt: Date | null;
 }
 
 export interface AgentTaskDetailResponse {
@@ -143,5 +159,10 @@ export type AgentMessageUiPayload =
       kind: "agent_artifact";
       taskId: string;
       artifact: AgentArtifactSummary;
+      text: string;
+    }
+  | {
+      kind: "agent_offer";
+      offer: AgentOfferSummary;
       text: string;
     };

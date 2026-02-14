@@ -15,7 +15,9 @@ Overall: **Foundation shipped, expansion in progress**
 - Browser E2E for themes/history/artifacts: **implemented and passing locally**
 - Model-based planner behind feature flag (`ENABLE_AGENT_MODEL_PLANNER`): **implemented with deterministic fallback**
 - Model-based mini-game generation + QA repair loop (`ENABLE_AGENT_MODEL_GAME_GENERATOR`): **implemented**
-- True LLM-driven artifact generation for agent tasks: **partially implemented (mini-game live, docs pending)**
+- Proactive offer contract in normal chat (`ENABLE_AGENT_PROACTIVE_OFFERS`): **implemented**
+- True LLM-driven artifact generation for agent tasks: **implemented for mini-game + docs + presentation slides**
+- Presentation export flow (image-first slides -> PDF): **implemented**
 - Real external connectors (Gmail/Drive/device control): **not implemented yet**
 - Hardened containerized sandbox isolation: **not implemented yet**
 
@@ -31,7 +33,7 @@ Overall: **Foundation shipped, expansion in progress**
 ### Scaffolded / Deterministic (not final intelligence yet)
 - Planner now supports a Gemini model path behind `ENABLE_AGENT_MODEL_PLANNER`, but still falls back to deterministic planning when model output is invalid/unavailable.
 - Mini-game generation now supports model-native adaptive project generation (single-file/multi-file) with retry/repair.
-- Doc generation remains deterministic template-based in `server/agent-runtime.ts`.
+- Presentation slide rendering is image-model dependent and can fall back to markdown-only previews if disabled/failing by policy.
 - Intent router is rule/regex-based (not model-classifier yet).
 - Connector policies exist in `server/agent-sandbox.ts`, but connector execution engines are not wired yet.
 - Sandbox is ephemeral filesystem + command isolation policy layer, not yet hardened container runtime with strict OS-level isolation guarantees.
@@ -59,8 +61,9 @@ Goal: Real agent planning/execution quality, not template outputs.
 
 - [x] B1. Model-based planner (Gemini primary, provider abstraction maintained)
 - [x] B2a. Model-based game generation pipeline (adaptive single-file/multi-file)
-- [ ] B2b. Model-based doc generation pipeline
-- [x] B3. Add retry/replan policy on failed QA (game path)
+- [x] B2b. Model-based doc generation pipeline
+- [x] B3. Add retry/replan policy on failed QA (game + doc paths)
+- [x] B3c. Add proactive offer contract for opportunity prompts (explicit yes starts runtime)
 - [ ] B4. Add eval set for artifact quality (game playability + doc usefulness rubric)
 
 Exit criteria:
@@ -105,10 +108,10 @@ Exit criteria:
 
 ## 4) Immediate Next Sprint (Systematic)
 
-1. Build B2 model-based doc generator (game path complete; doc path pending).
-2. Add B3 replan-on-QA-fail loop for docs.
-3. Add quality eval script and baseline metrics for doc artifacts.
-4. Add production monitoring dashboards for game generation retry/failure thresholds.
+1. Add proactive offer quality evals (precision/recall on “opportunity” detection).
+2. Expand presentation pipeline QA (slide text legibility checks + PDF export validation).
+3. Add quality eval script and baseline metrics for doc/presentation artifacts.
+4. Add production monitoring dashboards for offer acceptance rate and artifact task failure thresholds.
 
 Definition of done for sprint:
 - Feature flag toggles between deterministic adapter and model adapter.

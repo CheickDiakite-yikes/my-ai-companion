@@ -67,6 +67,8 @@ interface TokenUsageSnapshot {
 const DEFAULT_TEXT_MODEL = "gemini-3-flash-preview";
 const DEFAULT_LIVE_MODEL = "gemini-2.5-flash-native-audio-preview-12-2025";
 const DEFAULT_AGENT_GAME_MODEL = "gemini-3-flash-preview";
+const DEFAULT_AGENT_DOC_MODEL = "gemini-3-flash-preview";
+const DEFAULT_AGENT_PRESENTATION_IMAGE_MODEL = "gemini-3-pro-image-preview";
 const DEFAULT_ZEE_PROMPT_FALLBACK = [
   "You are Zee, a warm, emotionally intelligent AI companion.",
   "Stay helpful, grounded, and conversational.",
@@ -118,6 +120,21 @@ function resolveLiveModel(): string {
 function resolveAgentGameModel(): string {
   return normalizeModelId(
     process.env.AGENT_GAME_MODEL ?? DEFAULT_AGENT_GAME_MODEL,
+  );
+}
+
+function resolveAgentDocModel(): string {
+  return normalizeModelId(
+    process.env.AGENT_DOC_MODEL ??
+      process.env.AGENT_GAME_MODEL ??
+      DEFAULT_AGENT_DOC_MODEL,
+  );
+}
+
+function resolveAgentPresentationImageModel(): string {
+  return normalizeModelId(
+    process.env.AGENT_PRESENTATION_IMAGE_MODEL ??
+      DEFAULT_AGENT_PRESENTATION_IMAGE_MODEL,
   );
 }
 
@@ -331,6 +348,7 @@ function buildTextPromptAdditions(params: {
       "- You may occasionally send 2 short messages when the user's tone is emotional/casual and a reaction + follow-up feels natural.",
       "- If the user asks to double text, return exactly 2 messages. If they ask to triple/tripple text, return exactly 3 messages.",
       "- For casual banter, keep reactions concise in the same message unless split mode is requested.",
+      "- If the user mentions a need (for example: 'I need to write an email') but does not directly ask you to create something, stay conversational first and ask a short consent question before proposing or starting any task.",
       params.enableMultipart
         ? `- For multi-message turns, separate each message with ${ZEE_SPLIT_TOKEN}.`
         : "- Return one assistant message per turn.",
@@ -1215,6 +1233,7 @@ export interface GenerateAgentPlannerDraftResult {
 
 export type GameProjectFormat = "single_file" | "multi_file";
 export type GameProjectEngine = "canvas_dom" | "threejs_light";
+export type DocOutputFormat = "document" | "presentation";
 
 export interface GeneratedGameProjectFile {
   path: string;
@@ -1254,6 +1273,52 @@ export interface GenerateGameProjectDraftResult {
   rawJson: string;
   responseId?: string;
   usage?: TokenUsageSnapshot;
+}
+
+export interface GeneratedDocDraft {
+  title: string;
+  summary: string;
+  markdown: string;
+  format: DocOutputFormat;
+  sections: string[];
+}
+
+export interface GenerateDocDraftInput {
+  prompt: string;
+  imageHints: string[];
+}
+
+export interface RepairDocDraftInput {
+  prompt: string;
+  imageHints: string[];
+  previousDraft: GeneratedDocDraft;
+  qaFailures: string[];
+  attempt: number;
+}
+
+export interface GenerateDocDraftResult {
+  model: string;
+  draft: GeneratedDocDraft;
+  rawJson: string;
+  responseId?: string;
+  usage?: TokenUsageSnapshot;
+}
+
+export interface GeneratedPresentationSlideImage {
+  index: number;
+  prompt: string;
+  mimeType: string;
+  imageBase64: string;
+}
+
+export interface GeneratePresentationSlideImagesInput {
+  title: string;
+  slidePrompts: string[];
+}
+
+export interface GeneratePresentationSlideImagesResult {
+  model: string;
+  slides: GeneratedPresentationSlideImage[];
 }
 
 export async function generateAgentPlannerDraft(
@@ -1437,6 +1502,183 @@ export async function repairGameProjectDraftViaGeminiCli(
   };
 }
 
+export async function generateDocDraft(
+  input: GenerateDocDraftInput,
+): Promise<GenerateDocDraftResult> {
+  const ai = getGeminiClient();
+  const model = resolveAgentDocModel();
+  const prompt = buildGenerateDocDraftPrompt(input);
+
+  const response = await ai.models.generateContent({
+    model,
+    contents: [{ role: "user", parts: [{ text: prompt }] }],
+    config: {
+      systemInstruction:
+        "You are a deterministic document generator for a sandboxed AI runtime. Output strict JSON only.",
+      temperature: 0.35,
+      maxOutputTokens: 4800,
+      responseMimeType: "application/json",
+    },
+  });
+
+  const rawJson = stripJsonCodeFence((response.text ?? "").trim());
+  if (!rawJson) {
+    throw new Error("Gemini returned an empty doc draft");
+  }
+
+  const draft = parseDocDraft(rawJson);
+
+  return {
+    model,
+    draft,
+    rawJson,
+    responseId: response.responseId,
+    usage: compactUsage(response.usageMetadata),
+  };
+}
+
+export async function generateDocDraftViaGeminiCli(
+  input: GenerateDocDraftInput,
+): Promise<GenerateDocDraftResult> {
+  const model = resolveAgentDocModel();
+  const prompt = buildGenerateDocDraftPrompt(input);
+  const rawOutput = await runGeminiCliJsonPrompt({
+    prompt,
+    model,
+  });
+  const rawJson = stripJsonCodeFence(rawOutput);
+  if (!rawJson) {
+    throw new Error("Gemini CLI returned an empty doc draft");
+  }
+  const draft = parseDocDraft(rawJson);
+  return {
+    model: `${model}:gemini_cli`,
+    draft,
+    rawJson,
+  };
+}
+
+export async function repairDocDraft(
+  input: RepairDocDraftInput,
+): Promise<GenerateDocDraftResult> {
+  const ai = getGeminiClient();
+  const model = resolveAgentDocModel();
+  const prompt = buildRepairDocDraftPrompt(input);
+
+  const response = await ai.models.generateContent({
+    model,
+    contents: [{ role: "user", parts: [{ text: prompt }] }],
+    config: {
+      systemInstruction:
+        "You repair markdown documents for a sandboxed AI runtime. Output strict JSON only.",
+      temperature: 0.2,
+      maxOutputTokens: 5200,
+      responseMimeType: "application/json",
+    },
+  });
+
+  const rawJson = stripJsonCodeFence((response.text ?? "").trim());
+  if (!rawJson) {
+    throw new Error("Gemini returned an empty repaired doc draft");
+  }
+
+  const draft = parseDocDraft(rawJson);
+
+  return {
+    model,
+    draft,
+    rawJson,
+    responseId: response.responseId,
+    usage: compactUsage(response.usageMetadata),
+  };
+}
+
+export async function repairDocDraftViaGeminiCli(
+  input: RepairDocDraftInput,
+): Promise<GenerateDocDraftResult> {
+  const model = resolveAgentDocModel();
+  const prompt = buildRepairDocDraftPrompt(input);
+  const rawOutput = await runGeminiCliJsonPrompt({
+    prompt,
+    model,
+  });
+
+  const rawJson = stripJsonCodeFence(rawOutput);
+  if (!rawJson) {
+    throw new Error("Gemini CLI returned an empty repaired doc draft");
+  }
+  const draft = parseDocDraft(rawJson);
+  return {
+    model: `${model}:gemini_cli`,
+    draft,
+    rawJson,
+  };
+}
+
+export async function generatePresentationSlideImages(
+  input: GeneratePresentationSlideImagesInput,
+): Promise<GeneratePresentationSlideImagesResult> {
+  const ai = getGeminiClient();
+  const model = resolveAgentPresentationImageModel();
+  const prompts = input.slidePrompts
+    .map((prompt) => prompt.trim())
+    .filter((prompt) => prompt.length > 0)
+    .slice(0, 5);
+
+  if (prompts.length === 0) {
+    throw new Error("No slide prompts provided");
+  }
+
+  const slides: GeneratedPresentationSlideImage[] = [];
+  for (let index = 0; index < prompts.length; index += 1) {
+    const prompt = prompts[index];
+    const imagePrompt = [
+      "Create a polished single presentation slide image (16:9).",
+      "The slide should be complete with professional layout, headings, and clean visual hierarchy.",
+      "Include readable text and include a chart/diagram only when relevant to the prompt.",
+      "Avoid watermarks, logos, and tiny unreadable text.",
+      `Deck context: ${input.title}`,
+      `Slide ${index + 1} brief: ${prompt}`,
+    ].join("\n");
+
+    const response = await ai.models.generateImages({
+      model,
+      prompt: imagePrompt,
+      config: {
+        numberOfImages: 1,
+        aspectRatio: "16:9",
+        outputMimeType: "image/png",
+      },
+    });
+
+    const generated = response.generatedImages?.[0]?.image as
+      | { imageBytes?: string | Uint8Array; mimeType?: string }
+      | undefined;
+    const rawBytes = generated?.imageBytes;
+    const imageBase64 =
+      typeof rawBytes === "string"
+        ? rawBytes.trim()
+        : rawBytes instanceof Uint8Array
+          ? Buffer.from(rawBytes).toString("base64")
+          : "";
+    if (!imageBase64) {
+      throw new Error(`Slide ${index + 1} image generation returned empty output`);
+    }
+
+    slides.push({
+      index: index + 1,
+      prompt,
+      mimeType: generated?.mimeType?.trim() || "image/png",
+      imageBase64,
+    });
+  }
+
+  return {
+    model,
+    slides,
+  };
+}
+
 function buildGenerateGameProjectPrompt(
   input: GenerateGameProjectDraftInput,
 ): string {
@@ -1509,6 +1751,72 @@ function buildRepairGameProjectPrompt(input: RepairGameProjectDraftInput): strin
     "- Keep output browser-runnable with no build step.",
     "- Do not rely on external network assets or CDNs.",
     "- Keep entryPath present in files[] and valid.",
+  ].join("\n");
+}
+
+function buildGenerateDocDraftPrompt(input: GenerateDocDraftInput): string {
+  const imageHints = input.imageHints.length
+    ? input.imageHints.map((hint) => `- ${hint}`).join("\n")
+    : "- none";
+  return [
+    "Generate a polished markdown document for a personal AI companion workflow.",
+    "Return strict JSON only with this exact schema:",
+    "{",
+    '  "title": string,',
+    '  "summary": string,',
+    '  "format": "document" | "presentation",',
+    '  "sections": string[],',
+    '  "markdown": string',
+    "}",
+    "",
+    "Hard rules:",
+    "- markdown must begin with a top-level heading (# ...).",
+    "- markdown must include section headings (## ...).",
+    "- markdown must include formatting richness: use bold/italics and bullet or numbered lists where appropriate.",
+    "- Keep content practical, concrete, and immediately usable.",
+    "- Use concise structure with clear sections and bullet lists when helpful.",
+    "- If the user asks for slides/presentation, use format='presentation' and produce 3-5 slide-style sections (for example: ## Slide 1: ...).",
+    "- Do not include HTML in markdown output.",
+    "",
+    "Task request:",
+    `- Prompt: ${input.prompt}`,
+    "- Image hints:",
+    imageHints,
+  ].join("\n");
+}
+
+function buildRepairDocDraftPrompt(input: RepairDocDraftInput): string {
+  const imageHints = input.imageHints.length
+    ? input.imageHints.map((hint) => `- ${hint}`).join("\n")
+    : "- none";
+  const qaFailures = input.qaFailures.length
+    ? input.qaFailures.map((failure) => `- ${failure}`).join("\n")
+    : "- unknown";
+  return [
+    "Repair the provided markdown document draft to satisfy QA.",
+    "Return strict JSON using the exact schema defined previously.",
+    "",
+    `Attempt: ${input.attempt}`,
+    "",
+    "Original user prompt:",
+    input.prompt,
+    "",
+    "Image hints:",
+    imageHints,
+    "",
+    "QA failures to fix:",
+    qaFailures,
+    "",
+    "Current doc draft JSON:",
+    JSON.stringify(input.previousDraft),
+    "",
+    "Hard rules:",
+    "- markdown must start with a top-level heading.",
+    "- markdown must include section headings (## ...).",
+    "- markdown must include formatting richness: use bold/italics and bullet or numbered lists.",
+    "- If format='presentation', keep 3-5 slide sections and do not exceed 5.",
+    "- Ensure actionable content and non-trivial depth (not empty template stubs).",
+    "- Keep formatting valid markdown with no HTML tags.",
   ].join("\n");
 }
 
@@ -1697,6 +2005,65 @@ function parseGameProjectDraft(
   };
 }
 
+function parseDocDraft(rawJson: string): GeneratedDocDraft {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawJson) as unknown;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Doc draft JSON parse failed: ${message}`);
+  }
+
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Doc draft must be a JSON object");
+  }
+
+  const record = parsed as Record<string, unknown>;
+  const title = coerceRequiredString(record.title, "title", 160);
+  const summary = coerceRequiredString(record.summary, "summary", 500);
+  const format = coerceDocOutputFormat(record.format);
+  const sections = coerceDocSections(record.sections);
+  const markdown = coerceRequiredString(record.markdown, "markdown", 120_000);
+
+  if (!/^#\s+/m.test(markdown)) {
+    throw new Error('Doc draft field "markdown" must include a top-level heading');
+  }
+  if (markdown.trim().length < 120) {
+    throw new Error('Doc draft field "markdown" is too short');
+  }
+  if (!/^##\s+/m.test(markdown)) {
+    throw new Error('Doc draft field "markdown" must include section headings');
+  }
+  const hasRichFormattingSignal =
+    /(^[-*]\s+.+$)|(^\d+\.\s+.+$)|(\*\*[^*]+\*\*)|(\*[^*\n]+\*)/m.test(markdown);
+  if (!hasRichFormattingSignal) {
+    throw new Error(
+      'Doc draft field "markdown" must include lists or emphasis formatting',
+    );
+  }
+  if (format === "presentation") {
+    const slideHeadingCount = (
+      markdown.match(/^##\s+(?:Slide\s+\d+[:\s-].*|.+)$/gim) ?? []
+    ).length;
+    if (slideHeadingCount < 1) {
+      throw new Error(
+        'Presentation markdown must include "## Slide ..." sections',
+      );
+    }
+    if (slideHeadingCount > 5) {
+      throw new Error("Presentation slide count exceeds 5");
+    }
+  }
+
+  return {
+    title,
+    summary,
+    markdown,
+    format,
+    sections,
+  };
+}
+
 function coerceRequiredString(
   value: unknown,
   field: string,
@@ -1750,6 +2117,24 @@ function coerceMechanics(value: unknown): string[] {
     throw new Error('Game project field "mechanics" must include at least one item');
   }
   return mechanics;
+}
+
+function coerceDocOutputFormat(value: unknown): DocOutputFormat {
+  if (value === "document" || value === "presentation") {
+    return value;
+  }
+  return "document";
+}
+
+function coerceDocSections(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .filter((item): item is string => typeof item === "string")
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0)
+    .slice(0, 16);
 }
 
 function coerceFiles(value: unknown): GeneratedGameProjectFile[] {

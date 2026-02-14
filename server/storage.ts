@@ -119,6 +119,10 @@ export interface IStorage {
 
   getMessages(conversationId: string): Promise<Message[]>;
   getMessagesWithAttachments(conversationId: string): Promise<MessageWithAttachments[]>;
+  getUserMessageById(
+    messageId: string,
+    userId: string,
+  ): Promise<UserScopedMessage | undefined>;
   getRecentMessagesForUser(params: {
     userId: string;
     limit: number;
@@ -134,6 +138,11 @@ export interface IStorage {
     textParts: string[];
     turnId?: string;
   }): Promise<Message[]>;
+  updateMessageUiPayload(params: {
+    messageId: string;
+    uiPayload: unknown;
+    text?: string;
+  }): Promise<Message | undefined>;
   createMessageAttachment(data: InsertMessageAttachment): Promise<MessageAttachment>;
   getAttachmentById(id: string): Promise<MessageAttachment | undefined>;
   getPendingAttachmentsByIds(
@@ -564,6 +573,30 @@ export class DatabaseStorage implements IStorage {
     }));
   }
 
+  async getUserMessageById(
+    messageId: string,
+    userId: string,
+  ): Promise<UserScopedMessage | undefined> {
+    const [message] = await db
+      .select({
+        id: messages.id,
+        conversationId: messages.conversationId,
+        sender: messages.sender,
+        turnId: messages.turnId,
+        partIndex: messages.partIndex,
+        text: messages.text,
+        uiPayload: messages.uiPayload,
+        createdAt: messages.createdAt,
+        userId: conversations.userId,
+      })
+      .from(messages)
+      .innerJoin(conversations, eq(conversations.id, messages.conversationId))
+      .where(and(eq(messages.id, messageId), eq(conversations.userId, userId)))
+      .limit(1);
+
+    return message;
+  }
+
   async getRecentMessagesForUser(params: {
     userId: string;
     limit: number;
@@ -681,6 +714,34 @@ export class DatabaseStorage implements IStorage {
     }
 
     return created.sort((a, b) => a.partIndex - b.partIndex);
+  }
+
+  async updateMessageUiPayload(params: {
+    messageId: string;
+    uiPayload: unknown;
+    text?: string;
+  }): Promise<Message | undefined> {
+    const updates: Partial<typeof messages.$inferInsert> = {
+      uiPayload: params.uiPayload,
+    };
+    if (params.text !== undefined) {
+      updates.text = params.text;
+    }
+
+    const [message] = await db
+      .update(messages)
+      .set(updates)
+      .where(eq(messages.id, params.messageId))
+      .returning();
+
+    if (!message) return undefined;
+
+    await db
+      .update(conversations)
+      .set({ updatedAt: new Date() })
+      .where(eq(conversations.id, message.conversationId));
+
+    return message;
   }
 
   async createMessageAttachment(

@@ -52,6 +52,12 @@ async function run(): Promise<void> {
   );
 
   assert.equal(
+    classifyChatTurnIntent("I need to write an email this morning"),
+    "companion_reply",
+    "Self-intent statements should not auto-start agent tasks",
+  );
+
+  assert.equal(
     classifyChatTurnIntent("can you create a new one?"),
     "companion_reply",
     "Ambiguous requests without context should stay in companion lane",
@@ -117,6 +123,12 @@ async function run(): Promise<void> {
     inferTaskRiskLevel("please send this by email to my team"),
     "high",
     "External actions should be high risk",
+  );
+
+  assert.equal(
+    inferTaskRiskLevel("I need to draft a clean follow-up email for tomorrow"),
+    "low",
+    "Draft-only email requests should stay low risk",
   );
 
   assert.equal(

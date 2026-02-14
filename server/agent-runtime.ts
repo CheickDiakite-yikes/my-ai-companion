@@ -15,10 +15,17 @@ import type {
 import { storage } from "./storage";
 import {
   generateAgentPlannerDraft,
+  generateDocDraft,
+  generateDocDraftViaGeminiCli,
+  generatePresentationSlideImages,
   generateGameProjectDraft,
   generateGameProjectDraftViaGeminiCli,
+  repairDocDraft,
+  repairDocDraftViaGeminiCli,
   repairGameProjectDraft,
   repairGameProjectDraftViaGeminiCli,
+  type DocOutputFormat,
+  type GeneratedDocDraft,
   type GameProjectFormat,
   type GameProjectEngine,
   type GeneratedGameProjectDraft,
@@ -42,10 +49,17 @@ const AGENT_DELIVERABLE_PATTERN =
   /\b(game|mini\s*game|document|doc|brief|summary|report|presentation|slides|artifact|prototype|app|website|email|draft|checklist)\b/i;
 const TASK_DIRECTIVE_PATTERNS = [
   /^\s*(can|could|would)\s+you\b/i,
-  /\bplease\b/i,
+  /^\s*please\b/i,
   /\bi\s+(need|want)\s+you\s+to\b/i,
   /\bhelp\s+me\b/i,
   /\bfor\s+me\b/i,
+];
+const TASK_IMPERATIVE_PATTERNS = [
+  /^\s*(create|build|generate|make|draft|write|design|code|develop|plan|send|email|connect|control|automate|research|organize|prepare|summari[sz]e)\b/i,
+];
+const SELF_INTENT_PATTERNS = [
+  /\bi\s+(need|want|have\s+to|gotta|should|plan\s+to|am\s+going\s+to|trying\s+to)\b/i,
+  /\bthinking\s+of\b/i,
 ];
 
 const AGENT_FOLLOW_UP_REFERENCE_PATTERNS = [
@@ -64,8 +78,22 @@ const HIGH_RISK_PATTERNS = [
   /\bcontrol\b.*\b(tv|device|browser|lights?|thermostat)\b/i,
   /\b(tv|device|browser|lights?|thermostat)\b.*\bcontrol\b/i,
 ];
+const HIGH_RISK_IRREVERSIBLE_ACTION_PATTERNS = [
+  /\b(send|forward|delete|archive|purchase|buy|pay|transfer|wire|book|submit)\b/i,
+];
+const HIGH_RISK_EXTERNAL_TARGET_PATTERNS = [
+  /\b(email|gmail|drive|calendar|bank|account|device|tv|thermostat|lights?|browser)\b/i,
+];
+const HIGH_RISK_CONNECTOR_CONTROL_PATTERNS = [
+  /\b(connect|control|remote|automation|automate)\b/i,
+];
+const LOW_RISK_EMAIL_DRAFT_PATTERNS = [
+  /\b(write|draft|compose|outline|revise|rewrite|polish)\b/i,
+];
 
-const DOC_HINT_PATTERNS = [/\b(doc|document|notes|brief|summary|write[- ]?up|presentation|slides)\b/i];
+const DOC_HINT_PATTERNS = [
+  /\b(doc|document|notes|brief|summary|write[- ]?up|presentation|slides|email|letter)\b/i,
+];
 const GAME_HINT_PATTERNS = [/\b(game|mini\s*game|playable)\b/i];
 const GAME_GENRE_HINT_PATTERNS = [
   /\b(snake|pong|tetris|platformer|runner|arcade|maze|shooter|flappy|breakout)\b/i,
@@ -143,6 +171,21 @@ export interface GameQaFailureDiagnostics {
   warning?: string;
 }
 
+export interface GeneratedDocArtifact {
+  title: string;
+  summary: string;
+  markdown: string;
+  generationMetadata: {
+    mode: "model" | "deterministic_recovery";
+    format: DocOutputFormat;
+    sections: string[];
+    attempt: number;
+    model: string;
+    backend: "gemini_api" | "gemini_cli" | "deterministic_recovery";
+    backendFallbackReason?: string | null;
+  };
+}
+
 export interface AgentExecutor {
   generateMiniGame(input: {
     prompt: string;
@@ -159,7 +202,15 @@ export interface AgentExecutor {
   generateDoc(input: {
     prompt: string;
     imageHints: string[];
-  }): Promise<{ markdown: string; title: string; summary: string }>;
+    attempt: number;
+  }): Promise<GeneratedDocArtifact>;
+  repairDoc(input: {
+    prompt: string;
+    imageHints: string[];
+    previousDoc: GeneratedDocArtifact;
+    qaFailures: string[];
+    attempt: number;
+  }): Promise<GeneratedDocArtifact>;
 }
 
 class GeminiPrimaryAgentAdapter implements AgentPlanner, AgentExecutor {
@@ -399,42 +450,138 @@ class GeminiPrimaryAgentAdapter implements AgentPlanner, AgentExecutor {
   async generateDoc(input: {
     prompt: string;
     imageHints: string[];
-  }): Promise<{ markdown: string; title: string; summary: string }> {
-    const subject = extractSubject(input.prompt, "project");
-    const title = toTitleCase(`${subject} brief`);
-    const imageLine = input.imageHints[0]
-      ? `- Visual note: ${input.imageHints[0]}`
-      : "- Visual note: No image input attached";
+    attempt: number;
+  }): Promise<GeneratedDocArtifact> {
+    if (!isModelDocGeneratorEnabled()) {
+      return buildDeterministicRecoveryDoc({
+        prompt: input.prompt,
+        imageHints: input.imageHints,
+        attempt: input.attempt,
+      });
+    }
 
-    const markdown = `# ${title}
+    const backend = resolveCodeWorkerBackend();
+    if (backend === "gemini_cli") {
+      try {
+        const generatedViaCli = await generateDocDraftViaGeminiCli({
+          prompt: input.prompt,
+          imageHints: input.imageHints,
+        });
+        return coerceModelDoc({
+          draft: generatedViaCli.draft,
+          attempt: input.attempt,
+          model: generatedViaCli.model,
+          backend: "gemini_cli",
+          backendFallbackReason: null,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(
+          `[agent-runtime] gemini_cli doc backend unavailable, falling back to Gemini API: ${message}`,
+        );
+        const generatedViaApi = await generateDocDraft({
+          prompt: input.prompt,
+          imageHints: input.imageHints,
+        });
+        return coerceModelDoc({
+          draft: generatedViaApi.draft,
+          attempt: input.attempt,
+          model: generatedViaApi.model,
+          backend: "gemini_api",
+          backendFallbackReason: truncate(`gemini_cli_unavailable:${message}`, 220),
+        });
+      }
+    }
 
-## Goal
-- Convert your request into a practical output that is easy to share and iterate.
+    const generated = await generateDocDraft({
+      prompt: input.prompt,
+      imageHints: input.imageHints,
+    });
+    return coerceModelDoc({
+      draft: generated.draft,
+      attempt: input.attempt,
+      model: generated.model,
+      backend: "gemini_api",
+      backendFallbackReason: null,
+    });
+  }
 
-## User Request
-- ${input.prompt.trim()}
-${imageLine}
+  async repairDoc(input: {
+    prompt: string;
+    imageHints: string[];
+    previousDoc: GeneratedDocArtifact;
+    qaFailures: string[];
+    attempt: number;
+  }): Promise<GeneratedDocArtifact> {
+    if (!isModelDocGeneratorEnabled()) {
+      return buildDeterministicRecoveryDoc({
+        prompt: input.prompt,
+        imageHints: input.imageHints,
+        attempt: input.attempt,
+      });
+    }
 
-## Proposed Output
-1. Core narrative and framing for the idea.
-2. Action checklist to execute quickly.
-3. Next iteration notes for follow-up with Zee.
-
-## Action Checklist
-- [ ] Confirm target audience.
-- [ ] Finalize the tone and depth.
-- [ ] Review deliverable for completeness.
-- [ ] Share or publish the output.
-
-## Notes
-- This draft is optimized for fast collaboration and can be expanded in follow-up turns.
-`;
-
-    return {
-      markdown,
-      title,
-      summary: `Document draft created: ${title}`,
+    const backend = resolveCodeWorkerBackend();
+    const previousDraft: GeneratedDocDraft = {
+      title: input.previousDoc.title,
+      summary: input.previousDoc.summary,
+      markdown: input.previousDoc.markdown,
+      format: input.previousDoc.generationMetadata.format,
+      sections: input.previousDoc.generationMetadata.sections,
     };
+
+    if (backend === "gemini_cli") {
+      try {
+        const repairedViaCli = await repairDocDraftViaGeminiCli({
+          prompt: input.prompt,
+          imageHints: input.imageHints,
+          previousDraft,
+          qaFailures: input.qaFailures,
+          attempt: input.attempt,
+        });
+        return coerceModelDoc({
+          draft: repairedViaCli.draft,
+          attempt: input.attempt,
+          model: repairedViaCli.model,
+          backend: "gemini_cli",
+          backendFallbackReason: null,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(
+          `[agent-runtime] gemini_cli doc repair backend unavailable, falling back to Gemini API: ${message}`,
+        );
+        const repairedViaApi = await repairDocDraft({
+          prompt: input.prompt,
+          imageHints: input.imageHints,
+          previousDraft,
+          qaFailures: input.qaFailures,
+          attempt: input.attempt,
+        });
+        return coerceModelDoc({
+          draft: repairedViaApi.draft,
+          attempt: input.attempt,
+          model: repairedViaApi.model,
+          backend: "gemini_api",
+          backendFallbackReason: truncate(`gemini_cli_unavailable:${message}`, 220),
+        });
+      }
+    }
+
+    const repaired = await repairDocDraft({
+      prompt: input.prompt,
+      imageHints: input.imageHints,
+      previousDraft,
+      qaFailures: input.qaFailures,
+      attempt: input.attempt,
+    });
+    return coerceModelDoc({
+      draft: repaired.draft,
+      attempt: input.attempt,
+      model: repaired.model,
+      backend: "gemini_api",
+      backendFallbackReason: null,
+    });
   }
 }
 
@@ -692,6 +839,9 @@ function reconcilePlannedTaskKind(params: {
   if (params.fallback === "mini_game" && params.candidate === "doc_markdown") {
     return params.fallback;
   }
+  if (params.fallback === "doc_markdown" && params.candidate === "mini_game") {
+    return params.fallback;
+  }
   return params.candidate;
 }
 
@@ -752,6 +902,10 @@ function isModelGameGeneratorEnabled(): boolean {
   return parseBooleanFlag(process.env.ENABLE_AGENT_MODEL_GAME_GENERATOR, false);
 }
 
+function isModelDocGeneratorEnabled(): boolean {
+  return parseBooleanFlag(process.env.ENABLE_AGENT_MODEL_DOC_GENERATOR, false);
+}
+
 function isAgentCodeWorkerEnabled(): boolean {
   return parseBooleanFlag(process.env.ENABLE_AGENT_CODE_WORKER, true);
 }
@@ -780,12 +934,65 @@ function resolveAgentGameModel(): string {
   return configured || "gemini-3-flash-preview";
 }
 
+function resolveAgentDocModel(): string {
+  if (!isModelDocGeneratorEnabled()) {
+    return "deterministic_recovery";
+  }
+  const configured = (
+    process.env.AGENT_DOC_MODEL ??
+    process.env.AGENT_GAME_MODEL ??
+    "gemini-3-flash-preview"
+  )
+    .trim()
+    .replace(/^models\//, "");
+  return configured || "gemini-3-flash-preview";
+}
+
 function resolveAgentGameMaxRetries(): number {
   return clampInt(
     parseIntOrFallback(process.env.AGENT_GAME_MAX_RETRIES, 2),
     0,
     4,
   );
+}
+
+function resolveAgentDocMaxRetries(): number {
+  return clampInt(parseIntOrFallback(process.env.AGENT_DOC_MAX_RETRIES, 2), 0, 4);
+}
+
+function isPresentationImageGenerationEnabled(): boolean {
+  return parseBooleanFlag(
+    process.env.ENABLE_AGENT_PRESENTATION_IMAGE_GENERATION,
+    true,
+  );
+}
+
+function resolveAgentPresentationMaxSlides(): number {
+  return clampInt(
+    parseIntOrFallback(process.env.AGENT_PRESENTATION_MAX_SLIDES, 5),
+    1,
+    5,
+  );
+}
+
+function resolveGeneratorModelForTaskKind(taskKind: AgentTaskKind): string {
+  if (taskKind === "doc_markdown") {
+    return resolveAgentDocModel();
+  }
+  return resolveAgentGameModel();
+}
+
+function resolveGeneratorBackendForTaskKind(
+  taskKind: AgentTaskKind,
+): CodeWorkerBackend | "deterministic_recovery" {
+  if (taskKind === "doc_markdown") {
+    return isModelDocGeneratorEnabled()
+      ? resolveCodeWorkerBackend()
+      : "deterministic_recovery";
+  }
+  return isModelGameGeneratorEnabled()
+    ? resolveCodeWorkerBackend()
+    : "deterministic_recovery";
 }
 
 function resolveAgentGameMaxFiles(): number {
@@ -949,6 +1156,110 @@ function buildDeterministicRecoveryMiniGameProject(input: {
       format: "single_file",
       engine: mode3d && !requestsSnake ? "threejs_light" : "canvas_dom",
       mechanics,
+      attempt: input.attempt,
+      model: "deterministic_recovery",
+      backend: "deterministic_recovery",
+      backendFallbackReason: null,
+    },
+  };
+}
+
+function coerceModelDoc(params: {
+  draft: GeneratedDocDraft;
+  attempt: number;
+  model: string;
+  backend: "gemini_api" | "gemini_cli";
+  backendFallbackReason: string | null;
+}): GeneratedDocArtifact {
+  const markdown = params.draft.markdown.trim();
+  if (!markdown) {
+    throw new Error("Doc draft markdown is empty");
+  }
+  if (!/^#\s+/m.test(markdown)) {
+    throw new Error("Doc draft markdown missing top-level heading");
+  }
+
+  return {
+    title: truncate(params.draft.title.trim(), 120),
+    summary: truncate(params.draft.summary.trim(), 320),
+    markdown,
+    generationMetadata: {
+      mode: "model",
+      format: params.draft.format,
+      sections: params.draft.sections.slice(0, 16),
+      attempt: params.attempt,
+      model: params.model,
+      backend: params.backend,
+      backendFallbackReason: params.backendFallbackReason,
+    },
+  };
+}
+
+function buildDeterministicRecoveryDoc(input: {
+  prompt: string;
+  imageHints: string[];
+  attempt: number;
+}): GeneratedDocArtifact {
+  const subject = extractSubject(input.prompt, "project");
+  const title = toTitleCase(`${subject} brief`);
+  const wantsPresentation = /\b(slides?|presentation|deck)\b/i.test(input.prompt);
+  const imageLine = input.imageHints[0]
+    ? `- Visual note: ${input.imageHints[0]}`
+    : "- Visual note: No image input attached";
+
+  const markdown = wantsPresentation
+    ? `# ${title}
+
+## Slide 1: Vision
+- **Objective:** turn the idea into a concrete first deck.
+- *Hook:* why this matters right now.
+
+## Slide 2: Context
+- ${input.prompt.trim()}
+- ${imageLine.replace(/^- /, "")}
+
+## Slide 3: Solution
+1. Problem framing
+2. Core proposal
+3. Why this approach wins
+
+## Slide 4: Plan
+- [ ] Define audience and scope
+- [ ] Validate assumptions quickly
+- [ ] Prepare launch checklist
+`
+    : `# ${title}
+
+## Goal
+- Convert your request into a practical output that is easy to share and iterate.
+
+## User Request
+- ${input.prompt.trim()}
+${imageLine}
+
+## Proposed Output
+1. Core narrative and framing for the idea.
+2. Action checklist to execute quickly.
+3. Next iteration notes for follow-up with Zee.
+
+## Action Checklist
+- [ ] Confirm target audience.
+- [ ] Finalize the tone and depth.
+- [ ] Review deliverable for completeness.
+- [ ] Share or publish the output.
+
+## Notes
+- This draft is optimized for fast collaboration and can be expanded in follow-up turns.
+`;
+
+  return {
+    markdown,
+    title,
+    summary: `Document draft created: ${title}`,
+    generationMetadata: {
+      mode: "deterministic_recovery",
+      format: wantsPresentation ? "presentation" : "document",
+      sections: ["Goal", "User Request", "Proposed Output", "Action Checklist"],
       attempt: input.attempt,
       model: "deterministic_recovery",
       backend: "deterministic_recovery",
@@ -1778,6 +2089,9 @@ export function classifyChatTurnIntent(
   const hasDirective = TASK_DIRECTIVE_PATTERNS.some((pattern) =>
     pattern.test(normalized),
   );
+  const hasImperativeStart = TASK_IMPERATIVE_PATTERNS.some((pattern) =>
+    pattern.test(normalized),
+  );
   const hasHighRiskSignal = HIGH_RISK_PATTERNS.some((pattern) =>
     pattern.test(normalized),
   );
@@ -1788,14 +2102,35 @@ export function classifyChatTurnIntent(
     pattern.test(normalized),
   );
   const hasGameIntentSignal = hasGameRequestSignal(normalized);
+  const hasSelfIntentSignal = SELF_INTENT_PATTERNS.some((pattern) =>
+    pattern.test(normalized),
+  );
+  const hasExplicitTaskRequest = hasDirective || hasImperativeStart;
 
-  if (hasHighRiskSignal && (hasActionVerb || hasDirective)) {
+  if (
+    hasSelfIntentSignal &&
+    !hasExplicitTaskRequest &&
+    !hasFollowUpReference &&
+    !hasMiniGameTuningSignal
+  ) {
+    return "companion_reply";
+  }
+
+  if (hasHighRiskSignal && hasExplicitTaskRequest) {
     return "agent_task";
   }
-  if (hasActionVerb && (hasDeliverable || hasGameIntentSignal)) {
+  if (
+    hasExplicitTaskRequest &&
+    hasActionVerb &&
+    (hasDeliverable || hasGameIntentSignal)
+  ) {
     return "agent_task";
   }
-  if (hasDirective && (hasDeliverable || hasGameIntentSignal)) {
+  if (
+    hasExplicitTaskRequest &&
+    hasDirective &&
+    (hasDeliverable || hasGameIntentSignal)
+  ) {
     return "agent_task";
   }
   if (
@@ -1849,9 +2184,53 @@ function hasGameRequestSignal(text: string): boolean {
 
 export function inferTaskRiskLevel(text: string): TaskRiskLevel {
   const normalized = text.toLowerCase();
-  return HIGH_RISK_PATTERNS.some((pattern) => pattern.test(normalized))
-    ? "high"
-    : "low";
+  const hasExternalTarget = HIGH_RISK_EXTERNAL_TARGET_PATTERNS.some((pattern) =>
+    pattern.test(normalized),
+  );
+  const hasIrreversibleAction = HIGH_RISK_IRREVERSIBLE_ACTION_PATTERNS.some(
+    (pattern) => pattern.test(normalized),
+  );
+  const hasConnectorControl = HIGH_RISK_CONNECTOR_CONTROL_PATTERNS.some((pattern) =>
+    pattern.test(normalized),
+  );
+  const hasSensitiveCredentialSignal =
+    /\b(password|passcode|bank|routing number|account number|ssn|social security)\b/i.test(
+      normalized,
+    );
+  const hasEmailMention = /\b(email|gmail)\b/i.test(normalized);
+  const hasEmailDraftIntent = LOW_RISK_EMAIL_DRAFT_PATTERNS.some((pattern) =>
+    pattern.test(normalized),
+  );
+  const hasExplicitSendIntent =
+    /\b(send|forward|deliver|submit)\b/i.test(normalized) &&
+    /\b(to|via|through|out)\b/i.test(normalized);
+
+  if (hasSensitiveCredentialSignal) {
+    return "high";
+  }
+  if (hasConnectorControl && hasExternalTarget) {
+    return "high";
+  }
+  if (hasIrreversibleAction && hasExternalTarget) {
+    return "high";
+  }
+  if (hasEmailMention && hasExplicitSendIntent) {
+    return "high";
+  }
+  if (hasEmailMention && hasEmailDraftIntent) {
+    return "low";
+  }
+
+  const hasBroadHighRiskSignal = HIGH_RISK_PATTERNS.some((pattern) =>
+    pattern.test(normalized),
+  );
+  if (!hasBroadHighRiskSignal) {
+    return "low";
+  }
+  if (hasEmailMention && !hasExplicitSendIntent && !hasIrreversibleAction) {
+    return "low";
+  }
+  return "high";
 }
 
 export async function startAgentTaskRun(
@@ -1880,10 +2259,8 @@ export async function startAgentTaskRun(
       imageHintCount: imageHints.length,
       plannerModel: planned.audit.plannerModel,
       plannerFallbackReason: planned.audit.plannerFallbackReason ?? null,
-      generatorModel: resolveAgentGameModel(),
-      generatorBackend: isModelGameGeneratorEnabled()
-        ? resolveCodeWorkerBackend()
-        : "deterministic_recovery",
+      generatorModel: resolveGeneratorModelForTaskKind(plan.taskKind),
+      generatorBackend: resolveGeneratorBackendForTaskKind(plan.taskKind),
       generatorFallbackReason: null,
       generatorAttempts: 0,
       generatorFinalStatus: "not_started",
@@ -2431,65 +2808,192 @@ async function runTaskExecution(state: RuntimeState): Promise<void> {
         status: "started",
         outputSummary: null,
       });
-
-      const doc = await adapter.generateDoc({
-        prompt: state.prompt,
-        imageHints: effectiveImageHints,
-      });
-
       const docRelativePath = "artifacts/docs/output.md";
       const docPreviewRelativePath = "artifacts/docs/preview.html";
-      const docPreviewHtml = buildDocPreviewHtml({
-        title: doc.title,
-        markdown: doc.markdown,
-      });
+      const docAttemptBudget = isModelDocGeneratorEnabled()
+        ? resolveAgentDocMaxRetries() + 1
+        : 1;
+      const docQaFailures: string[] = [];
+      let generatedDoc: GeneratedDocArtifact | null = null;
+      let persistedMarkdown: string | null = null;
+      let docPreviewHtml = "";
+      let presentationSlideCount = 0;
+      let presentationImageModel: string | null = null;
+      let presentationImageFallbackReason: string | null = null;
+      let attemptsUsed = 0;
+      let finalDocFailureReason = "";
 
-      await writeSandboxFile({
-        job: sandboxJob,
-        toolName: "doc_generator",
-        relativePath: docRelativePath,
-        content: doc.markdown,
-      });
-      await writeSandboxFile({
-        job: sandboxJob,
-        toolName: "doc_generator",
-        relativePath: docPreviewRelativePath,
-        content: docPreviewHtml,
-      });
+      for (let attempt = 1; attempt <= docAttemptBudget; attempt += 1) {
+        attemptsUsed = attempt;
+        presentationSlideCount = 0;
+        presentationImageModel = null;
+        presentationImageFallbackReason = null;
+        if (buildStep) {
+          await markStepInProgress(
+            buildStep.id,
+            state,
+            `Drafting document output (attempt ${attempt}/${docAttemptBudget}).`,
+          );
+        }
 
-      const docSandboxCheck = await runSandboxCommand({
-        job: sandboxJob,
-        toolName: "doc_generator",
-        command: "node",
-        args: [
-          "-e",
-          "const fs=require('fs');const md=fs.readFileSync('artifacts/docs/output.md','utf8');if(!md.startsWith('# ')){process.exit(2)}",
-        ],
-      });
-      if (!docSandboxCheck.ok) {
+        try {
+          generatedDoc =
+            attempt === 1 || !generatedDoc
+              ? await adapter.generateDoc({
+                  prompt: state.prompt,
+                  imageHints: effectiveImageHints,
+                  attempt,
+                })
+              : await adapter.repairDoc({
+                  prompt: state.prompt,
+                  imageHints: effectiveImageHints,
+                  previousDoc: generatedDoc,
+                  qaFailures: docQaFailures,
+                  attempt,
+                });
+
+          await writeSandboxFile({
+            job: sandboxJob,
+            toolName: "doc_generator",
+            relativePath: docRelativePath,
+            content: generatedDoc.markdown,
+          });
+
+          const docSandboxCheck = await runSandboxCommand({
+            job: sandboxJob,
+            toolName: "doc_generator",
+            command: "node",
+            args: [
+              "-e",
+              "const fs=require('fs');const md=fs.readFileSync('artifacts/docs/output.md','utf8');if(!md.startsWith('# ')){process.exit(2)}",
+            ],
+          });
+          if (!docSandboxCheck.ok) {
+            const reason = `Sandbox check failed: ${truncate(docSandboxCheck.stderr, 220)}`;
+            docQaFailures.push(reason);
+            finalDocFailureReason = reason;
+            if (attempt < docAttemptBudget) {
+              continue;
+            }
+            break;
+          }
+
+          persistedMarkdown = await readSandboxFile({
+            job: sandboxJob,
+            toolName: "doc_generator",
+            relativePath: docRelativePath,
+          });
+
+          const qaPassed = runDocChecks(
+            persistedMarkdown,
+            generatedDoc.generationMetadata.format,
+          );
+          if (!qaPassed.ok) {
+            docQaFailures.push(qaPassed.reason);
+            finalDocFailureReason = qaPassed.reason;
+            if (attempt < docAttemptBudget) {
+              continue;
+            }
+            break;
+          }
+
+          if (generatedDoc.generationMetadata.format === "presentation") {
+            const presentationSlides = await materializePresentationSlides({
+              title: generatedDoc.title,
+              markdown: persistedMarkdown,
+            });
+            presentationSlideCount = presentationSlides.slides.length;
+            presentationImageModel = presentationSlides.imageModel;
+            presentationImageFallbackReason =
+              presentationSlides.imageFallbackReason;
+
+            if (isPresentationImageGenerationEnabled()) {
+              const missingSlides = presentationSlides.slides.filter(
+                (slide) => !slide.imageDataUrl,
+              ).length;
+              if (missingSlides > 0) {
+                const reason =
+                  presentationSlides.imageFallbackReason ??
+                  `Presentation image generation incomplete (${missingSlides} slide(s) missing images)`;
+                docQaFailures.push(reason);
+                finalDocFailureReason = reason;
+                if (attempt < docAttemptBudget) {
+                  continue;
+                }
+                break;
+              }
+            }
+
+            docPreviewHtml = buildDocPreviewHtml({
+              title: generatedDoc.title,
+              markdown: persistedMarkdown,
+              presentationSlides: presentationSlides.slides,
+            });
+          } else {
+            docPreviewHtml = buildDocPreviewHtml({
+              title: generatedDoc.title,
+              markdown: persistedMarkdown,
+            });
+          }
+
+          await writeSandboxFile({
+            job: sandboxJob,
+            toolName: "doc_generator",
+            relativePath: docPreviewRelativePath,
+            content: docPreviewHtml,
+          });
+
+          finalDocFailureReason = "";
+          break;
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          const reason = `Doc generation attempt ${attempt} failed: ${truncate(message, 220)}`;
+          docQaFailures.push(reason);
+          finalDocFailureReason = reason;
+          if (attempt < docAttemptBudget) {
+            continue;
+          }
+        }
+      }
+
+      if (!generatedDoc || !persistedMarkdown || finalDocFailureReason) {
+        const failureReason =
+          finalDocFailureReason ||
+          docQaFailures[docQaFailures.length - 1] ||
+          "Document generation failed";
+        plan = await updatePlanGeneratorAudit({
+          taskId: task.id,
+          plan,
+          attempts: attemptsUsed,
+          finalStatus: "failed",
+          generatorModel: resolveAgentDocModel(),
+          generatorBackend: resolveGeneratorBackendForTaskKind("doc_markdown"),
+          generatorFallbackReason: truncate(failureReason, 220),
+        });
         await storage.updateAgentToolCall({
           toolCallId: toolCall.id,
           status: "failed",
-          outputSummary: `[trace ${auditTraceId.slice(0, 8)}] Sandbox check failed: ${truncate(docSandboxCheck.stderr, 220)}`,
+          outputSummary: `[trace ${auditTraceId.slice(0, 8)}] ${truncate(failureReason, 240)}`,
         });
-        throw new Error("Doc sandbox validation command failed");
+        throw new Error(
+          `Document generation failed after ${attemptsUsed}/${docAttemptBudget} attempts: ${failureReason}`,
+        );
       }
 
-      const persistedMarkdown = await readSandboxFile({
-        job: sandboxJob,
-        toolName: "doc_generator",
-        relativePath: docRelativePath,
+      const finalGeneratorStatus =
+        generatedDoc.generationMetadata.mode === "deterministic_recovery"
+          ? "skipped_deterministic_recovery"
+          : "completed";
+      plan = await updatePlanGeneratorAudit({
+        taskId: task.id,
+        plan,
+        attempts: attemptsUsed,
+        finalStatus: finalGeneratorStatus,
+        generatorModel: generatedDoc.generationMetadata.model,
+        generatorBackend: generatedDoc.generationMetadata.backend,
+        generatorFallbackReason:
+          generatedDoc.generationMetadata.backendFallbackReason ?? null,
       });
-
-      const qaPassed = runDocChecks(persistedMarkdown);
-      if (!qaPassed.ok) {
-        await storage.updateAgentToolCall({
-          toolCallId: toolCall.id,
-          status: "failed",
-          outputSummary: `[trace ${auditTraceId.slice(0, 8)}] ${qaPassed.reason}`,
-        });
-        throw new Error(`Doc QA failed: ${qaPassed.reason}`);
-      }
 
       const artifact = await storage.createAgentArtifact({
         taskId: task.id,
@@ -2497,11 +3001,11 @@ async function runTaskExecution(state: RuntimeState): Promise<void> {
         userId: state.userId,
         type: "doc_markdown",
         status: "active",
-        title: doc.title,
+        title: generatedDoc.title,
         markdownContent: persistedMarkdown,
         htmlContent: docPreviewHtml,
         metadata: {
-          summary: doc.summary,
+          summary: generatedDoc.summary,
           sandbox: {
             jobId: sandboxJob.id,
             outputPath: docRelativePath,
@@ -2509,6 +3013,20 @@ async function runTaskExecution(state: RuntimeState): Promise<void> {
           },
           audit: {
             traceId: auditTraceId,
+          },
+          generation: {
+            mode: generatedDoc.generationMetadata.mode,
+            format: generatedDoc.generationMetadata.format,
+            attempts: attemptsUsed,
+            model: generatedDoc.generationMetadata.model,
+            backend: generatedDoc.generationMetadata.backend,
+            backendFallbackReason:
+              generatedDoc.generationMetadata.backendFallbackReason ?? null,
+            sections: generatedDoc.generationMetadata.sections,
+            slideCount: presentationSlideCount || null,
+            presentationImageModel,
+            presentationImageFallbackReason,
+            qaFailures: docQaFailures.slice(0, 6),
           },
           qa: {
             mode: "deterministic_smoke",
@@ -2520,7 +3038,9 @@ async function runTaskExecution(state: RuntimeState): Promise<void> {
       await storage.updateAgentToolCall({
         toolCallId: toolCall.id,
         status: "completed",
-        outputSummary: `[trace ${auditTraceId.slice(0, 8)}] Published doc artifact ${artifact.id} (sandbox ${sandboxJob.id.slice(0, 8)})`,
+        outputSummary:
+          `[trace ${auditTraceId.slice(0, 8)}] Published doc artifact ${artifact.id} ` +
+          `(sandbox ${sandboxJob.id.slice(0, 8)}) attempts=${attemptsUsed} format=${generatedDoc.generationMetadata.format} backend=${generatedDoc.generationMetadata.backend}`,
       });
 
       const artifactSummary = toArtifactSummary(artifact);
@@ -3239,7 +3759,10 @@ async function runMiniGameChecks(
   }
 }
 
-function runDocChecks(markdown: string): { ok: true } | { ok: false; reason: string } {
+function runDocChecks(
+  markdown: string,
+  format: DocOutputFormat,
+): { ok: true } | { ok: false; reason: string } {
   if (!markdown.trim()) {
     return { ok: false, reason: "Document is empty" };
   }
@@ -3249,10 +3772,257 @@ function runDocChecks(markdown: string): { ok: true } | { ok: false; reason: str
   if (!/^#\s+/m.test(markdown)) {
     return { ok: false, reason: "Document missing top-level heading" };
   }
+  if (!/^##\s+/m.test(markdown)) {
+    return { ok: false, reason: "Document missing section headings" };
+  }
+  const hasRichFormattingSignal =
+    /(^[-*]\s+.+$)|(^\d+\.\s+.+$)|(\*\*[^*]+\*\*)|(\*[^*\n]+\*)/m.test(markdown);
+  if (!hasRichFormattingSignal) {
+    return { ok: false, reason: "Document missing list/emphasis formatting" };
+  }
+  if (format === "presentation") {
+    const maxSlides = resolveAgentPresentationMaxSlides();
+    const slides = extractPresentationSlideDrafts(markdown, maxSlides + 5);
+    if (slides.length === 0) {
+      return { ok: false, reason: "Presentation missing slide sections" };
+    }
+    if (slides.length > maxSlides) {
+      return {
+        ok: false,
+        reason: `Presentation exceeds maximum slide count (${maxSlides})`,
+      };
+    }
+  }
   return { ok: true };
 }
 
-function buildDocPreviewHtml(params: { title: string; markdown: string }): string {
+interface PresentationSlidePreview {
+  index: number;
+  title: string;
+  body: string;
+  prompt: string;
+  imageDataUrl: string | null;
+}
+
+function extractPresentationSlideDrafts(
+  markdown: string,
+  maxSlides: number,
+): PresentationSlidePreview[] {
+  const normalizedMax = clampInt(maxSlides, 1, 5);
+  const lines = markdown.split(/\r?\n/);
+  const slides: Array<{ title: string; bodyLines: string[] }> = [];
+  let current: { title: string; bodyLines: string[] } | null = null;
+
+  for (const rawLine of lines) {
+    const headingMatch = rawLine.match(/^##\s+(.*)$/);
+    if (headingMatch) {
+      if (current) {
+        slides.push(current);
+      }
+      current = {
+        title: headingMatch[1].trim() || `Slide ${slides.length + 1}`,
+        bodyLines: [],
+      };
+      continue;
+    }
+    if (current) {
+      current.bodyLines.push(rawLine);
+    }
+  }
+  if (current) {
+    slides.push(current);
+  }
+
+  if (slides.length === 0) {
+    const fallbackBody = markdown
+      .replace(/^#\s+.*$/m, "")
+      .trim()
+      .slice(0, 1200);
+    return [
+      {
+        index: 1,
+        title: "Slide 1",
+        body: fallbackBody,
+        prompt: fallbackBody || "Overview slide",
+        imageDataUrl: null,
+      },
+    ];
+  }
+
+  return slides.slice(0, normalizedMax).map((slide, index) => {
+    const body = slide.bodyLines.join("\n").trim();
+    const prompt = `${slide.title}. ${body}`.replace(/\s+/g, " ").trim();
+    return {
+      index: index + 1,
+      title: slide.title,
+      body,
+      prompt: truncate(prompt || slide.title, 700),
+      imageDataUrl: null,
+    };
+  });
+}
+
+async function materializePresentationSlides(params: {
+  title: string;
+  markdown: string;
+}): Promise<{
+  slides: PresentationSlidePreview[];
+  imageModel: string | null;
+  imageFallbackReason: string | null;
+}> {
+  const maxSlides = resolveAgentPresentationMaxSlides();
+  const drafts = extractPresentationSlideDrafts(params.markdown, maxSlides);
+
+  if (!isPresentationImageGenerationEnabled()) {
+    return {
+      slides: drafts,
+      imageModel: null,
+      imageFallbackReason: "presentation_image_generation_disabled",
+    };
+  }
+
+  try {
+    const rendered = await generatePresentationSlideImages({
+      title: params.title,
+      slidePrompts: drafts.map((draft) => draft.prompt),
+    });
+
+    const slides = drafts.map((draft, index) => {
+      const generated = rendered.slides[index];
+      if (!generated?.imageBase64) {
+        return draft;
+      }
+      const mimeType = generated.mimeType || "image/png";
+      return {
+        ...draft,
+        imageDataUrl: `data:${mimeType};base64,${generated.imageBase64}`,
+      };
+    });
+
+    return {
+      slides,
+      imageModel: rendered.model,
+      imageFallbackReason: null,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      slides: drafts,
+      imageModel: null,
+      imageFallbackReason: truncate(message, 220),
+    };
+  }
+}
+
+function buildPresentationPreviewHtml(params: {
+  title: string;
+  slides: PresentationSlidePreview[];
+}): string {
+  const escapedTitle = escapeHtml(params.title);
+  const slidesHtml = params.slides
+    .map((slide) => {
+      const title = escapeHtml(slide.title);
+      const bodyHtml = markdownToSimpleHtml(slide.body || "");
+      return `<section class=\"slide\">
+  <div class=\"slide-head\">
+    <span class=\"slide-index\">Slide ${slide.index}</span>
+    <h2>${title}</h2>
+  </div>
+  ${
+    slide.imageDataUrl
+      ? `<img class=\"slide-image\" src=\"${slide.imageDataUrl}\" alt=\"${title}\" />`
+      : `<article class=\"slide-body\">${bodyHtml || "<p>Slide content pending.</p>"}</article>`
+  }
+</section>`;
+    })
+    .join("\n");
+
+  return `<!doctype html>
+<html lang=\"en\">
+  <head>
+    <meta charset=\"UTF-8\" />
+    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
+    <title>${escapedTitle}</title>
+    <style>
+      :root { color-scheme: light; }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: \"DM Sans\", sans-serif;
+        background: #f5ecda;
+        color: #2a1d10;
+        padding: 20px;
+      }
+      .slide {
+        width: 100%;
+        max-width: 960px;
+        margin: 0 auto 18px;
+        background: rgba(255,255,255,0.86);
+        border: 1px solid rgba(42, 29, 16, 0.15);
+        border-radius: 16px;
+        padding: 16px;
+        page-break-after: always;
+      }
+      .slide:last-child { page-break-after: auto; }
+      .slide-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 10px;
+      }
+      .slide-index {
+        font-size: 11px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        opacity: 0.7;
+      }
+      .slide-head h2 {
+        margin: 0;
+        font-family: \"Outfit\", sans-serif;
+        font-size: 1.3rem;
+      }
+      .slide-image {
+        width: 100%;
+        aspect-ratio: 16 / 9;
+        object-fit: cover;
+        border-radius: 12px;
+        border: 1px solid rgba(42, 29, 16, 0.18);
+        background: #e7dcc6;
+      }
+      .slide-body { line-height: 1.6; }
+      .slide-body h1, .slide-body h2, .slide-body h3, .slide-body h4 {
+        font-family: \"Outfit\", sans-serif;
+      }
+      @media print {
+        body { background: #fff; padding: 0; }
+        .slide {
+          border: none;
+          border-radius: 0;
+          margin: 0;
+          min-height: 100vh;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    ${slidesHtml}
+  </body>
+</html>`;
+}
+
+function buildDocPreviewHtml(params: {
+  title: string;
+  markdown: string;
+  presentationSlides?: PresentationSlidePreview[] | null;
+}): string {
+  if (params.presentationSlides && params.presentationSlides.length > 0) {
+    return buildPresentationPreviewHtml({
+      title: params.title,
+      slides: params.presentationSlides,
+    });
+  }
+
   const escapedTitle = escapeHtml(params.title);
   const bodyHtml = markdownToSimpleHtml(params.markdown);
   return `<!doctype html>

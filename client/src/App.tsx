@@ -59,6 +59,7 @@ import {
 import type {
   AgentArtifactSummary,
   AgentApprovalSummary,
+  AgentOfferSummary,
   AgentToolCallSummary,
   AgentMessageUiPayload,
   AgentStepSummary,
@@ -351,6 +352,17 @@ interface AgentTaskResponse {
   toolCalls?: AgentToolCallSummary[];
 }
 
+interface AgentOfferResponse {
+  traceId?: string;
+  accepted?: boolean;
+  declined?: boolean;
+  alreadyAccepted?: boolean;
+  alreadyDeclined?: boolean;
+  offer: AgentOfferSummary;
+  task?: AgentTaskSummary | null;
+  awaitingApproval?: boolean;
+}
+
 type LiveMemoryMode = "safe_selective" | "remember_everything";
 interface MemorySettingsData {
   memoryMode: LiveMemoryMode;
@@ -528,6 +540,12 @@ function isAgentArtifactPayload(
   payload: MessageData["uiPayload"],
 ): payload is Extract<AgentMessageUiPayload, { kind: "agent_artifact" }> {
   return Boolean(payload && payload.kind === "agent_artifact");
+}
+
+function isAgentOfferPayload(
+  payload: MessageData["uiPayload"],
+): payload is Extract<AgentMessageUiPayload, { kind: "agent_offer" }> {
+  return Boolean(payload && payload.kind === "agent_offer");
 }
 
 function toTaskStatusLabel(status: AgentTaskSummary["status"]): string {
@@ -4568,6 +4586,7 @@ const TextView = ({
   userProfileImage,
   onOpenArtifact,
   onResolveApproval,
+  onResolveOffer,
   liveTaskSnapshots,
 }: {
   messages: MessageData[];
@@ -4582,6 +4601,7 @@ const TextView = ({
     approve: boolean,
     reason?: string,
   ) => Promise<void>;
+  onResolveOffer: (offerId: string, accept: boolean) => Promise<void>;
   liveTaskSnapshots: Record<string, LiveTaskSnapshot>;
 }) => {
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -4756,6 +4776,64 @@ const TextView = ({
                         onOpenArtifact={onOpenArtifact}
                         onResolveApproval={onResolveApproval}
                       />
+                    ) : isAgentOfferPayload(msg.uiPayload) ? (
+                      <div
+                        className="space-y-2"
+                        data-testid="agent-offer-card"
+                        data-agent-offer-status={msg.uiPayload.offer.status}
+                        data-agent-offer-id={msg.id}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-[11px] font-semibold uppercase tracking-wide opacity-75">
+                            Suggested build
+                          </span>
+                          <span className="text-[11px] font-semibold">
+                            {msg.uiPayload.offer.status === "pending"
+                              ? "Needs your choice"
+                              : msg.uiPayload.offer.status === "accepted"
+                                ? "Accepted"
+                                : msg.uiPayload.offer.status === "declined"
+                                  ? "Skipped"
+                                  : "Expired"}
+                          </span>
+                        </div>
+                        <p className="text-sm font-semibold">{msg.uiPayload.offer.title}</p>
+                        <p className="text-xs opacity-85">{msg.uiPayload.offer.summary}</p>
+                        {msg.uiPayload.offer.status === "pending" ? (
+                          <div className="flex gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                void onResolveOffer(msg.id, true);
+                              }}
+                              className="rounded-lg border px-2.5 py-1.5 text-xs font-semibold"
+                              style={{
+                                borderColor: "var(--app-soft-card-border)",
+                                backgroundColor: "var(--app-soft-card-bg)",
+                              }}
+                              data-testid="button-agent-offer-accept"
+                            >
+                              Yes, build it
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                void onResolveOffer(msg.id, false);
+                              }}
+                              className="rounded-lg border px-2.5 py-1.5 text-xs font-semibold"
+                              style={{
+                                borderColor: "var(--app-soft-card-border)",
+                                backgroundColor: "transparent",
+                              }}
+                              data-testid="button-agent-offer-decline"
+                            >
+                              Not now
+                            </button>
+                          </div>
+                        ) : (
+                          <p className="text-xs opacity-80">{msg.text}</p>
+                        )}
+                      </div>
                     ) : isAgentTaskStatusPayload(msg.uiPayload) ? (
                       <div
                         className="space-y-2"
@@ -4946,6 +5024,12 @@ const ArtifactViewer = ({
     typeof artifact?.htmlContent === "string" && artifact.htmlContent.trim().length > 0;
   const markdown = artifact?.markdownContent ?? "";
   const [iframeKey, setIframeKey] = useState(0);
+  const [isExportingPdf, setIsExportingPdf] = useState(false);
+
+  const generationMetadata = (artifact?.metadata as
+    | { generation?: { format?: string } }
+    | undefined)?.generation;
+  const isPresentation = generationMetadata?.format === "presentation";
 
   const iframeSrc = useMemo(() => {
     if (!canRenderIframe || !artifact?.id) return null;
@@ -4956,7 +5040,7 @@ const ArtifactViewer = ({
     setIframeKey((k) => k + 1);
   };
 
-  const downloadDoc = () => {
+  const downloadMarkdown = () => {
     const blob = new Blob([markdown], { type: "text/markdown;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
@@ -4964,6 +5048,39 @@ const ArtifactViewer = ({
     anchor.download = `${(artifact?.title ?? "document").replace(/\\s+/g, "-").toLowerCase()}.md`;
     anchor.click();
     URL.revokeObjectURL(url);
+  };
+
+  const downloadArtifactPdf = async () => {
+    if (!artifact?.id || isExportingPdf) return;
+    setIsExportingPdf(true);
+    try {
+      const response = await fetch(
+        `/api/agent/artifacts/${artifact.id}/export.pdf`,
+        {
+          credentials: "include",
+          headers: {
+            "x-trace-id": createRequestTraceId(),
+          },
+        },
+      );
+      if (!response.ok) {
+        const text = (await response.text()) || response.statusText;
+        throw new Error(text);
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `${(artifact.title ?? "presentation")
+        .replace(/\s+/g, "-")
+        .toLowerCase()}.pdf`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error("artifact.pdf.export.failed", error);
+    } finally {
+      setIsExportingPdf(false);
+    }
   };
 
   return (
@@ -5003,17 +5120,33 @@ const ArtifactViewer = ({
             </button>
           )}
           {!isGame && artifact && (
-            <button
-              type="button"
-              onClick={downloadDoc}
-              className="rounded-lg border px-3 py-1.5 text-xs font-semibold"
-              style={{
-                borderColor: "var(--app-soft-card-border)",
-                backgroundColor: "var(--app-soft-card-bg)",
-              }}
-            >
-              Download
-            </button>
+            <>
+              {!isPresentation && (
+                <button
+                  type="button"
+                  onClick={downloadMarkdown}
+                  className="rounded-lg border px-3 py-1.5 text-xs font-semibold"
+                  style={{
+                    borderColor: "var(--app-soft-card-border)",
+                    backgroundColor: "var(--app-soft-card-bg)",
+                  }}
+                >
+                  Download Markdown
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={downloadArtifactPdf}
+                disabled={isExportingPdf}
+                className="rounded-lg border px-3 py-1.5 text-xs font-semibold disabled:opacity-60"
+                style={{
+                  borderColor: "var(--app-soft-card-border)",
+                  backgroundColor: "var(--app-soft-card-bg)",
+                }}
+              >
+                {isExportingPdf ? "Exporting..." : "Download PDF"}
+              </button>
+            </>
           )}
           <Button
             variant="ghost"
@@ -5952,6 +6085,28 @@ function App() {
     },
   });
 
+  const resolveAgentOfferMutation = useMutation({
+    mutationFn: async (params: { offerId: string; accept: boolean }) => {
+      const endpoint = params.accept ? "accept" : "decline";
+      const response = await apiRequest(
+        "POST",
+        `/api/agent/offers/${params.offerId}/${endpoint}`,
+        {},
+      );
+      return (await response.json()) as AgentOfferResponse;
+    },
+    onSuccess: () => {
+      if (activeConversationId) {
+        queryClient.invalidateQueries({
+          queryKey: getConversationMessagesKey(activeConversationId),
+        });
+      }
+      queryClient.invalidateQueries({
+        queryKey: ["/api/agent/artifacts?includeArchived=1"],
+      });
+    },
+  });
+
   const archiveArtifactMutation = useMutation({
     mutationFn: async (artifactId: string) => {
       const response = await apiRequest(
@@ -6090,9 +6245,29 @@ function App() {
         });
       }
     } catch (error) {
-      setComposerError(
-        getErrorMessage(error) || "Failed to process approval decision.",
-      );
+      const message = getErrorMessage(error);
+      if (message.toLowerCase().includes("no pending approval")) {
+        if (activeConversationId) {
+          queryClient.invalidateQueries({
+            queryKey: getConversationMessagesKey(activeConversationId),
+          });
+        }
+        return;
+      }
+      setComposerError(message || "Failed to process approval decision.");
+    }
+  };
+
+  const handleResolveAgentOffer = async (offerId: string, accept: boolean) => {
+    try {
+      await resolveAgentOfferMutation.mutateAsync({ offerId, accept });
+      if (activeConversationId) {
+        queryClient.invalidateQueries({
+          queryKey: getConversationMessagesKey(activeConversationId),
+        });
+      }
+    } catch (error) {
+      setComposerError(getErrorMessage(error) || "Failed to process offer decision.");
     }
   };
 
@@ -7753,6 +7928,7 @@ function App() {
               userProfileImage={resolvedProfileImage}
               onOpenArtifact={handleOpenArtifact}
               onResolveApproval={handleResolveTaskApproval}
+              onResolveOffer={handleResolveAgentOffer}
               liveTaskSnapshots={liveTaskSnapshots}
             />
           </div>
