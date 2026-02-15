@@ -2287,7 +2287,7 @@ function buildDocTypeSpecificGuidance(docType: string): string {
     presentation: [
       "Type-specific guidance (Presentation/Slides):",
       "- Use format='presentation' in the output.",
-      "- Structure as 4-8 slide-style sections (## Slide N: Title).",
+      "- Structure as 5-10 slide-style sections (## Slide N: Title).",
       "- Each slide should have 3-5 bullet points maximum.",
       "- First slide should be a strong opening hook or vision statement.",
       "- Last slide should be a clear call-to-action or summary.",
@@ -2361,7 +2361,7 @@ function buildRepairDocDraftPrompt(input: RepairDocDraftInput): string {
     "- markdown must start with a top-level heading.",
     "- markdown must include section headings (## ...).",
     "- markdown must include formatting richness: use bold/italics and bullet or numbered lists.",
-    "- If format='presentation', keep 3-5 slide sections and do not exceed 5.",
+    "- If format='presentation', keep 5-10 slide sections and do not exceed 10.",
     "- Ensure actionable content and non-trivial depth (not empty template stubs).",
     "- Preserve resolved docType, audience, tone, and required sections from the intent contract.",
     "- Keep formatting valid markdown with no HTML tags.",
@@ -2715,8 +2715,8 @@ function parseDocDraft(rawJson: string): GeneratedDocDraft {
         'Presentation markdown must include "## Slide ..." sections',
       );
     }
-    if (slideHeadingCount > 5) {
-      throw new Error("Presentation slide count exceeds 5");
+    if (slideHeadingCount > 10) {
+      throw new Error("Presentation slide count exceeds 10");
     }
   }
 

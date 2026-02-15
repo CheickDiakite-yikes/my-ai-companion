@@ -1207,9 +1207,9 @@ function isPresentationImageGenerationEnabled(): boolean {
 
 function resolveAgentPresentationMaxSlides(): number {
   return clampInt(
-    parseIntOrFallback(process.env.AGENT_PRESENTATION_MAX_SLIDES, 5),
+    parseIntOrFallback(process.env.AGENT_PRESENTATION_MAX_SLIDES, 10),
     1,
-    5,
+    10,
   );
 }
 

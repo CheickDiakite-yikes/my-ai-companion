@@ -2410,7 +2410,7 @@ function inferExplicitOfferOpportunity(input: {
     summary = "I can draft this email with strong structure and clarity.";
   } else if (docType === "presentation") {
     title = "Presentation Build";
-    summary = "I can build up to 5 polished slides and export to PDF.";
+    summary = "I can build up to 10 polished slides and export to PDF.";
   } else if (taskKind === "mixed") {
     title = "Build Bundle";
     summary = "I can build this bundle and keep the output organized.";
