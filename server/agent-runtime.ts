@@ -58,7 +58,7 @@ import {
 const AGENT_ACTION_PATTERN =
   /\b(create|build|generate|make|draft|write|design|code|develop|plan|send|email|connect|control|automate|research|organize|prepare|summari[sz]e)\b/i;
 const AGENT_DELIVERABLE_PATTERN =
-  /\b(game|mini\s*game|document|doc|brief|summary|report|presentation|slides|artifact|prototype|app|website|landing\s*page|web\s*app|mini\s*saas|email|draft|checklist|letter|cover\s*letter|resume|cv|essay|statement|memo|proposal|paper|research\s*paper|guide|tutorial|whitepaper)\b/i;
+  /\b(game|mini\s*game|document|doc|brief|summary|report|presentation|slides|artifact|prototype|app|website|landing\s*page|web\s*app|mini\s*saas|email|draft|checklist|letter|cover\s*letter|resume|cv|essay|statement|memo|proposal|paper|research\s*paper|guide|tutorial|whitepaper|investment\s*thesis|business\s*plan|action\s*plan)\b/i;
 const TASK_DIRECTIVE_PATTERNS = [
   /^\s*(can|could|would)\s+you\b/i,
   /^\s*please\b/i,
@@ -109,7 +109,7 @@ const LOW_RISK_EMAIL_DRAFT_PATTERNS = [
 ];
 
 const DOC_HINT_PATTERNS = [
-  /\b(doc|document|notes|brief|summary|write[- ]?up|presentation|slides|email|letter|cover\s*letter|resume|cv|essay|statement|memo|proposal|paper|research\s*paper|guide|tutorial|whitepaper)\b/i,
+  /\b(doc|document|notes|brief|summary|write[- ]?up|presentation|slides|email|letter|cover\s*letter|resume|cv|essay|statement|memo|proposal|paper|research\s*paper|guide|tutorial|whitepaper|investment\s*thesis|business\s*plan|action\s*plan)\b/i,
 ];
 const WEB_BUILD_HINT_PATTERNS = [
   /\b(landing\s*page|website|web\s*app|mini\s*saas|prototype|tool)\b/i,

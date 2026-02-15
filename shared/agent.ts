@@ -176,7 +176,16 @@ export type ArtifactDocType =
   | "brief"
   | "report"
   | "document"
-  | "presentation";
+  | "presentation"
+  | "resume"
+  | "essay"
+  | "research_paper"
+  | "whitepaper"
+  | "proposal"
+  | "tutorial"
+  | "memo"
+  | "investment_thesis"
+  | "business_plan";
 
 export interface ArtifactIntentContract {
   docType?: ArtifactDocType;
