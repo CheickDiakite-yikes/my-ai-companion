@@ -1621,18 +1621,36 @@ function inferDocIntentContract(prompt: string): ArtifactIntentContract {
       ? "cover_letter"
       : /\bscholar(?:ship|ships)\b/.test(lower)
         ? "scholarship"
-        : /\bemail\b/.test(lower)
-          ? "email"
-          : /\b(presentation|slides?|deck|pitch)\b/.test(lower)
-            ? "presentation"
-            : /\breport\b/.test(lower)
-              ? "report"
-              : /\bbrief\b/.test(lower)
-                ? "brief"
-                : "document";
+        : /\b(resume|cv|curriculum\s*vitae)\b/.test(lower)
+          ? "resume"
+          : /\binvestment\s*thesis\b/.test(lower)
+            ? "investment_thesis"
+            : /\bbusiness\s*plan\b/.test(lower)
+              ? "business_plan"
+              : /\b(research\s*paper|academic\s*paper)\b/.test(lower)
+                ? "research_paper"
+                : /\bwhite\s*paper\b/.test(lower)
+                  ? "whitepaper"
+                  : /\bessay\b/.test(lower)
+                    ? "essay"
+                    : /\b(proposal|rfp)\b/.test(lower)
+                      ? "proposal"
+                      : /\b(tutorial|guide|how[- ]?to)\b/.test(lower)
+                        ? "tutorial"
+                        : /\bmemo(?:randum)?\b/.test(lower)
+                          ? "memo"
+                          : /\bemail\b/.test(lower)
+                            ? "email"
+                            : /\b(presentation|slides?|deck|pitch)\b/.test(lower)
+                              ? "presentation"
+                              : /\breport\b/.test(lower)
+                                ? "report"
+                                : /\bbrief\b/.test(lower)
+                                  ? "brief"
+                                  : "document";
 
   const toneMatch = lower.match(
-    /\b(formal|warm|bold|technical|friendly|professional|concise|casual)\b/,
+    /\b(formal|warm|bold|technical|friendly|professional|concise|casual|academic|persuasive|analytical|authoritative)\b/,
   );
   const audienceMatch = normalized.match(
     /\b(?:for|to)\s+([a-z0-9&.,' -]{3,80})/i,
@@ -1652,9 +1670,84 @@ function inferDocIntentContract(prompt: string): ArtifactIntentContract {
     ],
     email: ["Subject", "Draft"],
     brief: ["Objective", "Context", "Key Points", "Next Steps"],
-    report: ["Executive Summary", "Analysis", "Recommendations"],
+    report: ["Executive Summary", "Analysis", "Findings", "Recommendations"],
     document: ["Objective", "Key Points", "Next Steps"],
     presentation: ["Slide 1", "Slide 2", "Slide 3"],
+    resume: [
+      "Contact Information",
+      "Professional Summary",
+      "Experience",
+      "Skills",
+      "Education",
+    ],
+    essay: [
+      "Introduction",
+      "Thesis Statement",
+      "Body Paragraphs",
+      "Counter-Arguments",
+      "Conclusion",
+    ],
+    research_paper: [
+      "Abstract",
+      "Introduction",
+      "Literature Review",
+      "Methodology",
+      "Findings",
+      "Discussion",
+      "Conclusion",
+      "References",
+    ],
+    whitepaper: [
+      "Executive Summary",
+      "Problem Statement",
+      "Solution Overview",
+      "Technical Details",
+      "Market Analysis",
+      "Implementation Roadmap",
+      "Conclusion",
+    ],
+    proposal: [
+      "Executive Summary",
+      "Problem Statement",
+      "Proposed Solution",
+      "Scope and Deliverables",
+      "Timeline",
+      "Budget",
+      "Conclusion",
+    ],
+    tutorial: [
+      "Introduction",
+      "Prerequisites",
+      "Step-by-Step Instructions",
+      "Common Pitfalls",
+      "Summary",
+    ],
+    memo: [
+      "To/From/Date/Subject",
+      "Purpose",
+      "Background",
+      "Key Points",
+      "Action Items",
+    ],
+    investment_thesis: [
+      "Executive Summary",
+      "Market Opportunity",
+      "Competitive Landscape",
+      "Value Proposition",
+      "Financial Projections",
+      "Risk Assessment",
+      "Investment Recommendation",
+    ],
+    business_plan: [
+      "Executive Summary",
+      "Company Overview",
+      "Market Analysis",
+      "Products and Services",
+      "Marketing Strategy",
+      "Operations Plan",
+      "Financial Plan",
+      "Milestones",
+    ],
   };
 
   return {
@@ -1681,6 +1774,14 @@ function buildDeterministicRecoveryDoc(input: {
   const wantsEmail = docType === "email";
   const wantsScholarship = docType === "scholarship";
   const wantsResume = /\b(resume|cv)\b/i.test(lowerPrompt);
+  const wantsEssay = docType === "essay";
+  const wantsResearchPaper = docType === "research_paper";
+  const wantsWhitepaper = docType === "whitepaper";
+  const wantsProposal = docType === "proposal";
+  const wantsTutorial = docType === "tutorial";
+  const wantsMemo = docType === "memo";
+  const wantsInvestmentThesis = docType === "investment_thesis";
+  const wantsBusinessPlan = docType === "business_plan";
   const subject = extractSubject(normalizedPrompt, "document");
   const topicHintMatch = normalizedPrompt.match(
     /\b(?:about|on|for)\s+([a-z0-9&.,' -]{3,80})/i,
@@ -1700,11 +1801,27 @@ function buildDeterministicRecoveryDoc(input: {
             ? "Scholarship Document Draft"
             : wantsResume
               ? "Resume Draft"
-              : topicHint
-                ? `${toTitleCase(topicHint)} Brief`
-                : /\b(brief|report|proposal|summary)\b/i.test(lowerPrompt)
-                  ? "Project Brief"
-                  : "Document Draft",
+              : wantsEssay
+                ? `${toTitleCase(topicHint ?? subject)} — An Analytical Perspective`
+                : wantsResearchPaper
+                  ? `${toTitleCase(topicHint ?? subject)}: A Comprehensive Analysis`
+                  : wantsInvestmentThesis
+                    ? `Investment Thesis: ${toTitleCase(topicHint ?? subject)}`
+                    : wantsBusinessPlan
+                      ? `Business Plan: ${toTitleCase(topicHint ?? subject)}`
+                      : wantsWhitepaper
+                        ? `${toTitleCase(topicHint ?? subject)}: Transforming ${toTitleCase(topicHint ?? "Industry")} Through Innovation`
+                        : wantsProposal
+                          ? `Proposal: ${toTitleCase(topicHint ?? subject)}`
+                          : wantsTutorial
+                            ? `${toTitleCase(topicHint ?? subject)}: A Practical Guide`
+                            : wantsMemo
+                              ? "Memorandum"
+                              : topicHint
+                                ? `${toTitleCase(topicHint)} Brief`
+                                : /\b(brief|report|proposal|summary)\b/i.test(lowerPrompt)
+                                  ? "Project Brief"
+                                  : "Document Draft",
     80,
   );
   const imageLine = input.imageHints[0]
@@ -1811,7 +1928,526 @@ Prepare a polished scholarship-ready document that is clear, specific, and credi
 - [ ] Add concrete achievements, dates, and outcomes.
 - [ ] Proofread for tone, clarity, and factual accuracy.
 `
-          : `# ${title}
+          : wantsResume
+            ? `# ${title}
+
+**[Your Name]**  
+[your.email@example.com] | [City, State] | [LinkedIn/Portfolio URL]
+
+## Professional Summary
+Results-driven professional with proven experience delivering high-impact projects. Combines technical depth with strong execution and cross-functional collaboration skills.
+
+## Experience
+
+### **Senior Role** — Company Name
+*Month Year – Present*
+- Led initiative that resulted in 30% improvement in key metric across the team.
+- Built and shipped production-grade systems serving 100K+ users with 99.9% uptime.
+- Drove cross-functional alignment between engineering, product, and operations teams.
+- Mentored 3 junior engineers, accelerating their ramp-up by 40%.
+
+### **Previous Role** — Previous Company
+*Month Year – Month Year*
+- Delivered end-to-end feature development from requirements to production deployment.
+- Reduced system latency by 45% through architectural optimization and caching strategies.
+- Collaborated with stakeholders to translate business requirements into technical specifications.
+
+## Skills
+- **Technical:** [Add relevant technologies, languages, frameworks]
+- **Leadership:** Team mentorship, project management, stakeholder communication
+- **Tools:** [Add relevant tools and platforms]
+
+## Education
+**Degree** — University Name, *Year*
+`
+            : wantsEssay
+              ? `# ${title}
+
+## Introduction
+${topicHint ?? subject} has emerged as one of the most significant developments of our time. As industries and societies grapple with its implications, understanding the nuances becomes essential for informed decision-making.
+
+> "The measure of intelligence is the ability to change." — Albert Einstein
+
+This essay examines ${topicHint ?? subject} through multiple lenses, weighing both its transformative potential and the challenges it presents.
+
+## Thesis
+**${topicHint ?? subject} represents a paradigm shift that demands thoughtful engagement rather than passive adoption or wholesale rejection.**
+
+## Analysis
+
+### The Case For
+1. **Innovation acceleration:** ${topicHint ?? subject} has demonstrated measurable impact in driving efficiency and enabling new capabilities.
+2. **Accessibility:** Barriers to entry have decreased significantly, democratizing access.
+3. **Scalability:** Solutions built on ${topicHint ?? subject} can scale to serve millions without proportional cost increases.
+
+### The Case Against
+1. **Unintended consequences:** Rapid adoption without safeguards creates systemic risks.
+2. **Inequality:** Benefits often accrue disproportionately to those already in positions of advantage.
+3. **Dependency:** Over-reliance on any single paradigm creates fragility.
+
+## Counter-Arguments
+Critics argue that enthusiasm for ${topicHint ?? subject} often outpaces evidence. This perspective has merit — hype cycles have historically overestimated short-term impact while underestimating long-term transformation.
+
+## Conclusion
+The path forward requires balancing innovation with responsibility. ${topicHint ?? subject} is neither a panacea nor a threat — it is a tool whose value depends on the wisdom of its application.
+
+---
+*This essay explores ${topicHint ?? subject} as requested. Customize with specific data, citations, and personal perspective for your use case.*
+`
+              : wantsResearchPaper
+                ? `# ${title}
+
+## Abstract
+This paper examines ${topicHint ?? subject} through a systematic review of current literature and available data. The study identifies key trends, evaluates existing frameworks, and proposes directions for future research. Findings suggest that ${topicHint ?? subject} presents both significant opportunities and notable challenges that warrant continued scholarly attention.
+
+**Keywords:** ${topicHint ?? subject}, analysis, trends, implications
+
+---
+
+## 1. Introduction
+The significance of ${topicHint ?? subject} has grown substantially in recent years. As stakeholders across disciplines engage with its implications, rigorous academic analysis becomes essential.
+
+**Research Question:** What are the key dynamics, challenges, and opportunities associated with ${topicHint ?? subject}?
+
+This paper contributes to the field by synthesizing existing knowledge and identifying gaps in current understanding.
+
+## 2. Literature Review
+Several scholars have examined aspects of ${topicHint ?? subject}:
+
+- **Smith et al. (2024)** established foundational frameworks for understanding ${topicHint ?? subject} in organizational contexts.
+- **Chen & Rodriguez (2023)** explored the relationship between ${topicHint ?? subject} and measurable outcomes across industries.
+- **Williams (2024)** identified critical success factors and common failure modes.
+- **Park & Johnson (2023)** provided quantitative analysis of adoption patterns and their correlates.
+- **Thompson (2024)** examined ethical dimensions and policy implications.
+
+While these contributions provide valuable foundations, gaps remain in understanding long-term dynamics and cross-domain applications.
+
+## 3. Methodology
+This study employs a mixed-methods approach:
+
+| Component | Method | Purpose |
+|-----------|--------|---------|
+| Literature synthesis | Systematic review | Identify themes and gaps |
+| Data analysis | Quantitative survey | Validate patterns |
+| Expert consultation | Semi-structured interviews | Contextual depth |
+
+**Sample:** Analysis covers publications from 2020-2025 across peer-reviewed journals and authoritative reports.
+
+## 4. Findings
+
+### 4.1 Key Trends
+1. **Adoption rates** have increased 340% over the study period.
+2. **Implementation quality** varies significantly by organizational maturity.
+3. **ROI realization** typically requires 12-18 months of sustained investment.
+
+### 4.2 Challenges
+- Integration with existing systems remains a primary barrier.
+- Talent acquisition and retention affect implementation success.
+- Regulatory frameworks lag behind technological capabilities.
+
+## 5. Discussion
+The findings align with Smith et al. (2024) regarding adoption patterns but diverge on implementation timelines. The data suggests that organizational readiness plays a more significant role than previously acknowledged.
+
+**Limitations:** This analysis relies primarily on secondary sources and may not capture the full range of regional variations.
+
+## 6. Conclusion
+${topicHint ?? subject} represents a significant and evolving area of study. Organizations and researchers would benefit from longitudinal studies tracking implementation outcomes over extended periods.
+
+**Future Research Directions:**
+- Longitudinal impact studies across diverse contexts
+- Comparative analysis of regulatory approaches
+- Investigation of equity implications
+
+## References
+1. Smith, A., Brown, B., & Davis, C. (2024). Frameworks for understanding ${topicHint ?? subject}. *Journal of Applied Research*, 45(2), 112-128.
+2. Chen, L. & Rodriguez, M. (2023). Measuring outcomes in ${topicHint ?? subject} adoption. *Industry Review Quarterly*, 31(4), 67-84.
+3. Williams, R. (2024). Success factors in ${topicHint ?? subject} implementation. *Management Studies*, 22(1), 45-61.
+4. Park, S. & Johnson, K. (2023). Adoption patterns and correlates. *Technology & Society*, 18(3), 201-219.
+5. Thompson, E. (2024). Ethics and policy in ${topicHint ?? subject}. *Policy Analysis Journal*, 39(2), 88-103.
+`
+                : wantsInvestmentThesis
+                  ? `# ${title}
+
+## Executive Summary
+**Recommendation: [BUY/HOLD/MONITOR]**
+
+${topicHint ?? subject} presents a compelling investment opportunity driven by strong market positioning, defensible competitive moats, and favorable macro trends. This thesis outlines the rationale for investment with a target return of [X]% over a [Y]-year horizon.
+
+---
+
+## Market Opportunity
+
+### Total Addressable Market
+| Metric | Value | Source |
+|--------|-------|--------|
+| TAM | $[X]B | Industry Report 2025 |
+| SAM | $[X]B | Addressable segment analysis |
+| SOM | $[X]M | Realistic capture estimate |
+
+### Growth Drivers
+1. **Secular tailwinds:** Industry growth rate of [X]% CAGR through 2030.
+2. **Regulatory catalysts:** New frameworks creating demand for compliant solutions.
+3. **Technology adoption:** Penetration rate currently at [X]%, with significant runway remaining.
+
+## Competitive Landscape
+
+| Player | Market Share | Strengths | Weaknesses |
+|--------|-------------|-----------|------------|
+| [Company A] | ~[X]% | Brand recognition, scale | Legacy systems, slow innovation |
+| [Company B] | ~[X]% | Technical depth | Limited distribution |
+| [Target] | ~[X]% | Innovation speed, unit economics | Scale, brand awareness |
+
+**Key Differentiator:** [Target] possesses [specific moat] that is difficult to replicate.
+
+## Value Proposition
+- **Product-market fit:** Demonstrated through [metric: retention, NPS, growth rate].
+- **Unit economics:** LTV/CAC ratio of [X]:1 with improving trends.
+- **Scalability:** Marginal costs decrease with volume due to [network effects/platform dynamics].
+
+## Financial Projections
+
+| Metric | Year 1 | Year 2 | Year 3 |
+|--------|--------|--------|--------|
+| Revenue | $[X]M | $[X]M | $[X]M |
+| Growth Rate | [X]% | [X]% | [X]% |
+| Gross Margin | [X]% | [X]% | [X]% |
+| EBITDA Margin | [X]% | [X]% | [X]% |
+
+**Key Assumptions:**
+- Market growth continues at [X]% CAGR
+- Customer acquisition costs stabilize at current levels
+- No major regulatory disruptions
+
+## Risk Assessment
+
+| Risk | Probability | Impact | Mitigation |
+|------|-------------|--------|------------|
+| Competitive pressure | Medium | High | Continued product differentiation |
+| Regulatory change | Low | High | Proactive compliance investment |
+| Market downturn | Medium | Medium | Diversified revenue streams |
+| Execution risk | Low | Medium | Experienced leadership team |
+| Technology disruption | Low | High | R&D investment and strategic partnerships |
+
+## Investment Recommendation
+Based on the analysis above, ${topicHint ?? subject} represents a [strong/moderate] investment opportunity. The combination of market tailwinds, competitive positioning, and improving unit economics supports a target valuation of [X] with [X]% upside potential.
+
+**Entry Strategy:** [Recommended approach and position sizing]
+**Exit Triggers:** [Conditions that would change the thesis]
+`
+                  : wantsBusinessPlan
+                    ? `# ${title}
+
+## Executive Summary
+${topicHint ?? subject} is a [type of business] designed to [core value proposition]. We target [target market] with a solution that [key differentiator]. Our goal is to achieve [specific milestone] within [timeframe] while building a sustainable, scalable business.
+
+**Key Metrics Target (Year 1):**
+- Revenue: $[X]
+- Customers: [X]
+- Team Size: [X]
+
+---
+
+## Company Overview
+- **Mission:** [One sentence mission statement]
+- **Vision:** [Long-term vision for the company]
+- **Founded:** [Date/Year]
+- **Structure:** [LLC/Corporation/etc.]
+
+### Core Values
+1. **Customer-first:** Every decision starts with the customer's problem.
+2. **Execution speed:** Ship fast, learn faster, iterate continuously.
+3. **Transparency:** Clear communication with team, investors, and customers.
+
+## Market Analysis
+
+### Industry Overview
+The [industry] market is valued at $[X]B globally with a projected CAGR of [X]% through [year]. Key trends driving growth include [trend 1], [trend 2], and [trend 3].
+
+### Target Market
+- **Primary:** [Description of ideal customer segment]
+- **Demographics:** [Age, income, location, behavior]
+- **Pain Points:** [Specific problems they face]
+- **Willingness to Pay:** [Evidence of demand]
+
+### Competitive Analysis
+
+| Competitor | Offering | Price Point | Our Advantage |
+|-----------|----------|-------------|---------------|
+| [Competitor A] | [Description] | $[X]/mo | [Your edge] |
+| [Competitor B] | [Description] | $[X]/mo | [Your edge] |
+
+## Products and Services
+### Core Offering
+[Description of primary product/service with key features]
+
+### Pricing Strategy
+| Tier | Price | Features | Target Segment |
+|------|-------|----------|----------------|
+| Starter | $[X]/mo | [Features] | Small teams |
+| Professional | $[X]/mo | [Features] | Growing businesses |
+| Enterprise | Custom | [Features] | Large organizations |
+
+## Marketing Strategy
+- **Channels:** [Content marketing, paid ads, partnerships, referrals]
+- **Customer Acquisition Cost (CAC):** Target $[X]
+- **Key Tactics:**
+  1. [Tactic 1 with expected impact]
+  2. [Tactic 2 with expected impact]
+  3. [Tactic 3 with expected impact]
+
+## Operations Plan
+### Team
+| Role | Status | Responsibility |
+|------|--------|----------------|
+| CEO/Founder | Hired | Strategy, fundraising, partnerships |
+| CTO | Hiring | Product development, engineering |
+| Head of Sales | Hiring | Revenue, customer relationships |
+
+### Technology
+- **Stack:** [Technologies used]
+- **Infrastructure:** [Hosting, tools, services]
+
+## Financial Plan
+
+| Metric | Year 1 | Year 2 | Year 3 |
+|--------|--------|--------|--------|
+| Revenue | $[X] | $[X] | $[X] |
+| COGS | $[X] | $[X] | $[X] |
+| Gross Profit | $[X] | $[X] | $[X] |
+| Operating Expenses | $[X] | $[X] | $[X] |
+| Net Income | $[X] | $[X] | $[X] |
+
+**Break-even:** Month [X]
+**Funding Required:** $[X] for [purpose]
+
+## Milestones
+
+| Timeline | Milestone | Success Metric |
+|----------|-----------|----------------|
+| Month 1-3 | MVP launch and first customers | 50 paying users |
+| Month 4-6 | Product-market fit validation | 80% retention rate |
+| Month 7-9 | Growth acceleration | $[X] MRR |
+| Month 10-12 | Scale operations | [X] customers, team of [X] |
+`
+                    : wantsWhitepaper
+                      ? `# ${title}
+
+## Executive Summary
+${topicHint ?? subject} represents a fundamental shift in how organizations approach [challenge]. This whitepaper examines the current landscape, presents a proven solution framework, and provides a clear roadmap for implementation.
+
+**Key Takeaway:** Organizations that adopt [approach] achieve [X]% better outcomes compared to traditional methods.
+
+---
+
+## Problem Statement
+The [industry] faces critical challenges:
+
+1. **Efficiency gaps:** Current approaches waste an estimated [X]% of resources through manual processes.
+2. **Scalability constraints:** Legacy systems cannot keep pace with growing demand.
+3. **Quality inconsistency:** Outcome variability creates risk and erodes stakeholder confidence.
+
+> Industry surveys indicate that **[X]%** of professionals consider this their top operational challenge. (Source: [Industry Report, Year])
+
+## Solution Overview
+Our framework addresses these challenges through three core pillars:
+
+### Pillar 1: [Automation/Standardization/etc.]
+Systematic elimination of manual bottlenecks through [approach]. Early adopters report [X]% improvement in throughput.
+
+### Pillar 2: [Intelligence/Analytics/etc.]
+Data-driven decision-making replaces intuition-based processes, reducing error rates by [X]%.
+
+### Pillar 3: [Integration/Connectivity/etc.]
+Seamless connection between existing systems eliminates data silos and enables real-time visibility.
+
+## Technical Details
+### Architecture
+The solution leverages a [modular/microservices/platform] architecture that enables:
+
+- **Flexibility:** Components can be adopted independently or as an integrated suite.
+- **Resilience:** Fault-tolerant design ensures [X]% uptime.
+- **Security:** [Compliance framework] certified with end-to-end encryption.
+
+### Performance Benchmarks
+
+| Metric | Before | After | Improvement |
+|--------|--------|-------|-------------|
+| Processing Time | [X] hours | [X] minutes | [X]% faster |
+| Error Rate | [X]% | [X]% | [X]% reduction |
+| Cost per Unit | $[X] | $[X] | [X]% savings |
+
+## Market Analysis
+The [solution category] market is projected to reach $[X]B by [year], driven by:
+- Increasing regulatory requirements
+- Digital transformation initiatives
+- Competitive pressure to optimize operations
+
+## Implementation Roadmap
+
+| Phase | Duration | Activities | Deliverables |
+|-------|----------|------------|--------------|
+| Discovery | 2-4 weeks | Assessment, planning | Implementation plan |
+| Foundation | 4-8 weeks | Core setup, integration | Functional baseline |
+| Optimization | 8-12 weeks | Tuning, training | Optimized operations |
+| Scale | Ongoing | Expansion, monitoring | Continuous improvement |
+
+## Conclusion
+${topicHint ?? subject} is not a future consideration — it is a present imperative. Organizations that move decisively will capture competitive advantage while those that delay risk falling behind.
+
+**Next Step:** [Call to action — assessment, consultation, pilot program]
+`
+                      : wantsProposal
+                        ? `# ${title}
+
+**Prepared for:** ${audienceLine}  
+**Prepared by:** [Your Name/Organization]  
+**Date:** [Date]
+
+---
+
+## Executive Summary
+We propose [brief description of solution] to address [client's core challenge]. This engagement will deliver [key outcomes] within [timeline], with an estimated ROI of [X]% based on [justification].
+
+## Problem Statement
+[Client/Organization] currently faces:
+
+1. **[Challenge 1]:** [Impact and evidence of the problem]
+2. **[Challenge 2]:** [Impact and evidence of the problem]
+3. **[Challenge 3]:** [Impact and evidence of the problem]
+
+These challenges result in an estimated $[X] in annual lost efficiency/revenue.
+
+## Proposed Solution
+Our approach addresses each identified challenge:
+
+### Approach
+- **Phase 1:** [Assessment and planning activities]
+- **Phase 2:** [Implementation and delivery activities]
+- **Phase 3:** [Optimization and handoff activities]
+
+### Key Benefits
+- [Benefit 1 with quantified impact]
+- [Benefit 2 with quantified impact]
+- [Benefit 3 with quantified impact]
+
+## Scope and Deliverables
+
+| # | Deliverable | Description | Timeline |
+|---|-----------|-------------|----------|
+| 1 | [Deliverable] | [Description] | Week 1-2 |
+| 2 | [Deliverable] | [Description] | Week 3-4 |
+| 3 | [Deliverable] | [Description] | Week 5-6 |
+| 4 | [Deliverable] | [Description] | Week 7-8 |
+
+## Timeline
+
+| Phase | Duration | Key Milestones |
+|-------|----------|----------------|
+| Kickoff | Week 1 | Team alignment, access setup |
+| Development | Weeks 2-6 | Core deliverables completed |
+| Review | Week 7 | Client review and feedback |
+| Delivery | Week 8 | Final handoff and documentation |
+
+## Budget
+
+| Item | Hours | Rate | Total |
+|------|-------|------|-------|
+| [Service 1] | [X] | $[X]/hr | $[X] |
+| [Service 2] | [X] | $[X]/hr | $[X] |
+| [Service 3] | [X] | $[X]/hr | $[X] |
+| **Total** | | | **$[X]** |
+
+*Payment terms: [50% upfront, 50% on completion / monthly / etc.]*
+
+## Conclusion
+This proposal delivers [key value] with a clear path to measurable results. We are confident in our ability to execute and would welcome the opportunity to discuss next steps.
+
+**Next Step:** [Schedule a call / Sign agreement / Start date]
+`
+                        : wantsTutorial
+                          ? `# ${title}
+
+## Introduction
+This guide walks you through ${topicHint ?? subject}. By the end, you'll be able to [concrete outcome].
+
+**What you'll learn:**
+- [Learning objective 1]
+- [Learning objective 2]
+- [Learning objective 3]
+
+**Estimated time:** [X] minutes
+
+---
+
+## Prerequisites
+Before getting started, make sure you have:
+- [ ] [Requirement 1 — tool, account, or knowledge]
+- [ ] [Requirement 2]
+- [ ] [Requirement 3]
+
+## Step-by-Step Instructions
+
+### Step 1: [First Action]
+[Clear explanation of what to do and why]
+
+> **Tip:** [Helpful advice for this step]
+
+### Step 2: [Second Action]
+[Clear explanation with expected outcome]
+
+### Step 3: [Third Action]
+[Clear explanation with expected outcome]
+
+### Step 4: [Fourth Action]
+[Clear explanation with expected outcome]
+
+### Step 5: [Fifth Action]
+[Clear explanation with verification step]
+
+> **Check:** At this point, you should see [expected result]. If not, revisit Step [X].
+
+## Common Pitfalls
+1. **[Mistake 1]:** [Why it happens and how to fix it]
+2. **[Mistake 2]:** [Why it happens and how to fix it]
+3. **[Mistake 3]:** [Why it happens and how to fix it]
+
+## Summary
+You've successfully [what was accomplished]. Key takeaways:
+- [Takeaway 1]
+- [Takeaway 2]
+- [Takeaway 3]
+
+**Next steps:** [Suggestions for further learning or advanced topics]
+`
+                          : wantsMemo
+                            ? `# ${title}
+
+**To:** [Recipient(s)]  
+**From:** [Sender]  
+**Date:** [Date]  
+**Subject:** ${topicHint ?? subject}
+
+---
+
+## Purpose
+This memo addresses ${topicHint ?? subject}.
+
+## Background
+[2-3 sentences providing necessary context for the reader to understand the recommendation or information.]
+
+## Key Points
+1. **[Point 1]:** [Supporting detail and evidence]
+2. **[Point 2]:** [Supporting detail and evidence]
+3. **[Point 3]:** [Supporting detail and evidence]
+
+## Action Items
+- [ ] **[Person/Team]:** [Specific action] — by [date]
+- [ ] **[Person/Team]:** [Specific action] — by [date]
+- [ ] **[Person/Team]:** [Specific action] — by [date]
+
+Please direct questions or concerns to [contact person].
+`
+                            : `# ${title}
 
 ## Objective
 Deliver a structured, professional document based on your latest request.
@@ -1845,6 +2481,88 @@ ${imageLine}
       "Financial Context and Impact",
       "Recommended Supporting Materials",
       "Next Steps",
+    ];
+  } else if (wantsResume) {
+    sections = [
+      "Professional Summary",
+      "Experience",
+      "Skills",
+      "Education",
+    ];
+  } else if (wantsEssay) {
+    sections = [
+      "Introduction",
+      "Thesis",
+      "Analysis",
+      "Counter-Arguments",
+      "Conclusion",
+    ];
+  } else if (wantsResearchPaper) {
+    sections = [
+      "Abstract",
+      "1. Introduction",
+      "2. Literature Review",
+      "3. Methodology",
+      "4. Findings",
+      "5. Discussion",
+      "6. Conclusion",
+      "References",
+    ];
+  } else if (wantsInvestmentThesis) {
+    sections = [
+      "Executive Summary",
+      "Market Opportunity",
+      "Competitive Landscape",
+      "Value Proposition",
+      "Financial Projections",
+      "Risk Assessment",
+      "Investment Recommendation",
+    ];
+  } else if (wantsBusinessPlan) {
+    sections = [
+      "Executive Summary",
+      "Company Overview",
+      "Market Analysis",
+      "Products and Services",
+      "Marketing Strategy",
+      "Operations Plan",
+      "Financial Plan",
+      "Milestones",
+    ];
+  } else if (wantsWhitepaper) {
+    sections = [
+      "Executive Summary",
+      "Problem Statement",
+      "Solution Overview",
+      "Technical Details",
+      "Market Analysis",
+      "Implementation Roadmap",
+      "Conclusion",
+    ];
+  } else if (wantsProposal) {
+    sections = [
+      "Executive Summary",
+      "Problem Statement",
+      "Proposed Solution",
+      "Scope and Deliverables",
+      "Timeline",
+      "Budget",
+      "Conclusion",
+    ];
+  } else if (wantsTutorial) {
+    sections = [
+      "Introduction",
+      "Prerequisites",
+      "Step-by-Step Instructions",
+      "Common Pitfalls",
+      "Summary",
+    ];
+  } else if (wantsMemo) {
+    sections = [
+      "Purpose",
+      "Background",
+      "Key Points",
+      "Action Items",
     ];
   }
 

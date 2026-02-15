@@ -1624,9 +1624,9 @@ export async function generateDocDraft(
     contents: [{ role: "user", parts: [{ text: prompt }] }],
     config: {
       systemInstruction:
-        "You are a deterministic document generator for a sandboxed AI runtime. Output strict JSON only.",
+        "You are an expert writer and document specialist. Produce polished, professional content tailored to the document type. Output strict JSON only.",
       temperature: 0.35,
-      maxOutputTokens: 4800,
+      maxOutputTokens: 8000,
       responseMimeType: "application/json",
     },
   });
@@ -2090,8 +2090,11 @@ function buildGenerateDocDraftPrompt(input: GenerateDocDraftInput): string {
     ? input.imageHints.map((hint) => `- ${hint}`).join("\n")
     : "- none";
   const intentContractBlock = buildDocIntentContractBlock(input.intentContract);
+  const docType = input.intentContract?.docType ?? "document";
+  const typeSpecificGuidance = buildDocTypeSpecificGuidance(docType);
+
   return [
-    "Generate a polished markdown document for a personal AI companion workflow.",
+    `Generate a polished, professional ${docType.replace(/_/g, " ")} as a markdown document.`,
     "Return strict JSON only with this exact schema:",
     "{",
     '  "title": string,',
@@ -2101,15 +2104,21 @@ function buildGenerateDocDraftPrompt(input: GenerateDocDraftInput): string {
     '  "markdown": string',
     "}",
     "",
-    "Hard rules:",
+    "Core formatting rules:",
     "- markdown must begin with a top-level heading (# ...).",
-    "- markdown must include section headings (## ...).",
-    "- markdown must include formatting richness: use bold/italics and bullet or numbered lists where appropriate.",
-    "- Keep content practical, concrete, and immediately usable.",
-    "- Use concise structure with clear sections and bullet lists when helpful.",
-    "- If the user asks for slides/presentation, use format='presentation' and produce 3-5 slide-style sections (for example: ## Slide 1: ...).",
-    "- Do not include HTML in markdown output.",
-    "- Do not emit placeholder-heavy templates; produce a real draft ready for editing.",
+    "- markdown must include section headings (## ...) for each major section.",
+    "- Use bold (**text**) for key terms, emphasis, and labels.",
+    "- Use italics (*text*) for nuance, tone markers, and secondary emphasis.",
+    "- Use bullet lists (- item) for enumeration and feature lists.",
+    "- Use numbered lists (1. item) for sequential steps, rankings, or prioritized items.",
+    "- Use blockquotes (> text) for testimonials, key quotes, or callouts.",
+    "- Use horizontal rules (---) between major sections for visual separation.",
+    "- Use tables (| col1 | col2 |) when presenting comparative data, timelines, or structured information.",
+    "- Do not include raw HTML in markdown output.",
+    "- Do not emit placeholder-heavy templates; produce a real, substantive draft ready for editing.",
+    "- Generate realistic, topic-relevant content (NOT lorem ipsum or generic filler).",
+    "",
+    typeSpecificGuidance,
     "",
     intentContractBlock,
     "",
@@ -2118,6 +2127,205 @@ function buildGenerateDocDraftPrompt(input: GenerateDocDraftInput): string {
     "- Image hints:",
     imageHints,
   ].join("\n");
+}
+
+function buildDocTypeSpecificGuidance(docType: string): string {
+  const guidance: Record<string, string> = {
+    cover_letter: [
+      "Type-specific guidance (Cover Letter):",
+      "- Write in first person with a confident, professional tone.",
+      "- Open with a compelling hook that connects the candidate to the role.",
+      "- Highlight 2-3 specific achievements with quantifiable impact (revenue, efficiency, scale).",
+      "- Show understanding of the company/role and explain why it's a mutual fit.",
+      "- Close with a clear call-to-action and professional sign-off.",
+      "- Keep total length between 300-500 words (one page).",
+      "- Avoid generic phrases like 'I am a hard worker' — use specific evidence instead.",
+      "- Include sections: Opening, Why I Fit, Relevant Impact, Close.",
+    ].join("\n"),
+
+    resume: [
+      "Type-specific guidance (Resume/CV):",
+      "- Structure with clear sections: Contact Info, Professional Summary, Experience, Skills, Education.",
+      "- Professional Summary should be 2-3 sentences highlighting career trajectory and key strengths.",
+      "- Each Experience entry should have: **Role** at **Company** (Date Range), followed by 3-5 bullet points.",
+      "- Bullet points must start with strong action verbs (Led, Built, Delivered, Scaled, Optimized).",
+      "- Include quantified achievements wherever possible (%, $, time saved, users served).",
+      "- Skills section should be grouped by category (Technical, Leadership, Tools).",
+      "- Use reverse chronological order for Experience and Education.",
+      "- Keep concise — target 1-2 pages worth of content.",
+      "- Do NOT use first person pronouns (I, my, me) — use implied first person.",
+    ].join("\n"),
+
+    essay: [
+      "Type-specific guidance (Essay):",
+      "- Open with a compelling hook: a question, anecdote, surprising fact, or bold claim.",
+      "- State a clear, arguable thesis in the introduction.",
+      "- Each body paragraph should have a topic sentence, evidence/examples, and analysis.",
+      "- Include at least one counter-argument and address it thoughtfully.",
+      "- Use transitions between paragraphs for logical flow.",
+      "- Conclude by restating the thesis in a new light and offering broader implications.",
+      "- Tone should match the subject: academic for scholarly topics, persuasive for opinion pieces.",
+      "- Target 800-1500 words with substantive depth.",
+      "- Use in-text citations where claims reference data or studies (Author, Year format).",
+    ].join("\n"),
+
+    research_paper: [
+      "Type-specific guidance (Research Paper):",
+      "- Follow academic paper structure: Abstract, Introduction, Literature Review, Methodology, Findings, Discussion, Conclusion, References.",
+      "- Abstract should be 150-250 words summarizing the entire paper.",
+      "- Introduction should establish context, state the research question, and preview the structure.",
+      "- Literature Review should synthesize 5-8 relevant sources with proper citations (Author, Year).",
+      "- Methodology should describe the approach clearly (qualitative, quantitative, mixed methods).",
+      "- Findings should present results with supporting data (use tables or bullet lists for data).",
+      "- Discussion should interpret findings, compare with existing literature, and acknowledge limitations.",
+      "- Conclusion should summarize key contributions and suggest future research directions.",
+      "- References section should list all cited works in a consistent format.",
+      "- Use formal academic tone throughout. Avoid first person unless describing methodology.",
+      "- Target 2000-4000 words of substantive academic content.",
+    ].join("\n"),
+
+    investment_thesis: [
+      "Type-specific guidance (Investment Thesis):",
+      "- Open with a crisp Executive Summary stating the investment recommendation and key rationale.",
+      "- Market Opportunity section should include TAM/SAM/SOM analysis with specific numbers.",
+      "- Competitive Landscape should use a comparison table with key players and differentiation factors.",
+      "- Value Proposition should articulate unique moats, defensibility, and growth levers.",
+      "- Financial Projections should include revenue estimates, growth rates, and key assumptions.",
+      "- Risk Assessment should identify 3-5 key risks with mitigation strategies for each.",
+      "- Investment Recommendation should clearly state the position (buy/hold/avoid), target valuation, and time horizon.",
+      "- Use a data-driven, analytical tone. Support claims with market data and comparable analysis.",
+      "- Include tables for financial comparisons and competitive analysis.",
+      "- Target 1500-3000 words with professional depth.",
+    ].join("\n"),
+
+    business_plan: [
+      "Type-specific guidance (Business Plan):",
+      "- Executive Summary should be a compelling 1-page overview of the entire plan.",
+      "- Company Overview should describe mission, vision, values, and founding story.",
+      "- Market Analysis should include industry trends, target market demographics, and competitive positioning.",
+      "- Products/Services should describe offerings with value propositions and pricing strategy.",
+      "- Marketing Strategy should cover channels, customer acquisition, and brand positioning.",
+      "- Operations Plan should describe team structure, key processes, and technology stack.",
+      "- Financial Plan should include projected revenue, costs, break-even analysis, and funding needs.",
+      "- Milestones should list 6-12 month goals with measurable outcomes.",
+      "- Use confident, forward-looking tone. Balance ambition with realism.",
+      "- Include tables for financial projections and competitive comparisons.",
+      "- Target 2000-4000 words of substantive business content.",
+    ].join("\n"),
+
+    whitepaper: [
+      "Type-specific guidance (Whitepaper):",
+      "- Open with Executive Summary that frames the problem and previews the solution.",
+      "- Problem Statement should be data-backed with industry statistics and pain points.",
+      "- Solution Overview should present the proposed approach with clear benefits.",
+      "- Technical Details should dive deep into how the solution works (architecture, methodology, process).",
+      "- Include case studies, benchmarks, or proof points where possible.",
+      "- Market Analysis should position the solution within industry trends.",
+      "- Implementation Roadmap should outline adoption steps and expected timeline.",
+      "- Use authoritative, educational tone. Position as thought leadership.",
+      "- Target 2000-4000 words with substantive technical depth.",
+    ].join("\n"),
+
+    proposal: [
+      "Type-specific guidance (Proposal):",
+      "- Executive Summary should hook the reader with the key value proposition.",
+      "- Problem Statement should demonstrate deep understanding of the client's challenges.",
+      "- Proposed Solution should be specific, actionable, and clearly mapped to the problem.",
+      "- Scope and Deliverables should use a clear list or table format.",
+      "- Timeline should include milestones with specific dates or durations.",
+      "- Budget should be itemized with clear line items and totals.",
+      "- Conclusion should restate value and include a clear next step or call-to-action.",
+      "- Use professional, persuasive tone. Focus on outcomes and ROI.",
+      "- Target 1000-2000 words.",
+    ].join("\n"),
+
+    tutorial: [
+      "Type-specific guidance (Tutorial/Guide):",
+      "- Start with a clear Introduction explaining what the reader will learn and why it matters.",
+      "- Prerequisites section should list required knowledge, tools, or setup.",
+      "- Step-by-step instructions should be numbered with clear, actionable language.",
+      "- Include code blocks (```language) for any code, commands, or configuration.",
+      "- Add tips, warnings, or notes using blockquotes (> **Tip:** ...).",
+      "- Common Pitfalls section should list 3-5 frequent mistakes and how to avoid them.",
+      "- Summary should recap key learnings and suggest next steps or further resources.",
+      "- Use friendly, instructive tone. Write as if teaching a colleague.",
+      "- Target 1000-2500 words.",
+    ].join("\n"),
+
+    memo: [
+      "Type-specific guidance (Memo):",
+      "- Start with structured header: **To:** / **From:** / **Date:** / **Subject:**",
+      "- Purpose section should state the memo's objective in 1-2 sentences.",
+      "- Background should provide necessary context concisely.",
+      "- Key Points should use bullet lists for clarity and quick scanning.",
+      "- Action Items should be specific with owners and deadlines where possible.",
+      "- Keep total length under 500 words. Memos should be concise and actionable.",
+      "- Use direct, professional tone. Get to the point quickly.",
+    ].join("\n"),
+
+    scholarship: [
+      "Type-specific guidance (Scholarship Application):",
+      "- Objective should clearly state the scholarship goal and alignment with the candidate.",
+      "- Candidate Narrative should tell a compelling personal story with specific examples.",
+      "- Academic Highlights should include concrete achievements with dates and outcomes.",
+      "- Financial Context should be honest and specific about need and impact.",
+      "- Use a balance of confidence and humility. Show growth mindset.",
+      "- Target 800-1500 words.",
+    ].join("\n"),
+
+    email: [
+      "Type-specific guidance (Email Draft):",
+      "- Include a clear, specific Subject line.",
+      "- Opening should address the recipient and state purpose immediately.",
+      "- Body should be concise with clear paragraphs or bullet points.",
+      "- Close with a specific ask or next step.",
+      "- Keep total length under 300 words. Respect the reader's time.",
+      "- Match tone to context (formal for business, warm for personal).",
+    ].join("\n"),
+
+    presentation: [
+      "Type-specific guidance (Presentation/Slides):",
+      "- Use format='presentation' in the output.",
+      "- Structure as 4-8 slide-style sections (## Slide N: Title).",
+      "- Each slide should have 3-5 bullet points maximum.",
+      "- First slide should be a strong opening hook or vision statement.",
+      "- Last slide should be a clear call-to-action or summary.",
+      "- Use bold for key phrases that would be emphasized visually.",
+      "- Keep text concise — slides should be scannable, not paragraphs.",
+    ].join("\n"),
+
+    brief: [
+      "Type-specific guidance (Brief):",
+      "- Objective should be stated in 1-2 clear sentences.",
+      "- Context should provide relevant background without excess detail.",
+      "- Key Points should be actionable and specific.",
+      "- Next Steps should include clear owners and timelines.",
+      "- Keep total length under 600 words. Briefs should be brief.",
+      "- Use direct, clear language. Avoid jargon unless audience-appropriate.",
+    ].join("\n"),
+
+    report: [
+      "Type-specific guidance (Report):",
+      "- Executive Summary should distill the entire report into 3-5 sentences.",
+      "- Analysis section should present data, trends, and observations with supporting evidence.",
+      "- Use tables for comparative data and metrics.",
+      "- Findings should be clearly stated with supporting data points.",
+      "- Recommendations should be specific, actionable, and prioritized.",
+      "- Use formal, objective tone. Let data drive conclusions.",
+      "- Target 1000-3000 words depending on scope.",
+    ].join("\n"),
+
+    document: [
+      "Type-specific guidance (General Document):",
+      "- Adapt structure and tone to match the user's specific request.",
+      "- Include clear section headings for organization.",
+      "- Use formatting richness: bold, italics, lists, tables where appropriate.",
+      "- Make content substantive and actionable, not generic.",
+      "- Target 500-2000 words depending on topic complexity.",
+    ].join("\n"),
+  };
+
+  return guidance[docType] ?? guidance["document"];
 }
 
 function buildRepairDocDraftPrompt(input: RepairDocDraftInput): string {
