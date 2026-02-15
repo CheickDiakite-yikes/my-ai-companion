@@ -4,6 +4,9 @@
 A companion AI chat/voice app with personalized persona Zee (with voice variants). Users interact via text chat and voice calls. Features onboarding flow, dark teal branding, persistent conversations, agentic capabilities (AI game generation, task execution), and customizable themes.
 
 ## Recent Changes
+- 2026-02-15: Upgraded web build generation from deterministic template to model-based (Gemini API/CLI) with comprehensive prompt producing professional multi-section websites (hero, features, testimonials, CTA, footer, animations, responsive design)
+- 2026-02-15: Added `generateWebBuild`/`repairWebBuild` adapter methods with CLI→API fallback and deterministic recovery fallback
+- 2026-02-15: Set `AGENT_CODE_WORKER_BACKEND=gemini_cli`, `AGENT_GEMINI_CLI_COMMAND=npx -y @google/gemini-cli` env vars
 - 2026-02-13: Stabilized live voice interruption behavior with assistant-speech duplex suppression and user-transcript suppression during assistant speech windows
 - 2026-02-13: Added live trace diagnostics (`live.server.content`) for interruption vs normal completion classification
 - 2026-02-13: Simplified live baseline in deployment profile (NO_INTERRUPTION, proactivity off, client noise gate off)
