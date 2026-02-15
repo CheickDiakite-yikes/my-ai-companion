@@ -519,6 +519,14 @@ function detectLiveDeviceClass(): "mobile" | "desktop" | "unknown" {
   return /android|iphone|ipad|ipod|mobile/i.test(ua) ? "mobile" : "desktop";
 }
 
+function detectClientTimeZone(): string | null {
+  if (typeof Intl === "undefined" || typeof Intl.DateTimeFormat !== "function") {
+    return null;
+  }
+  const candidate = Intl.DateTimeFormat().resolvedOptions().timeZone?.trim();
+  return candidate && candidate.length > 0 ? candidate : null;
+}
+
 function getErrorMessage(error: unknown): string {
   if (error instanceof Error) {
     return error.message;
@@ -6707,11 +6715,13 @@ function App() {
       conversationId: string;
       deviceClass: "mobile" | "desktop" | "unknown";
     }) => {
+      const clientTimeZone = detectClientTimeZone();
       const res = await apiRequest("POST", "/api/live/token", {
         conversationId: data.conversationId,
         persona: data.persona,
         voice: data.voice,
         deviceClass: data.deviceClass,
+        clientTimeZone,
         responseModality: "AUDIO",
       });
       const body = (await res.json()) as LiveTokenResponse;
@@ -7055,6 +7065,7 @@ function App() {
         text: params.text,
         persona,
         attachmentIds: params.attachmentIds,
+        clientTimeZone: detectClientTimeZone(),
       }),
     });
 
@@ -7651,6 +7662,7 @@ function App() {
       text: params.text,
       persona,
       attachmentIds: params.attachmentIds,
+      clientTimeZone: detectClientTimeZone(),
     });
     const payload = (await response.json()) as {
       userMessage: MessageData;

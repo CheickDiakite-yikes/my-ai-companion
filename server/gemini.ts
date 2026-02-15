@@ -263,6 +263,90 @@ function parseBooleanFlag(input: string | undefined, fallback: boolean): boolean
   return fallback;
 }
 
+function normalizeTimeZone(timeZone: string | null | undefined): string | null {
+  const candidate = typeof timeZone === "string" ? timeZone.trim() : "";
+  if (!candidate) return null;
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: candidate });
+    return candidate;
+  } catch {
+    return null;
+  }
+}
+
+function resolveCompanionTimeZone(clientTimeZone?: string | null): string {
+  const explicitClientTimeZone = normalizeTimeZone(clientTimeZone);
+  if (explicitClientTimeZone) return explicitClientTimeZone;
+
+  const envTimeZone = normalizeTimeZone(
+    process.env.ZEE_CALENDAR_TIMEZONE ?? process.env.APP_TIMEZONE ?? null,
+  );
+  if (envTimeZone) return envTimeZone;
+  return "UTC";
+}
+
+function formatCalendarSnapshot(now: Date, timeZone: string): {
+  timeZone: string;
+  date: string;
+  time: string;
+  dateTime: string;
+  weekday: string;
+  utcIso: string;
+} {
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    weekday: "long",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
+  const parts = formatter.formatToParts(now);
+  const valueByType = new Map<string, string>();
+  for (const part of parts) {
+    if (part.type === "literal") continue;
+    valueByType.set(part.type, part.value);
+  }
+
+  const year = valueByType.get("year") ?? "0000";
+  const month = valueByType.get("month") ?? "01";
+  const day = valueByType.get("day") ?? "01";
+  const hour = valueByType.get("hour") ?? "00";
+  const minute = valueByType.get("minute") ?? "00";
+  const second = valueByType.get("second") ?? "00";
+  const weekday = valueByType.get("weekday") ?? "Unknown";
+  const date = `${year}-${month}-${day}`;
+  const time = `${hour}:${minute}:${second}`;
+
+  return {
+    timeZone,
+    date,
+    time,
+    dateTime: `${date}T${time}`,
+    weekday,
+    utcIso: now.toISOString(),
+  };
+}
+
+function buildCalendarTimeContextBlock(clientTimeZone?: string | null): string {
+  const now = new Date();
+  const timeZone = resolveCompanionTimeZone(clientTimeZone);
+  const local = formatCalendarSnapshot(now, timeZone);
+  return [
+    "CALENDAR / TIME CONTEXT:",
+    `- Current instant (UTC): ${local.utcIso}`,
+    `- Active timezone: ${local.timeZone}`,
+    `- Local date: ${local.date} (${local.weekday})`,
+    `- Local time: ${local.time}`,
+    `- Local date-time: ${local.dateTime}`,
+    "- Treat relative references like today/tomorrow/this week using the active timezone.",
+    "- If the user mentions a different timezone, quickly acknowledge and adapt.",
+  ].join("\n");
+}
+
 function cleanTextInput(value: string | null | undefined): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
@@ -320,6 +404,7 @@ function buildTextPromptAdditions(params: {
   memoryContextBlock?: string | null;
   memoryPolicy?: LiveMemoryPolicy;
   enableMultipart: boolean;
+  clientTimeZone?: string | null;
 }): string {
   const sections: string[] = [];
   const memoryPolicy = params.memoryPolicy ?? "safe_selective";
@@ -339,6 +424,7 @@ function buildTextPromptAdditions(params: {
     styleLines.push(`- User custom note: ${styleNote}`);
   }
   sections.push(styleLines.join("\n"));
+  sections.push(buildCalendarTimeContextBlock(params.clientTimeZone));
 
   sections.push(
     [
@@ -548,6 +634,7 @@ async function getTextPersonaPrompt(params: {
   memoryContextBlock?: string | null;
   memoryPolicy?: LiveMemoryPolicy;
   enableMultipart: boolean;
+  clientTimeZone?: string | null;
 }): Promise<string> {
   const basePrompt = await loadZeePrompt();
   const additions = buildTextPromptAdditions({
@@ -555,6 +642,7 @@ async function getTextPersonaPrompt(params: {
     memoryContextBlock: params.memoryContextBlock,
     memoryPolicy: params.memoryPolicy,
     enableMultipart: params.enableMultipart,
+    clientTimeZone: params.clientTimeZone,
   });
 
   return `${basePrompt}
@@ -833,6 +921,7 @@ export interface CreateLiveTokenInput {
   profileContext?: TextPersonalizationProfile | null;
   memoryPolicy?: LiveMemoryPolicy;
   deviceClass?: "mobile" | "desktop" | "unknown";
+  clientTimeZone?: string | null;
 }
 
 export interface LiveTokenConfigSummary {
@@ -872,6 +961,7 @@ function composeLiveSystemInstruction(params: {
   memoryContextBlock?: string;
   profileContext?: TextPersonalizationProfile | null;
   memoryPolicy: LiveMemoryPolicy;
+  clientTimeZone?: string | null;
 }): string {
   const sections: string[] = [params.personaPrompt];
 
@@ -879,6 +969,7 @@ function composeLiveSystemInstruction(params: {
   if (profileBlock) {
     sections.push(profileBlock);
   }
+  sections.push(buildCalendarTimeContextBlock(params.clientTimeZone));
 
   sections.push(
     [
@@ -917,6 +1008,7 @@ export async function createLiveToken(
     memoryContextBlock: input.memoryContextBlock,
     profileContext: input.profileContext ?? null,
     memoryPolicy,
+    clientTimeZone: input.clientTimeZone ?? null,
   });
 
   const now = Date.now();
@@ -1198,6 +1290,7 @@ export interface GenerateTextReplyInput {
   memoryContextBlock?: string | null;
   memoryPolicy?: LiveMemoryPolicy;
   enableMultipart?: boolean;
+  clientTimeZone?: string | null;
 }
 
 export interface GenerateTextReplyResult {
@@ -1979,6 +2072,7 @@ export async function generateTextReply(
     memoryContextBlock: input.memoryContextBlock,
     memoryPolicy: input.memoryPolicy,
     enableMultipart,
+    clientTimeZone: input.clientTimeZone,
   });
   const contents = buildConversationContents(input.messages);
 
@@ -2309,6 +2403,7 @@ export async function generateTextReplyStream(
     memoryContextBlock: input.memoryContextBlock,
     memoryPolicy: input.memoryPolicy,
     enableMultipart,
+    clientTimeZone: input.clientTimeZone,
   });
   const contents = buildConversationContents(input.messages);
 

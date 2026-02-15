@@ -89,6 +89,7 @@ const liveTokenSchema = z.object({
   responseModality: z.enum(["AUDIO", "TEXT"]).optional(),
   voice: liveVoiceSchema.optional(),
   deviceClass: z.enum(["mobile", "desktop", "unknown"]).optional(),
+  clientTimeZone: z.string().trim().min(1).max(80).optional(),
   memoryModeOverride: liveMemoryModeSchema.optional(),
 });
 
@@ -119,6 +120,7 @@ const chatRespondSchema = z
     text: z.string().trim().max(8000, "Message is too long").default(""),
     attachmentIds: z.array(z.string().min(1)).optional().default([]),
     persona: personaInputSchema.optional(),
+    clientTimeZone: z.string().trim().min(1).max(80).optional(),
   })
   .superRefine((value, ctx) => {
     if (value.text.length === 0 && value.attachmentIds.length === 0) {
@@ -6749,6 +6751,7 @@ export async function registerRoutes(
         voice,
         responseModality: parsed.responseModality ?? "AUDIO",
         deviceClass: parsed.deviceClass ?? "unknown",
+        clientTimeZone: parsed.clientTimeZone ?? null,
         memoryMode: memoryMeta.mode,
         memoryFallback: memoryMeta.fallbackUsed,
       });
@@ -6761,6 +6764,7 @@ export async function registerRoutes(
         memoryContextBlock,
         profileContext: profileContext ?? null,
         memoryPolicy: memoryMeta.mode,
+        clientTimeZone: parsed.clientTimeZone ?? null,
       });
 
       trace(req, "live.token.generated", {
@@ -6843,6 +6847,7 @@ export async function registerRoutes(
         persona,
         textLength: parsed.text.length,
         attachmentCount: parsed.attachmentIds.length,
+        clientTimeZone: parsed.clientTimeZone ?? null,
       });
 
       const pendingAttachments = await storage.getPendingAttachmentsByIds(
@@ -7679,6 +7684,7 @@ export async function registerRoutes(
         memoryContextBlock: chatMemory.memoryContextBlock,
         memoryPolicy: chatMemory.memoryMeta.mode,
         enableMultipart: ENABLE_MULTIPART_TEXT,
+        clientTimeZone: parsed.clientTimeZone ?? null,
       });
 
       trace(req, "chat.respond.model_success", {
@@ -8696,6 +8702,7 @@ export async function registerRoutes(
         conversationId: conversation.id,
         persona,
         attachmentCount: boundAttachments.length,
+        clientTimeZone: parsed.clientTimeZone ?? null,
         memoryMode: chatMemory.memoryMeta.mode,
         memoryFallback: chatMemory.memoryMeta.fallbackUsed,
         memoryBuildMs: chatMemory.memoryMeta.buildMs,
@@ -8719,6 +8726,7 @@ export async function registerRoutes(
         memoryContextBlock: chatMemory.memoryContextBlock,
         memoryPolicy: chatMemory.memoryMeta.mode,
         enableMultipart: ENABLE_MULTIPART_TEXT,
+        clientTimeZone: parsed.clientTimeZone ?? null,
       });
 
       const maxMultipartParts = Math.min(Math.max(desiredParts, 1), 3);
