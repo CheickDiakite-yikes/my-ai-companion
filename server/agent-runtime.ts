@@ -24,10 +24,14 @@ import {
   generatePresentationSlideImages,
   generateGameProjectDraft,
   generateGameProjectDraftViaGeminiCli,
+  generateWebBuildProjectDraft,
+  generateWebBuildProjectDraftViaGeminiCli,
   repairDocDraft,
   repairDocDraftViaGeminiCli,
   repairGameProjectDraft,
   repairGameProjectDraftViaGeminiCli,
+  repairWebBuildProjectDraft,
+  repairWebBuildProjectDraftViaGeminiCli,
   type DocOutputFormat,
   type GeneratedDocDraft,
   type GameProjectFormat,
@@ -232,6 +236,18 @@ export interface AgentExecutor {
     attempt: number;
     intentContract: ArtifactIntentContract;
   }): Promise<GeneratedDocArtifact>;
+  generateWebBuild(input: {
+    prompt: string;
+    imageHints: string[];
+    attempt: number;
+  }): Promise<GeneratedMiniGameProject>;
+  repairWebBuild(input: {
+    prompt: string;
+    imageHints: string[];
+    previousProject: GeneratedMiniGameProject;
+    qaFailures: GameQaFailureDiagnostics[];
+    attempt: number;
+  }): Promise<GeneratedMiniGameProject>;
 }
 
 class GeminiPrimaryAgentAdapter implements AgentPlanner, AgentExecutor {
@@ -607,6 +623,179 @@ class GeminiPrimaryAgentAdapter implements AgentPlanner, AgentExecutor {
       intentContract: input.intentContract,
     });
     return coerceModelDoc({
+      draft: repaired.draft,
+      attempt: input.attempt,
+      model: repaired.model,
+      backend: "gemini_api",
+      backendFallbackReason: null,
+    });
+  }
+
+  async generateWebBuild(input: {
+    prompt: string;
+    imageHints: string[];
+    attempt: number;
+  }): Promise<GeneratedMiniGameProject> {
+    if (!isModelGameGeneratorEnabled()) {
+      return buildDeterministicRecoveryWebBuildProject({
+        prompt: input.prompt,
+        imageHints: input.imageHints,
+        attempt: input.attempt,
+      });
+    }
+
+    const preferredFormat: GameProjectFormat = "multi_file";
+    const allowLight3d = false;
+    const backend = resolveCodeWorkerBackend();
+    if (backend === "gemini_cli") {
+      try {
+        const generatedViaCli = await generateWebBuildProjectDraftViaGeminiCli({
+          prompt: input.prompt,
+          imageHints: input.imageHints,
+          preferredFormat,
+          allowLight3d,
+        });
+        return coerceModelGameProject({
+          prompt: input.prompt,
+          preferredFormat,
+          allowLight3d,
+          draft: generatedViaCli.draft,
+          attempt: input.attempt,
+          model: generatedViaCli.model,
+          backend: "gemini_cli",
+          backendFallbackReason: null,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(
+          `[agent-runtime] gemini_cli web build backend unavailable, falling back to Gemini API: ${message}`,
+        );
+        const generatedViaApi = await generateWebBuildProjectDraft({
+          prompt: input.prompt,
+          imageHints: input.imageHints,
+          preferredFormat,
+          allowLight3d,
+        });
+        return coerceModelGameProject({
+          prompt: input.prompt,
+          preferredFormat,
+          allowLight3d,
+          draft: generatedViaApi.draft,
+          attempt: input.attempt,
+          model: generatedViaApi.model,
+          backend: "gemini_api",
+          backendFallbackReason: truncate(`gemini_cli_unavailable:${message}`, 220),
+        });
+      }
+    }
+
+    const generated = await generateWebBuildProjectDraft({
+      prompt: input.prompt,
+      imageHints: input.imageHints,
+      preferredFormat,
+      allowLight3d,
+    });
+
+    return coerceModelGameProject({
+      prompt: input.prompt,
+      preferredFormat,
+      allowLight3d,
+      draft: generated.draft,
+      attempt: input.attempt,
+      model: generated.model,
+      backend: "gemini_api",
+      backendFallbackReason: null,
+    });
+  }
+
+  async repairWebBuild(input: {
+    prompt: string;
+    imageHints: string[];
+    previousProject: GeneratedMiniGameProject;
+    qaFailures: GameQaFailureDiagnostics[];
+    attempt: number;
+  }): Promise<GeneratedMiniGameProject> {
+    if (!isModelGameGeneratorEnabled()) {
+      throw new Error("Model game generator is disabled");
+    }
+
+    const preferredFormat: GameProjectFormat = "multi_file";
+    const allowLight3d = false;
+    const backend = resolveCodeWorkerBackend();
+    const previousDraft: GeneratedGameProjectDraft = {
+      title: input.previousProject.title,
+      summary: input.previousProject.summary,
+      format: input.previousProject.generationMetadata.format,
+      engine: input.previousProject.generationMetadata.engine,
+      mechanics: input.previousProject.generationMetadata.mechanics,
+      entryPath: input.previousProject.entryPath,
+      files: input.previousProject.files,
+    };
+    const qaFailures = input.qaFailures.map((failure) =>
+      formatQaFailureForModel(failure),
+    );
+    if (backend === "gemini_cli") {
+      try {
+        const repairedViaCli = await repairWebBuildProjectDraftViaGeminiCli({
+          prompt: input.prompt,
+          imageHints: input.imageHints,
+          preferredFormat,
+          allowLight3d,
+          previousDraft,
+          qaFailures,
+          attempt: input.attempt,
+        });
+        return coerceModelGameProject({
+          prompt: input.prompt,
+          preferredFormat,
+          allowLight3d,
+          draft: repairedViaCli.draft,
+          attempt: input.attempt,
+          model: repairedViaCli.model,
+          backend: "gemini_cli",
+          backendFallbackReason: null,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(
+          `[agent-runtime] gemini_cli web build repair backend unavailable, falling back to Gemini API: ${message}`,
+        );
+        const repairedViaApi = await repairWebBuildProjectDraft({
+          prompt: input.prompt,
+          imageHints: input.imageHints,
+          preferredFormat,
+          allowLight3d,
+          previousDraft,
+          qaFailures,
+          attempt: input.attempt,
+        });
+        return coerceModelGameProject({
+          prompt: input.prompt,
+          preferredFormat,
+          allowLight3d,
+          draft: repairedViaApi.draft,
+          attempt: input.attempt,
+          model: repairedViaApi.model,
+          backend: "gemini_api",
+          backendFallbackReason: truncate(`gemini_cli_unavailable:${message}`, 220),
+        });
+      }
+    }
+
+    const repaired = await repairWebBuildProjectDraft({
+      prompt: input.prompt,
+      imageHints: input.imageHints,
+      preferredFormat,
+      allowLight3d,
+      previousDraft,
+      qaFailures,
+      attempt: input.attempt,
+    });
+
+    return coerceModelGameProject({
+      prompt: input.prompt,
+      preferredFormat,
+      allowLight3d,
       draft: repaired.draft,
       attempt: input.attempt,
       model: repaired.model,
@@ -3058,15 +3247,7 @@ async function runTaskExecution(state: RuntimeState): Promise<void> {
       const isWebBuild = taskKind === "web_build";
       const generatorToolName = isWebBuild ? "web_build_generator" : "mini_game_generator";
       const qaLabel = isWebBuild ? "web build" : "game artifact";
-      const generatorPrompt = isWebBuild
-        ? [
-            "Build a browser-based web app / landing page (not a game).",
-            "Use clear semantic HTML, CSS, and JavaScript with at least one interactive behavior.",
-            "Keep it mobile-friendly and self-contained with no build step.",
-            "",
-            `User request: ${state.prompt}`,
-          ].join("\n")
-        : state.prompt;
+      const generatorPrompt = state.prompt;
       await assertRuntimeToolExecutionAllowed({
         taskId: task.id,
         taskRiskLevel: task.riskLevel,
@@ -3154,11 +3335,19 @@ async function runTaskExecution(state: RuntimeState): Promise<void> {
 
         try {
           const project: GeneratedMiniGameProject = isWebBuild
-            ? buildDeterministicRecoveryWebBuildProject({
-                prompt: state.prompt,
-                imageHints: effectiveImageHints,
-                attempt,
-              })
+            ? (attempt === 1 || !generatedProject
+              ? await adapter.generateWebBuild({
+                  prompt: generatorPrompt,
+                  imageHints: effectiveImageHints,
+                  attempt,
+                })
+              : await adapter.repairWebBuild({
+                  prompt: generatorPrompt,
+                  imageHints: effectiveImageHints,
+                  previousProject: generatedProject,
+                  qaFailures,
+                  attempt,
+                }))
             : attempt === 1 || !generatedProject
               ? await adapter.generateMiniGame({
                   prompt: generatorPrompt,

@@ -1864,6 +1864,227 @@ function buildRepairGameProjectPrompt(input: RepairGameProjectDraftInput): strin
   ].join("\n");
 }
 
+function buildGenerateWebBuildProjectPrompt(
+  input: GenerateGameProjectDraftInput,
+): string {
+  const imageHints = input.imageHints.length
+    ? input.imageHints.map((hint) => `- ${hint}`).join("\n")
+    : "- none";
+
+  return [
+    "Generate a professional, beautiful multi-section website project.",
+    "Return JSON only, with this exact schema:",
+    "{",
+    '  "title": string,',
+    '  "summary": string,',
+    '  "format": "multi_file",',
+    '  "engine": "canvas_dom",',
+    '  "mechanics": string[],',
+    '  "entryPath": string,',
+    '  "files": [{ "path": string, "content": string }]',
+    "}",
+    "",
+    "Design requirements:",
+    "- Create a stunning, modern multi-section website with at least these sections: hero, features, about, testimonials, call-to-action, and footer.",
+    "- Include a fixed/sticky navigation bar with smooth-scroll anchor links to each section.",
+    "- Use modern CSS with gradients, glass-morphism (backdrop-filter: blur), smooth animations (CSS keyframes and transitions).",
+    "- Define custom CSS variables (--primary, --accent, --bg, --text, etc.) for easy theming.",
+    "- Use a dark, immersive color scheme by default (dark backgrounds with vibrant accent colors).",
+    "- Make the design fully mobile-responsive with media queries (mobile-first approach).",
+    "- Use professional typography via Google Fonts (import Inter, Outfit, or DM Sans via @import in CSS).",
+    "- Add smooth scroll behavior (html { scroll-behavior: smooth }).",
+    "- Include hover effects on buttons, cards, and interactive elements (scale, glow, color transitions).",
+    "- Use Intersection Observer in JavaScript for scroll-triggered fade-in/slide-in animations.",
+    "- Add subtle animated background elements (floating shapes with CSS keyframes, gradient shifts, or typing effects).",
+    "- Use semantic HTML5 elements (header, nav, main, section, article, footer).",
+    "",
+    "Content requirements:",
+    "- Generate realistic placeholder content that matches the user's topic (NOT lorem ipsum).",
+    "- Include at least 3 testimonial quotes with names and roles.",
+    "- Include at least 4 feature cards with icons (use unicode/emoji icons).",
+    "- Include descriptive headings and subheadings for each section.",
+    "",
+    "Hard rules:",
+    "- format MUST be \"multi_file\" with separate HTML, CSS, and JS files.",
+    "- engine MUST be \"canvas_dom\".",
+    "- Files must be self-contained and browser-runnable with no build step.",
+    "- Do NOT use external CDNs except Google Fonts (@import in CSS).",
+    "- Do NOT use external JavaScript libraries or frameworks.",
+    "- Keep total generated source concise (target <= 120KB total file content).",
+    "- Ensure the entry file is HTML and references only files included in files[].",
+    "- The entryPath must be an .html file present in files[].",
+    "- mechanics[] should list the website sections and interactive features (e.g. [\"hero\", \"features\", \"testimonials\", \"scroll_animations\", \"responsive_layout\"]).",
+    "",
+    "Task request:",
+    `- Prompt: ${input.prompt}`,
+    "- Image hints:",
+    imageHints,
+  ].join("\n");
+}
+
+function buildRepairWebBuildProjectPrompt(input: RepairGameProjectDraftInput): string {
+  const imageHints = input.imageHints.length
+    ? input.imageHints.map((hint) => `- ${hint}`).join("\n")
+    : "- none";
+  const qaFailures = input.qaFailures.length
+    ? input.qaFailures.map((failure) => `- ${failure}`).join("\n")
+    : "- unknown";
+
+  return [
+    "Repair the provided website project draft to pass QA.",
+    "Return strict JSON with the exact schema previously defined.",
+    "",
+    `Attempt: ${input.attempt}`,
+    "",
+    "Original user prompt:",
+    input.prompt,
+    "",
+    "Image hints:",
+    imageHints,
+    "",
+    "QA failures to fix:",
+    qaFailures,
+    "",
+    "Current project draft JSON:",
+    JSON.stringify(input.previousDraft),
+    "",
+    "Hard rules:",
+    "- Preserve the multi-section website design and all interactive features.",
+    "- format MUST remain \"multi_file\" and engine MUST remain \"canvas_dom\".",
+    "- Keep output browser-runnable with no build step.",
+    "- Do NOT rely on external network assets or CDNs (except Google Fonts).",
+    "- Keep entryPath present in files[] and valid.",
+    "- Maintain responsive design, animations, and professional styling.",
+    "- Fix all QA failures while preserving the overall design quality.",
+  ].join("\n");
+}
+
+export async function generateWebBuildProjectDraft(
+  input: GenerateGameProjectDraftInput,
+): Promise<GenerateGameProjectDraftResult> {
+  const ai = getGeminiClient();
+  const model = resolveAgentGameModel();
+  const prompt = buildGenerateWebBuildProjectPrompt(input);
+
+  const response = await ai.models.generateContent({
+    model,
+    contents: [{ role: "user", parts: [{ text: prompt }] }],
+    config: {
+      systemInstruction:
+        "You are a professional web designer and frontend developer. Output strict JSON only.",
+      temperature: 0.4,
+      maxOutputTokens: 12000,
+      responseMimeType: "application/json",
+    },
+  });
+
+  const rawJson = stripJsonCodeFence((response.text ?? "").trim());
+  if (!rawJson) {
+    throw new Error("Gemini returned an empty web build project draft");
+  }
+
+  const draft = parseGameProjectDraft(rawJson, {
+    allowLight3d: false,
+  });
+
+  return {
+    model,
+    draft,
+    rawJson,
+    responseId: response.responseId,
+    usage: compactUsage(response.usageMetadata),
+  };
+}
+
+export async function generateWebBuildProjectDraftViaGeminiCli(
+  input: GenerateGameProjectDraftInput,
+): Promise<GenerateGameProjectDraftResult> {
+  const model = resolveAgentGameModel();
+  const prompt = buildGenerateWebBuildProjectPrompt(input);
+  const rawOutput = await runGeminiCliJsonPrompt({
+    prompt,
+    model,
+  });
+
+  const rawJson = stripJsonCodeFence(rawOutput);
+  if (!rawJson) {
+    throw new Error("Gemini CLI returned an empty web build project draft");
+  }
+
+  const draft = parseGameProjectDraft(rawJson, {
+    allowLight3d: false,
+  });
+
+  return {
+    model: `${model}:gemini_cli`,
+    draft,
+    rawJson,
+  };
+}
+
+export async function repairWebBuildProjectDraft(
+  input: RepairGameProjectDraftInput,
+): Promise<GenerateGameProjectDraftResult> {
+  const ai = getGeminiClient();
+  const model = resolveAgentGameModel();
+  const prompt = buildRepairWebBuildProjectPrompt(input);
+
+  const response = await ai.models.generateContent({
+    model,
+    contents: [{ role: "user", parts: [{ text: prompt }] }],
+    config: {
+      systemInstruction:
+        "You repair website projects for a sandboxed runtime. Output strict JSON only.",
+      temperature: 0.2,
+      maxOutputTokens: 12000,
+      responseMimeType: "application/json",
+    },
+  });
+
+  const rawJson = stripJsonCodeFence((response.text ?? "").trim());
+  if (!rawJson) {
+    throw new Error("Gemini returned an empty repaired web build project draft");
+  }
+
+  const draft = parseGameProjectDraft(rawJson, {
+    allowLight3d: false,
+  });
+
+  return {
+    model,
+    draft,
+    rawJson,
+    responseId: response.responseId,
+    usage: compactUsage(response.usageMetadata),
+  };
+}
+
+export async function repairWebBuildProjectDraftViaGeminiCli(
+  input: RepairGameProjectDraftInput,
+): Promise<GenerateGameProjectDraftResult> {
+  const model = resolveAgentGameModel();
+  const prompt = buildRepairWebBuildProjectPrompt(input);
+  const rawOutput = await runGeminiCliJsonPrompt({
+    prompt,
+    model,
+  });
+
+  const rawJson = stripJsonCodeFence(rawOutput);
+  if (!rawJson) {
+    throw new Error("Gemini CLI returned an empty repaired web build project draft");
+  }
+
+  const draft = parseGameProjectDraft(rawJson, {
+    allowLight3d: false,
+  });
+
+  return {
+    model: `${model}:gemini_cli`,
+    draft,
+    rawJson,
+  };
+}
+
 function buildGenerateDocDraftPrompt(input: GenerateDocDraftInput): string {
   const imageHints = input.imageHints.length
     ? input.imageHints.map((hint) => `- ${hint}`).join("\n")
