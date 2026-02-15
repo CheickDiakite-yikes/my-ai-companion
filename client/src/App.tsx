@@ -5338,13 +5338,19 @@ const ArtifactViewer = ({
       !Array.isArray(artifact.metadata) &&
       (artifact.metadata as Record<string, unknown>).render,
   );
+  const hasMarkdownForRerender = Boolean(
+    artifact?.markdownContent &&
+      typeof artifact.markdownContent === "string" &&
+      artifact.markdownContent.trim().length > 0,
+  );
   const shouldUseJsonRenderViewer =
     Boolean(artifact) &&
     !isGame &&
     !isWebApp &&
     isDocArtifact &&
     ENABLE_JSON_RENDER_ARTIFACT_VIEWER &&
-    hasRenderSpec;
+    hasRenderSpec &&
+    !hasMarkdownForRerender;
   const canRenderIframe = hasHtmlContent && (isGame || isWebApp || !shouldUseJsonRenderViewer);
   const markdown = artifact?.markdownContent ?? "";
   const [iframeKey, setIframeKey] = useState(0);

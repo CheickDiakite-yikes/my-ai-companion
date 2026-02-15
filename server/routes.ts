@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "crypto";
+import { buildDocumentRenderPayload } from "./artifact-render-spec";
 import type { Express } from "express";
 import multer, { MulterError } from "multer";
 import { type Server } from "http";
@@ -6331,7 +6332,32 @@ export async function registerRoutes(
         if (artifact.status === "deleted") {
           return res.status(404).send("Deleted");
         }
-        const html = artifact.htmlContent;
+
+        let html = artifact.htmlContent;
+
+        const isDocType =
+          artifact.type === "doc_markdown" ||
+          (artifact.type as string) === "document";
+        const hasMarkdown =
+          artifact.markdownContent &&
+          typeof artifact.markdownContent === "string" &&
+          artifact.markdownContent.trim().length > 0;
+        if (isDocType && hasMarkdown) {
+          const genMeta = (artifact.metadata as Record<string, unknown> | null)
+            ?.generation as Record<string, unknown> | undefined;
+          const isPresentation = genMeta?.format === "presentation";
+          if (!isPresentation) {
+            const subtitle =
+              (genMeta?.subtitle as string | undefined) ?? null;
+            const rendered = buildDocumentRenderPayload({
+              title: artifact.title,
+              subtitle,
+              markdown: artifact.markdownContent!,
+            });
+            html = rendered.html;
+          }
+        }
+
         if (!html || typeof html !== "string" || html.trim().length === 0) {
           return res.status(404).send("No HTML content");
         }

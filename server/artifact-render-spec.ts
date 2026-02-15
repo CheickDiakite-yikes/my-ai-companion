@@ -29,7 +29,16 @@ type DocumentBlock =
     }
   | {
       kind: "list";
+      ordered: boolean;
       items: string[];
+    }
+  | {
+      kind: "table";
+      headers: string[];
+      rows: string[][];
+    }
+  | {
+      kind: "hr";
     };
 
 const renderCatalog = defineCatalog(reactSchema, {
@@ -148,11 +157,28 @@ function inlineMarkdownToHtml(input: string): string {
     .replace(/\*([^*\n]+)\*/g, "<em>$1</em>");
 }
 
+function parseTableRow(line: string): string[] {
+  return line
+    .replace(/^\|/, "")
+    .replace(/\|$/, "")
+    .split("|")
+    .map((cell) => cell.trim());
+}
+
+function isTableSeparator(line: string): boolean {
+  return /^\|?(\s*:?-{2,}:?\s*\|)+\s*:?-{2,}:?\s*\|?\s*$/.test(line);
+}
+
+function isTableRow(line: string): boolean {
+  return /^\|.+\|/.test(line.trim());
+}
+
 function markdownToBlocks(markdown: string): DocumentBlock[] {
   const blocks: DocumentBlock[] = [];
   const lines = markdown.split(/\r?\n/);
   let activeParagraph: string[] = [];
   let activeList: string[] = [];
+  let activeListOrdered = false;
 
   const flushParagraph = () => {
     if (activeParagraph.length === 0) return;
@@ -167,18 +193,49 @@ function markdownToBlocks(markdown: string): DocumentBlock[] {
     if (activeList.length === 0) return;
     blocks.push({
       kind: "list",
+      ordered: activeListOrdered,
       items: [...activeList],
     });
     activeList = [];
+    activeListOrdered = false;
   };
 
-  for (const rawLine of lines) {
-    const line = rawLine.trimEnd();
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i].trimEnd();
     const trimmed = line.trim();
+
     if (!trimmed) {
       flushParagraph();
       flushList();
+      i++;
       continue;
+    }
+
+    if (/^(-{3,}|\*{3,}|_{3,})\s*$/.test(trimmed)) {
+      flushParagraph();
+      flushList();
+      blocks.push({ kind: "hr" });
+      i++;
+      continue;
+    }
+
+    if (isTableRow(trimmed)) {
+      const headerLine = trimmed;
+      const nextIdx = i + 1;
+      if (nextIdx < lines.length && isTableSeparator(lines[nextIdx].trim())) {
+        flushParagraph();
+        flushList();
+        const headers = parseTableRow(headerLine);
+        const tableRows: string[][] = [];
+        i = nextIdx + 1;
+        while (i < lines.length && isTableRow(lines[i].trim())) {
+          tableRows.push(parseTableRow(lines[i].trim()));
+          i++;
+        }
+        blocks.push({ kind: "table", headers, rows: tableRows });
+        continue;
+      }
     }
 
     const headingMatch = trimmed.match(/^(#{1,4})\s+(.*)$/);
@@ -194,18 +251,37 @@ function markdownToBlocks(markdown: string): DocumentBlock[] {
         level,
         text: headingMatch[2].trim(),
       });
+      i++;
       continue;
     }
 
-    const listMatch = trimmed.match(/^[-*]\s+(.*)$/);
-    if (listMatch) {
+    const unorderedMatch = trimmed.match(/^[-*]\s+(.*)$/);
+    if (unorderedMatch) {
       flushParagraph();
-      activeList.push(listMatch[1].trim());
+      if (activeList.length > 0 && activeListOrdered) {
+        flushList();
+      }
+      activeListOrdered = false;
+      activeList.push(unorderedMatch[1].trim());
+      i++;
+      continue;
+    }
+
+    const orderedMatch = trimmed.match(/^\d+[.)]\s+(.*)$/);
+    if (orderedMatch) {
+      flushParagraph();
+      if (activeList.length > 0 && !activeListOrdered) {
+        flushList();
+      }
+      activeListOrdered = true;
+      activeList.push(orderedMatch[1].trim());
+      i++;
       continue;
     }
 
     flushList();
     activeParagraph.push(trimmed);
+    i++;
   }
 
   flushParagraph();
@@ -254,6 +330,14 @@ function buildDocumentSpec(input: {
         type: "ZeeBulletList",
         props: {
           items: block.items,
+        },
+        children: [],
+      };
+    } else if (block.kind === "table" || block.kind === "hr") {
+      elements[key] = {
+        type: "ZeeParagraph",
+        props: {
+          text: block.kind === "hr" ? "---" : "[table]",
         },
         children: [],
       };
@@ -328,7 +412,23 @@ function renderDocumentHtml(input: {
         const items = block.items
           .map((item) => `<li>${inlineMarkdownToHtml(item)}</li>`)
           .join("");
-        return `<ul>${items}</ul>`;
+        const tag = block.ordered ? "ol" : "ul";
+        return `<${tag}>${items}</${tag}>`;
+      }
+      if (block.kind === "table") {
+        const headerCells = block.headers
+          .map((h) => `<th>${inlineMarkdownToHtml(h)}</th>`)
+          .join("");
+        const bodyRows = block.rows
+          .map(
+            (row) =>
+              `<tr>${row.map((cell) => `<td>${inlineMarkdownToHtml(cell)}</td>`).join("")}</tr>`,
+          )
+          .join("");
+        return `<div class="table-wrap"><table><thead><tr>${headerCells}</tr></thead><tbody>${bodyRows}</tbody></table></div>`;
+      }
+      if (block.kind === "hr") {
+        return `<hr />`;
       }
       return block.text
         .split("\n")
@@ -378,9 +478,46 @@ function renderDocumentHtml(input: {
         border-radius: 6px;
         padding: 0.1em 0.35em;
       }
-      ul {
+      ul, ol {
         margin: 0 0 16px;
-        padding-left: 20px;
+        padding-left: 24px;
+      }
+      ol { list-style-type: decimal; }
+      hr {
+        border: none;
+        border-top: 1px solid rgba(42, 29, 16, 0.18);
+        margin: 20px 0;
+      }
+      .table-wrap {
+        overflow-x: auto;
+        margin: 16px 0;
+        border-radius: 10px;
+        border: 1px solid rgba(42, 29, 16, 0.15);
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.92em;
+      }
+      thead {
+        background: rgba(42, 29, 16, 0.07);
+      }
+      th {
+        text-align: left;
+        font-weight: 600;
+        padding: 10px 14px;
+        border-bottom: 2px solid rgba(42, 29, 16, 0.18);
+        white-space: nowrap;
+      }
+      td {
+        padding: 8px 14px;
+        border-bottom: 1px solid rgba(42, 29, 16, 0.09);
+      }
+      tbody tr:last-child td {
+        border-bottom: none;
+      }
+      tbody tr:nth-child(even) {
+        background: rgba(42, 29, 16, 0.025);
       }
     </style>
   </head>

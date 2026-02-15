@@ -13,6 +13,60 @@ import type {
   ArtifactRenderMetadata,
   ArtifactRenderSpecV1,
 } from "@shared/agent";
+import type { ReactNode } from "react";
+
+function renderInlineMarkdown(text: string): ReactNode {
+  const parts: ReactNode[] = [];
+  let remaining = text;
+  let keyIdx = 0;
+
+  while (remaining.length > 0) {
+    const boldMatch = remaining.match(/\*\*([^*]+)\*\*/);
+    const codeMatch = remaining.match(/`([^`]+)`/);
+    const italicMatch = remaining.match(/\*([^*\n]+)\*/);
+
+    let earliest: { type: "bold" | "code" | "italic"; index: number; match: RegExpMatchArray } | null = null;
+    if (boldMatch && boldMatch.index !== undefined) {
+      earliest = { type: "bold", index: boldMatch.index, match: boldMatch };
+    }
+    if (codeMatch && codeMatch.index !== undefined) {
+      if (!earliest || codeMatch.index < earliest.index) {
+        earliest = { type: "code", index: codeMatch.index, match: codeMatch };
+      }
+    }
+    if (italicMatch && italicMatch.index !== undefined && italicMatch[0] !== boldMatch?.[0]) {
+      if (!earliest || italicMatch.index < earliest.index) {
+        earliest = { type: "italic", index: italicMatch.index, match: italicMatch };
+      }
+    }
+
+    if (!earliest) {
+      parts.push(remaining);
+      break;
+    }
+
+    if (earliest.index > 0) {
+      parts.push(remaining.slice(0, earliest.index));
+    }
+
+    const inner = earliest.match[1];
+    if (earliest.type === "bold") {
+      parts.push(<strong key={keyIdx++}>{inner}</strong>);
+    } else if (earliest.type === "code") {
+      parts.push(
+        <code key={keyIdx++} className="rounded bg-black/10 px-1 py-0.5 text-[0.85em]">
+          {inner}
+        </code>,
+      );
+    } else {
+      parts.push(<em key={keyIdx++}>{inner}</em>);
+    }
+
+    remaining = remaining.slice(earliest.index + earliest.match[0].length);
+  }
+
+  return parts.length === 1 && typeof parts[0] === "string" ? parts[0] : <>{parts}</>;
+}
 
 const zeeRenderCatalog = defineCatalog(jsonRenderSchema, {
   components: {
@@ -96,12 +150,12 @@ const { registry } = defineRegistry(zeeRenderCatalog, {
       return <Tag className={headingClassName}>{props.text}</Tag>;
     },
     ZeeParagraph: ({ props }) => (
-      <p className="whitespace-pre-wrap text-sm leading-relaxed">{props.text}</p>
+      <p className="whitespace-pre-wrap text-sm leading-relaxed">{renderInlineMarkdown(props.text)}</p>
     ),
     ZeeBulletList: ({ props }) => (
       <ul className="list-disc space-y-1 pl-5 text-sm leading-relaxed">
         {props.items.map((item, idx) => (
-          <li key={`${item}-${idx}`}>{item}</li>
+          <li key={`${item}-${idx}`}>{renderInlineMarkdown(item)}</li>
         ))}
       </ul>
     ),
