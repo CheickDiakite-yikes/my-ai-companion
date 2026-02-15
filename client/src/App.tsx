@@ -66,6 +66,7 @@ import type {
   AgentStepSummary,
   AgentTaskSummary,
   TaskAssumption,
+  TaskFailureSummary,
   TaskStateResolvedStatusSource,
   TaskStateVersion,
   UnifiedAgentTaskCardModel,
@@ -230,6 +231,7 @@ interface ChatStreamTaskFailedEvent {
   type: "task_failed";
   taskId: string;
   message: string;
+  failure?: TaskFailureSummary | null;
 }
 
 type ChatStreamEvent =
@@ -366,6 +368,7 @@ interface AgentTaskResponse {
   resolvedStatusSource?: TaskStateResolvedStatusSource;
   qualitySummary?: ArtifactQualitySummary | null;
   assumptionsUsed?: TaskAssumption[];
+  failure?: TaskFailureSummary | null;
 }
 
 interface AgentOfferResponse {
@@ -460,6 +463,7 @@ interface LiveTaskSnapshot {
   latestStep: AgentStepSummary | null;
   approval: AgentApprovalSummary | null;
   artifact: AgentArtifactSummary | null;
+  failure: TaskFailureSummary | null;
   timeline: UnifiedAgentTaskTimelineItem[];
   updatedAtIso: string;
 }
@@ -735,7 +739,11 @@ function toUnifiedTaskOutputSummary(card: UnifiedAgentTaskCardModel): string {
   const summary = card.summaryText?.trim() ?? "";
   const summaryLooksLeakedArtifact = isLikelyAgentArtifactBodyLeak(summary);
   if (card.status === "failed") {
-    return summary || "This task failed before publishing an output.";
+    return (
+      card.failure?.reason ||
+      summary ||
+      "This task failed before publishing an output."
+    );
   }
   if (card.approval?.status === "pending") {
     return card.approval.requestedAction;
@@ -804,6 +812,7 @@ function buildUnifiedAgentTaskCards(
     latestStep: AgentStepSummary | null;
     approval: AgentApprovalSummary | null;
     artifact: AgentArtifactSummary | null;
+    failure: TaskFailureSummary | null;
     timeline: UnifiedAgentTaskTimelineItem[];
     summaryText: string | null;
   }
@@ -825,6 +834,7 @@ function buildUnifiedAgentTaskCards(
         latestStep: null,
         approval: null,
         artifact: null,
+        failure: null,
         timeline: [],
         summaryText: null,
       });
@@ -841,6 +851,28 @@ function buildUnifiedAgentTaskCards(
 
     if (isAgentTaskStatusPayload(message.uiPayload)) {
       aggregate.task = pickLatestTaskSummary(aggregate.task, message.uiPayload.task);
+      if (message.uiPayload.task.status === "failed") {
+        const failureReason =
+          message.uiPayload.task.errorMessage?.trim() ||
+          message.uiPayload.latestStep?.detail?.trim() ||
+          aggregate.summaryText;
+        if (failureReason) {
+          aggregate.failure = {
+            traceId: null,
+            stage: "unknown",
+            stepKey: message.uiPayload.latestStep?.stepKey ?? null,
+            stepTitle: message.uiPayload.latestStep?.title ?? null,
+            toolName: null,
+            code: null,
+            reason: failureReason,
+            toolOutputSummary: null,
+            sandboxJobId: null,
+            retriable: false,
+            occurredAt: toIsoString(message.uiPayload.task.updatedAt),
+            rawMessage: message.uiPayload.task.errorMessage ?? failureReason,
+          };
+        }
+      }
       if (message.uiPayload.latestStep) {
         aggregate.latestStep = message.uiPayload.latestStep;
         upsertTimelineItem(aggregate.timeline, {
@@ -909,6 +941,9 @@ function buildUnifiedAgentTaskCards(
     if (snapshot.artifact) {
       aggregate.artifact = snapshot.artifact;
     }
+    if (snapshot.failure) {
+      aggregate.failure = snapshot.failure;
+    }
     for (const timelineItem of snapshot.timeline) {
       upsertTimelineItem(aggregate.timeline, timelineItem);
     }
@@ -969,6 +1004,8 @@ function buildUnifiedAgentTaskCards(
               ? "web_build"
               : "doc_markdown",
         prompt: message.text,
+        errorMessage:
+          aggregate.failure?.rawMessage ?? aggregate.failure?.reason ?? null,
         createdAt: message.createdAt ? new Date(message.createdAt) : null,
         updatedAt: message.createdAt ? new Date(message.createdAt) : null,
         completedAt: null,
@@ -992,6 +1029,7 @@ function buildUnifiedAgentTaskCards(
       latestStep: aggregate.latestStep,
       approval: aggregate.approval,
       artifact: aggregate.artifact,
+      failure: aggregate.failure,
       timeline,
       autoCollapsed:
         isTerminalTaskStatus(resolvedStatus) &&
@@ -3893,10 +3931,21 @@ const UnifiedAgentTaskCard = ({
       });
     }
 
+    if (details.failure) {
+      rows.push({
+        id: `detail-failure-${card.taskId}`,
+        title: "Failure diagnostics",
+        detail: details.failure.reason,
+        status: "failed",
+        createdAt: details.failure.occurredAt ?? new Date().toISOString(),
+      });
+    }
+
     return normalizeTimeline(rows);
   }, [taskDetailQuery.data]);
 
   const timeline = detailTimeline.length > 0 ? detailTimeline : card.timeline;
+  const failure = taskDetailQuery.data?.failure ?? card.failure;
   const hasArtifact = Boolean(card.artifact);
   const approvalPending = card.approval?.status === "pending";
   const isRunning = card.status === "queued" || card.status === "in_progress";
@@ -4008,8 +4057,25 @@ const UnifiedAgentTaskCard = ({
       }
     }
 
+    if (failure) {
+      lines.push({
+        text: `$ zee forensic --stage ${failure.stage} --trace ${failure.traceId ?? "n/a"}`,
+        type: "cmd",
+      });
+      lines.push({ text: `[fail] ${failure.reason}`, type: "warn" });
+      if (failure.code) {
+        lines.push({ text: `[code] ${failure.code}`, type: "warn" });
+      }
+      if (failure.toolName) {
+        lines.push({ text: `[tool] ${failure.toolName}`, type: "warn" });
+      }
+      if (failure.retriable) {
+        lines.push({ text: `[hint] retriable=true`, type: "info" });
+      }
+    }
+
     return lines;
-  }, [card.artifact, card.taskId, card.taskKind, detailTools]);
+  }, [card.artifact, card.taskId, card.taskKind, detailTools, failure]);
 
   const tabAnimVariants = {
     initial: { opacity: 0, y: 6 },
@@ -4394,6 +4460,35 @@ const UnifiedAgentTaskCard = ({
                             ? "View / Launch"
                             : "View"}
                       </button>
+                    </div>
+                  </div>
+                ) : card.status === "failed" ? (
+                  <div
+                    className="rounded-xl border p-4"
+                    style={{
+                      borderColor: "color-mix(in srgb, var(--app-accent) 42%, #ef4444)",
+                      backgroundColor:
+                        "color-mix(in srgb, var(--app-soft-card-bg) 84%, transparent)",
+                    }}
+                    data-testid="agent-task-failure-panel"
+                  >
+                    <div className="mb-2 inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide opacity-85">
+                      <AlertTriangle className="h-3 w-3" />
+                      Failure diagnostics
+                    </div>
+                    <p className="text-sm font-semibold">
+                      {failure?.reason ||
+                        card.summaryText ||
+                        card.latestStep?.detail ||
+                        "This task failed before publishing output."}
+                    </p>
+                    <div className="mt-3 grid grid-cols-1 gap-1.5 text-[11px] opacity-80">
+                      {failure?.stage ? <p>Stage: {failure.stage}</p> : null}
+                      {failure?.toolName ? <p>Tool: {failure.toolName}</p> : null}
+                      {failure?.code ? <p>Code: {failure.code}</p> : null}
+                      {failure?.traceId ? (
+                        <p className="break-all">Trace: {failure.traceId}</p>
+                      ) : null}
                     </div>
                   </div>
                 ) : (
@@ -6895,6 +6990,7 @@ function App() {
         riskLevel: "low",
         taskKind: "mixed",
         prompt: "",
+        errorMessage: null,
         createdAt: new Date(nowIso),
         updatedAt: new Date(nowIso),
         completedAt: null,
@@ -6902,6 +6998,7 @@ function App() {
       latestStep: null,
       approval: null,
       artifact: null,
+      failure: null,
       timeline: [],
       updatedAtIso: nowIso,
     };
@@ -7124,6 +7221,7 @@ function App() {
           updater: (snapshot) => ({
             ...snapshot,
             task: pickLatestTaskSummary(snapshot.task, event.task) ?? event.task,
+            failure: null,
             timeline: appendLiveTimelineItem(snapshot.timeline, {
               id: `task-created-${event.task.id}`,
               title: "Task started",
@@ -7247,11 +7345,13 @@ function App() {
             task: {
               ...snapshot.task,
               status: snapshot.task.status === "failed" ? "failed" : "completed",
+              errorMessage: snapshot.task.status === "failed" ? snapshot.task.errorMessage : null,
               updatedAt: new Date(),
               completedAt: new Date(),
             },
             approval: null,
             artifact: event.artifact,
+            failure: snapshot.task.status === "failed" ? snapshot.failure : null,
             timeline: appendLiveTimelineItem(snapshot.timeline, {
               id: `artifact-${event.artifact.id}`,
               title: "Artifact ready",
@@ -7282,6 +7382,22 @@ function App() {
       }
 
       if (event.type === "task_failed") {
+        const normalizedFailure =
+          event.failure ??
+          ({
+            traceId: null,
+            stage: "unknown",
+            stepKey: null,
+            stepTitle: null,
+            toolName: null,
+            code: null,
+            reason: event.message,
+            toolOutputSummary: null,
+            sandboxJobId: null,
+            retriable: false,
+            occurredAt: new Date().toISOString(),
+            rawMessage: event.message,
+          } satisfies TaskFailureSummary);
         upsertLiveTaskSnapshot({
           taskId: event.taskId,
           conversationId: params.conversationId,
@@ -7290,23 +7406,34 @@ function App() {
             task: {
               ...snapshot.task,
               status: "failed",
+              errorMessage: event.message,
               updatedAt: new Date(),
               completedAt: new Date(),
             },
             approval: null,
+            failure: normalizedFailure,
             timeline: appendLiveTimelineItem(snapshot.timeline, {
               id: `failed-${event.taskId}`,
               title: "Task failed",
-              detail: event.message,
+              detail: normalizedFailure.reason,
               status: "failed",
               createdAt: new Date().toISOString(),
             }),
           }),
         });
+        if (activeTaskSummary) {
+          activeTaskSummary = {
+            ...activeTaskSummary,
+            status: "failed",
+            errorMessage: event.message,
+            updatedAt: new Date(),
+            completedAt: new Date(),
+          };
+        }
         updatePrimaryOptimisticMessage((message) => ({
           ...message,
           isTyping: false,
-          text: event.message,
+          text: normalizedFailure.reason,
           uiPayload:
             activeTaskSummary
               ? {
@@ -7314,6 +7441,7 @@ function App() {
                   task: {
                     ...activeTaskSummary,
                     status: "failed",
+                    errorMessage: event.message,
                   },
                   text: "Failed",
                 }
@@ -7355,6 +7483,27 @@ function App() {
                   approval:
                     nextTask.status === "approval_required" && !snapshot.artifact
                       ? snapshot.approval
+                      : null,
+                  failure:
+                    nextTask.status === "failed"
+                      ? snapshot.failure ??
+                        (nextTask.errorMessage
+                          ? {
+                              traceId: null,
+                              stage: "unknown",
+                              stepKey: null,
+                              stepTitle: null,
+                              toolName: null,
+                              code: null,
+                              reason: nextTask.errorMessage,
+                              toolOutputSummary: null,
+                              sandboxJobId: null,
+                              retriable: false,
+                              occurredAt:
+                                toIsoString(nextTask.updatedAt) ?? new Date().toISOString(),
+                              rawMessage: nextTask.errorMessage,
+                            }
+                          : null)
                       : null,
                   latestStep: payload.latestStep ?? snapshot.latestStep,
                   timeline: appendLiveTimelineItem(snapshot.timeline, {
@@ -7432,11 +7581,14 @@ function App() {
                 task: {
                   ...snapshot.task,
                   status: snapshot.task.status === "failed" ? "failed" : "completed",
+                  errorMessage:
+                    snapshot.task.status === "failed" ? snapshot.task.errorMessage : null,
                   updatedAt: new Date(),
                   completedAt: new Date(),
                 },
                 approval: null,
                 artifact: payload.artifact,
+                failure: snapshot.task.status === "failed" ? snapshot.failure : null,
                 timeline: appendLiveTimelineItem(snapshot.timeline, {
                   id: `artifact-${payload.artifact.id}`,
                   title: "Artifact ready",

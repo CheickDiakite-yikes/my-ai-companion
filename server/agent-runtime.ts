@@ -12,6 +12,8 @@ import type {
   AgentTaskKind,
   AgentTaskSummary,
   ChatTurnIntent,
+  TaskFailureStage,
+  TaskFailureSummary,
   TaskInputResolution,
 } from "@shared/agent";
 import { storage } from "./storage";
@@ -659,6 +661,7 @@ interface StoredTaskPlan extends AgentExecutionPlan {
       | "skipped_deterministic_recovery";
     codeWorkerEnabled?: boolean;
     codeWorkerRecipes?: CodeWorkerRecipe[];
+    failure?: TaskFailureSummary;
   };
   context?: {
     imageHints?: string[];
@@ -2097,6 +2100,75 @@ function formatQaFailureForModel(failure: GameQaFailureDiagnostics): string {
       : null,
   ].filter((value): value is string => Boolean(value));
   return chunks.join(" ; ");
+}
+
+function toFailureStage(stepKey: string | null | undefined): TaskFailureStage {
+  if (!stepKey) return "unknown";
+  if (stepKey === "plan") return "plan";
+  if (stepKey === "build") return "build";
+  if (stepKey === "qa") return "qa";
+  if (stepKey === "publish") return "publish";
+  if (stepKey === "approval") return "approval";
+  return "unknown";
+}
+
+function stripTracePrefix(message: string): string {
+  return message.replace(/^\[trace\s+[a-z0-9-]{6,}\]\s*/i, "").trim();
+}
+
+function inferFailureCode(message: string): string | null {
+  const normalized = message.toLowerCase();
+  if (normalized.includes("invalid input value for enum agent_artifact_type")) {
+    return "artifact_type_enum_mismatch";
+  }
+  if (normalized.includes("playwright detected runtime/console errors")) {
+    return "playwright_runtime_console";
+  }
+  if (normalized.includes("render root not detected")) {
+    return "render_root_missing";
+  }
+  if (normalized.includes("script block")) {
+    return "script_missing";
+  }
+  if (normalized.includes("qa failed")) {
+    return "qa_failed";
+  }
+  if (normalized.includes("approval is still pending")) {
+    return "approval_pending";
+  }
+  if (normalized.includes("task not found")) {
+    return "task_not_found";
+  }
+  return null;
+}
+
+function inferRetriableFailure(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes("timeout") ||
+    normalized.includes("timed out") ||
+    normalized.includes("temporar") ||
+    normalized.includes("rate limit") ||
+    normalized.includes("429") ||
+    normalized.includes("econn") ||
+    normalized.includes("network") ||
+    normalized.includes("unavailable") ||
+    normalized.includes("playwright_exception")
+  );
+}
+
+function withFailureAudit(params: {
+  plan: StoredTaskPlan | null;
+  failure: TaskFailureSummary;
+}): StoredTaskPlan | null {
+  if (!params.plan) return params.plan;
+  return {
+    ...params.plan,
+    audit: {
+      ...(params.plan.audit ?? {}),
+      failure: params.failure,
+    },
+  };
 }
 
 function shouldAllowFormatOverride(prompt: string): boolean {
@@ -3723,17 +3795,43 @@ async function runTaskExecution(state: RuntimeState): Promise<void> {
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     const errorWithTrace = `[trace ${auditTraceId.slice(0, 8)}] ${errorMessage}`;
+    const failedStep = await storage.getAgentSteps(task.id).then((steps) =>
+      steps.find((step) => step.status === "in_progress") ?? null,
+    );
+    const toolCalls = await storage.getAgentToolCalls(task.id);
+    const primaryFailedToolCall = [...toolCalls]
+      .reverse()
+      .find((toolCall) => toolCall.status === "failed" || toolCall.status === "started");
+    const fallbackToolCall = [...toolCalls].reverse().find((toolCall) => toolCall.status === "completed");
+    const relatedToolCall = primaryFailedToolCall ?? fallbackToolCall ?? null;
+
+    const failureSummary: TaskFailureSummary = {
+      traceId: auditTraceId,
+      stage: toFailureStage(failedStep?.stepKey ?? null),
+      stepKey: failedStep?.stepKey ?? null,
+      stepTitle: failedStep?.title ?? null,
+      toolName: relatedToolCall?.toolName ?? null,
+      code: inferFailureCode(errorMessage),
+      reason: stripTracePrefix(errorWithTrace),
+      toolOutputSummary: relatedToolCall?.outputSummary ?? null,
+      sandboxJobId: sandboxJob.id,
+      retriable: inferRetriableFailure(errorMessage),
+      occurredAt: new Date().toISOString(),
+      rawMessage: errorWithTrace,
+    };
+    plan = withFailureAudit({
+      plan,
+      failure: failureSummary,
+    });
 
     await storage.updateAgentTaskStatus({
       taskId: task.id,
       status: "failed",
       errorMessage: errorWithTrace,
       completedAt: new Date(),
+      plan: plan ?? undefined,
     });
 
-    const failedStep = await storage.getAgentSteps(task.id).then((steps) =>
-      steps.find((step) => step.status === "in_progress") ?? null,
-    );
     if (failedStep) {
       await storage.updateAgentStep({
         stepId: failedStep.id,
@@ -3755,14 +3853,35 @@ async function runTaskExecution(state: RuntimeState): Promise<void> {
       type: "task_failed",
       taskId: task.id,
       message: errorWithTrace,
+      failure: failureSummary,
     });
+
+    console.error(
+      `[agent-runtime][task_failed] ${JSON.stringify({
+        taskId: task.id,
+        traceId: failureSummary.traceId,
+        stage: failureSummary.stage,
+        stepKey: failureSummary.stepKey,
+        toolName: failureSummary.toolName,
+        code: failureSummary.code,
+        retriable: failureSummary.retriable,
+        reason: failureSummary.reason,
+      })}`,
+    );
 
     await createAssistantUiMessage({
       conversationId: state.conversationId,
       text: `Task failed: ${errorWithTrace}`,
       uiPayload: {
         kind: "agent_task_status",
-        task: toTaskSummary({ ...task, status: "failed" }),
+        task: toTaskSummary({ ...task, status: "failed", errorMessage: errorWithTrace }),
+        latestStep: failedStep
+          ? toStepSummary({
+              ...failedStep,
+              status: "failed",
+              detail: errorWithTrace,
+            })
+          : undefined,
         text: "Failed",
       },
     });
@@ -4241,6 +4360,7 @@ function toTaskSummary(task: {
   riskLevel: TaskRiskLevel;
   taskKind: string;
   prompt: string;
+  errorMessage: string | null;
   createdAt: Date | null;
   updatedAt: Date | null;
   completedAt: Date | null;
@@ -4252,6 +4372,7 @@ function toTaskSummary(task: {
     riskLevel: task.riskLevel,
     taskKind: task.taskKind,
     prompt: task.prompt,
+    errorMessage: task.errorMessage,
     createdAt: task.createdAt,
     updatedAt: task.updatedAt,
     completedAt: task.completedAt,

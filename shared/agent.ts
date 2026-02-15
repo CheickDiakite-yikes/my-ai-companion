@@ -27,6 +27,29 @@ export type AgentTaskKind = "mini_game" | "doc_markdown" | "web_build" | "mixed"
 export type AgentOfferStatus = AgentOffer["status"];
 export type AgentIntentSessionStatus = AgentIntentSession["status"];
 
+export type TaskFailureStage =
+  | "plan"
+  | "build"
+  | "qa"
+  | "publish"
+  | "approval"
+  | "unknown";
+
+export interface TaskFailureSummary {
+  traceId: string | null;
+  stage: TaskFailureStage;
+  stepKey: string | null;
+  stepTitle: string | null;
+  toolName: string | null;
+  code: string | null;
+  reason: string;
+  toolOutputSummary: string | null;
+  sandboxJobId: string | null;
+  retriable: boolean;
+  occurredAt: string | null;
+  rawMessage: string | null;
+}
+
 export interface AgentTaskSummary {
   id: string;
   conversationId: string;
@@ -34,6 +57,7 @@ export interface AgentTaskSummary {
   riskLevel: TaskRiskLevel;
   taskKind: string;
   prompt: string;
+  errorMessage: string | null;
   createdAt: Date | null;
   updatedAt: Date | null;
   completedAt: Date | null;
@@ -223,6 +247,7 @@ export interface AgentTaskDetailResponse {
   resolvedStatusSource?: TaskStateResolvedStatusSource;
   qualitySummary?: ArtifactQualitySummary | null;
   assumptionsUsed?: TaskAssumption[];
+  failure?: TaskFailureSummary | null;
 }
 
 export interface UnifiedAgentTaskTimelineItem {
@@ -244,6 +269,7 @@ export interface UnifiedAgentTaskCardModel {
   approval: AgentApprovalSummary | null;
   artifact: AgentArtifactSummary | null;
   timeline: UnifiedAgentTaskTimelineItem[];
+  failure: TaskFailureSummary | null;
   autoCollapsed?: boolean;
 }
 
@@ -271,6 +297,7 @@ export type AgentTaskEvent =
       type: "task_failed";
       taskId: string;
       message: string;
+      failure?: TaskFailureSummary | null;
     };
 
 export type AgentMessageUiPayload =

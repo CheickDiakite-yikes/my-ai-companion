@@ -44,6 +44,7 @@ import type {
   AgentTaskEvent,
   AgentTaskSummary,
   TaskAssumption,
+  TaskFailureSummary,
   TaskInputResolution,
   TaskStateVersion,
   TaskStateResolvedStatusSource,
@@ -1370,6 +1371,7 @@ function toAgentTaskSummary(task: AgentTask): AgentTaskSummary {
     riskLevel: task.riskLevel,
     taskKind: task.taskKind,
     prompt: task.prompt,
+    errorMessage: task.errorMessage ?? null,
     createdAt: task.createdAt,
     updatedAt: task.updatedAt,
     completedAt: task.completedAt,
@@ -1731,6 +1733,188 @@ function extractTaskAssumptionsUsed(task: AgentTask): TaskAssumption[] {
     assumptionsUsed.push({ key, value, reason });
   }
   return assumptionsUsed;
+}
+
+function toFailureStage(stepKey: string | null | undefined): TaskFailureSummary["stage"] {
+  if (!stepKey) return "unknown";
+  if (stepKey === "plan") return "plan";
+  if (stepKey === "build") return "build";
+  if (stepKey === "qa") return "qa";
+  if (stepKey === "publish") return "publish";
+  if (stepKey === "approval") return "approval";
+  return "unknown";
+}
+
+function stripFailureTracePrefix(message: string): string {
+  return message.replace(/^\[trace\s+[a-z0-9-]{6,}\]\s*/i, "").trim();
+}
+
+function extractFailureTraceId(message: string): string | null {
+  const match = message.match(/^\[trace\s+([a-z0-9-]{6,})\]\s*/i);
+  return match?.[1] ?? null;
+}
+
+function isFailureStage(value: unknown): value is TaskFailureSummary["stage"] {
+  return (
+    value === "plan" ||
+    value === "build" ||
+    value === "qa" ||
+    value === "publish" ||
+    value === "approval" ||
+    value === "unknown"
+  );
+}
+
+function inferFailureCodeFromMessage(message: string): string | null {
+  const normalized = message.toLowerCase();
+  if (normalized.includes("invalid input value for enum agent_artifact_type")) {
+    return "artifact_type_enum_mismatch";
+  }
+  if (normalized.includes("playwright detected runtime/console errors")) {
+    return "playwright_runtime_console";
+  }
+  if (normalized.includes("render root not detected")) {
+    return "render_root_missing";
+  }
+  if (normalized.includes("qa failed")) {
+    return "qa_failed";
+  }
+  if (normalized.includes("approval is still pending")) {
+    return "approval_pending";
+  }
+  if (normalized.includes("task not found")) {
+    return "task_not_found";
+  }
+  return null;
+}
+
+function inferRetriableFailureFromMessage(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes("timeout") ||
+    normalized.includes("timed out") ||
+    normalized.includes("temporar") ||
+    normalized.includes("rate limit") ||
+    normalized.includes("429") ||
+    normalized.includes("econn") ||
+    normalized.includes("network") ||
+    normalized.includes("unavailable") ||
+    normalized.includes("playwright_exception")
+  );
+}
+
+function normalizeStoredTaskFailureSummary(value: unknown): TaskFailureSummary | null {
+  if (!isRecordLike(value)) return null;
+  const reason = typeof value.reason === "string" ? value.reason.trim() : "";
+  if (!reason) return null;
+  const rawMessage =
+    typeof value.rawMessage === "string" && value.rawMessage.trim().length > 0
+      ? value.rawMessage.trim()
+      : reason;
+  const traceFromRaw = extractFailureTraceId(rawMessage);
+  const stage = isFailureStage(value.stage) ? value.stage : "unknown";
+  const occurredAt =
+    typeof value.occurredAt === "string" && value.occurredAt.trim().length > 0
+      ? value.occurredAt
+      : null;
+  return {
+    traceId:
+      (typeof value.traceId === "string" && value.traceId.trim().length > 0
+        ? value.traceId.trim()
+        : null) ?? traceFromRaw,
+    stage,
+    stepKey: typeof value.stepKey === "string" ? value.stepKey : null,
+    stepTitle: typeof value.stepTitle === "string" ? value.stepTitle : null,
+    toolName: typeof value.toolName === "string" ? value.toolName : null,
+    code:
+      typeof value.code === "string" && value.code.trim().length > 0
+        ? value.code
+        : inferFailureCodeFromMessage(rawMessage),
+    reason,
+    toolOutputSummary:
+      typeof value.toolOutputSummary === "string" ? value.toolOutputSummary : null,
+    sandboxJobId: typeof value.sandboxJobId === "string" ? value.sandboxJobId : null,
+    retriable:
+      typeof value.retriable === "boolean"
+        ? value.retriable
+        : inferRetriableFailureFromMessage(rawMessage),
+    occurredAt,
+    rawMessage,
+  };
+}
+
+function inferTaskFailureSummary(input: {
+  task: AgentTask;
+  steps: AgentStep[];
+  toolCalls: AgentToolCall[];
+}): TaskFailureSummary | null {
+  const plan = isRecordLike(input.task.plan) ? input.task.plan : null;
+  const audit = isRecordLike(plan?.audit) ? plan.audit : null;
+  const storedFailure = normalizeStoredTaskFailureSummary(audit?.failure);
+  if (storedFailure) {
+    return storedFailure;
+  }
+
+  const baseMessage =
+    (input.task.errorMessage ?? "").trim() ||
+    [...input.steps]
+      .sort((a, b) => {
+        const left = a.updatedAt?.getTime() ?? a.createdAt?.getTime() ?? 0;
+        const right = b.updatedAt?.getTime() ?? b.createdAt?.getTime() ?? 0;
+        return right - left;
+      })
+      .find((step) => step.status === "failed")
+      ?.detail?.trim() ||
+    [...input.toolCalls]
+      .sort((a, b) => {
+        const left = a.createdAt?.getTime() ?? 0;
+        const right = b.createdAt?.getTime() ?? 0;
+        return right - left;
+      })
+      .find((toolCall) => toolCall.status === "failed")
+      ?.outputSummary?.trim() ||
+    "";
+
+  if (!baseMessage) return null;
+
+  const failedStep =
+    [...input.steps]
+      .sort((a, b) => {
+        const left = a.updatedAt?.getTime() ?? a.createdAt?.getTime() ?? 0;
+        const right = b.updatedAt?.getTime() ?? b.createdAt?.getTime() ?? 0;
+        return right - left;
+      })
+      .find((step) => step.status === "failed") ?? null;
+  const failedToolCall =
+    [...input.toolCalls]
+      .sort((a, b) => {
+        const left = a.createdAt?.getTime() ?? 0;
+        const right = b.createdAt?.getTime() ?? 0;
+        return right - left;
+      })
+      .find((toolCall) => toolCall.status === "failed" || toolCall.status === "started") ??
+    null;
+
+  const rawMessage = baseMessage;
+  return {
+    traceId: extractFailureTraceId(rawMessage),
+    stage: toFailureStage(failedStep?.stepKey),
+    stepKey: failedStep?.stepKey ?? null,
+    stepTitle: failedStep?.title ?? null,
+    toolName: failedToolCall?.toolName ?? null,
+    code: inferFailureCodeFromMessage(rawMessage),
+    reason: stripFailureTracePrefix(rawMessage),
+    toolOutputSummary: failedToolCall?.outputSummary ?? null,
+    sandboxJobId: null,
+    retriable: inferRetriableFailureFromMessage(rawMessage),
+    occurredAt:
+      input.task.completedAt?.toISOString() ??
+      failedStep?.updatedAt?.toISOString() ??
+      failedStep?.createdAt?.toISOString() ??
+      failedToolCall?.createdAt?.toISOString() ??
+      null,
+    rawMessage,
+  };
 }
 
 async function renderArtifactHtmlToPdf(params: {
@@ -5556,6 +5740,11 @@ export async function registerRoutes(
         artifacts: task.artifacts,
       });
       const assumptionsUsed = extractTaskAssumptionsUsed(task);
+      const failure = inferTaskFailureSummary({
+        task,
+        steps: task.steps,
+        toolCalls: task.toolCalls,
+      });
 
       return res.status(200).json({
         traceId: getTraceId(req),
@@ -5574,6 +5763,7 @@ export async function registerRoutes(
         resolvedStatusSource,
         qualitySummary,
         assumptionsUsed,
+        failure,
       });
     } catch (error) {
       traceError(req, "agent.task.read.failed", error, {
