@@ -90,6 +90,18 @@ async function run(): Promise<void> {
   );
 
   assert.equal(
+    classifyChatTurnIntent("create a research paper on quantum error correction"),
+    "agent_task",
+    "Research-paper deliverables should route to agent lane",
+  );
+
+  assert.equal(
+    classifyChatTurnIntent("create a guide on vibe coding for beginners"),
+    "agent_task",
+    "Guide deliverables should route to agent lane",
+  );
+
+  assert.equal(
     inferAgentTaskKind("make a game and a doc for class", true),
     "mixed",
     "Game + doc prompts should map to mixed task",
@@ -99,6 +111,21 @@ async function run(): Promise<void> {
     inferAgentTaskKind("write a project brief", false),
     "doc_markdown",
     "Doc prompts should map to doc artifact",
+  );
+
+  assert.equal(
+    inferAgentTaskKind("create a landing page for me based on what you know", false),
+    "web_build",
+    "Landing page prompts should map to web_build task kind",
+  );
+
+  assert.equal(
+    inferAgentTaskKind(
+      "Create a landing page for an AI food startup with hero, features, pricing, and CTA",
+      false,
+    ),
+    "web_build",
+    "Landing-page startup prompts must not drift into mini-game because of incidental words like food",
   );
 
   assert.equal(

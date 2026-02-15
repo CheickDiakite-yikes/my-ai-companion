@@ -52,7 +52,7 @@ import {
 const AGENT_ACTION_PATTERN =
   /\b(create|build|generate|make|draft|write|design|code|develop|plan|send|email|connect|control|automate|research|organize|prepare|summari[sz]e)\b/i;
 const AGENT_DELIVERABLE_PATTERN =
-  /\b(game|mini\s*game|document|doc|brief|summary|report|presentation|slides|artifact|prototype|app|website|landing\s*page|email|draft|checklist|letter|cover\s*letter|resume|cv|essay|statement|memo|proposal)\b/i;
+  /\b(game|mini\s*game|document|doc|brief|summary|report|presentation|slides|artifact|prototype|app|website|landing\s*page|web\s*app|mini\s*saas|email|draft|checklist|letter|cover\s*letter|resume|cv|essay|statement|memo|proposal|paper|research\s*paper|guide|tutorial|whitepaper)\b/i;
 const TASK_DIRECTIVE_PATTERNS = [
   /^\s*(can|could|would)\s+you\b/i,
   /^\s*please\b/i,
@@ -103,14 +103,20 @@ const LOW_RISK_EMAIL_DRAFT_PATTERNS = [
 ];
 
 const DOC_HINT_PATTERNS = [
-  /\b(doc|document|notes|brief|summary|write[- ]?up|presentation|slides|email|letter|cover\s*letter|resume|cv|essay|statement|memo|proposal|landing\s*page|website)\b/i,
+  /\b(doc|document|notes|brief|summary|write[- ]?up|presentation|slides|email|letter|cover\s*letter|resume|cv|essay|statement|memo|proposal|paper|research\s*paper|guide|tutorial|whitepaper)\b/i,
+];
+const WEB_BUILD_HINT_PATTERNS = [
+  /\b(landing\s*page|website|web\s*app|mini\s*saas|prototype|tool)\b/i,
 ];
 const GAME_HINT_PATTERNS = [/\b(game|mini\s*game|playable)\b/i];
 const GAME_GENRE_HINT_PATTERNS = [
   /\b(snake|pong|tetris|platformer|runner|arcade|maze|shooter|flappy|breakout)\b/i,
 ];
-const GAME_MECHANIC_HINT_PATTERNS = [
-  /\b(arrow[-\s]?keys?|controls\b|obstacles?|collision|self[-\s]?collision|pellets?|food|score|restart|segments?|body)\b/i,
+const GAME_MECHANIC_STRONG_HINT_PATTERNS = [
+  /\b(arrow[-\s]?keys?|controls\b|obstacles?|collision|self[-\s]?collision)\b/i,
+];
+const GAME_MECHANIC_WEAK_HINT_PATTERNS = [
+  /\b(pellets?|food|score|restart|segments?|body)\b/i,
 ];
 const PLAYABLE_REQUEST_PATTERNS = [
   /\b(play together|we can play|something we can play|play with (me|us))\b/i,
@@ -681,6 +687,8 @@ function buildDeterministicPlan(input: {
         ? "Craft a mini game"
         : taskKind === "doc_markdown"
           ? "Draft a polished doc"
+          : taskKind === "web_build"
+            ? "Build a web experience"
           : "Craft game + doc bundle",
     taskKind,
     riskLevel,
@@ -848,7 +856,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isAgentTaskKind(value: unknown): value is AgentTaskKind {
   return (
-    value === "mini_game" || value === "doc_markdown" || value === "mixed"
+    value === "mini_game" ||
+    value === "doc_markdown" ||
+    value === "web_build" ||
+    value === "mixed"
   );
 }
 
@@ -867,6 +878,12 @@ function reconcilePlannedTaskKind(params: {
     return params.fallback;
   }
   if (params.fallback === "doc_markdown" && params.candidate === "mini_game") {
+    return params.fallback;
+  }
+  if (params.fallback === "doc_markdown" && params.candidate === "web_build") {
+    return params.fallback;
+  }
+  if (params.fallback === "web_build" && params.candidate !== "web_build") {
     return params.fallback;
   }
   return params.candidate;
@@ -1187,6 +1204,187 @@ function buildDeterministicRecoveryMiniGameProject(input: {
       model: "deterministic_recovery",
       backend: "deterministic_recovery",
       backendFallbackReason: null,
+    },
+  };
+}
+
+function extractWebBuildTopic(prompt: string): string {
+  const normalized = prompt.replace(/\s+/g, " ").trim();
+  const topicMatch = normalized.match(
+    /\b(?:for|about|around|focused on|for a)\s+([a-z0-9&.,' -]{3,80})/i,
+  );
+  const raw = topicMatch?.[1]?.trim() ?? extractSubject(normalized, "idea");
+  return truncate(raw, 72);
+}
+
+function buildDeterministicRecoveryWebBuildProject(input: {
+  prompt: string;
+  imageHints: string[];
+  attempt: number;
+}): GeneratedMiniGameProject {
+  const topic = extractWebBuildTopic(input.prompt);
+  const title = toTitleCase(`${topic} web app`);
+  const hint = truncate(
+    input.imageHints[0] ?? "A polished, fast, and mobile-friendly web experience.",
+    220,
+  );
+  const seed = hashToPositiveInt(`${input.prompt}|${input.imageHints.join("|")}`);
+  const accentHue = seed % 360;
+  const accent = `hsl(${accentHue} 78% 52%)`;
+  const accentSoft = `hsl(${(accentHue + 28) % 360} 72% 66%)`;
+  const dark = "hsl(14 39% 14%)";
+  const light = "hsl(42 58% 92%)";
+
+  const html = `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>${escapeHtml(title)}</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main id="app" data-app-root="true">
+      <header class="hero">
+        <p class="eyebrow">Built by Zee</p>
+        <h1>${escapeHtml(title)}</h1>
+        <p class="lead">${escapeHtml(hint)}</p>
+        <div class="cta-row">
+          <button id="primaryAction" class="btn btn-primary">Get Started</button>
+          <button id="secondaryAction" class="btn btn-secondary">See Features</button>
+        </div>
+      </header>
+
+      <section id="features" class="panel">
+        <h2>Core Features</h2>
+        <ul>
+          <li>Responsive layout for phone and desktop</li>
+          <li>Fast interaction with no build step</li>
+          <li>Editable starter structure for rapid iteration</li>
+        </ul>
+      </section>
+
+      <section class="panel">
+        <h2>Quick Intake</h2>
+        <form id="captureForm" class="capture-form">
+          <label>
+            What should this app do next?
+            <input id="captureInput" type="text" placeholder="Add your idea..." />
+          </label>
+          <button class="btn btn-primary" type="submit">Save Idea</button>
+        </form>
+        <p id="savedMessage" class="saved-message" aria-live="polite"></p>
+      </section>
+    </main>
+
+    <script src="./app.js" defer></script>
+  </body>
+</html>`;
+
+  const css = `:root {
+  --app-bg: ${dark};
+  --app-card: color-mix(in oklab, ${light} 88%, white);
+  --app-on-bg: ${light};
+  --app-accent: ${accent};
+  --app-accent-soft: ${accentSoft};
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: "DM Sans", sans-serif;
+  min-height: 100vh;
+  background:
+    radial-gradient(110% 90% at 18% 8%, color-mix(in srgb, var(--app-accent) 26%, transparent) 0%, transparent 54%),
+    radial-gradient(90% 120% at 86% 10%, color-mix(in srgb, var(--app-accent-soft) 20%, transparent) 0%, transparent 52%),
+    var(--app-bg);
+  color: var(--app-on-bg);
+  padding: 20px;
+}
+#app { max-width: 940px; margin: 0 auto; display: grid; gap: 14px; }
+.hero, .panel {
+  border: 1px solid color-mix(in srgb, var(--app-on-bg) 14%, transparent);
+  border-radius: 18px;
+  padding: 18px;
+  background: color-mix(in srgb, var(--app-card) 90%, transparent);
+  color: #24180f;
+}
+.eyebrow { margin: 0; text-transform: uppercase; letter-spacing: 0.08em; font-size: 11px; opacity: 0.7; }
+h1 { margin: 8px 0 10px; font-family: "Outfit", sans-serif; font-size: clamp(1.6rem, 4vw, 2.6rem); line-height: 1.1; }
+h2 { margin: 0 0 8px; font-family: "Outfit", sans-serif; font-size: 1.2rem; }
+.lead { margin: 0 0 12px; line-height: 1.55; }
+.cta-row { display: flex; flex-wrap: wrap; gap: 10px; }
+.btn {
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, #24180f 18%, transparent);
+  background: transparent;
+  color: #24180f;
+  font-weight: 700;
+  padding: 10px 16px;
+  cursor: pointer;
+}
+.btn-primary { background: var(--app-accent); color: white; border-color: transparent; }
+.btn-secondary { background: color-mix(in srgb, var(--app-accent-soft) 42%, white); }
+ul { margin: 0; padding-left: 18px; line-height: 1.6; }
+.capture-form { display: grid; gap: 10px; }
+input {
+  width: 100%;
+  margin-top: 6px;
+  border: 1px solid color-mix(in srgb, #24180f 22%, transparent);
+  border-radius: 12px;
+  padding: 10px 12px;
+  font: inherit;
+}
+.saved-message { min-height: 20px; margin: 4px 0 0; font-weight: 600; color: color-mix(in srgb, #24180f 84%, var(--app-accent)); }
+@media (max-width: 640px) {
+  body { padding: 14px; }
+  .hero, .panel { padding: 14px; }
+}`;
+
+  const js = `const primary = document.getElementById("primaryAction");
+const secondary = document.getElementById("secondaryAction");
+const features = document.getElementById("features");
+const form = document.getElementById("captureForm");
+const input = document.getElementById("captureInput");
+const savedMessage = document.getElementById("savedMessage");
+
+primary?.addEventListener("click", () => {
+  savedMessage.textContent = "Launched. Start customizing this web app with your exact requirements.";
+});
+
+secondary?.addEventListener("click", () => {
+  features?.scrollIntoView({ behavior: "smooth", block: "start" });
+});
+
+form?.addEventListener("submit", (event) => {
+  event.preventDefault();
+  const value = input?.value?.trim() ?? "";
+  if (!value) {
+    savedMessage.textContent = "Add one idea first so we can tailor the build.";
+    return;
+  }
+  savedMessage.textContent = "Saved: " + value;
+  if (input) input.value = "";
+});`;
+
+  return {
+    title,
+    summary: `Web build created: ${title}`,
+    entryPath: "artifacts/web/index.html",
+    entryHtml: html,
+    files: [
+      { path: "artifacts/web/index.html", content: html },
+      { path: "artifacts/web/styles.css", content: css },
+      { path: "artifacts/web/app.js", content: js },
+    ],
+    generationMetadata: {
+      mode: "deterministic_recovery",
+      format: "multi_file",
+      engine: "canvas_dom",
+      mechanics: ["responsive_layout", "cta_actions", "interactive_form"],
+      attempt: input.attempt,
+      model: "deterministic_recovery",
+      backend: "deterministic_recovery",
+      backendFallbackReason: "web_build_deterministic_v1_2",
     },
   };
 }
@@ -1744,6 +1942,23 @@ async function materializeGameProjectInSandbox(params: {
     entryPath,
     fileMap,
   });
+
+  if (bundledEntryHtml !== entryHtmlRaw) {
+    await writeSandboxFile({
+      job: params.sandboxJob,
+      toolName: "mini_game_generator",
+      relativePath: entryPath,
+      content: bundledEntryHtml,
+    });
+    fileMap.set(entryPath, bundledEntryHtml);
+    const entryIndex = sanitizedFiles.findIndex((file) => file.path === entryPath);
+    if (entryIndex >= 0) {
+      sanitizedFiles[entryIndex] = {
+        path: entryPath,
+        content: bundledEntryHtml,
+      };
+    }
+  }
 
   return {
     entryPath,
@@ -2368,11 +2583,18 @@ export function inferAgentTaskKind(
   context?: ChatTurnIntentContext,
 ): AgentTaskKind {
   const normalized = text.toLowerCase();
+  const hasGameAnchorSignal =
+    GAME_HINT_PATTERNS.some((pattern) => pattern.test(normalized)) ||
+    GAME_GENRE_HINT_PATTERNS.some((pattern) => pattern.test(normalized)) ||
+    PLAYABLE_REQUEST_PATTERNS.some((pattern) => pattern.test(normalized));
   const wantsGame = hasGameRequestSignal(normalized);
+  const wantsWebBuild = WEB_BUILD_HINT_PATTERNS.some((pattern) =>
+    pattern.test(normalized),
+  );
   const wantsDoc = DOC_HINT_PATTERNS.some((pattern) => pattern.test(normalized));
   const hasExplicitDocSignal =
     wantsDoc &&
-    /\b(doc|document|brief|summary|report|presentation|slides|deck|email|letter|cover\s*letter|resume|cv|essay|statement|memo|proposal)\b/i.test(
+    /\b(doc|document|brief|summary|report|presentation|slides|deck|email|letter|cover\s*letter|resume|cv|essay|statement|memo|proposal|paper|research\s*paper|guide|tutorial|whitepaper)\b/i.test(
       normalized,
     );
   const likelyGameFollowUp =
@@ -2382,8 +2604,12 @@ export function inferAgentTaskKind(
     (AGENT_FOLLOW_UP_REFERENCE_PATTERNS.some((pattern) => pattern.test(normalized)) ||
       MINI_GAME_TUNING_PATTERNS.some((pattern) => pattern.test(normalized)));
 
+  if (wantsWebBuild && !hasGameAnchorSignal && !likelyGameFollowUp) {
+    return "web_build";
+  }
   if (wantsGame && wantsDoc) return "mixed";
   if (wantsGame || likelyGameFollowUp) return "mini_game";
+  if (wantsWebBuild) return "web_build";
   if (wantsDoc) return "doc_markdown";
   if (hasImage) return "mini_game";
   return "doc_markdown";
@@ -2411,12 +2637,27 @@ export function isExplicitBuildCommand(text: string): boolean {
 }
 
 function hasGameRequestSignal(text: string): boolean {
-  return (
+  const hasGameAnchorSignal =
     GAME_HINT_PATTERNS.some((pattern) => pattern.test(text)) ||
     GAME_GENRE_HINT_PATTERNS.some((pattern) => pattern.test(text)) ||
-    GAME_MECHANIC_HINT_PATTERNS.some((pattern) => pattern.test(text)) ||
-    PLAYABLE_REQUEST_PATTERNS.some((pattern) => pattern.test(text))
+    PLAYABLE_REQUEST_PATTERNS.some((pattern) => pattern.test(text));
+  if (hasGameAnchorSignal) {
+    return true;
+  }
+
+  const hasStrongMechanicSignal = GAME_MECHANIC_STRONG_HINT_PATTERNS.some((pattern) =>
+    pattern.test(text),
   );
+  if (!hasStrongMechanicSignal) {
+    return false;
+  }
+
+  // Avoid false positives like "AI food startup" by requiring a second gameplay cue.
+  const hasWeakMechanicSignal = GAME_MECHANIC_WEAK_HINT_PATTERNS.some((pattern) =>
+    pattern.test(text),
+  );
+  const hasGameplayFraming = /\b(gameplay|level|arcade|player)\b/i.test(text);
+  return hasWeakMechanicSignal || hasGameplayFraming;
 }
 
 export function inferTaskRiskLevel(text: string): TaskRiskLevel {
@@ -2741,13 +2982,25 @@ async function runTaskExecution(state: RuntimeState): Promise<void> {
 
     const artifactsToPublish: AgentArtifactSummary[] = [];
 
-    if (taskKind === "mini_game" || taskKind === "mixed") {
+    if (taskKind === "mini_game" || taskKind === "mixed" || taskKind === "web_build") {
+      const isWebBuild = taskKind === "web_build";
+      const generatorToolName = isWebBuild ? "web_build_generator" : "mini_game_generator";
+      const qaLabel = isWebBuild ? "web build" : "game artifact";
+      const generatorPrompt = isWebBuild
+        ? [
+            "Build a browser-based web app / landing page (not a game).",
+            "Use clear semantic HTML, CSS, and JavaScript with at least one interactive behavior.",
+            "Keep it mobile-friendly and self-contained with no build step.",
+            "",
+            `User request: ${state.prompt}`,
+          ].join("\n")
+        : state.prompt;
       await assertRuntimeToolExecutionAllowed({
         taskId: task.id,
         taskRiskLevel: task.riskLevel,
-        toolName: "mini_game_generator",
+        toolName: generatorToolName,
       });
-      assertSandboxToolAccess({ toolName: "mini_game_generator" });
+      assertSandboxToolAccess({ toolName: generatorToolName });
 
       const preferredFormat = selectPreferredGameProjectFormat(state.prompt);
       const maxRetries = resolveAgentGameMaxRetries();
@@ -2762,7 +3015,7 @@ async function runTaskExecution(state: RuntimeState): Promise<void> {
       const toolCall = await storage.createAgentToolCall({
         taskId: task.id,
         stepId: buildStep?.id ?? null,
-        toolName: "mini_game_generator",
+        toolName: generatorToolName,
         riskLevel: "low",
         argsRedacted: {
           promptSnippet: truncate(state.prompt, 220),
@@ -2773,6 +3026,7 @@ async function runTaskExecution(state: RuntimeState): Promise<void> {
           attemptBudget,
           modelGeneratorEnabled: isModelGameGeneratorEnabled(),
           backend: resolveCodeWorkerBackend(),
+          taskKind,
         },
         status: "started",
         outputSummary: null,
@@ -2821,21 +3075,26 @@ async function runTaskExecution(state: RuntimeState): Promise<void> {
             buildStep.id,
             state,
             attempt === 1
-              ? `Generating game artifact (attempt ${attempt}/${attemptBudget}).`
-              : `Repairing game artifact after QA feedback (attempt ${attempt}/${attemptBudget}).`,
+              ? `Generating ${qaLabel} (attempt ${attempt}/${attemptBudget}).`
+              : `Repairing ${qaLabel} after QA feedback (attempt ${attempt}/${attemptBudget}).`,
           );
         }
 
         try {
-          const project: GeneratedMiniGameProject =
-            attempt === 1 || !generatedProject
+          const project: GeneratedMiniGameProject = isWebBuild
+            ? buildDeterministicRecoveryWebBuildProject({
+                prompt: state.prompt,
+                imageHints: effectiveImageHints,
+                attempt,
+              })
+            : attempt === 1 || !generatedProject
               ? await adapter.generateMiniGame({
-                  prompt: state.prompt,
+                  prompt: generatorPrompt,
                   imageHints: effectiveImageHints,
                   attempt,
                 })
               : await adapter.repairMiniGame({
-                  prompt: state.prompt,
+                  prompt: generatorPrompt,
                   imageHints: effectiveImageHints,
                   previousProject: generatedProject,
                   qaFailures,
@@ -2851,15 +3110,30 @@ async function runTaskExecution(state: RuntimeState): Promise<void> {
           gameMaterialized = materialized;
 
           const qa = codeWorkerEnabled
-            ? await runMiniGameCodeWorkerQa({
-                prompt: state.prompt,
-                html: materialized.entryHtml,
-                sandboxJob,
-                relativeHtmlPath: materialized.entryPath,
-                approvalGranted: task.riskLevel === "high",
-              })
-            : await runMiniGameChecks({
-                prompt: state.prompt,
+            ? isWebBuild
+              ? await runWebBuildCodeWorkerQa({
+                  prompt: state.prompt,
+                  html: materialized.entryHtml,
+                  sandboxJob,
+                  relativeHtmlPath: materialized.entryPath,
+                  approvalGranted: task.riskLevel === "high",
+                })
+              : await runMiniGameCodeWorkerQa({
+                  prompt: state.prompt,
+                  html: materialized.entryHtml,
+                  sandboxJob,
+                  relativeHtmlPath: materialized.entryPath,
+                  approvalGranted: task.riskLevel === "high",
+                })
+            : isWebBuild
+              ? await runWebBuildChecks({
+                  prompt: state.prompt,
+                  html: materialized.entryHtml,
+                  sandboxJob,
+                  relativeHtmlPath: materialized.entryPath,
+                })
+              : await runMiniGameChecks({
+                  prompt: state.prompt,
                 html: materialized.entryHtml,
                 sandboxJob,
                 relativeHtmlPath: materialized.entryPath,
@@ -2901,6 +3175,9 @@ async function runTaskExecution(state: RuntimeState): Promise<void> {
         } catch (error) {
           const reason = error instanceof Error ? error.message : String(error);
           lastFailureReason = reason;
+          if (isWebBuild) {
+            break;
+          }
           if (attempt >= attemptBudget) {
             break;
           }
@@ -2931,7 +3208,10 @@ async function runTaskExecution(state: RuntimeState): Promise<void> {
 
       if (!generatedProject || !gameMaterialized || !qaPassed) {
         const failureReason =
-          lastFailureReason ?? "Game generation failed with no diagnosable reason";
+          lastFailureReason ??
+          (isWebBuild
+            ? "Web build generation failed with no diagnosable reason"
+            : "Game generation failed with no diagnosable reason");
         plan = await updatePlanGeneratorAudit({
           taskId: task.id,
           plan,
@@ -2959,7 +3239,7 @@ async function runTaskExecution(state: RuntimeState): Promise<void> {
           });
         }
         throw new Error(
-          `Mini-game generation failed after ${attemptsUsed}/${attemptBudget} attempts: ${failureReason}`,
+          `${isWebBuild ? "Web build" : "Mini-game"} generation failed after ${attemptsUsed}/${attemptBudget} attempts: ${failureReason}`,
         );
       }
 
@@ -2982,7 +3262,7 @@ async function runTaskExecution(state: RuntimeState): Promise<void> {
         taskId: task.id,
         conversationId: state.conversationId,
         userId: state.userId,
-        type: "mini_game",
+        type: isWebBuild ? "web_app" : "mini_game",
         status: "active",
         title: generatedProject.title,
         markdownContent: null,
@@ -3003,6 +3283,7 @@ async function runTaskExecution(state: RuntimeState): Promise<void> {
             attempts: attemptsUsed,
             model: generatedProject.generationMetadata.model,
             backend: generatedProject.generationMetadata.backend,
+            taskKind,
             backendFallbackReason:
               generatedProject.generationMetadata.backendFallbackReason ?? null,
             mechanics: generatedProject.generationMetadata.mechanics,
@@ -3027,7 +3308,7 @@ async function runTaskExecution(state: RuntimeState): Promise<void> {
         toolCallId: toolCall.id,
         status: "completed",
         outputSummary:
-          `[trace ${auditTraceId.slice(0, 8)}] Published mini-game artifact ${artifact.id} ` +
+          `[trace ${auditTraceId.slice(0, 8)}] Published ${isWebBuild ? "web-app" : "mini-game"} artifact ${artifact.id} ` +
           `(sandbox ${sandboxJob.id.slice(0, 8)}) attempts=${attemptsUsed} ` +
           `format=${generatedProject.generationMetadata.format} engine=${generatedProject.generationMetadata.engine} backend=${generatedProject.generationMetadata.backend}`,
       });
@@ -3693,6 +3974,133 @@ async function runMiniGameCodeWorkerQa(params: {
   };
 }
 
+async function runWebBuildCodeWorkerQa(params: {
+  prompt: string;
+  html: string;
+  sandboxJob: EphemeralSandboxJob;
+  relativeHtmlPath: string;
+  approvalGranted: boolean;
+}): Promise<
+  | {
+      ok: true;
+      mode: "playwright_smoke" | "deterministic_fallback";
+      warning?: string;
+      recipeSummary?: string;
+    }
+  | {
+      ok: false;
+      reason: string;
+      mode: "playwright_smoke" | "deterministic_fallback";
+      diagnostics: GameQaFailureDiagnostics;
+      recipeSummary?: string;
+    }
+> {
+  const recipeStates: string[] = [];
+
+  const buildRecipe = await runCodeWorkerRecipe({
+    job: params.sandboxJob,
+    recipe: "build",
+    approved: params.approvalGranted,
+    inlineScript: buildCodeWorkerBuildScript(params.relativeHtmlPath),
+  });
+  recipeStates.push(`build=${buildRecipe.ok ? "ok" : "fail"}`);
+  if (!buildRecipe.ok) {
+    const reason = `code_worker build recipe failed: ${truncate(buildRecipe.stderr, 220)}`;
+    return {
+      ok: false,
+      reason,
+      mode: "deterministic_fallback",
+      diagnostics: {
+        reason,
+        mode: "deterministic_fallback",
+        consoleErrors: [],
+        runtimeErrors: [],
+        missingSignals: ["code_worker_build_failed"],
+      },
+      recipeSummary: `recipes: ${recipeStates.join(", ")}`,
+    };
+  }
+
+  const testRecipe = await runCodeWorkerRecipe({
+    job: params.sandboxJob,
+    recipe: "test",
+    approved: params.approvalGranted,
+    inlineScript: buildCodeWorkerWebTestScript(params.relativeHtmlPath),
+  });
+  recipeStates.push(`test=${testRecipe.ok ? "ok" : "fail"}`);
+  if (!testRecipe.ok) {
+    const reason = `code_worker test recipe failed: ${truncate(testRecipe.stderr, 220)}`;
+    return {
+      ok: false,
+      reason,
+      mode: "deterministic_fallback",
+      diagnostics: {
+        reason,
+        mode: "deterministic_fallback",
+        consoleErrors: [],
+        runtimeErrors: [],
+        missingSignals: ["code_worker_test_failed"],
+      },
+      recipeSummary: `recipes: ${recipeStates.join(", ")}`,
+    };
+  }
+
+  const deterministicQa = await runWebBuildChecks({
+    prompt: params.prompt,
+    html: params.html,
+    sandboxJob: params.sandboxJob,
+    relativeHtmlPath: params.relativeHtmlPath,
+    skipPlaywright: true,
+  });
+  if (!deterministicQa.ok) {
+    return {
+      ...deterministicQa,
+      recipeSummary: `recipes: ${recipeStates.join(", ")}`,
+    };
+  }
+
+  const fileUrl = pathToFileURL(
+    resolve(params.sandboxJob.rootDir, params.relativeHtmlPath),
+  ).toString();
+  const smokeRecipe = await runCodeWorkerRecipe({
+    job: params.sandboxJob,
+    recipe: "playwright_smoke",
+    approved: params.approvalGranted,
+    inlineScript: buildCodeWorkerPlaywrightSmokeScript(fileUrl),
+  });
+  recipeStates.push(`playwright_smoke=${smokeRecipe.ok ? "ok" : "fail"}`);
+  if (!smokeRecipe.ok) {
+    const parsed = parseCodeWorkerPlaywrightFailure(smokeRecipe.stderr);
+    if (parsed.missingSignals.includes("playwright_exception")) {
+      return {
+        ok: true,
+        mode: "deterministic_fallback",
+        warning: parsed.reason,
+        recipeSummary: `recipes: ${recipeStates.join(", ")}`,
+      };
+    }
+    return {
+      ok: false,
+      reason: parsed.reason,
+      mode: "playwright_smoke",
+      diagnostics: {
+        reason: parsed.reason,
+        mode: "playwright_smoke",
+        consoleErrors: parsed.consoleErrors,
+        runtimeErrors: parsed.runtimeErrors,
+        missingSignals: parsed.missingSignals,
+      },
+      recipeSummary: `recipes: ${recipeStates.join(", ")}`,
+    };
+  }
+
+  return {
+    ok: true,
+    mode: "playwright_smoke",
+    recipeSummary: `recipes: ${recipeStates.join(", ")}`,
+  };
+}
+
 function buildCodeWorkerBuildScript(relativeHtmlPath: string): string {
   return [
     "const fs=require('fs');",
@@ -3711,6 +4119,19 @@ function buildCodeWorkerTestScript(relativeHtmlPath: string): string {
     "const html=fs.readFileSync(path,'utf8');",
     "const hasScript=/<script\\b/i.test(html);",
     "const hasRoot=/<canvas\\b/i.test(html)||/data-game-root/i.test(html)||/id=[\"']game/i.test(html);",
+    "if(!hasScript){console.error('script_missing');process.exit(2);}",
+    "if(!hasRoot){console.error('render_root_missing');process.exit(3);}",
+    "process.stdout.write('test_ok');",
+  ].join("");
+}
+
+function buildCodeWorkerWebTestScript(relativeHtmlPath: string): string {
+  return [
+    "const fs=require('fs');",
+    `const path=${JSON.stringify(relativeHtmlPath)};`,
+    "const html=fs.readFileSync(path,'utf8');",
+    "const hasScript=/<script\\b/i.test(html);",
+    "const hasRoot=/<main\\b/i.test(html)||/id=[\"']app[\"']/i.test(html)||/id=[\"']root[\"']/i.test(html)||/data-app-root/i.test(html);",
     "if(!hasScript){console.error('script_missing');process.exit(2);}",
     "if(!hasRoot){console.error('render_root_missing');process.exit(3);}",
     "process.stdout.write('test_ok');",
@@ -3912,6 +4333,7 @@ function toArtifactSummary(artifact: {
 function labelForTaskKind(taskKind: AgentTaskKind): string {
   if (taskKind === "mini_game") return "mini-game";
   if (taskKind === "doc_markdown") return "document";
+  if (taskKind === "web_build") return "web build";
   return "game + document bundle";
 }
 
@@ -4066,6 +4488,199 @@ async function runMiniGameChecks(
         (rootSignals.canvasCount === 0 && !rootSignals.hasGameRoot)
       ) {
         const reason = "Playwright smoke failed: render root not detected";
+        return {
+          ok: false,
+          reason,
+          mode: "playwright_smoke",
+          diagnostics: {
+            reason,
+            mode: "playwright_smoke",
+            consoleErrors: [],
+            runtimeErrors: [],
+            missingSignals: ["render_root_missing"],
+          },
+        };
+      }
+
+      return { ok: true, mode: "playwright_smoke" };
+    } finally {
+      await browser.close();
+    }
+  } catch (error) {
+    return {
+      ok: true,
+      mode: "deterministic_fallback",
+      warning: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+async function runWebBuildChecks(
+  params: {
+    prompt: string;
+    html: string;
+    sandboxJob: EphemeralSandboxJob;
+    relativeHtmlPath: string;
+    skipPlaywright?: boolean;
+  },
+): Promise<
+  | {
+      ok: true;
+      mode: "playwright_smoke" | "deterministic_fallback";
+      warning?: string;
+      recipeSummary?: string;
+    }
+  | {
+      ok: false;
+      reason: string;
+      mode: "playwright_smoke" | "deterministic_fallback";
+      diagnostics: GameQaFailureDiagnostics;
+      recipeSummary?: string;
+    }
+> {
+  const hasScript = /<script\b/i.test(params.html);
+  const hasWebRoot =
+    /<main\b/i.test(params.html) ||
+    /id=["']app["']/i.test(params.html) ||
+    /id=["']root["']/i.test(params.html) ||
+    /data-app-root/i.test(params.html);
+  if (!hasScript) {
+    return {
+      ok: false,
+      reason: "Missing script block for web app behavior",
+      mode: "deterministic_fallback",
+      diagnostics: {
+        reason: "Missing script block for web app behavior",
+        mode: "deterministic_fallback",
+        consoleErrors: [],
+        runtimeErrors: [],
+        missingSignals: ["script_missing"],
+      },
+    };
+  }
+  if (!hasWebRoot) {
+    return {
+      ok: false,
+      reason: "Missing recognizable web app root element",
+      mode: "deterministic_fallback",
+      diagnostics: {
+        reason: "Missing recognizable web app root element",
+        mode: "deterministic_fallback",
+        consoleErrors: [],
+        runtimeErrors: [],
+        missingSignals: ["render_root_missing"],
+      },
+    };
+  }
+  if (!/h1|<title/i.test(params.html)) {
+    return {
+      ok: false,
+      reason: "Missing visible page title",
+      mode: "deterministic_fallback",
+      diagnostics: {
+        reason: "Missing visible page title",
+        mode: "deterministic_fallback",
+        consoleErrors: [],
+        runtimeErrors: [],
+        missingSignals: ["title_missing"],
+      },
+    };
+  }
+
+  const lowerPrompt = params.prompt.toLowerCase();
+  const lowerHtml = params.html.toLowerCase();
+  const promptRequestsGame = hasGameRequestSignal(lowerPrompt);
+  const gameSignals = [
+    /\b(score|game over|press arrow|snake|collision|obstacle)\b/i,
+    /<canvas\b/i,
+    /id=["']game["']/i,
+  ].filter((pattern) => pattern.test(lowerHtml)).length;
+  if (!promptRequestsGame && gameSignals >= 2) {
+    return {
+      ok: false,
+      reason: "Web build drifted to game-like output",
+      mode: "deterministic_fallback",
+      diagnostics: {
+        reason: "Web build drifted to game-like output",
+        mode: "deterministic_fallback",
+        consoleErrors: [],
+        runtimeErrors: [],
+        missingSignals: ["task_kind_drift"],
+      },
+    };
+  }
+
+  if (params.skipPlaywright) {
+    return {
+      ok: true,
+      mode: "deterministic_fallback",
+      warning: "Playwright smoke skipped by code_worker path.",
+    };
+  }
+
+  try {
+    assertSandboxToolAccess({ toolName: "playwright_smoke" });
+    const playwrightModuleName = "playwright";
+    const playwright = (await import(playwrightModuleName as string)) as any;
+    if (!playwright?.chromium) {
+      return {
+        ok: true,
+        mode: "deterministic_fallback",
+        warning: "Playwright unavailable in runtime",
+      };
+    }
+
+    const browser = await playwright.chromium.launch({ headless: true });
+    try {
+      const page = await browser.newPage();
+      const consoleErrors: string[] = [];
+      const runtimeErrors: string[] = [];
+
+      page.on("console", (message: { type: () => string; text: () => string }) => {
+        if (message.type() === "error") {
+          consoleErrors.push(message.text());
+        }
+      });
+      page.on("pageerror", (error: Error) => {
+        runtimeErrors.push(error.message);
+      });
+
+      const fileUrl = pathToFileURL(
+        resolve(params.sandboxJob.rootDir, params.relativeHtmlPath),
+      ).toString();
+      await page.goto(fileUrl, { waitUntil: "load" });
+      await page.waitForTimeout(350);
+
+      const rootSignals = (await page.evaluate(() => ({
+        appRoots:
+          Number(document.querySelectorAll("main").length) +
+          Number(document.querySelectorAll("#app").length) +
+          Number(document.querySelectorAll("#root").length) +
+          Number(document.querySelectorAll("[data-app-root]").length),
+        scriptCount: document.querySelectorAll("script").length,
+      }))) as {
+        appRoots: number;
+        scriptCount: number;
+      };
+
+      if (runtimeErrors.length > 0 || consoleErrors.length > 0) {
+        const reason = "Playwright detected runtime/console errors";
+        return {
+          ok: false,
+          reason,
+          mode: "playwright_smoke",
+          diagnostics: {
+            reason,
+            mode: "playwright_smoke",
+            consoleErrors: consoleErrors.slice(0, 5),
+            runtimeErrors: runtimeErrors.slice(0, 5),
+            missingSignals: [],
+          },
+        };
+      }
+
+      if (rootSignals.scriptCount === 0 || rootSignals.appRoots === 0) {
+        const reason = "Playwright smoke failed: web app root not detected";
         return {
           ok: false,
           reason,

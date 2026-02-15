@@ -38,6 +38,7 @@ import type {
   AgentOfferSummary,
   ChatTurnIntent,
   IntentDecisionPath,
+  IntentDecisionPathReason,
   AgentStepSummary,
   AgentTaskKind,
   AgentTaskEvent,
@@ -1485,6 +1486,7 @@ function toAgentOfferSummary(offer: AgentOffer): AgentOfferSummary {
     proposedPrompt: offer.proposedPrompt,
     taskKind:
       offer.taskKind === "mini_game" ||
+      offer.taskKind === "web_build" ||
       offer.taskKind === "doc_markdown" ||
       offer.taskKind === "mixed"
         ? offer.taskKind
@@ -1562,6 +1564,7 @@ function toAgentIntentSessionSummary(
     status: session.status,
     taskKind:
       session.taskKind === "mini_game" ||
+      session.taskKind === "web_build" ||
       session.taskKind === "doc_markdown" ||
       session.taskKind === "mixed"
         ? session.taskKind
@@ -1828,13 +1831,13 @@ const PROACTIVE_OFFER_NEED_PATTERNS = [
   /\b(?:i'm trying to|im trying to|help me|not sure how to)\b/i,
 ];
 const PROACTIVE_OFFER_DELIVERABLE_PATTERNS = [
-  /\b(?:email|document|doc|brief|report|proposal|summary|plan|checklist)\b/i,
+  /\b(?:email|document|doc|brief|report|proposal|summary|plan|checklist|paper|research paper|guide|tutorial|whitepaper)\b/i,
   /\b(?:presentation|slides|deck|pitch)\b/i,
-  /\b(?:landing page|website|app|prototype|mini game|game)\b/i,
+  /\b(?:landing page|website|web app|mini-saas|app|prototype|mini game|game)\b/i,
 ];
 const TASK_CONTEXT_GENERIC_REQUEST_PATTERNS = [
-  /^\s*(?:can|could|would|will)\s+you\s+(?:create|make|draft|write|build)\s+(?:a|an)?\s*(?:document|doc|email|letter|cover letter|presentation|slides?|deck)\b.*\??\s*$/i,
-  /^\s*(?:create|make|draft|write|build)\s+(?:a|an)?\s*(?:document|doc|email|letter|cover letter|presentation|slides?|deck)\b.*$/i,
+  /^\s*(?:can|could|would|will)\s+you\s+(?:create|make|draft|write|build)\s+(?:a|an)?\s*(?:document|doc|email|letter|cover letter|presentation|slides?|deck|paper|research paper|guide|tutorial|whitepaper|resume|cv)\b.*\??\s*$/i,
+  /^\s*(?:create|make|draft|write|build)\s+(?:a|an)?\s*(?:document|doc|email|letter|cover letter|presentation|slides?|deck|paper|research paper|guide|tutorial|whitepaper|resume|cv)\b.*$/i,
 ];
 const TASK_CONTEXT_DETAIL_PATTERNS = [
   /\b(?:for|about|regarding|focused on|targeting|to\s+[a-z]|with|including)\b/i,
@@ -1896,6 +1899,36 @@ function getIntentQuestionCount(
     }
   }
   return 0;
+}
+
+function toIntentMissingSlots(
+  session: AgentIntentSession | null | undefined,
+): string[] {
+  if (!session || !Array.isArray(session.missingSlots)) return [];
+  return session.missingSlots
+    .filter((slot): slot is string => typeof slot === "string")
+    .map((slot) => slot.trim())
+    .filter((slot) => slot.length > 0);
+}
+
+function hasActiveIntentSessionContinuationLock(
+  session: AgentIntentSession | null | undefined,
+): boolean {
+  if (!session || session.status !== "active") return false;
+  if (toIntentMissingSlots(session).length > 0) return true;
+  return Boolean(session.clarificationQuestion?.trim());
+}
+
+function toDecisionPathReason(input: {
+  decisionPath: IntentDecisionPath;
+  hasPendingOffer?: boolean;
+}): IntentDecisionPathReason {
+  if (input.decisionPath === "agent_task") return "task_started";
+  if (input.decisionPath === "collecting_slots") return "slot_collection_active";
+  if (input.decisionPath === "offer_required") {
+    return input.hasPendingOffer ? "offer_pending" : "explicit_build_offer";
+  }
+  return "companion";
 }
 
 function isOfferAcceptMessage(text: string): boolean {
@@ -1972,6 +2005,7 @@ function parseAgentOfferFromMessage(
 
   const taskKind =
     offer.taskKind === "mini_game" ||
+    offer.taskKind === "web_build" ||
     offer.taskKind === "doc_markdown" ||
     offer.taskKind === "mixed"
       ? offer.taskKind
@@ -2078,6 +2112,12 @@ function buildProactiveOfferPrompt(input: {
   if (input.taskKind === "mini_game") {
     return `Create a playable mini-game inspired by: "${quoted}"`;
   }
+  if (input.taskKind === "web_build") {
+    return [
+      `Create a polished web app / landing page based on: "${quoted}"`,
+      "Use semantic HTML/CSS/JS, responsive layout, and at least one interactive behavior.",
+    ].join(" ");
+  }
 
   return [
     `Create a well-formatted document based on: "${quoted}"`,
@@ -2126,9 +2166,9 @@ function inferProactiveOfferOpportunity(input: {
   } else if (taskKind === "mini_game") {
     title = "Mini Game";
     summary = "I can build a playable game draft you can launch right away.";
-  } else if (/\b(landing page|website|app|prototype)\b/i.test(normalized)) {
-    title = "Prototype Build";
-    summary = "I can create a first-pass prototype from this idea.";
+  } else if (taskKind === "web_build" || /\b(landing page|website|web app|mini-saas|app|prototype)\b/i.test(normalized)) {
+    title = "Web Build";
+    summary = "I can build a sandboxed web app/landing page draft you can open immediately.";
   }
 
   return {
@@ -2171,6 +2211,9 @@ function inferExplicitOfferOpportunity(input: {
   if (taskKind === "mini_game") {
     title = "Mini Game Build";
     summary = "I can build a playable game and run checks before publishing.";
+  } else if (taskKind === "web_build") {
+    title = "Web Build";
+    summary = "I can build a sandboxed web app/landing page and run checks before publishing.";
   } else if (docType === "cover letter") {
     title = "Cover Letter Draft";
     summary = "I can draft a polished cover letter with your requested tone.";
@@ -2391,6 +2434,7 @@ async function acceptOfferAndStartOrClarify(input: {
   intentSession: AgentIntentSessionSummary | null;
   clarificationMessages: Message[];
   decisionPath: IntentDecisionPath;
+  decisionPathReason: IntentDecisionPathReason;
 }> {
   let offer = input.offer;
   const offerRecord = input.offerRecord;
@@ -2553,6 +2597,7 @@ async function acceptOfferAndStartOrClarify(input: {
         intentSession,
         clarificationMessages: clarificationMessages as unknown as Message[],
         decisionPath: "collecting_slots",
+        decisionPathReason: "slot_collection_active",
       };
     }
 
@@ -2660,11 +2705,17 @@ async function acceptOfferAndStartOrClarify(input: {
     intentSession: null,
     clarificationMessages: [],
     decisionPath: "agent_task",
+    decisionPathReason: "task_started",
   };
 }
 
 function coerceTaskKind(value: string): AgentTaskKind {
-  if (value === "mini_game" || value === "doc_markdown" || value === "mixed") {
+  if (
+    value === "mini_game" ||
+    value === "doc_markdown" ||
+    value === "web_build" ||
+    value === "mixed"
+  ) {
     return value;
   }
   return "doc_markdown";
@@ -2814,7 +2865,12 @@ function hydrateIntentSessionFromUserReply(input: {
 }
 
 function toTaskKindOrNull(value: unknown): AgentTaskKind | null {
-  if (value === "mini_game" || value === "doc_markdown" || value === "mixed") {
+  if (
+    value === "mini_game" ||
+    value === "doc_markdown" ||
+    value === "web_build" ||
+    value === "mixed"
+  ) {
     return value;
   }
   return null;
@@ -2854,6 +2910,8 @@ function inferRecentAgentIntentContext(messages: Message[], excludeMessageId: st
         recentTaskKind:
           artifactType === "mini_game"
             ? ("mini_game" as const)
+            : artifactType === "web_app"
+              ? ("web_build" as const)
             : artifactType === "doc_markdown"
               ? ("doc_markdown" as const)
               : null,
@@ -2899,6 +2957,13 @@ function isUnderSpecifiedTaskPrompt(input: {
 
   if (input.taskKind === "doc_markdown") {
     return hasGenericShape || shortAndVague || (explicitQuestion && !hasDetailSignal);
+  }
+  if (input.taskKind === "web_build") {
+    const hasWebFeatureSignal =
+      /\b(with|including|features?|pages?|sections?|cta|dashboard|auth|form|search|pricing)\b/i.test(
+        normalized,
+      );
+    return hasGenericShape || shortAndVague || !hasWebFeatureSignal;
   }
   return hasGenericShape && !hasDetailSignal;
 }
@@ -3042,6 +3107,8 @@ function inferDocumentTypeHint(text: string): string {
   const normalized = text.toLowerCase();
   if (/\bcover\s*letter\b/.test(normalized)) return "cover letter";
   if (/\bemail\b/.test(normalized)) return "email";
+  if (/\b(research\s*paper|whitepaper|paper)\b/.test(normalized)) return "report";
+  if (/\b(guide|tutorial)\b/.test(normalized)) return "brief";
   if (/\b(presentation|slides|deck|pitch)\b/.test(normalized)) {
     return "presentation";
   }
@@ -3102,6 +3169,18 @@ function buildClarificationQuestion(input: {
         "I can absolutely do both. Which one should I start first, the document or the game?",
       playful:
         "We can do both. You call it: doc first or game first?",
+    });
+  }
+  if (input.taskKind === "web_build") {
+    return chooseClarificationTone(input.stylePreset, {
+      concise:
+        "I can build it. Quick check: landing page or web app, and what 2-3 core features?",
+      balanced:
+        "I can build that. Quick check: should this be a landing page or a web app, and what 2-3 features should I include?",
+      expressive:
+        "I can absolutely build this. Quick check before I start: landing page or full web app, and what are the top 2-3 features?",
+      playful:
+        "Let’s ship it. Quick check: landing page or web app, and what are the top 2-3 must-have features?",
     });
   }
 
@@ -3203,8 +3282,14 @@ function maybeBuildTaskClarification(input: {
     input.taskKind === "mini_game" &&
     !input.hasImage &&
     TASK_GENERIC_GAME_REQUEST_PATTERNS.some((pattern) => pattern.test(normalized));
+  const needsWebClarification =
+    input.taskKind === "web_build" &&
+    isUnderSpecifiedTaskPrompt({
+      userText: normalized,
+      taskKind: "web_build",
+    });
 
-  if (!needsDocClarification && !needsGameClarification) {
+  if (!needsDocClarification && !needsGameClarification && !needsWebClarification) {
     return null;
   }
 
@@ -3223,7 +3308,9 @@ function maybeBuildTaskClarification(input: {
     }),
     reason: needsDocClarification
       ? "underspecified_document_task"
-      : "underspecified_game_task",
+      : needsWebClarification
+        ? "underspecified_web_build_task"
+        : "underspecified_game_task",
   };
 }
 
@@ -3245,9 +3332,9 @@ const INTENT_AMBIGUOUS_BUILD_ACTION_PATTERNS = [
   /\b(i need|i want|i should|i'?m trying|im trying|thinking of)\b/i,
 ];
 const INTENT_AMBIGUOUS_DELIVERABLE_PATTERNS = [
-  /\b(document|doc|email|letter|cover letter|brief|report|proposal|summary)\b/i,
+  /\b(document|doc|email|letter|cover letter|brief|report|proposal|summary|paper|research paper|guide|tutorial|whitepaper|resume|cv)\b/i,
   /\b(presentation|slides?|deck|pitch)\b/i,
-  /\b(app|website|landing page|mini(?:\s|-)?game|prototype|tool)\b/i,
+  /\b(app|website|web app|mini(?:\s|-)?saas|landing page|mini(?:\s|-)?game|prototype|tool)\b/i,
 ];
 const INTENT_TONE_PATTERNS =
   /\b(formal|warm|bold|friendly|technical|professional|casual|playful|concise)\b/i;
@@ -3271,6 +3358,13 @@ function buildIntentSlotSchema(input: {
     return [
       { key: "game_details", label: "Game style/mechanics", required: true },
       { key: "game_mode", label: "2D or light 3D", required: false },
+    ];
+  }
+  if (input.taskKind === "web_build") {
+    return [
+      { key: "artifact_type", label: "Build type (landing page or web app)", required: true },
+      { key: "core_features", label: "Core features", required: true },
+      { key: "tone", label: "Tone/style", required: false },
     ];
   }
 
@@ -3412,6 +3506,14 @@ function inferAssumptionDefault(input: {
   if (input.slotKey === "game_mode") {
     return "2d";
   }
+  if (input.slotKey === "artifact_type") {
+    return "web app";
+  }
+  if (input.slotKey === "core_features") {
+    return hasTechnicalSignal
+      ? "Responsive sections, clear CTA flow, and an interactive feature panel"
+      : "Responsive layout, clear call-to-action, and one interactive element";
+  }
 
   return "Use sensible defaults based on the request";
 }
@@ -3485,6 +3587,7 @@ function extractIntentSlotValuesFromText(input: {
   );
   const genericDocPrompt =
     input.taskKind !== "mini_game" &&
+    input.taskKind !== "web_build" &&
     TASK_CONTEXT_GENERIC_REQUEST_PATTERNS.some((pattern) =>
       pattern.test(normalized),
     ) &&
@@ -3497,6 +3600,20 @@ function extractIntentSlotValuesFromText(input: {
         values.game_mode = "light_3d";
       } else if (/\b2d\b/i.test(lower)) {
         values.game_mode = "2d";
+      }
+    } else if (input.taskKind === "web_build") {
+      if (/\blanding\s*page\b/i.test(lower)) {
+        values.artifact_type = "landing page";
+      } else if (/\b(web\s*app|website|mini-?saas|prototype|tool)\b/i.test(lower)) {
+        values.artifact_type = "web app";
+      }
+      const featureMatch = normalized.match(
+        /\b(?:with|including|featuring|that has)\s+(.+)$/i,
+      );
+      if (featureMatch?.[1]) {
+        values.core_features = featureMatch[1].trim().slice(0, 220);
+      } else {
+        values.core_features = normalized;
       }
     } else if (commaSegments.length >= 2 && /\b(email)\b/i.test(lower)) {
       values.recipient = values.recipient ?? commaSegments[0] ?? "";
@@ -3596,6 +3713,23 @@ function buildIntentSlotClarificationQuestion(input: {
       balanced: "Quick check: what strengths should I highlight?",
       expressive: "Before I continue, which strengths should I emphasize most?",
       playful: "Cool. What are the top strengths you want me to flex?",
+    });
+  }
+  if (firstMissing === "artifact_type") {
+    return chooseClarificationTone(input.stylePreset, {
+      concise: "Should I make this a landing page or a web app?",
+      balanced: "Quick check: should I make this a landing page or a web app?",
+      expressive: "Before I build it, should this be a landing page or a web app?",
+      playful: "Quick check: are we shipping a landing page or a web app?",
+    });
+  }
+  if (firstMissing === "core_features") {
+    return chooseClarificationTone(input.stylePreset, {
+      concise: "What 2-3 core features should this include?",
+      balanced: "Quick check: what 2-3 core features should I include?",
+      expressive:
+        "Before I build this, what are the top 2-3 features you want in version one?",
+      playful: "Got it. What are the top 2-3 features we should include first?",
     });
   }
 
@@ -3707,6 +3841,7 @@ async function resolveTurnIntentWithFallback(input: {
     recentTaskKind: AgentTaskKind | null;
   };
   hasActiveIntentSession: boolean;
+  forceActiveSessionTaskContinuation?: boolean;
 }): Promise<{
   intent: ChatTurnIntent;
   deterministicIntent: ChatTurnIntent;
@@ -3734,11 +3869,14 @@ async function resolveTurnIntentWithFallback(input: {
       pattern.test(compactUserText),
     );
 
+  const forceSlotCollectionContinuation =
+    input.forceActiveSessionTaskContinuation === true;
   const forceContinuation =
-    !explicitBuildCommand &&
-    input.hasActiveIntentSession &&
-    (INTENT_AFFIRMATION_ONLY_PATTERNS.some((pattern) => pattern.test(compactUserText)) ||
-      INTENT_FOLLOW_UP_PATTERNS.some((pattern) => pattern.test(compactUserText)));
+    forceSlotCollectionContinuation ||
+    (!explicitBuildCommand &&
+      input.hasActiveIntentSession &&
+      (INTENT_AFFIRMATION_ONLY_PATTERNS.some((pattern) => pattern.test(compactUserText)) ||
+        INTENT_FOLLOW_UP_PATTERNS.some((pattern) => pattern.test(compactUserText))));
   if (forceContinuation) {
     resolvedIntent = "agent_task";
   }
@@ -3764,10 +3902,18 @@ async function resolveTurnIntentWithFallback(input: {
       classifierConfidence = classified.confidence;
 
       if (classified.confidence >= AGENT_MODEL_INTENT_CLASSIFIER_MIN_CONFIDENCE) {
-        resolvedIntent =
+        const resolvedClassifiedIntent =
           shouldPreferCompanionOfferFlow && classified.intent === "agent_task"
             ? "companion_reply"
             : classified.intent;
+        if (
+          !(
+            forceSlotCollectionContinuation &&
+            resolvedClassifiedIntent === "companion_reply"
+          )
+        ) {
+          resolvedIntent = resolvedClassifiedIntent;
+        }
       }
     } catch (error) {
       traceError(input.req, "chat.turn.intent_classifier.failed", error, {
@@ -3775,6 +3921,10 @@ async function resolveTurnIntentWithFallback(input: {
         hasRecentAgentActivity: input.turnIntentContext.hasRecentAgentActivity,
       });
     }
+  }
+
+  if (forceSlotCollectionContinuation) {
+    resolvedIntent = "agent_task";
   }
 
   return {
@@ -5657,6 +5807,7 @@ export async function registerRoutes(
             task: null,
             awaitingApproval: false,
             decisionPath: acceptance.decisionPath,
+            decisionPathReason: acceptance.decisionPathReason,
           });
         }
 
@@ -5674,6 +5825,7 @@ export async function registerRoutes(
           task: acceptance.task,
           awaitingApproval: acceptance.awaitingApproval,
           decisionPath: acceptance.decisionPath,
+          decisionPathReason: acceptance.decisionPathReason,
         });
       } catch (error) {
         if (offerLocked && offerForRecovery) {
@@ -6625,11 +6777,14 @@ export async function registerRoutes(
           baseTurnIntentContext.recentTaskKind ??
           (activeIntentSession ? coerceTaskKind(activeIntentSession.taskKind) : null),
       };
+      const activeIntentSessionContinuationLock =
+        hasActiveIntentSessionContinuationLock(activeIntentSession);
       const intentResolution = await resolveTurnIntentWithFallback({
         req,
         userText: parsed.text,
         turnIntentContext,
         hasActiveIntentSession: Boolean(activeIntentSession),
+        forceActiveSessionTaskContinuation: activeIntentSessionContinuationLock,
       });
       const pendingOfferResolved = await findPendingOfferForConversation({
         userId: req.session.userId,
@@ -6687,6 +6842,7 @@ export async function registerRoutes(
         offerAcceptedByText,
         offerDeclinedByText,
         forcedOfferFlow: shouldForceOfferFlow,
+        activeIntentSessionContinuationLock,
       });
 
       if (offerDeclinedByText && pendingOfferResolved) {
@@ -6746,6 +6902,7 @@ export async function registerRoutes(
           model: "offer_guardrail_v1",
           usage: null,
           decisionPath: "offer_required" satisfies IntentDecisionPath,
+          decisionPathReason: "offer_pending" satisfies IntentDecisionPathReason,
           elapsedMs: elapsedMs(startedAt),
         });
       }
@@ -6779,6 +6936,7 @@ export async function registerRoutes(
             usage: null,
             intentSession: accepted.intentSession,
             decisionPath: accepted.decisionPath,
+            decisionPathReason: accepted.decisionPathReason,
             elapsedMs: elapsedMs(startedAt),
           });
         }
@@ -6854,6 +7012,7 @@ export async function registerRoutes(
           model: "agent_runtime_v1",
           usage: null,
           decisionPath: accepted.decisionPath,
+          decisionPathReason: accepted.decisionPathReason,
           elapsedMs: elapsedMs(startedAt),
         });
       }
@@ -6885,6 +7044,7 @@ export async function registerRoutes(
           model: "offer_guardrail_v1",
           usage: null,
           decisionPath: "offer_required" satisfies IntentDecisionPath,
+          decisionPathReason: "offer_pending" satisfies IntentDecisionPathReason,
           elapsedMs: elapsedMs(startedAt),
         });
       }
@@ -6931,6 +7091,7 @@ export async function registerRoutes(
           model: "offer_guardrail_v1",
           usage: null,
           decisionPath: "offer_required" satisfies IntentDecisionPath,
+          decisionPathReason: "explicit_build_offer" satisfies IntentDecisionPathReason,
           elapsedMs: elapsedMs(startedAt),
         });
       }
@@ -7013,6 +7174,8 @@ export async function registerRoutes(
                 usage: null,
                 intentSession: updatedIntentSession,
                 decisionPath: "collecting_slots" satisfies IntentDecisionPath,
+                decisionPathReason:
+                  "slot_collection_active" satisfies IntentDecisionPathReason,
                 elapsedMs: elapsedMs(startedAt),
               });
             }
@@ -7160,6 +7323,8 @@ export async function registerRoutes(
               usage: null,
               intentSession,
               decisionPath: "collecting_slots" satisfies IntentDecisionPath,
+              decisionPathReason:
+                "slot_collection_active" satisfies IntentDecisionPathReason,
               elapsedMs: elapsedMs(startedAt),
             });
           }
@@ -7270,6 +7435,7 @@ export async function registerRoutes(
           model: "agent_runtime_v1",
           usage: null,
           decisionPath: "agent_task" satisfies IntentDecisionPath,
+          decisionPathReason: "task_started" satisfies IntentDecisionPathReason,
           elapsedMs: elapsedMs(startedAt),
         });
       }
@@ -7474,6 +7640,10 @@ export async function registerRoutes(
         model: aiResponse.model,
         usage: aiResponse.usage,
         decisionPath: responseDecisionPath,
+        decisionPathReason: toDecisionPathReason({
+          decisionPath: responseDecisionPath,
+          hasPendingOffer: false,
+        }),
         elapsedMs: elapsedMs(startedAt),
       });
     } catch (error) {
@@ -7645,11 +7815,14 @@ export async function registerRoutes(
           baseTurnIntentContext.recentTaskKind ??
           (activeIntentSession ? coerceTaskKind(activeIntentSession.taskKind) : null),
       };
+      const activeIntentSessionContinuationLock =
+        hasActiveIntentSessionContinuationLock(activeIntentSession);
       const intentResolution = await resolveTurnIntentWithFallback({
         req,
         userText: parsed.text,
         turnIntentContext,
         hasActiveIntentSession: Boolean(activeIntentSession),
+        forceActiveSessionTaskContinuation: activeIntentSessionContinuationLock,
       });
       const pendingOfferResolved = await findPendingOfferForConversation({
         userId: req.session.userId,
@@ -7707,6 +7880,7 @@ export async function registerRoutes(
         offerAcceptedByText,
         offerDeclinedByText,
         forcedOfferFlow: shouldForceOfferFlow,
+        activeIntentSessionContinuationLock,
       });
 
       res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
@@ -7779,6 +7953,7 @@ export async function registerRoutes(
           model: "offer_guardrail_v1",
           usage: null,
           decisionPath: "offer_required" satisfies IntentDecisionPath,
+          decisionPathReason: "offer_pending" satisfies IntentDecisionPathReason,
           elapsedMs: elapsedMs(startedAt),
         });
         res.end();
@@ -7809,6 +7984,7 @@ export async function registerRoutes(
             usage: null,
             intentSession: accepted.intentSession,
             decisionPath: accepted.decisionPath,
+            decisionPathReason: accepted.decisionPathReason,
             elapsedMs: elapsedMs(startedAt),
           });
           res.end();
@@ -7878,6 +8054,7 @@ export async function registerRoutes(
           model: "agent_runtime_v1",
           usage: null,
           decisionPath: accepted.decisionPath,
+          decisionPathReason: accepted.decisionPathReason,
           elapsedMs: elapsedMs(startedAt),
         });
         res.end();
@@ -7901,6 +8078,7 @@ export async function registerRoutes(
           model: "offer_guardrail_v1",
           usage: null,
           decisionPath: "offer_required" satisfies IntentDecisionPath,
+          decisionPathReason: "offer_pending" satisfies IntentDecisionPathReason,
           elapsedMs: elapsedMs(startedAt),
         });
         res.end();
@@ -7941,6 +8119,7 @@ export async function registerRoutes(
           model: "offer_guardrail_v1",
           usage: null,
           decisionPath: "offer_required" satisfies IntentDecisionPath,
+          decisionPathReason: "explicit_build_offer" satisfies IntentDecisionPathReason,
           elapsedMs: elapsedMs(startedAt),
         });
         res.end();
@@ -8024,6 +8203,8 @@ export async function registerRoutes(
                 elapsedMs: elapsedMs(startedAt),
                 intentSession: updatedIntentSession,
                 decisionPath: "collecting_slots" satisfies IntentDecisionPath,
+                decisionPathReason:
+                  "slot_collection_active" satisfies IntentDecisionPathReason,
               });
               res.end();
               return;
@@ -8166,6 +8347,8 @@ export async function registerRoutes(
               elapsedMs: elapsedMs(startedAt),
               intentSession,
               decisionPath: "collecting_slots" satisfies IntentDecisionPath,
+              decisionPathReason:
+                "slot_collection_active" satisfies IntentDecisionPathReason,
             });
             res.end();
             return;
@@ -8273,6 +8456,7 @@ export async function registerRoutes(
           model: "agent_runtime_v1",
           usage: null,
           decisionPath: "agent_task" satisfies IntentDecisionPath,
+          decisionPathReason: "task_started" satisfies IntentDecisionPathReason,
           elapsedMs: elapsedMs(startedAt),
         });
 
@@ -8640,6 +8824,10 @@ export async function registerRoutes(
         model,
         usage,
         decisionPath: responseDecisionPath,
+        decisionPathReason: toDecisionPathReason({
+          decisionPath: responseDecisionPath,
+          hasPendingOffer: false,
+        }),
         elapsedMs: elapsedMs(startedAt),
       });
 

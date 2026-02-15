@@ -43,6 +43,18 @@ function assertDocumentHasStructure(markdown: string): void {
   );
 }
 
+function assertWebBuildLooksLikeApp(html: string): void {
+  assert.ok(/<html/i.test(html), "Web build should include html root");
+  assert.ok(
+    /<script[\s>]/i.test(html),
+    "Web build should include client-side script for interactivity",
+  );
+  assert.ok(
+    !/\bsnake\b|\bscore\b|\bpellet\b|arrow keys/i.test(html),
+    "Web build should not drift into game-specific template markers",
+  );
+}
+
 async function run(): Promise<void> {
   const [{ storage }, runtime, { db }, { agentToolCalls }] = await Promise.all([
     import("../server/storage.ts"),
@@ -190,6 +202,38 @@ async function run(): Promise<void> {
   const snakeHtml = snakeArtifact?.htmlContent ?? "";
   assert.ok(snakeHtml, "Snake game artifact should include html");
   assertSnakeMechanics(snakeHtml);
+
+  const webBuildUserId = `agent-smoke-web-${randomUUID()}`;
+  const webBuildConversation = await storage.createConversation({
+    userId: webBuildUserId,
+    persona: "Zee",
+    title: "Agent Smoke Web Build",
+  });
+  const webBuildMessage = await storage.createUserTurnMessage({
+    conversationId: webBuildConversation.id,
+    text: "Create a landing page for my AI food startup",
+  });
+  const webBuildRun = await runtime.startAgentTaskRun({
+    userId: webBuildUserId,
+    conversationId: webBuildConversation.id,
+    prompt:
+      "Create a landing page for an AI food startup with hero, features, pricing, and CTA",
+    requestedByMessageId: webBuildMessage.id,
+    attachments: [],
+  });
+  assert.equal(
+    webBuildRun.awaitingApproval,
+    false,
+    "Web build flow should not require approval",
+  );
+  const webBuildTask = await storage.getAgentTaskWithDetails(webBuildRun.task.id);
+  assert.equal(webBuildTask?.status, "completed", "Web build task should complete");
+  const webBuildArtifact = webBuildTask?.artifacts.find(
+    (artifact) => artifact.type === "web_app",
+  );
+  const webBuildHtml = webBuildArtifact?.htmlContent ?? "";
+  assert.ok(webBuildHtml, "Web build artifact should include html");
+  assertWebBuildLooksLikeApp(webBuildHtml);
 
   const scholarshipUserId = `agent-smoke-scholarship-${randomUUID()}`;
   const scholarshipConversation = await storage.createConversation({

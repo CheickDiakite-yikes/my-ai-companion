@@ -16,7 +16,14 @@ export type IntentDecisionPath =
   | "collecting_slots"
   | "agent_task";
 
-export type AgentTaskKind = "mini_game" | "doc_markdown" | "mixed";
+export type IntentDecisionPathReason =
+  | "explicit_build_offer"
+  | "offer_pending"
+  | "slot_collection_active"
+  | "task_started"
+  | "companion";
+
+export type AgentTaskKind = "mini_game" | "doc_markdown" | "web_build" | "mixed";
 export type AgentOfferStatus = AgentOffer["status"];
 export type AgentIntentSessionStatus = AgentIntentSession["status"];
 
@@ -176,7 +183,7 @@ export interface OfferDecision {
 }
 
 export interface ArtifactGenerationContract {
-  format: "document" | "presentation" | "mini_game";
+  format: "document" | "presentation" | "mini_game" | "web_app";
   strictPublish: boolean;
   maxSlides?: number;
   imageOnlySlides?: boolean;

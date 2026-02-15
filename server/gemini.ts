@@ -1235,7 +1235,7 @@ export interface ClassifyTurnIntentWithModelResult {
 export interface GenerateAgentPlannerDraftInput {
   prompt: string;
   hasImage: boolean;
-  inferredTaskKind: "mini_game" | "doc_markdown" | "mixed";
+  inferredTaskKind: "mini_game" | "doc_markdown" | "web_build" | "mixed";
   inferredRiskLevel: "low" | "high";
 }
 
@@ -1349,7 +1349,7 @@ export async function generateAgentPlannerDraft(
     "Return JSON only with this exact schema:",
     "{",
     '  "title": string,',
-    '  "taskKind": "mini_game" | "doc_markdown" | "mixed",',
+    '  "taskKind": "mini_game" | "doc_markdown" | "web_build" | "mixed",',
     '  "riskLevel": "low" | "high",',
     '  "steps": [',
     '    { "key": string, "title": string, "detail": string }',

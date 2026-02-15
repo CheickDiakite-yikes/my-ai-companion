@@ -191,6 +191,7 @@ export const agentApprovalStatusEnum = pgEnum("agent_approval_status", [
 export const agentArtifactTypeEnum = pgEnum("agent_artifact_type", [
   "mini_game",
   "doc_markdown",
+  "web_app",
 ]);
 
 export const agentArtifactStatusEnum = pgEnum("agent_artifact_status", [

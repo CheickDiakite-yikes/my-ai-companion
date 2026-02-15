@@ -187,6 +187,13 @@ interface ChatStreamFinalEvent {
   assistantMessages?: MessageData[];
   model?: string;
   usage?: unknown;
+  decisionPath?: "companion_reply" | "offer_required" | "collecting_slots" | "agent_task";
+  decisionPathReason?:
+    | "explicit_build_offer"
+    | "offer_pending"
+    | "slot_collection_active"
+    | "task_started"
+    | "companion";
   elapsedMs?: number;
 }
 
@@ -616,6 +623,30 @@ function isLikelyAgentArtifactBodyLeak(text: string): boolean {
   return false;
 }
 
+function suppressLeakedArtifactBodies(messages: MessageData[]): MessageData[] {
+  if (messages.length === 0) return messages;
+  const hasTaskUiPayload = messages.some(
+    (message) =>
+      isAgentTaskStatusPayload(message.uiPayload) ||
+      isAgentApprovalPayload(message.uiPayload) ||
+      isAgentArtifactPayload(message.uiPayload),
+  );
+  if (!hasTaskUiPayload) return messages;
+
+  const filtered = messages.filter((message) => {
+    if (message.sender !== "assistant") return true;
+    if (
+      isAgentTaskStatusPayload(message.uiPayload) ||
+      isAgentApprovalPayload(message.uiPayload) ||
+      isAgentArtifactPayload(message.uiPayload)
+    ) {
+      return true;
+    }
+    return !isLikelyAgentArtifactBodyLeak(message.text ?? "");
+  });
+  return filtered.length > 0 ? filtered : messages;
+}
+
 function toIsoString(value: string | Date | null | undefined): string | null {
   if (!value) return null;
   if (value instanceof Date) {
@@ -694,6 +725,7 @@ function upsertTimelineItem(
 
 function toTaskKindLabel(taskKind: string): string {
   if (taskKind === "mini_game") return "Mini game";
+  if (taskKind === "web_build") return "Web build";
   if (taskKind === "doc_markdown") return "Document";
   if (taskKind === "mixed") return "Mixed";
   return "Agent task";
@@ -719,6 +751,9 @@ function toUnifiedTaskOutputSummary(card: UnifiedAgentTaskCardModel): string {
     }
     if (card.artifact.type === "mini_game") {
       return "Open View / Play to launch the game and see controls in the full viewer.";
+    }
+    if (card.artifact.type === "web_app") {
+      return "Open View / Launch to open your web app in the full viewer.";
     }
     return "Your output is ready to open.";
   }
@@ -928,7 +963,11 @@ function buildUnifiedAgentTaskCards(
         status: resolvedStatus,
         riskLevel: "low",
         taskKind:
-          aggregate.artifact?.type === "mini_game" ? "mini_game" : "doc_markdown",
+          aggregate.artifact?.type === "mini_game"
+            ? "mini_game"
+            : aggregate.artifact?.type === "web_app"
+              ? "web_build"
+              : "doc_markdown",
         prompt: message.text,
         createdAt: message.createdAt ? new Date(message.createdAt) : null,
         updatedAt: message.createdAt ? new Date(message.createdAt) : null,
@@ -3899,8 +3938,10 @@ const UnifiedAgentTaskCard = ({
       ? (card.artifact.metadata as Record<string, unknown>)
       : null;
   const hasRenderSpec = Boolean(artifactMetadata?.render);
-  const canRenderInlineGame =
-    canRenderInlineHtml && card.artifact?.type === "mini_game";
+  const isInlineInteractiveArtifact =
+    card.artifact?.type === "mini_game" || card.artifact?.type === "web_app";
+  const canRenderInlineInteractive =
+    canRenderInlineHtml && isInlineInteractiveArtifact;
   const canRenderInlineDocument =
     canRenderInlineHtml &&
     card.artifact?.type === "doc_markdown" &&
@@ -4129,7 +4170,7 @@ const UnifiedAgentTaskCard = ({
                 transition={{ duration: 0.2 }}
                 className="p-3"
               >
-                {canRenderInlineGame && inlineIframeSrc ? (
+                {canRenderInlineInteractive && inlineIframeSrc ? (
                   <div className="space-y-2">
                     <div
                       className="relative overflow-hidden rounded-xl border group cursor-pointer"
@@ -4162,7 +4203,10 @@ const UnifiedAgentTaskCard = ({
                                 Tap to Launch
                               </p>
                               <p className="text-[11px] font-medium opacity-60" style={{ color: "var(--app-on-dark-muted)" }}>
-                                {card.artifact?.title ?? "Mini Game"}
+                                {card.artifact?.title ??
+                                  (card.artifact?.type === "web_app"
+                                    ? "Web App"
+                                    : "Mini Game")}
                               </p>
                             </div>
                             <div 
@@ -4197,7 +4241,7 @@ const UnifiedAgentTaskCard = ({
                         data-testid="button-fullscreen-inline-artifact"
                       >
                         <Maximize2 className="h-3 w-3" />
-                        Full Screen
+                        {card.artifact?.type === "web_app" ? "View / Launch" : "Full Screen"}
                       </button>
                       <button
                         type="button"
@@ -4324,8 +4368,12 @@ const UnifiedAgentTaskCard = ({
                   >
                     <div className="space-y-2">
                       <div className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide opacity-70">
-                        <Sparkles className="h-3 w-3" />
-                        Ready
+                        {card.artifact.type === "web_app" ? (
+                          <Globe className="h-3 w-3" />
+                        ) : (
+                          <Sparkles className="h-3 w-3" />
+                        )}
+                        {card.artifact.type === "web_app" ? "Web app" : "Ready"}
                       </div>
                       <p className="text-sm font-semibold">{card.artifact.title}</p>
                       <p className="text-xs opacity-75">{outputSummary}</p>
@@ -4340,7 +4388,11 @@ const UnifiedAgentTaskCard = ({
                         }}
                         data-testid="button-open-agent-artifact"
                       >
-                        {card.artifact.type === "mini_game" ? "View / Play" : "View"}
+                        {card.artifact.type === "mini_game"
+                          ? "View / Play"
+                          : card.artifact.type === "web_app"
+                            ? "View / Launch"
+                            : "View"}
                       </button>
                     </div>
                   </div>
@@ -5071,6 +5123,8 @@ const TextView = ({
                           <div className="flex items-center gap-1.5">
                             {msg.uiPayload.artifact.type === "mini_game" ? (
                               <Play className="h-4 w-4" />
+                            ) : msg.uiPayload.artifact.type === "web_app" ? (
+                              <Globe className="h-4 w-4" />
                             ) : (
                               <FileText className="h-4 w-4" />
                             )}
@@ -5081,6 +5135,8 @@ const TextView = ({
                           <span className="text-[11px] uppercase tracking-wide opacity-70">
                             {msg.uiPayload.artifact.type === "mini_game"
                               ? "Game"
+                              : msg.uiPayload.artifact.type === "web_app"
+                                ? "Web App"
                               : "Doc"}
                           </span>
                         </div>
@@ -5103,6 +5159,8 @@ const TextView = ({
                         >
                           {msg.uiPayload.artifact.type === "mini_game"
                             ? "View / Play"
+                            : msg.uiPayload.artifact.type === "web_app"
+                              ? "View / Launch"
                             : "View"}
                         </button>
                       </div>
@@ -5167,6 +5225,7 @@ const ArtifactViewer = ({
   onRetry: () => void;
 }) => {
   const isGame = artifact?.type === "mini_game";
+  const isWebApp = artifact?.type === "web_app";
   const isDocArtifact = artifact?.type === "doc_markdown";
   const hasHtmlContent =
     typeof artifact?.htmlContent === "string" && artifact.htmlContent.trim().length > 0;
@@ -5179,10 +5238,11 @@ const ArtifactViewer = ({
   const shouldUseJsonRenderViewer =
     Boolean(artifact) &&
     !isGame &&
+    !isWebApp &&
     isDocArtifact &&
     ENABLE_JSON_RENDER_ARTIFACT_VIEWER &&
     hasRenderSpec;
-  const canRenderIframe = hasHtmlContent && (isGame || !shouldUseJsonRenderViewer);
+  const canRenderIframe = hasHtmlContent && (isGame || isWebApp || !shouldUseJsonRenderViewer);
   const markdown = artifact?.markdownContent ?? "";
   const [iframeKey, setIframeKey] = useState(0);
   const [isExportingPdf, setIsExportingPdf] = useState(false);
@@ -5193,9 +5253,11 @@ const ArtifactViewer = ({
   const isPresentation = generationMetadata?.format === "presentation";
   const artifactLabel = isGame
     ? "Mini Game"
-    : isPresentation
-      ? "Presentation"
-      : "Document";
+    : isWebApp
+      ? "Web App"
+      : isPresentation
+        ? "Presentation"
+        : "Document";
 
   const iframeSrc = useMemo(() => {
     if (!canRenderIframe || !artifact?.id) return null;
@@ -5271,7 +5333,7 @@ const ArtifactViewer = ({
           <h3 className="text-base font-semibold">{artifact?.title ?? "Loading..."}</h3>
         </div>
         <div className="flex items-center gap-2">
-          {isGame && canRenderIframe && (
+          {(isGame || isWebApp) && canRenderIframe && (
             <button
               type="button"
               onClick={handleReload}
@@ -5285,7 +5347,7 @@ const ArtifactViewer = ({
               Reload
             </button>
           )}
-          {!isGame && artifact && (
+          {!isGame && !isWebApp && artifact && (
             <>
               {!isPresentation && (
                 <button
@@ -5465,7 +5527,12 @@ const OutputsHistoryView = ({
                   <div>
                     <p className="text-sm font-semibold">{artifact.title}</p>
                     <p className="text-[11px] uppercase tracking-wide opacity-70">
-                      {artifact.type === "mini_game" ? "Game" : "Doc"} · {artifact.status}
+                      {artifact.type === "mini_game"
+                        ? "Game"
+                        : artifact.type === "web_app"
+                          ? "Web App"
+                          : "Doc"}{" "}
+                      · {artifact.status}
                     </p>
                   </div>
                   <button
@@ -5475,7 +5542,11 @@ const OutputsHistoryView = ({
                     onClick={() => onOpenArtifact(artifact.id)}
                     data-testid="button-open-history-artifact"
                   >
-                    {artifact.type === "mini_game" ? "View/Play" : "View"}
+                    {artifact.type === "mini_game"
+                      ? "View/Play"
+                      : artifact.type === "web_app"
+                        ? "View/Launch"
+                        : "View"}
                   </button>
                 </div>
                 <div className="flex gap-2">
@@ -7199,7 +7270,12 @@ function App() {
             kind: "agent_artifact",
             taskId: event.taskId,
             artifact: event.artifact,
-            text: "View/Play",
+            text:
+              event.artifact.type === "mini_game"
+                ? "View/Play"
+                : event.artifact.type === "web_app"
+                  ? "View/Launch"
+                  : "View",
           },
         }));
         return;
@@ -7250,10 +7326,11 @@ function App() {
         clearPendingPartDeltaFlush();
         flushPendingPartDeltas();
         finalized = true;
-        const assistantMessages =
+        const assistantMessagesRaw =
           event.assistantMessages && event.assistantMessages.length > 0
             ? event.assistantMessages
             : [event.assistantMessage];
+        const assistantMessages = suppressLeakedArtifactBodies(assistantMessagesRaw);
         updateConversationMessages(params.conversationId, (current) =>
           replaceOptimisticAssistantTurn(
             current,
@@ -7429,10 +7506,11 @@ function App() {
       assistantMessages?: MessageData[];
     };
 
-    const assistantMessages =
+    const assistantMessagesRaw =
       payload.assistantMessages && payload.assistantMessages.length > 0
         ? payload.assistantMessages
         : [payload.assistantMessage];
+    const assistantMessages = suppressLeakedArtifactBodies(assistantMessagesRaw);
 
     updateConversationMessages(params.conversationId, (current) =>
       replaceOptimisticAssistantTurn(

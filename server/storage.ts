@@ -170,6 +170,42 @@ function inferMessagePurpose(data: InsertMessage): MessagePurpose {
   return "conversation";
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function resolveSemanticArtifactType(metadata: unknown): AgentArtifact["type"] | null {
+  if (!isRecord(metadata)) return null;
+  const direct = metadata.semanticArtifactType;
+  if (direct === "web_app") return "web_app";
+
+  const generation = metadata.generation;
+  if (isRecord(generation) && generation.semanticArtifactType === "web_app") {
+    return "web_app";
+  }
+
+  return null;
+}
+
+function withSemanticArtifactType(artifact: AgentArtifact): AgentArtifact {
+  const semanticType = resolveSemanticArtifactType(artifact.metadata);
+  if (!semanticType || semanticType === artifact.type) {
+    return artifact;
+  }
+  return {
+    ...artifact,
+    type: semanticType,
+  };
+}
+
+function isMissingArtifactEnumValueError(error: unknown, value: string): boolean {
+  if (!(error instanceof Error)) return false;
+  return (
+    error.message.includes("invalid input value for enum agent_artifact_type") &&
+    error.message.includes(`"${value}"`)
+  );
+}
+
 export interface IStorage {
   getConversations(userId: string): Promise<Conversation[]>;
   getConversation(id: string): Promise<Conversation | undefined>;
@@ -1249,7 +1285,7 @@ export class DatabaseStorage implements IStorage {
     const task = await this.getAgentTaskById(taskId);
     if (!task) return undefined;
 
-    const [steps, approvals, artifacts, toolCalls] = await Promise.all([
+    const [steps, approvals, rawArtifacts, toolCalls] = await Promise.all([
       this.getAgentSteps(taskId),
       db
         .select()
@@ -1263,6 +1299,7 @@ export class DatabaseStorage implements IStorage {
         .orderBy(asc(agentArtifacts.createdAt)),
       this.getAgentToolCalls(taskId),
     ]);
+    const artifacts = rawArtifacts.map((artifact) => withSemanticArtifactType(artifact));
 
     return {
       ...task,
@@ -1384,12 +1421,37 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createAgentArtifact(data: InsertAgentArtifact): Promise<AgentArtifact> {
-    const [artifact] = await db.insert(agentArtifacts).values(data).returning();
-    await db
-      .update(conversations)
-      .set({ updatedAt: new Date() })
-      .where(eq(conversations.id, data.conversationId));
-    return artifact;
+    try {
+      const [artifact] = await db.insert(agentArtifacts).values(data).returning();
+      await db
+        .update(conversations)
+        .set({ updatedAt: new Date() })
+        .where(eq(conversations.id, data.conversationId));
+      return withSemanticArtifactType(artifact);
+    } catch (error) {
+      if (!isMissingArtifactEnumValueError(error, "web_app") || data.type !== "web_app") {
+        throw error;
+      }
+
+      const metadata = isRecord(data.metadata) ? { ...data.metadata } : {};
+      metadata.semanticArtifactType = "web_app";
+      metadata.compatibility = {
+        ...(isRecord(metadata.compatibility) ? metadata.compatibility : {}),
+        webAppEnumFallback: true,
+      };
+
+      const fallbackData: InsertAgentArtifact = {
+        ...data,
+        type: "mini_game",
+        metadata,
+      };
+      const [artifact] = await db.insert(agentArtifacts).values(fallbackData).returning();
+      await db
+        .update(conversations)
+        .set({ updatedAt: new Date() })
+        .where(eq(conversations.id, data.conversationId));
+      return withSemanticArtifactType(artifact);
+    }
   }
 
   async getAgentArtifactById(
@@ -1399,14 +1461,15 @@ export class DatabaseStorage implements IStorage {
       .select()
       .from(agentArtifacts)
       .where(eq(agentArtifacts.id, artifactId));
-    return artifact;
+    if (!artifact) return undefined;
+    return withSemanticArtifactType(artifact);
   }
 
   async getAgentArtifactsForUser(params: {
     userId: string;
     includeArchived?: boolean;
   }): Promise<AgentArtifact[]> {
-    return db
+    const artifacts = await db
       .select()
       .from(agentArtifacts)
       .where(
@@ -1418,6 +1481,7 @@ export class DatabaseStorage implements IStorage {
         ),
       )
       .orderBy(desc(agentArtifacts.createdAt));
+    return artifacts.map((artifact) => withSemanticArtifactType(artifact));
   }
 
   async updateAgentArtifactStatus(params: {
@@ -1438,7 +1502,8 @@ export class DatabaseStorage implements IStorage {
         ),
       )
       .returning();
-    return artifact;
+    if (!artifact) return undefined;
+    return withSemanticArtifactType(artifact);
   }
 
   async createAgentToolCall(data: InsertAgentToolCall): Promise<AgentToolCall> {

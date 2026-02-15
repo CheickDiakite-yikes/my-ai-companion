@@ -38,6 +38,14 @@ const TOOL_POLICIES: Record<string, SandboxToolPolicy> = {
     network: { mode: "deny_all" },
     timeoutMs: 45_000,
   },
+  web_build_generator: {
+    toolName: "web_build_generator",
+    category: "build",
+    riskLevel: "low",
+    requiresApproval: false,
+    network: { mode: "deny_all" },
+    timeoutMs: 45_000,
+  },
   doc_generator: {
     toolName: "doc_generator",
     category: "build",
