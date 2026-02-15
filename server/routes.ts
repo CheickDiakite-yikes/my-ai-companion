@@ -4,7 +4,7 @@ import type { Express } from "express";
 import multer, { MulterError } from "multer";
 import { type Server } from "http";
 import { z } from "zod";
-import { eq } from "drizzle-orm";
+import { eq, and, desc } from "drizzle-orm";
 import {
   storage,
   type AgentIntentSessionUpdate,
@@ -16,6 +16,7 @@ import { setupAuth, registerAuthRoutes, isAuthenticated } from "./auth";
 import { db } from "./db";
 import { users } from "@shared/models/auth";
 import {
+  agentArtifacts,
   insertConversationSchema,
   insertMessageSchema,
   insertUserPreferencesSchema,
@@ -4529,14 +4530,59 @@ async function runMulterSingleImage(req: any, res: any): Promise<void> {
   });
 }
 
+function buildArtifactContextBlock(artifacts: Array<{
+  title: string;
+  type: string;
+  metadata: unknown;
+  createdAt: Date | null;
+}>): string | null {
+  if (artifacts.length === 0) return null;
+
+  const lines = artifacts.map((artifact) => {
+    const meta = artifact.metadata as Record<string, unknown> | null;
+    const summary = meta?.summary ? String(meta.summary) : null;
+    const typeLabel =
+      artifact.type === "mini_game" ? "game" :
+      artifact.type === "web_app" ? "website/web app" :
+      artifact.type === "doc_markdown" ? "document" :
+      artifact.type === "presentation" ? "presentation" :
+      artifact.type;
+    const summarySnippet = summary ? ` — ${summary.slice(0, 200)}` : "";
+    return `- [${typeLabel}] "${artifact.title}"${summarySnippet}`;
+  });
+
+  return [
+    "YOUR RECENT CREATIONS (artifacts you built for this user in this conversation):",
+    "When the user references, thanks, or asks about these, you know what they mean.",
+    ...lines,
+  ].join("\n");
+}
+
 async function buildModelMessages(params: {
   conversationId: string;
   boundAttachments: MessageAttachment[];
   mediaStore: ReturnType<typeof getMediaStore>;
 }) {
-  const stitchedMemory = await storage.getMessagesWithAttachments(
-    params.conversationId,
-  );
+  const [stitchedMemory, conversationArtifacts] = await Promise.all([
+    storage.getMessagesWithAttachments(params.conversationId),
+    db
+      .select({
+        title: agentArtifacts.title,
+        type: agentArtifacts.type,
+        metadata: agentArtifacts.metadata,
+        createdAt: agentArtifacts.createdAt,
+      })
+      .from(agentArtifacts)
+      .where(
+        and(
+          eq(agentArtifacts.conversationId, params.conversationId),
+          eq(agentArtifacts.status, "active"),
+        ),
+      )
+      .orderBy(desc(agentArtifacts.createdAt))
+      .limit(10),
+  ]);
+
   const filteredMemory = stitchedMemory.filter((message) =>
     shouldIncludeMessageInConversationContext(message),
   );
@@ -4557,7 +4603,7 @@ async function buildModelMessages(params: {
     currentAttachmentById.set(attachment.id, bytes.toString("base64"));
   }
 
-  return safeConversationMemory.map((message) => ({
+  const modelMessages = safeConversationMemory.map((message) => ({
     sender: message.sender,
     text: message.text,
     attachments: message.attachments
@@ -4579,6 +4625,17 @@ async function buildModelMessages(params: {
         };
       }),
   }));
+
+  const artifactBlock = buildArtifactContextBlock(conversationArtifacts);
+  if (artifactBlock) {
+    modelMessages.unshift({
+      sender: "assistant" as const,
+      text: artifactBlock,
+      attachments: [],
+    });
+  }
+
+  return modelMessages;
 }
 
 async function summarizeAndPersistAttachments(params: {
@@ -7702,6 +7759,7 @@ export async function registerRoutes(
         crossChatMemoryEnabled: chatMemory.crossChatMemoryEnabled,
       });
 
+      const desiredParts = inferDesiredMultipartCount(parsed.text);
       const aiStartedAt = Date.now();
       const aiResponse = await generateTextReply({
         persona,
@@ -7711,6 +7769,7 @@ export async function registerRoutes(
         memoryPolicy: chatMemory.memoryMeta.mode,
         enableMultipart: ENABLE_MULTIPART_TEXT,
         clientTimeZone: parsed.clientTimeZone ?? null,
+        desiredParts,
       });
 
       trace(req, "chat.respond.model_success", {
@@ -7742,7 +7801,6 @@ export async function registerRoutes(
         throw new Error("Gemini returned an empty response");
       }
 
-      const desiredParts = inferDesiredMultipartCount(parsed.text);
       const splitDiag = ENABLE_MULTIPART_TEXT
         ? splitAssistantReplyPartsWithDiagnostics(rawGroundedReply)
         : {
@@ -8753,6 +8811,7 @@ export async function registerRoutes(
         memoryPolicy: chatMemory.memoryMeta.mode,
         enableMultipart: ENABLE_MULTIPART_TEXT,
         clientTimeZone: parsed.clientTimeZone ?? null,
+        desiredParts,
       });
 
       const maxMultipartParts = Math.min(Math.max(desiredParts, 1), 3);

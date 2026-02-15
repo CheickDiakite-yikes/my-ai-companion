@@ -1291,6 +1291,7 @@ export interface GenerateTextReplyInput {
   memoryPolicy?: LiveMemoryPolicy;
   enableMultipart?: boolean;
   clientTimeZone?: string | null;
+  desiredParts?: number;
 }
 
 export interface GenerateTextReplyResult {
@@ -2460,15 +2461,20 @@ function extractLikelyJsonPayload(raw: string): string {
   return trimmed;
 }
 
-function buildTextGenerationConfig(personaPrompt: string) {
+function buildTextGenerationConfig(personaPrompt: string, desiredParts = 1) {
+  const baseMaxTokens = parsePositiveInt(
+    process.env.GEMINI_TEXT_MAX_OUTPUT_TOKENS,
+    1024,
+  );
+  const clampedParts = Math.min(Math.max(desiredParts, 1), 3);
+  const maxOutputTokens = clampedParts > 1
+    ? Math.min(baseMaxTokens * clampedParts, 4096)
+    : baseMaxTokens;
   return {
     systemInstruction: personaPrompt,
     temperature: parseBoundedNumber(process.env.GEMINI_TEXT_TEMPERATURE, 0.85, 0, 2),
     topP: parseBoundedNumber(process.env.GEMINI_TEXT_TOP_P, 0.95, 0, 1),
-    maxOutputTokens: parsePositiveInt(
-      process.env.GEMINI_TEXT_MAX_OUTPUT_TOKENS,
-      1024,
-    ),
+    maxOutputTokens,
   };
 }
 
@@ -2512,7 +2518,7 @@ export async function generateTextReply(
   const response = await ai.models.generateContent({
     model,
     contents,
-    config: buildTextGenerationConfig(personaPrompt),
+    config: buildTextGenerationConfig(personaPrompt, input.desiredParts ?? 1),
   });
 
   const sanitized = sanitizeAssistantReplyText(response.text ?? "");
@@ -2843,7 +2849,7 @@ export async function generateTextReplyStream(
   const responseStream = await ai.models.generateContentStream({
     model,
     contents,
-    config: buildTextGenerationConfig(personaPrompt),
+    config: buildTextGenerationConfig(personaPrompt, input.desiredParts ?? 1),
   });
 
   async function* streamChunks(): AsyncGenerator<GenerateTextReplyStreamChunk> {
