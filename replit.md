@@ -4,6 +4,8 @@
 A companion AI chat/voice app with personalized persona Zee (with voice variants). Users interact via text chat and voice calls. Features onboarding flow, dark teal branding, persistent conversations, agentic capabilities (AI game generation, task execution), and customizable themes.
 
 ## Recent Changes
+- 2026-02-15: Fixed critical intent classification: added missing deliverables (deck, pitch deck, thesis, business plan, roadmap, etc.), typo tolerance (creat, crate, creste), self-intent gate fix allowing deliverables through, informational context guard preventing false positives, and hasActionVerb+hasDeliverable catch-all rule with safety guards
+- 2026-02-15: Synced all intent patterns across agent-runtime.ts and routes.ts (PROACTIVE_OFFER_*, TASK_CONTEXT_*, INTENT_AMBIGUOUS_* patterns)
 - 2026-02-15: Upgraded web build generation from deterministic template to model-based (Gemini API/CLI) with comprehensive prompt producing professional multi-section websites (hero, features, testimonials, CTA, footer, animations, responsive design)
 - 2026-02-15: Added `generateWebBuild`/`repairWebBuild` adapter methods with CLI→API fallback and deterministic recovery fallback
 - 2026-02-15: Upgraded document generation with 9 new doc types (resume, essay, research_paper, whitepaper, proposal, tutorial, memo, investment_thesis, business_plan) with type-specific prompts, rich deterministic fallback templates, and expanded intent inference

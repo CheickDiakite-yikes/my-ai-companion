@@ -2017,13 +2017,13 @@ const PROACTIVE_OFFER_NEED_PATTERNS = [
   /\b(?:i'm trying to|im trying to|help me|not sure how to)\b/i,
 ];
 const PROACTIVE_OFFER_DELIVERABLE_PATTERNS = [
-  /\b(?:email|document|doc|brief|report|proposal|summary|plan|checklist|paper|research paper|guide|tutorial|whitepaper)\b/i,
-  /\b(?:presentation|slides|deck|pitch)\b/i,
+  /\b(?:email|document|doc|brief|report|proposal|summary|plan|checklist|paper|research paper|guide|tutorial|whitepaper|white paper|thesis|investment thesis|business plan|action plan|roadmap|memo|memorandum|essay|resume|cv|curriculum vitae|cover letter|letter)\b/i,
+  /\b(?:presentation|slides?|deck|pitch|pitch deck)\b/i,
   /\b(?:landing page|website|web app|mini-saas|app|prototype|mini game|game)\b/i,
 ];
 const TASK_CONTEXT_GENERIC_REQUEST_PATTERNS = [
-  /^\s*(?:can|could|would|will)\s+you\s+(?:create|make|draft|write|build)\s+(?:a|an)?\s*(?:document|doc|email|letter|cover letter|presentation|slides?|deck|paper|research paper|guide|tutorial|whitepaper|resume|cv)\b.*\??\s*$/i,
-  /^\s*(?:create|make|draft|write|build)\s+(?:a|an)?\s*(?:document|doc|email|letter|cover letter|presentation|slides?|deck|paper|research paper|guide|tutorial|whitepaper|resume|cv)\b.*$/i,
+  /^\s*(?:can|could|would|will)\s+you\s+(?:create|make|draft|write|build)\s+(?:a|an)?\s*(?:document|doc|email|letter|cover letter|presentation|slides?|deck|pitch deck|paper|research paper|guide|tutorial|whitepaper|white paper|resume|cv|curriculum vitae|essay|memo|memorandum|proposal|thesis|investment thesis|business plan|action plan|roadmap)\b.*\??\s*$/i,
+  /^\s*(?:create|creat|crate|creste|make|draft|write|build)\s+(?:a|an)?\s*(?:document|doc|email|letter|cover letter|presentation|slides?|deck|pitch deck|paper|research paper|guide|tutorial|whitepaper|white paper|resume|cv|curriculum vitae|essay|memo|memorandum|proposal|thesis|investment thesis|business plan|action plan|roadmap)\b.*$/i,
 ];
 const TASK_CONTEXT_DETAIL_PATTERNS = [
   /\b(?:for|about|regarding|focused on|targeting|to\s+[a-z]|with|including)\b/i,
@@ -3514,12 +3514,12 @@ const INTENT_AFFIRMATION_ONLY_PATTERNS = [
   /^\s*(yes|yeah|yep|sure|ok|okay|do it|go ahead|sounds good|let'?s do it|please do)\s*[.!?]*\s*$/i,
 ];
 const INTENT_AMBIGUOUS_BUILD_ACTION_PATTERNS = [
-  /\b(create|build|draft|write|make|develop|code|prototype)\b/i,
+  /\b(create|creat|crate|build|draft|write|make|develop|code|prototype|compose|outline|produce)\b/i,
   /\b(i need|i want|i should|i'?m trying|im trying|thinking of)\b/i,
 ];
 const INTENT_AMBIGUOUS_DELIVERABLE_PATTERNS = [
-  /\b(document|doc|email|letter|cover letter|brief|report|proposal|summary|paper|research paper|guide|tutorial|whitepaper|resume|cv)\b/i,
-  /\b(presentation|slides?|deck|pitch)\b/i,
+  /\b(document|doc|email|letter|cover letter|brief|report|proposal|summary|paper|research paper|guide|how[- ]?to|tutorial|whitepaper|white paper|resume|cv|curriculum vitae|essay|memo|memorandum|thesis|investment thesis|business plan|action plan|roadmap)\b/i,
+  /\b(presentation|slides?|deck|pitch|pitch deck)\b/i,
   /\b(app|website|web app|mini(?:\s|-)?saas|landing page|mini(?:\s|-)?game|prototype|tool)\b/i,
 ];
 const INTENT_TONE_PATTERNS =

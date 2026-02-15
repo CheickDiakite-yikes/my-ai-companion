@@ -56,9 +56,9 @@ import {
 } from "./artifact-render-spec";
 
 const AGENT_ACTION_PATTERN =
-  /\b(create|build|generate|make|draft|write|design|code|develop|plan|send|email|connect|control|automate|research|organize|prepare|summari[sz]e)\b/i;
+  /\b(create|creat|crate|creste|build|generate|make|draft|write|design|code|develop|plan|send|email|connect|control|automate|research|organize|prepare|summari[sz]e|compose|outline|produce|put\s+together)\b/i;
 const AGENT_DELIVERABLE_PATTERN =
-  /\b(game|mini\s*game|document|doc|brief|summary|report|presentation|slides|artifact|prototype|app|website|landing\s*page|web\s*app|mini\s*saas|email|draft|checklist|letter|cover\s*letter|resume|cv|essay|statement|memo|proposal|paper|research\s*paper|guide|tutorial|whitepaper|investment\s*thesis|business\s*plan|action\s*plan)\b/i;
+  /\b(game|mini\s*game|document|doc|brief|summary|report|presentation|slides?|deck|pitch\s*deck|artifact|prototype|app|website|landing\s*page|web\s*app|mini\s*saas|email|draft|checklist|letter|cover\s*letter|resume|cv|curriculum\s*vitae|essay|statement|memo|memorandum|proposal|paper|research\s*paper|guide|how[- ]?to|tutorial|whitepaper|white\s*paper|thesis|investment\s*thesis|business\s*plan|action\s*plan|roadmap)\b/i;
 const TASK_DIRECTIVE_PATTERNS = [
   /^\s*(can|could|would)\s+you\b/i,
   /^\s*please\b/i,
@@ -67,12 +67,12 @@ const TASK_DIRECTIVE_PATTERNS = [
   /\bfor\s+me\b/i,
 ];
 const TASK_IMPERATIVE_PATTERNS = [
-  /^\s*(create|build|generate|make|draft|write|design|code|develop|plan|send|email|connect|control|automate|research|organize|prepare|summari[sz]e)\b/i,
+  /^\s*(create|creat|crate|creste|build|generate|make|draft|write|design|code|develop|plan|send|email|connect|control|automate|research|organize|prepare|summari[sz]e|compose|outline|produce)\b/i,
 ];
 const EXPLICIT_BUILD_COMMAND_PATTERNS = [
-  /\b(?:create|build|generate|make|draft|write|design|code|develop)\s+.+\s+(?:for\s+me|now)\b/i,
-  /^\s*(?:create|build|generate|make|draft|write|design|code|develop)\b/i,
-  /\b(?:can|could|would|will)\s+you\s+(?:create|build|generate|make|draft|write|design|code|develop)\b/i,
+  /\b(?:create|creat|crate|creste|build|generate|make|draft|write|design|code|develop|compose|outline|produce)\s+.+\s+(?:for\s+me|now)\b/i,
+  /^\s*(?:create|creat|crate|creste|build|generate|make|draft|write|design|code|develop|compose|outline|produce)\b/i,
+  /\b(?:can|could|would|will)\s+you\s+(?:create|creat|crate|creste|build|generate|make|draft|write|design|code|develop|compose|outline|produce)\b/i,
 ];
 const SELF_INTENT_PATTERNS = [
   /\bi\s+(need|want|have\s+to|gotta|should|plan\s+to|am\s+going\s+to|trying\s+to)\b/i,
@@ -81,7 +81,9 @@ const SELF_INTENT_PATTERNS = [
 
 const AGENT_FOLLOW_UP_REFERENCE_PATTERNS = [
   /\b(new one|another one|one more|different one|remake|redo|do it again)\b/i,
-  /\b(make|create|build|generate|update|improve|tweak)\s+(it|that|this)\b/i,
+  /\b(make|create|creat|crate|creste|build|generate|update|improve|tweak|draft|write)\s+(it|that|this)\b/i,
+  /^\s*(do\s+it|go\s+ahead|go\s+for\s+it|let'?s\s+do\s+it|let'?s\s+go|yes\s+do\s+it|yes\s+please|yeah\s+do\s+it|sure|yep|yes\s*,?\s*(create|make|build|draft|write|generate)\s+it)\s*[.!]?\s*$/i,
+  /^\s*(create|creat|crate|creste|make|build|draft|write|generate)\s+(it|that|this|one)\s*[.!]?\s*$/i,
 ];
 
 const MINI_GAME_TUNING_PATTERNS = [
@@ -109,7 +111,7 @@ const LOW_RISK_EMAIL_DRAFT_PATTERNS = [
 ];
 
 const DOC_HINT_PATTERNS = [
-  /\b(doc|document|notes|brief|summary|write[- ]?up|presentation|slides|email|letter|cover\s*letter|resume|cv|essay|statement|memo|proposal|paper|research\s*paper|guide|tutorial|whitepaper|investment\s*thesis|business\s*plan|action\s*plan)\b/i,
+  /\b(doc|document|notes|brief|summary|write[- ]?up|presentation|slides?|deck|pitch\s*deck|email|letter|cover\s*letter|resume|cv|curriculum\s*vitae|essay|statement|memo|memorandum|proposal|paper|research\s*paper|guide|how[- ]?to|tutorial|whitepaper|white\s*paper|thesis|investment\s*thesis|business\s*plan|action\s*plan|roadmap)\b/i,
 ];
 const WEB_BUILD_HINT_PATTERNS = [
   /\b(landing\s*page|website|web\s*app|mini\s*saas|prototype|tool)\b/i,
@@ -3512,7 +3514,9 @@ export function classifyChatTurnIntent(
     hasSelfIntentSignal &&
     !hasExplicitTaskRequest &&
     !hasFollowUpReference &&
-    !hasMiniGameTuningSignal
+    !hasMiniGameTuningSignal &&
+    !hasDeliverable &&
+    !hasGameIntentSignal
   ) {
     return "companion_reply";
   }
@@ -3537,10 +3541,28 @@ export function classifyChatTurnIntent(
   ) {
     return "agent_task";
   }
+  const isInformationalContext =
+    /\b(learn|read|study|understand|explain|tell me|what is|what are|what'?s|how does|talk about|discuss|know about|teach me|help me understand)\b/i.test(normalized);
+  if (hasActionVerb && hasDeliverable && !isInformationalContext && !hasSelfIntentSignal) {
+    return "agent_task";
+  }
+  if (
+    hasSelfIntentSignal &&
+    hasDeliverable &&
+    !isInformationalContext &&
+    /\b(need|want)\s+(a|an|my|the|this)\b/i.test(normalized)
+  ) {
+    return "agent_task";
+  }
   if (
     context?.hasRecentAgentActivity &&
+    hasFollowUpReference
+  ) {
+    return "agent_task";
+  }
+  if (
     hasFollowUpReference &&
-    (hasActionVerb || hasDirective || hasGameIntentSignal)
+    /^\s*(do\s+it|go\s+ahead|go\s+for\s+it|let'?s\s+do\s+it|let'?s\s+go|yes|sure|yep|yeah|ok|okay)\b/i.test(normalized)
   ) {
     return "agent_task";
   }
@@ -3573,7 +3595,7 @@ export function inferAgentTaskKind(
   const wantsDoc = DOC_HINT_PATTERNS.some((pattern) => pattern.test(normalized));
   const hasExplicitDocSignal =
     wantsDoc &&
-    /\b(doc|document|brief|summary|report|presentation|slides|deck|email|letter|cover\s*letter|resume|cv|essay|statement|memo|proposal|paper|research\s*paper|guide|tutorial|whitepaper)\b/i.test(
+    /\b(doc|document|brief|summary|report|presentation|slides?|deck|pitch\s*deck|email|letter|cover\s*letter|resume|cv|curriculum\s*vitae|essay|statement|memo|memorandum|proposal|paper|research\s*paper|guide|how[- ]?to|tutorial|whitepaper|white\s*paper|thesis|investment\s*thesis|business\s*plan|action\s*plan|roadmap)\b/i.test(
       normalized,
     );
   const likelyGameFollowUp =
