@@ -18,6 +18,17 @@ Current persona model:
 - Runtime persona: `Zee` (server-authoritative)
 - Voice options: `Aoede`, `Kore`, `Charon`, `Fenrir`
 
+### Companion-only mode
+
+To run Zee as a pure companion (text + voice + memory) with agentic creation archived:
+
+```bash
+ENABLE_AGENTIC_CREATIONS=false
+VITE_ENABLE_AGENTIC_CREATIONS=false
+```
+
+When disabled, build offers/tasks/approvals/artifact cards are blocked server-side and hidden in chat/profile surfaces.
+
 ## 2) Core Architecture
 
 ### High-level system map

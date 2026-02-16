@@ -624,6 +624,15 @@ function isAgentOfferPayload(
   return Boolean(payload && payload.kind === "agent_offer");
 }
 
+function isAgentUiPayload(payload: MessageData["uiPayload"]): boolean {
+  return (
+    isAgentTaskStatusPayload(payload) ||
+    isAgentApprovalPayload(payload) ||
+    isAgentArtifactPayload(payload) ||
+    isAgentOfferPayload(payload)
+  );
+}
+
 function toTaskStatusLabel(status: AgentTaskSummary["status"]): string {
   if (status === "in_progress") return "In progress";
   if (status === "approval_required") return "Needs approval";
@@ -654,6 +663,12 @@ const ENABLE_UNIFIED_AGENT_TASK_CARD = parseClientBooleanFlag(
   (import.meta.env as Record<string, unknown>).VITE_ENABLE_UNIFIED_AGENT_TASK_CARD ??
     (import.meta.env as Record<string, unknown>).ENABLE_UNIFIED_AGENT_TASK_CARD,
   true,
+);
+
+const ENABLE_AGENTIC_CREATIONS = parseClientBooleanFlag(
+  (import.meta.env as Record<string, unknown>).VITE_ENABLE_AGENTIC_CREATIONS ??
+    (import.meta.env as Record<string, unknown>).ENABLE_AGENTIC_CREATIONS,
+  false,
 );
 
 const ENABLE_JSON_RENDER_ARTIFACT_VIEWER = parseClientBooleanFlag(
@@ -2331,19 +2346,21 @@ const ProfileView = ({
                       >
                         Replay onboarding
                       </button>
-                      <button
-                        type="button"
-                        onClick={onOpenOutputsHistory}
-                        className="w-full rounded-xl border px-3 py-2 text-sm font-medium transition-colors hover:opacity-95"
-                        style={{
-                          borderColor: "var(--app-soft-card-border)",
-                          backgroundColor: "var(--app-soft-card-bg)",
-                          color: "var(--app-on-dark)",
-                        }}
-                        data-testid="button-open-outputs-history"
-                      >
-                        Outputs history
-                      </button>
+                      {ENABLE_AGENTIC_CREATIONS && (
+                        <button
+                          type="button"
+                          onClick={onOpenOutputsHistory}
+                          className="w-full rounded-xl border px-3 py-2 text-sm font-medium transition-colors hover:opacity-95"
+                          style={{
+                            borderColor: "var(--app-soft-card-border)",
+                            backgroundColor: "var(--app-soft-card-bg)",
+                            color: "var(--app-on-dark)",
+                          }}
+                          data-testid="button-open-outputs-history"
+                        >
+                          Outputs history
+                        </button>
+                      )}
                     </div>
                   </motion.div>
                 )}
@@ -5025,23 +5042,36 @@ const TextView = ({
     setShowJumpToNewest(false);
   }, []);
 
+  const visibleMessages = useMemo(
+    () =>
+      ENABLE_AGENTIC_CREATIONS
+        ? messages
+        : messages.filter((message) => !isAgentUiPayload(message.uiPayload)),
+    [messages],
+  );
+
   useEffect(() => {
     if (shouldAutoStickRef.current) {
       scrollToBottom(isStreamingReply);
       setShowJumpToNewest(false);
     }
-  }, [messages, isStreamingReply]);
+  }, [visibleMessages, isStreamingReply]);
 
   const latestAssistantText =
-    [...messages]
+    [...visibleMessages]
       .reverse()
       .find((msg) => msg.sender === "assistant")
       ?.text ?? "";
 
-  const renderItems = useMemo(
-    () => buildUnifiedAgentTaskCards(messages, liveTaskSnapshots),
-    [messages, liveTaskSnapshots],
-  );
+  const renderItems = useMemo(() => {
+    if (!ENABLE_AGENTIC_CREATIONS || !ENABLE_UNIFIED_AGENT_TASK_CARD) {
+      return visibleMessages.map((message) => ({
+        kind: "message",
+        message,
+      })) as TextRenderItem[];
+    }
+    return buildUnifiedAgentTaskCards(visibleMessages, liveTaskSnapshots);
+  }, [visibleMessages, liveTaskSnapshots]);
 
   return (
     <div
@@ -6180,6 +6210,13 @@ function App() {
   >([]);
   const [composerError, setComposerError] = useState<string | null>(null);
   const [isSendingMessage, setIsSendingMessage] = useState(false);
+
+  useEffect(() => {
+    if (!ENABLE_AGENTIC_CREATIONS) {
+      if (showOutputsHistory) setShowOutputsHistory(false);
+      if (activeArtifactId) setActiveArtifactId(null);
+    }
+  }, [showOutputsHistory, activeArtifactId]);
 
   const liveSessionRef = useRef<GeminiLiveVoiceSession | null>(null);
   const liveConversationRef = useRef<string | null>(null);
@@ -8577,7 +8614,7 @@ function App() {
           </AnimatePresence>
 
           <AnimatePresence>
-            {showOutputsHistory && (
+            {ENABLE_AGENTIC_CREATIONS && showOutputsHistory && (
               <OutputsHistoryView
                 artifacts={artifacts}
                 isLoading={isArtifactsLoading}
@@ -8592,7 +8629,7 @@ function App() {
           </AnimatePresence>
 
           <AnimatePresence>
-            {activeArtifactId && (
+            {ENABLE_AGENTIC_CREATIONS && activeArtifactId && (
               <ArtifactViewer
                 artifact={activeArtifact}
                 isLoading={isActiveArtifactLoading && !activeArtifact}

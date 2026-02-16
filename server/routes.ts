@@ -290,6 +290,10 @@ const ENABLE_AGENT_PROACTIVE_OFFERS = parseBooleanFlag(
   process.env.ENABLE_AGENT_PROACTIVE_OFFERS,
   true,
 );
+const ENABLE_AGENTIC_CREATIONS = parseBooleanFlag(
+  process.env.ENABLE_AGENTIC_CREATIONS,
+  false,
+);
 const ENABLE_AGENT_OFFERS_V2 = parseBooleanFlag(
   process.env.ENABLE_AGENT_OFFERS_V2,
   true,
@@ -2470,6 +2474,34 @@ function hasActiveIntentSessionContinuationLock(
   if (!session || session.status !== "active") return false;
   if (toIntentMissingSlots(session).length > 0) return true;
   return Boolean(session.clarificationQuestion?.trim());
+}
+
+async function archiveIntentSessionForCompanionOnly(input: {
+  req: any;
+  session: AgentIntentSession | null;
+  sourceMessageId: string;
+  conversationId: string;
+}): Promise<AgentIntentSession | null> {
+  if (!input.session) return null;
+  const existingMetadata = normalizeIntentMetadata(input.session.metadata);
+  await storage.updateAgentIntentSession({
+    sessionId: input.session.id,
+    updates: {
+      status: "cancelled",
+      resolvedAt: new Date(),
+      metadata: {
+        ...existingMetadata,
+        cancelReason: "companion_only_mode",
+        cancelledByMessageId: input.sourceMessageId,
+      },
+    },
+  });
+  trace(input.req, "chat.intent_session.archived.companion_only", {
+    conversationId: input.conversationId,
+    intentSessionId: input.session.id,
+    sourceMessageId: input.sourceMessageId,
+  });
+  return null;
 }
 
 function toDecisionPathReason(input: {
@@ -6247,6 +6279,12 @@ export async function registerRoutes(
     isAuthenticated,
     async (req: any, res) => {
       const startedAt = Date.now();
+      if (!ENABLE_AGENTIC_CREATIONS) {
+        return res.status(410).json({
+          message: "Agentic creation features are archived in companion-only mode.",
+          traceId: getTraceId(req),
+        });
+      }
       try {
         const parsed = agentApprovalDecisionSchema.parse(req.body ?? {});
         const task = await storage.getAgentTaskById(req.params.taskId);
@@ -6390,6 +6428,12 @@ export async function registerRoutes(
     isAuthenticated,
     async (req: any, res) => {
       const startedAt = Date.now();
+      if (!ENABLE_AGENTIC_CREATIONS) {
+        return res.status(410).json({
+          message: "Agentic creation features are archived in companion-only mode.",
+          traceId: getTraceId(req),
+        });
+      }
       let offerMessageIdForRecovery: string | null = null;
       let offerForRecovery: AgentOfferSummary | null = null;
       let offerLocked = false;
@@ -6534,6 +6578,12 @@ export async function registerRoutes(
     isAuthenticated,
     async (req: any, res) => {
       const startedAt = Date.now();
+      if (!ENABLE_AGENTIC_CREATIONS) {
+        return res.status(410).json({
+          message: "Agentic creation features are archived in companion-only mode.",
+          traceId: getTraceId(req),
+        });
+      }
       try {
         const parsed = agentOfferDecisionSchema.parse(req.body ?? {});
         const resolved = await resolveOfferFromRequest({
@@ -7418,6 +7468,7 @@ export async function registerRoutes(
           })) ?? null)
         : null;
       if (
+        ENABLE_AGENTIC_CREATIONS &&
         ENABLE_AGENT_INTENT_SESSIONS &&
         shouldSupersedeActiveIntentSession({
           userText: parsed.text,
@@ -7455,10 +7506,20 @@ export async function registerRoutes(
         activeIntentSession = null;
         }
       }
-      const baseTurnIntentContext = inferRecentAgentIntentContext(
-        existingConversationMessages,
-        userMessage.id,
-      );
+      if (!ENABLE_AGENTIC_CREATIONS && activeIntentSession) {
+        activeIntentSession = await archiveIntentSessionForCompanionOnly({
+          req,
+          session: activeIntentSession,
+          sourceMessageId: userMessage.id,
+          conversationId: conversation.id,
+        });
+      }
+      const baseTurnIntentContext = ENABLE_AGENTIC_CREATIONS
+        ? inferRecentAgentIntentContext(existingConversationMessages, userMessage.id)
+        : {
+            hasRecentAgentActivity: false,
+            recentTaskKind: null,
+          };
       const turnIntentContext = {
         hasRecentAgentActivity:
           baseTurnIntentContext.hasRecentAgentActivity ||
@@ -7469,51 +7530,67 @@ export async function registerRoutes(
       };
       const activeIntentSessionContinuationLock =
         hasActiveIntentSessionContinuationLock(activeIntentSession);
-      const intentResolution = await resolveTurnIntentWithFallback({
-        req,
-        userText: parsed.text,
-        turnIntentContext,
-        hasActiveIntentSession: Boolean(activeIntentSession),
-        forceActiveSessionTaskContinuation: activeIntentSessionContinuationLock,
-      });
-      const pendingOfferResolved = await findPendingOfferForConversation({
-        userId: req.session.userId,
-        conversationId: conversation.id,
-        conversationMessages: existingConversationMessages,
-      });
+      const intentResolution = ENABLE_AGENTIC_CREATIONS
+        ? await resolveTurnIntentWithFallback({
+            req,
+            userText: parsed.text,
+            turnIntentContext,
+            hasActiveIntentSession: Boolean(activeIntentSession),
+            forceActiveSessionTaskContinuation: activeIntentSessionContinuationLock,
+          })
+        : {
+            intent: "companion_reply" as ChatTurnIntent,
+            deterministicIntent: "companion_reply" as ChatTurnIntent,
+            classifierUsed: false,
+          };
+      const pendingOfferResolved = ENABLE_AGENTIC_CREATIONS
+        ? await findPendingOfferForConversation({
+            userId: req.session.userId,
+            conversationId: conversation.id,
+            conversationMessages: existingConversationMessages,
+          })
+        : null;
       const hasPendingOffer = Boolean(pendingOfferResolved);
-      const explicitOfferOpportunity = inferExplicitOfferOpportunity({
-        conversationId: conversation.id,
-        sourceMessageId: userMessage.id,
-        userText: parsed.text,
-        hasImage: boundAttachments.length > 0,
-        turnIntentContext,
-      });
+      const explicitOfferOpportunity = ENABLE_AGENTIC_CREATIONS
+        ? inferExplicitOfferOpportunity({
+            conversationId: conversation.id,
+            sourceMessageId: userMessage.id,
+            userText: parsed.text,
+            hasImage: boundAttachments.length > 0,
+            turnIntentContext,
+          })
+        : null;
       const offerAcceptedByText = Boolean(
         pendingOfferResolved && isOfferAcceptMessage(parsed.text),
       );
       const offerDeclinedByText = Boolean(
         pendingOfferResolved && isOfferDeclineMessage(parsed.text),
       );
-      const proactiveOpportunity = inferProactiveOfferOpportunity({
-        conversationId: conversation.id,
-        sourceMessageId: userMessage.id,
-        userText: parsed.text,
-      });
+      const proactiveOpportunity = ENABLE_AGENTIC_CREATIONS
+        ? inferProactiveOfferOpportunity({
+            conversationId: conversation.id,
+            sourceMessageId: userMessage.id,
+            userText: parsed.text,
+          })
+        : null;
       const shouldForceOfferFlow =
+        ENABLE_AGENTIC_CREATIONS &&
         Boolean(explicitOfferOpportunity) &&
         !activeIntentSession &&
         !offerAcceptedByText &&
         !offerDeclinedByText;
       const shouldDeferToProactiveOffer =
+        ENABLE_AGENTIC_CREATIONS &&
         intentResolution.intent === "agent_task" &&
         Boolean(proactiveOpportunity) &&
         !hasPendingOffer &&
         !activeIntentSession &&
         !shouldForceOfferFlow;
-      const effectiveTurnIntent: ChatTurnIntent = shouldDeferToProactiveOffer
+      const effectiveTurnIntent: ChatTurnIntent = !ENABLE_AGENTIC_CREATIONS
         ? "companion_reply"
-        : intentResolution.intent;
+        : shouldDeferToProactiveOffer
+          ? "companion_reply"
+          : intentResolution.intent;
       trace(req, "chat.turn.classified", {
         conversationId: conversation.id,
         intent: intentResolution.intent,
@@ -8503,6 +8580,7 @@ export async function registerRoutes(
           })) ?? null)
         : null;
       if (
+        ENABLE_AGENTIC_CREATIONS &&
         ENABLE_AGENT_INTENT_SESSIONS &&
         shouldSupersedeActiveIntentSession({
           userText: parsed.text,
@@ -8540,10 +8618,20 @@ export async function registerRoutes(
         activeIntentSession = null;
         }
       }
-      const baseTurnIntentContext = inferRecentAgentIntentContext(
-        existingConversationMessages,
-        userMessage.id,
-      );
+      if (!ENABLE_AGENTIC_CREATIONS && activeIntentSession) {
+        activeIntentSession = await archiveIntentSessionForCompanionOnly({
+          req,
+          session: activeIntentSession,
+          sourceMessageId: userMessage.id,
+          conversationId: conversation.id,
+        });
+      }
+      const baseTurnIntentContext = ENABLE_AGENTIC_CREATIONS
+        ? inferRecentAgentIntentContext(existingConversationMessages, userMessage.id)
+        : {
+            hasRecentAgentActivity: false,
+            recentTaskKind: null,
+          };
       const turnIntentContext = {
         hasRecentAgentActivity:
           baseTurnIntentContext.hasRecentAgentActivity ||
@@ -8554,31 +8642,43 @@ export async function registerRoutes(
       };
       const activeIntentSessionContinuationLock =
         hasActiveIntentSessionContinuationLock(activeIntentSession);
-      const intentResolution = await resolveTurnIntentWithFallback({
-        req,
-        userText: parsed.text,
-        turnIntentContext,
-        hasActiveIntentSession: Boolean(activeIntentSession),
-        forceActiveSessionTaskContinuation: activeIntentSessionContinuationLock,
-      });
-      const pendingOfferResolved = await findPendingOfferForConversation({
-        userId: req.session.userId,
-        conversationId: conversation.id,
-        conversationMessages: existingConversationMessages,
-      });
+      const intentResolution = ENABLE_AGENTIC_CREATIONS
+        ? await resolveTurnIntentWithFallback({
+            req,
+            userText: parsed.text,
+            turnIntentContext,
+            hasActiveIntentSession: Boolean(activeIntentSession),
+            forceActiveSessionTaskContinuation: activeIntentSessionContinuationLock,
+          })
+        : {
+            intent: "companion_reply" as ChatTurnIntent,
+            deterministicIntent: "companion_reply" as ChatTurnIntent,
+            classifierUsed: false,
+          };
+      const pendingOfferResolved = ENABLE_AGENTIC_CREATIONS
+        ? await findPendingOfferForConversation({
+            userId: req.session.userId,
+            conversationId: conversation.id,
+            conversationMessages: existingConversationMessages,
+          })
+        : null;
       const hasPendingOffer = Boolean(pendingOfferResolved);
-      const explicitOfferOpportunity = inferExplicitOfferOpportunity({
-        conversationId: conversation.id,
-        sourceMessageId: userMessage.id,
-        userText: parsed.text,
-        hasImage: boundAttachments.length > 0,
-        turnIntentContext,
-      });
-      const proactiveOpportunity = inferProactiveOfferOpportunity({
-        conversationId: conversation.id,
-        sourceMessageId: userMessage.id,
-        userText: parsed.text,
-      });
+      const explicitOfferOpportunity = ENABLE_AGENTIC_CREATIONS
+        ? inferExplicitOfferOpportunity({
+            conversationId: conversation.id,
+            sourceMessageId: userMessage.id,
+            userText: parsed.text,
+            hasImage: boundAttachments.length > 0,
+            turnIntentContext,
+          })
+        : null;
+      const proactiveOpportunity = ENABLE_AGENTIC_CREATIONS
+        ? inferProactiveOfferOpportunity({
+            conversationId: conversation.id,
+            sourceMessageId: userMessage.id,
+            userText: parsed.text,
+          })
+        : null;
       const offerAcceptedByText = Boolean(
         pendingOfferResolved && isOfferAcceptMessage(parsed.text),
       );
@@ -8586,19 +8686,23 @@ export async function registerRoutes(
         pendingOfferResolved && isOfferDeclineMessage(parsed.text),
       );
       const shouldForceOfferFlow =
+        ENABLE_AGENTIC_CREATIONS &&
         Boolean(explicitOfferOpportunity) &&
         !activeIntentSession &&
         !offerAcceptedByText &&
         !offerDeclinedByText;
       const shouldDeferToProactiveOffer =
+        ENABLE_AGENTIC_CREATIONS &&
         intentResolution.intent === "agent_task" &&
         Boolean(proactiveOpportunity) &&
         !hasPendingOffer &&
         !activeIntentSession &&
         !shouldForceOfferFlow;
-      const effectiveTurnIntent: ChatTurnIntent = shouldDeferToProactiveOffer
+      const effectiveTurnIntent: ChatTurnIntent = !ENABLE_AGENTIC_CREATIONS
         ? "companion_reply"
-        : intentResolution.intent;
+        : shouldDeferToProactiveOffer
+          ? "companion_reply"
+          : intentResolution.intent;
       trace(req, "chat.turn.classified", {
         conversationId: conversation.id,
         intent: intentResolution.intent,
