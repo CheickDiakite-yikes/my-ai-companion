@@ -284,6 +284,8 @@ interface QuotaMetricData {
   nextUnlockAt: string | null;
 }
 
+type QuotaTier = "default" | "power" | "privileged";
+
 interface QuotaSummaryData {
   window: "rolling_30_days";
   windowDays: number;
@@ -316,6 +318,7 @@ interface QuotaSummaryData {
 
 interface QuotaSummaryResponse {
   traceId?: string;
+  tier?: QuotaTier;
   quota: QuotaSummaryData;
 }
 
@@ -1986,6 +1989,7 @@ const ProfileView = ({
   onOpenOutputsHistory,
   onLogout,
   quotaSummary,
+  quotaTier,
   isQuotaLoading,
 }: {
   onClose: () => void;
@@ -2016,6 +2020,7 @@ const ProfileView = ({
   onOpenOutputsHistory: () => void;
   onLogout: () => void;
   quotaSummary?: QuotaSummaryData;
+  quotaTier?: QuotaTier;
   isQuotaLoading: boolean;
 }) => {
   const avatarInputId = useId();
@@ -2341,6 +2346,12 @@ const ProfileView = ({
                           <p className="text-xs" style={{ color: "var(--app-on-dark-muted)" }}>
                             Rolling {quotaSummary.windowDays}-day limits reset automatically as older usage expires.
                           </p>
+                          <div className="flex items-center justify-between text-xs">
+                            <span style={{ color: "var(--app-on-dark-muted)" }}>Quota tier</span>
+                            <span className="font-medium uppercase" style={{ color: "var(--app-on-dark)" }}>
+                              {(quotaTier ?? "default").replace("_", " ")}
+                            </span>
+                          </div>
                           <div className="grid grid-cols-1 gap-2 text-sm">
                             <div className="flex items-center justify-between">
                               <span style={{ color: "var(--app-on-dark-muted)" }}>Texts</span>
@@ -6178,6 +6189,7 @@ function App() {
       refetchInterval: 15000,
     });
   const quotaSummary = quotaResponse?.quota;
+  const quotaTier = quotaResponse?.tier;
 
   const { data: userProfile, isLoading: isProfileLoading } =
     useQuery<UserProfileData>({
@@ -8453,6 +8465,7 @@ function App() {
                 }}
                 onLogout={logout}
                 quotaSummary={quotaSummary}
+                quotaTier={quotaTier}
                 isQuotaLoading={isQuotaLoading}
               />
             )}

@@ -342,14 +342,29 @@ const LIVE_MEMORY_CROSS_CHAT_MAX_MESSAGES = parsePositiveInt(
   process.env.LIVE_MEMORY_CROSS_CHAT_MAX_MESSAGES,
   80,
 );
-const BETA_TEXT_QUOTA_30D = parsePositiveInt(process.env.BETA_TEXT_QUOTA_30D, 200);
+const BETA_TEXT_QUOTA_30D = parsePositiveInt(process.env.BETA_TEXT_QUOTA_30D, 600);
 const BETA_VOICE_QUOTA_SECONDS_30D = parsePositiveInt(
   process.env.BETA_VOICE_QUOTA_SECONDS_30D,
-  10 * 60,
+  30 * 60,
 );
 const BETA_CAMERA_QUOTA_SECONDS_30D = parsePositiveInt(
   process.env.BETA_CAMERA_QUOTA_SECONDS_30D,
-  10 * 60,
+  15 * 60,
+);
+const BETA_POWER_QUOTA_EMAILS = new Set(
+  parseEmailList(process.env.BETA_POWER_QUOTA_EMAILS, []),
+);
+const BETA_POWER_TEXT_QUOTA_30D = parsePositiveInt(
+  process.env.BETA_POWER_TEXT_QUOTA_30D,
+  1500,
+);
+const BETA_POWER_VOICE_QUOTA_SECONDS_30D = parsePositiveInt(
+  process.env.BETA_POWER_VOICE_QUOTA_SECONDS_30D,
+  90 * 60,
+);
+const BETA_POWER_CAMERA_QUOTA_SECONDS_30D = parsePositiveInt(
+  process.env.BETA_POWER_CAMERA_QUOTA_SECONDS_30D,
+  45 * 60,
 );
 const BETA_PRIVILEGED_QUOTA_EMAILS = new Set(
   parseEmailList(process.env.BETA_PRIVILEGED_QUOTA_EMAILS, [
@@ -368,8 +383,9 @@ const BETA_PRIVILEGED_CAMERA_QUOTA_SECONDS_30D = parsePositiveInt(
   process.env.BETA_PRIVILEGED_CAMERA_QUOTA_SECONDS_30D,
   6 * 60 * 60,
 );
-const BETA_PRIVILEGED_QUOTA_CACHE_TTL_MS = parsePositiveInt(
-  process.env.BETA_PRIVILEGED_QUOTA_CACHE_TTL_MS,
+const BETA_QUOTA_CACHE_TTL_MS = parsePositiveInt(
+  process.env.BETA_QUOTA_CACHE_TTL_MS ??
+    process.env.BETA_PRIVILEGED_QUOTA_CACHE_TTL_MS,
   5 * 60 * 1000,
 );
 const QUOTA_WINDOW_DAYS = 30;
@@ -379,7 +395,7 @@ type EffectiveQuotaLimits = {
   text: number;
   voiceSeconds: number;
   cameraSeconds: number;
-  tier: "default" | "privileged";
+  tier: "default" | "power" | "privileged";
   email: string | null;
 };
 
@@ -489,23 +505,32 @@ async function resolveQuotaLimitsForUser(
     .limit(1);
   const email = user?.email?.trim().toLowerCase() ?? null;
 
-  const value: EffectiveQuotaLimits =
-    email && BETA_PRIVILEGED_QUOTA_EMAILS.has(email)
-      ? {
-          text: BETA_PRIVILEGED_TEXT_QUOTA_30D,
-          voiceSeconds: BETA_PRIVILEGED_VOICE_QUOTA_SECONDS_30D,
-          cameraSeconds: BETA_PRIVILEGED_CAMERA_QUOTA_SECONDS_30D,
-          tier: "privileged",
-          email,
-        }
-      : {
-          ...fallback,
-          email,
-        };
+  let value: EffectiveQuotaLimits = {
+    ...fallback,
+    email,
+  };
+
+  if (email && BETA_PRIVILEGED_QUOTA_EMAILS.has(email)) {
+    value = {
+      text: BETA_PRIVILEGED_TEXT_QUOTA_30D,
+      voiceSeconds: BETA_PRIVILEGED_VOICE_QUOTA_SECONDS_30D,
+      cameraSeconds: BETA_PRIVILEGED_CAMERA_QUOTA_SECONDS_30D,
+      tier: "privileged",
+      email,
+    };
+  } else if (email && BETA_POWER_QUOTA_EMAILS.has(email)) {
+    value = {
+      text: BETA_POWER_TEXT_QUOTA_30D,
+      voiceSeconds: BETA_POWER_VOICE_QUOTA_SECONDS_30D,
+      cameraSeconds: BETA_POWER_CAMERA_QUOTA_SECONDS_30D,
+      tier: "power",
+      email,
+    };
+  }
 
   effectiveQuotaLimitsCache.set(userId, {
     value,
-    expiresAt: now + BETA_PRIVILEGED_QUOTA_CACHE_TTL_MS,
+    expiresAt: now + BETA_QUOTA_CACHE_TTL_MS,
   });
   return value;
 }
@@ -5443,6 +5468,7 @@ export async function registerRoutes(
       });
       res.status(200).json({
         traceId: getTraceId(req),
+        tier: quotaLimits.tier,
         quota,
       });
     } catch (error) {

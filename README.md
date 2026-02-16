@@ -394,14 +394,33 @@ This keeps visual branding consistent while allowing dynamic profile-level appea
 ## 9) Quotas (Beta Defaults)
 
 Server-authoritative rolling 30-day hard limits (defaults):
-- `200` text replies
-- `600` voice seconds (10 minutes)
-- `600` camera seconds (10 minutes)
+- `600` text replies
+- `1800` voice seconds (30 minutes)
+- `900` camera seconds (15 minutes)
+
+Optional tiering:
+- `default` (all users unless matched by override lists)
+- `power` (email allowlist via `BETA_POWER_QUOTA_EMAILS`)
+- `privileged` (email allowlist via `BETA_PRIVILEGED_QUOTA_EMAILS`)
 
 Behavior:
 - hard lock on overage (`HTTP 429`)
 - response includes reason + quota summary for UX messaging
 - client shows remaining counters in composer/profile and proactively handles exhaustion states
+
+### Cost model (planning baseline as of Feb 16, 2026)
+Assumptions used for quota budgeting:
+- Text model: `gemini-3-flash-preview` pricing at `$0.50 / 1M` input tokens and `$3.00 / 1M` output tokens.
+- Native audio model: `gemini-2.5-flash-native-audio-preview-12-2025` pricing at `$1.00 / 1M` input audio tokens and `$2.00 / 1M` output audio tokens.
+- Token conversion guidance: ~`32` audio tokens per second.
+
+Approximate monthly cost envelope per user (upper-bound planning, not billing truth):
+- `default` (`600` text, `30` voice min, `15` camera min): about `$1.8` / user / 30d.
+- `power` (`1500` text, `90` voice min, `45` camera min): about `$4.7` / user / 30d.
+- `privileged` (`5000` text, `360` voice min, `360` camera min): about `$19.2` / user / 30d.
+
+Use this for product quota planning only; real cost varies with prompt size, memory depth, and response length.
+Detailed worksheet: `docs/QUOTA_PRICING_REEVALUATION_2026-02-16.md`.
 
 ## 10) Security and Privacy
 
@@ -550,11 +569,16 @@ Source of truth: `.env.example`
 - `BETA_TEXT_QUOTA_30D`
 - `BETA_VOICE_QUOTA_SECONDS_30D`
 - `BETA_CAMERA_QUOTA_SECONDS_30D`
+- `BETA_POWER_QUOTA_EMAILS` (comma-separated emails with mid-tier quotas)
+- `BETA_POWER_TEXT_QUOTA_30D`
+- `BETA_POWER_VOICE_QUOTA_SECONDS_30D`
+- `BETA_POWER_CAMERA_QUOTA_SECONDS_30D`
 - `BETA_PRIVILEGED_QUOTA_EMAILS` (comma-separated emails with elevated quotas)
 - `BETA_PRIVILEGED_TEXT_QUOTA_30D`
 - `BETA_PRIVILEGED_VOICE_QUOTA_SECONDS_30D`
 - `BETA_PRIVILEGED_CAMERA_QUOTA_SECONDS_30D`
-- `BETA_PRIVILEGED_QUOTA_CACHE_TTL_MS`
+- `BETA_QUOTA_CACHE_TTL_MS` (preferred)
+- `BETA_PRIVILEGED_QUOTA_CACHE_TTL_MS` (deprecated alias)
 
 ### Deployed voice profile note
 - Current production deployment intentionally uses higher response headroom (`GEMINI_LIVE_MAX_OUTPUT_TOKENS=1000`) to reduce clipped replies.

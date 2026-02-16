@@ -6,9 +6,9 @@ cd "$ROOT_DIR"
 
 TEST_HOST="${TEST_HOST:-127.0.0.1}"
 TEST_PORT="${TEST_PORT:-5599}"
-TEST_ADMIN_DB_URL="${TEST_ADMIN_DB_URL:-postgresql://postgres@127.0.0.1:5432/postgres}"
-TEST_DB_NAME="${TEST_DB_NAME:-my_ai_companion_local}"
-TEST_DB_URL="${TEST_DB_URL:-postgresql://postgres@127.0.0.1:5432/${TEST_DB_NAME}}"
+TEST_ADMIN_DB_URL="${TEST_ADMIN_DB_URL:-}"
+TEST_DB_NAME="${TEST_DB_NAME:-}"
+TEST_DB_URL="${TEST_DB_URL:-}"
 TEST_SERVER_LOG="${TEST_SERVER_LOG:-/tmp/my-ai-local-dev-${TEST_PORT}.log}"
 WAIT_SECONDS="${WAIT_SECONDS:-15}"
 START_SERVER="${START_SERVER:-1}"
@@ -18,6 +18,29 @@ if [[ -f .env ]]; then
   set -a
   source .env
   set +a
+fi
+
+if [[ -z "$TEST_DB_URL" ]]; then
+  if [[ -n "${DATABASE_URL:-}" ]]; then
+    TEST_DB_URL="$DATABASE_URL"
+  else
+    if [[ -z "$TEST_DB_NAME" ]]; then
+      TEST_DB_NAME="my_ai_companion_local"
+    fi
+    TEST_DB_URL="postgresql://postgres@127.0.0.1:5432/${TEST_DB_NAME}"
+  fi
+fi
+
+DERIVED_TEST_DB_NAME="$(node -e "try { const u = new URL(process.argv[1]); const p = u.pathname.replace(/^\\//, ''); process.stdout.write((p || '').split('/')[0] || ''); } catch { process.stdout.write(''); }" "$TEST_DB_URL")"
+if [[ -n "$DERIVED_TEST_DB_NAME" ]]; then
+  TEST_DB_NAME="$DERIVED_TEST_DB_NAME"
+fi
+if [[ -z "$TEST_DB_NAME" ]]; then
+  TEST_DB_NAME="my_ai_companion_local"
+fi
+
+if [[ -z "$TEST_ADMIN_DB_URL" ]]; then
+  TEST_ADMIN_DB_URL="$(node -e "try { const u = new URL(process.argv[1]); u.pathname = '/postgres'; u.search = ''; u.hash = ''; process.stdout.write(u.toString()); } catch { process.stdout.write('postgresql://postgres@127.0.0.1:5432/postgres'); }" "$TEST_DB_URL")"
 fi
 
 if [[ -z "${GEMINI_API_KEY:-}" ]]; then
@@ -91,7 +114,7 @@ trap cleanup EXIT
 
 create_db_if_missing() {
   log "Ensuring isolated local DB exists (${TEST_DB_NAME})"
-  TEST_ADMIN_DB_URL="$TEST_ADMIN_DB_URL" TEST_DB_NAME="$TEST_DB_NAME" node <<'NODE'
+  if TEST_ADMIN_DB_URL="$TEST_ADMIN_DB_URL" TEST_DB_NAME="$TEST_DB_NAME" node <<'NODE'
 const { Client } = require("pg");
 
 const adminUrl = process.env.TEST_ADMIN_DB_URL;
@@ -115,6 +138,30 @@ const escapedDbName = dbName.replace(/"/g, '""');
     console.log(`[local-e2e] database already exists ${dbName}`);
   }
   await client.end();
+})().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});
+NODE
+  then
+    return 0
+  fi
+
+  log "Admin DB bootstrap failed; checking direct connectivity to target DB (${TEST_DB_NAME})"
+  TEST_DB_URL="$TEST_DB_URL" node <<'NODE'
+const { Client } = require("pg");
+
+const targetUrl = process.env.TEST_DB_URL;
+if (!targetUrl) {
+  console.error("missing TEST_DB_URL");
+  process.exit(1);
+}
+
+(async () => {
+  const client = new Client({ connectionString: targetUrl });
+  await client.connect();
+  await client.end();
+  console.log("[local-e2e] target database connectivity confirmed");
 })().catch((error) => {
   console.error(error);
   process.exit(1);
