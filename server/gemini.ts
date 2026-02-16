@@ -69,7 +69,7 @@ const DEFAULT_TEXT_MODEL = "gemini-3-flash-preview";
 const DEFAULT_LIVE_MODEL = "gemini-2.5-flash-native-audio-preview-12-2025";
 const DEFAULT_AGENT_GAME_MODEL = "gemini-3-flash-preview";
 const DEFAULT_AGENT_DOC_MODEL = "gemini-3-flash-preview";
-const DEFAULT_AGENT_PRESENTATION_IMAGE_MODEL = "gemini-2.5-flash-preview-image";
+const DEFAULT_AGENT_PRESENTATION_IMAGE_MODEL = "gemini-2.5-flash-image";
 const DEFAULT_ZEE_PROMPT_FALLBACK = [
   "You are Zee, a warm, emotionally intelligent AI companion.",
   "Stay helpful, grounded, and conversational.",
