@@ -293,26 +293,51 @@ interface QuotaSummaryData {
     text: number;
     voiceSeconds: number;
     cameraSeconds: number;
+    creationRuns?: number;
+    codingTasks?: number;
+    documentTasks?: number;
+    presentationTasks?: number;
+    presentationImages?: number;
   };
   used: {
     text: number;
     voiceSeconds: number;
     cameraSeconds: number;
+    creationRuns?: number;
+    codingTasks?: number;
+    documentTasks?: number;
+    presentationTasks?: number;
+    presentationImages?: number;
   };
   remaining: {
     text: number;
     voiceSeconds: number;
     cameraSeconds: number;
+    creationRuns?: number;
+    codingTasks?: number;
+    documentTasks?: number;
+    presentationTasks?: number;
+    presentationImages?: number;
   };
   nextUnlockAt: {
     text: string | null;
     voiceSeconds: string | null;
     cameraSeconds: string | null;
+    creationRuns?: string | null;
+    codingTasks?: string | null;
+    documentTasks?: string | null;
+    presentationTasks?: string | null;
+    presentationImages?: string | null;
   };
   metrics: {
     text: QuotaMetricData;
     voiceSeconds: QuotaMetricData;
     cameraSeconds: QuotaMetricData;
+    creationRuns?: QuotaMetricData;
+    codingTasks?: QuotaMetricData;
+    documentTasks?: QuotaMetricData;
+    presentationTasks?: QuotaMetricData;
+    presentationImages?: QuotaMetricData;
   };
 }
 
@@ -330,22 +355,42 @@ interface QuotaErrorPayload {
     text?: number;
     voiceSeconds?: number;
     cameraSeconds?: number;
+    creationRuns?: number;
+    codingTasks?: number;
+    documentTasks?: number;
+    presentationTasks?: number;
+    presentationImages?: number;
     window?: string;
     windowDays?: number;
     limits?: {
       text?: number;
       voiceSeconds?: number;
       cameraSeconds?: number;
+      creationRuns?: number;
+      codingTasks?: number;
+      documentTasks?: number;
+      presentationTasks?: number;
+      presentationImages?: number;
     };
     used?: {
       text?: number;
       voiceSeconds?: number;
       cameraSeconds?: number;
+      creationRuns?: number;
+      codingTasks?: number;
+      documentTasks?: number;
+      presentationTasks?: number;
+      presentationImages?: number;
     };
     nextUnlockAt?: {
       text?: string | null;
       voiceSeconds?: string | null;
       cameraSeconds?: string | null;
+      creationRuns?: string | null;
+      codingTasks?: string | null;
+      documentTasks?: string | null;
+      presentationTasks?: string | null;
+      presentationImages?: string | null;
     };
   };
 }
@@ -2371,6 +2416,51 @@ const ProfileView = ({
                                 {formatMinutesFromSeconds(quotaSummary.remaining.cameraSeconds)} left / {formatMinutesFromSeconds(quotaSummary.limits.cameraSeconds)}
                               </span>
                             </div>
+                            {typeof quotaSummary.remaining.creationRuns === "number" &&
+                              typeof quotaSummary.limits.creationRuns === "number" && (
+                                <div className="flex items-center justify-between">
+                                  <span style={{ color: "var(--app-on-dark-muted)" }}>Creations</span>
+                                  <span style={{ color: "var(--app-on-dark)" }}>
+                                    {quotaSummary.remaining.creationRuns} left / {quotaSummary.limits.creationRuns}
+                                  </span>
+                                </div>
+                              )}
+                            {typeof quotaSummary.remaining.codingTasks === "number" &&
+                              typeof quotaSummary.limits.codingTasks === "number" && (
+                                <div className="flex items-center justify-between">
+                                  <span style={{ color: "var(--app-on-dark-muted)" }}>Coding builds</span>
+                                  <span style={{ color: "var(--app-on-dark)" }}>
+                                    {quotaSummary.remaining.codingTasks} left / {quotaSummary.limits.codingTasks}
+                                  </span>
+                                </div>
+                              )}
+                            {typeof quotaSummary.remaining.documentTasks === "number" &&
+                              typeof quotaSummary.limits.documentTasks === "number" && (
+                                <div className="flex items-center justify-between">
+                                  <span style={{ color: "var(--app-on-dark-muted)" }}>Documents</span>
+                                  <span style={{ color: "var(--app-on-dark)" }}>
+                                    {quotaSummary.remaining.documentTasks} left / {quotaSummary.limits.documentTasks}
+                                  </span>
+                                </div>
+                              )}
+                            {typeof quotaSummary.remaining.presentationTasks === "number" &&
+                              typeof quotaSummary.limits.presentationTasks === "number" && (
+                                <div className="flex items-center justify-between">
+                                  <span style={{ color: "var(--app-on-dark-muted)" }}>Presentations</span>
+                                  <span style={{ color: "var(--app-on-dark)" }}>
+                                    {quotaSummary.remaining.presentationTasks} left / {quotaSummary.limits.presentationTasks}
+                                  </span>
+                                </div>
+                              )}
+                            {typeof quotaSummary.remaining.presentationImages === "number" &&
+                              typeof quotaSummary.limits.presentationImages === "number" && (
+                                <div className="flex items-center justify-between">
+                                  <span style={{ color: "var(--app-on-dark-muted)" }}>Slide images</span>
+                                  <span style={{ color: "var(--app-on-dark)" }}>
+                                    {quotaSummary.remaining.presentationImages} left / {quotaSummary.limits.presentationImages}
+                                  </span>
+                                </div>
+                              )}
                           </div>
                         </>
                       )}

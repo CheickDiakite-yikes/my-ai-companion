@@ -145,6 +145,11 @@ export const usageEventMetricEnum = pgEnum("usage_event_metric", [
   "text_message",
   "voice_second",
   "camera_second",
+  "creation_run",
+  "coding_task",
+  "document_task",
+  "presentation_task",
+  "presentation_image",
 ]);
 
 export const memoryItemKindEnum = pgEnum("memory_item_kind", [

@@ -99,6 +99,11 @@ export interface QuotaSummary {
   textMessages: QuotaMetricSnapshot;
   voiceSeconds: QuotaMetricSnapshot;
   cameraSeconds: QuotaMetricSnapshot;
+  creationRuns: QuotaMetricSnapshot;
+  codingTasks: QuotaMetricSnapshot;
+  documentTasks: QuotaMetricSnapshot;
+  presentationTasks: QuotaMetricSnapshot;
+  presentationImages: QuotaMetricSnapshot;
 }
 
 export interface QuotaConsumeResult {
@@ -109,6 +114,13 @@ export interface QuotaConsumeResult {
   used: number;
   remaining: number;
   oldestInWindowAt: Date | null;
+  reason?: "quota_exceeded";
+}
+
+export interface QuotaBundleConsumeResult {
+  allowed: boolean;
+  results: QuotaConsumeResult[];
+  blockedMetric?: UsageEventMetric;
   reason?: "quota_exceeded";
 }
 
@@ -293,6 +305,16 @@ export interface IStorage {
     conversationId?: string | null;
     meta?: Record<string, unknown> | null;
   }): Promise<QuotaConsumeResult>;
+  consumeQuotaBundle(params: {
+    userId: string;
+    items: Array<{
+      metric: UsageEventMetric;
+      units: number;
+      limit: number;
+    }>;
+    conversationId?: string | null;
+    meta?: Record<string, unknown> | null;
+  }): Promise<QuotaBundleConsumeResult>;
   consumeLiveQuota(params: {
     userId: string;
     voiceSeconds: number;
@@ -1750,6 +1772,11 @@ export class DatabaseStorage implements IStorage {
       textMessages: { used: 0, oldestInWindowAt: null },
       voiceSeconds: { used: 0, oldestInWindowAt: null },
       cameraSeconds: { used: 0, oldestInWindowAt: null },
+      creationRuns: { used: 0, oldestInWindowAt: null },
+      codingTasks: { used: 0, oldestInWindowAt: null },
+      documentTasks: { used: 0, oldestInWindowAt: null },
+      presentationTasks: { used: 0, oldestInWindowAt: null },
+      presentationImages: { used: 0, oldestInWindowAt: null },
     };
 
     for (const row of rows) {
@@ -1783,6 +1810,61 @@ export class DatabaseStorage implements IStorage {
             row.createdAt < summary.cameraSeconds.oldestInWindowAt)
         ) {
           summary.cameraSeconds.oldestInWindowAt = row.createdAt ?? null;
+        }
+        continue;
+      }
+      if (row.metric === "creation_run") {
+        summary.creationRuns.used += row.units;
+        if (
+          !summary.creationRuns.oldestInWindowAt ||
+          (row.createdAt &&
+            row.createdAt < summary.creationRuns.oldestInWindowAt)
+        ) {
+          summary.creationRuns.oldestInWindowAt = row.createdAt ?? null;
+        }
+        continue;
+      }
+      if (row.metric === "coding_task") {
+        summary.codingTasks.used += row.units;
+        if (
+          !summary.codingTasks.oldestInWindowAt ||
+          (row.createdAt &&
+            row.createdAt < summary.codingTasks.oldestInWindowAt)
+        ) {
+          summary.codingTasks.oldestInWindowAt = row.createdAt ?? null;
+        }
+        continue;
+      }
+      if (row.metric === "document_task") {
+        summary.documentTasks.used += row.units;
+        if (
+          !summary.documentTasks.oldestInWindowAt ||
+          (row.createdAt &&
+            row.createdAt < summary.documentTasks.oldestInWindowAt)
+        ) {
+          summary.documentTasks.oldestInWindowAt = row.createdAt ?? null;
+        }
+        continue;
+      }
+      if (row.metric === "presentation_task") {
+        summary.presentationTasks.used += row.units;
+        if (
+          !summary.presentationTasks.oldestInWindowAt ||
+          (row.createdAt &&
+            row.createdAt < summary.presentationTasks.oldestInWindowAt)
+        ) {
+          summary.presentationTasks.oldestInWindowAt = row.createdAt ?? null;
+        }
+        continue;
+      }
+      if (row.metric === "presentation_image") {
+        summary.presentationImages.used += row.units;
+        if (
+          !summary.presentationImages.oldestInWindowAt ||
+          (row.createdAt &&
+            row.createdAt < summary.presentationImages.oldestInWindowAt)
+        ) {
+          summary.presentationImages.oldestInWindowAt = row.createdAt ?? null;
         }
       }
     }
@@ -1859,6 +1941,108 @@ export class DatabaseStorage implements IStorage {
         remaining: Math.max(0, limit - nextUsed),
         oldestInWindowAt: current.oldestInWindowAt ?? now,
       } satisfies QuotaConsumeResult;
+    });
+  }
+
+  async consumeQuotaBundle(params: {
+    userId: string;
+    items: Array<{
+      metric: UsageEventMetric;
+      units: number;
+      limit: number;
+    }>;
+    conversationId?: string | null;
+    meta?: Record<string, unknown> | null;
+  }): Promise<QuotaBundleConsumeResult> {
+    const windowStart = this.getQuotaWindowStart();
+    const mergedByMetric = new Map<
+      UsageEventMetric,
+      { metric: UsageEventMetric; units: number; limit: number }
+    >();
+
+    for (const item of params.items) {
+      const units = this.normalizeQuotaUnits(item.units);
+      const limit = this.normalizeQuotaUnits(item.limit);
+      if (units <= 0) continue;
+
+      const existing = mergedByMetric.get(item.metric);
+      if (existing) {
+        existing.units += units;
+        existing.limit = Math.min(existing.limit, limit);
+      } else {
+        mergedByMetric.set(item.metric, {
+          metric: item.metric,
+          units,
+          limit,
+        });
+      }
+    }
+
+    const normalizedItems = Array.from(mergedByMetric.values());
+    if (normalizedItems.length === 0) {
+      return {
+        allowed: true,
+        results: [],
+      };
+    }
+
+    return this.withUserQuotaLock(params.userId, async (tx) => {
+      const evaluated: QuotaConsumeResult[] = [];
+
+      for (const item of normalizedItems) {
+        const current = await this.getMetricUsageInWindow(tx, {
+          userId: params.userId,
+          metric: item.metric,
+          windowStart,
+        });
+        const nextUsed = current.used + item.units;
+        if (nextUsed > item.limit) {
+          const blockedResult: QuotaConsumeResult = {
+            allowed: false,
+            metric: item.metric,
+            units: item.units,
+            limit: item.limit,
+            used: current.used,
+            remaining: Math.max(0, item.limit - current.used),
+            oldestInWindowAt: current.oldestInWindowAt,
+            reason: "quota_exceeded",
+          };
+          return {
+            allowed: false,
+            results: [...evaluated, blockedResult],
+            blockedMetric: item.metric,
+            reason: "quota_exceeded",
+          } satisfies QuotaBundleConsumeResult;
+        }
+
+        evaluated.push({
+          allowed: true,
+          metric: item.metric,
+          units: item.units,
+          limit: item.limit,
+          used: nextUsed,
+          remaining: Math.max(0, item.limit - nextUsed),
+          oldestInWindowAt: current.oldestInWindowAt,
+        });
+      }
+
+      const now = new Date();
+      for (const result of evaluated) {
+        if (result.units <= 0) continue;
+        await tx.insert(usageEvents).values({
+          userId: params.userId,
+          metric: result.metric,
+          units: result.units,
+          conversationId: params.conversationId ?? null,
+          meta: params.meta ?? null,
+          createdAt: now,
+        });
+      }
+
+      return {
+        allowed: true,
+        results: evaluated,
+      } satisfies QuotaBundleConsumeResult;
     });
   }
 

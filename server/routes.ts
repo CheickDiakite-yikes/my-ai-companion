@@ -29,6 +29,7 @@ import {
   type AgentTask,
   type Message,
   type MessageAttachment,
+  type UsageEventMetric,
   type UserProfile,
 } from "@shared/schema";
 import type {
@@ -351,6 +352,33 @@ const BETA_CAMERA_QUOTA_SECONDS_30D = parsePositiveInt(
   process.env.BETA_CAMERA_QUOTA_SECONDS_30D,
   15 * 60,
 );
+const BETA_CREATION_RUNS_QUOTA_30D = parsePositiveInt(
+  process.env.BETA_CREATION_RUNS_QUOTA_30D,
+  40,
+);
+const BETA_CODING_TASKS_QUOTA_30D = parsePositiveInt(
+  process.env.BETA_CODING_TASKS_QUOTA_30D,
+  20,
+);
+const BETA_DOCUMENT_TASKS_QUOTA_30D = parsePositiveInt(
+  process.env.BETA_DOCUMENT_TASKS_QUOTA_30D,
+  30,
+);
+const BETA_PRESENTATION_TASKS_QUOTA_30D = parsePositiveInt(
+  process.env.BETA_PRESENTATION_TASKS_QUOTA_30D,
+  10,
+);
+const BETA_PRESENTATION_IMAGE_QUOTA_30D = parsePositiveInt(
+  process.env.BETA_PRESENTATION_IMAGE_QUOTA_30D,
+  50,
+);
+const BETA_PRESENTATION_IMAGE_UNITS_PER_TASK = Math.min(
+  5,
+  Math.max(
+    1,
+    parsePositiveInt(process.env.BETA_PRESENTATION_IMAGE_UNITS_PER_TASK, 5),
+  ),
+);
 const BETA_POWER_QUOTA_EMAILS = new Set(
   parseEmailList(process.env.BETA_POWER_QUOTA_EMAILS, []),
 );
@@ -365,6 +393,26 @@ const BETA_POWER_VOICE_QUOTA_SECONDS_30D = parsePositiveInt(
 const BETA_POWER_CAMERA_QUOTA_SECONDS_30D = parsePositiveInt(
   process.env.BETA_POWER_CAMERA_QUOTA_SECONDS_30D,
   45 * 60,
+);
+const BETA_POWER_CREATION_RUNS_QUOTA_30D = parsePositiveInt(
+  process.env.BETA_POWER_CREATION_RUNS_QUOTA_30D,
+  120,
+);
+const BETA_POWER_CODING_TASKS_QUOTA_30D = parsePositiveInt(
+  process.env.BETA_POWER_CODING_TASKS_QUOTA_30D,
+  60,
+);
+const BETA_POWER_DOCUMENT_TASKS_QUOTA_30D = parsePositiveInt(
+  process.env.BETA_POWER_DOCUMENT_TASKS_QUOTA_30D,
+  90,
+);
+const BETA_POWER_PRESENTATION_TASKS_QUOTA_30D = parsePositiveInt(
+  process.env.BETA_POWER_PRESENTATION_TASKS_QUOTA_30D,
+  25,
+);
+const BETA_POWER_PRESENTATION_IMAGE_QUOTA_30D = parsePositiveInt(
+  process.env.BETA_POWER_PRESENTATION_IMAGE_QUOTA_30D,
+  125,
 );
 const BETA_PRIVILEGED_QUOTA_EMAILS = new Set(
   parseEmailList(process.env.BETA_PRIVILEGED_QUOTA_EMAILS, [
@@ -383,6 +431,26 @@ const BETA_PRIVILEGED_CAMERA_QUOTA_SECONDS_30D = parsePositiveInt(
   process.env.BETA_PRIVILEGED_CAMERA_QUOTA_SECONDS_30D,
   6 * 60 * 60,
 );
+const BETA_PRIVILEGED_CREATION_RUNS_QUOTA_30D = parsePositiveInt(
+  process.env.BETA_PRIVILEGED_CREATION_RUNS_QUOTA_30D,
+  500,
+);
+const BETA_PRIVILEGED_CODING_TASKS_QUOTA_30D = parsePositiveInt(
+  process.env.BETA_PRIVILEGED_CODING_TASKS_QUOTA_30D,
+  250,
+);
+const BETA_PRIVILEGED_DOCUMENT_TASKS_QUOTA_30D = parsePositiveInt(
+  process.env.BETA_PRIVILEGED_DOCUMENT_TASKS_QUOTA_30D,
+  350,
+);
+const BETA_PRIVILEGED_PRESENTATION_TASKS_QUOTA_30D = parsePositiveInt(
+  process.env.BETA_PRIVILEGED_PRESENTATION_TASKS_QUOTA_30D,
+  80,
+);
+const BETA_PRIVILEGED_PRESENTATION_IMAGE_QUOTA_30D = parsePositiveInt(
+  process.env.BETA_PRIVILEGED_PRESENTATION_IMAGE_QUOTA_30D,
+  400,
+);
 const BETA_QUOTA_CACHE_TTL_MS = parsePositiveInt(
   process.env.BETA_QUOTA_CACHE_TTL_MS ??
     process.env.BETA_PRIVILEGED_QUOTA_CACHE_TTL_MS,
@@ -395,6 +463,11 @@ type EffectiveQuotaLimits = {
   text: number;
   voiceSeconds: number;
   cameraSeconds: number;
+  creationRuns: number;
+  codingTasks: number;
+  documentTasks: number;
+  presentationTasks: number;
+  presentationImages: number;
   tier: "default" | "power" | "privileged";
   email: string | null;
 };
@@ -421,26 +494,51 @@ type QuotaSummaryResponse = {
     text: number;
     voiceSeconds: number;
     cameraSeconds: number;
+    creationRuns: number;
+    codingTasks: number;
+    documentTasks: number;
+    presentationTasks: number;
+    presentationImages: number;
   };
   used: {
     text: number;
     voiceSeconds: number;
     cameraSeconds: number;
+    creationRuns: number;
+    codingTasks: number;
+    documentTasks: number;
+    presentationTasks: number;
+    presentationImages: number;
   };
   remaining: {
     text: number;
     voiceSeconds: number;
     cameraSeconds: number;
+    creationRuns: number;
+    codingTasks: number;
+    documentTasks: number;
+    presentationTasks: number;
+    presentationImages: number;
   };
   nextUnlockAt: {
     text: string | null;
     voiceSeconds: string | null;
     cameraSeconds: string | null;
+    creationRuns: string | null;
+    codingTasks: string | null;
+    documentTasks: string | null;
+    presentationTasks: string | null;
+    presentationImages: string | null;
   };
   metrics: {
     text: QuotaMetricResponse;
     voiceSeconds: QuotaMetricResponse;
     cameraSeconds: QuotaMetricResponse;
+    creationRuns: QuotaMetricResponse;
+    codingTasks: QuotaMetricResponse;
+    documentTasks: QuotaMetricResponse;
+    presentationTasks: QuotaMetricResponse;
+    presentationImages: QuotaMetricResponse;
   };
 };
 
@@ -483,6 +581,11 @@ function defaultQuotaLimits(): EffectiveQuotaLimits {
     text: BETA_TEXT_QUOTA_30D,
     voiceSeconds: BETA_VOICE_QUOTA_SECONDS_30D,
     cameraSeconds: BETA_CAMERA_QUOTA_SECONDS_30D,
+    creationRuns: BETA_CREATION_RUNS_QUOTA_30D,
+    codingTasks: BETA_CODING_TASKS_QUOTA_30D,
+    documentTasks: BETA_DOCUMENT_TASKS_QUOTA_30D,
+    presentationTasks: BETA_PRESENTATION_TASKS_QUOTA_30D,
+    presentationImages: BETA_PRESENTATION_IMAGE_QUOTA_30D,
     tier: "default",
     email: null,
   };
@@ -515,6 +618,11 @@ async function resolveQuotaLimitsForUser(
       text: BETA_PRIVILEGED_TEXT_QUOTA_30D,
       voiceSeconds: BETA_PRIVILEGED_VOICE_QUOTA_SECONDS_30D,
       cameraSeconds: BETA_PRIVILEGED_CAMERA_QUOTA_SECONDS_30D,
+      creationRuns: BETA_PRIVILEGED_CREATION_RUNS_QUOTA_30D,
+      codingTasks: BETA_PRIVILEGED_CODING_TASKS_QUOTA_30D,
+      documentTasks: BETA_PRIVILEGED_DOCUMENT_TASKS_QUOTA_30D,
+      presentationTasks: BETA_PRIVILEGED_PRESENTATION_TASKS_QUOTA_30D,
+      presentationImages: BETA_PRIVILEGED_PRESENTATION_IMAGE_QUOTA_30D,
       tier: "privileged",
       email,
     };
@@ -523,6 +631,11 @@ async function resolveQuotaLimitsForUser(
       text: BETA_POWER_TEXT_QUOTA_30D,
       voiceSeconds: BETA_POWER_VOICE_QUOTA_SECONDS_30D,
       cameraSeconds: BETA_POWER_CAMERA_QUOTA_SECONDS_30D,
+      creationRuns: BETA_POWER_CREATION_RUNS_QUOTA_30D,
+      codingTasks: BETA_POWER_CODING_TASKS_QUOTA_30D,
+      documentTasks: BETA_POWER_DOCUMENT_TASKS_QUOTA_30D,
+      presentationTasks: BETA_POWER_PRESENTATION_TASKS_QUOTA_30D,
+      presentationImages: BETA_POWER_PRESENTATION_IMAGE_QUOTA_30D,
       tier: "power",
       email,
     };
@@ -548,6 +661,26 @@ function toQuotaSummaryResponse(
     summary.cameraSeconds,
     limits.cameraSeconds,
   );
+  const creationRuns = toQuotaMetric(
+    summary.creationRuns,
+    limits.creationRuns,
+  );
+  const codingTasks = toQuotaMetric(
+    summary.codingTasks,
+    limits.codingTasks,
+  );
+  const documentTasks = toQuotaMetric(
+    summary.documentTasks,
+    limits.documentTasks,
+  );
+  const presentationTasks = toQuotaMetric(
+    summary.presentationTasks,
+    limits.presentationTasks,
+  );
+  const presentationImages = toQuotaMetric(
+    summary.presentationImages,
+    limits.presentationImages,
+  );
 
   return {
     window: "rolling_30_days",
@@ -556,26 +689,51 @@ function toQuotaSummaryResponse(
       text: text.limit,
       voiceSeconds: voiceSeconds.limit,
       cameraSeconds: cameraSeconds.limit,
+      creationRuns: creationRuns.limit,
+      codingTasks: codingTasks.limit,
+      documentTasks: documentTasks.limit,
+      presentationTasks: presentationTasks.limit,
+      presentationImages: presentationImages.limit,
     },
     used: {
       text: text.used,
       voiceSeconds: voiceSeconds.used,
       cameraSeconds: cameraSeconds.used,
+      creationRuns: creationRuns.used,
+      codingTasks: codingTasks.used,
+      documentTasks: documentTasks.used,
+      presentationTasks: presentationTasks.used,
+      presentationImages: presentationImages.used,
     },
     remaining: {
       text: text.remaining,
       voiceSeconds: voiceSeconds.remaining,
       cameraSeconds: cameraSeconds.remaining,
+      creationRuns: creationRuns.remaining,
+      codingTasks: codingTasks.remaining,
+      documentTasks: documentTasks.remaining,
+      presentationTasks: presentationTasks.remaining,
+      presentationImages: presentationImages.remaining,
     },
     nextUnlockAt: {
       text: text.nextUnlockAt,
       voiceSeconds: voiceSeconds.nextUnlockAt,
       cameraSeconds: cameraSeconds.nextUnlockAt,
+      creationRuns: creationRuns.nextUnlockAt,
+      codingTasks: codingTasks.nextUnlockAt,
+      documentTasks: documentTasks.nextUnlockAt,
+      presentationTasks: presentationTasks.nextUnlockAt,
+      presentationImages: presentationImages.nextUnlockAt,
     },
     metrics: {
       text,
       voiceSeconds,
       cameraSeconds,
+      creationRuns,
+      codingTasks,
+      documentTasks,
+      presentationTasks,
+      presentationImages,
     },
   };
 }
@@ -599,6 +757,21 @@ function quotaBlockedMessage(reason: string): string {
   if (reason === "camera_quota_exceeded") {
     return "You reached your beta camera minutes for now. Camera minutes unlock automatically on a rolling basis.";
   }
+  if (reason === "creation_quota_exceeded") {
+    return "You reached your beta creation limit for now. Creation quota unlocks automatically on a rolling basis.";
+  }
+  if (reason === "coding_quota_exceeded") {
+    return "You reached your beta coding build limit for now. Coding quota unlocks automatically on a rolling basis.";
+  }
+  if (reason === "document_quota_exceeded") {
+    return "You reached your beta document creation limit for now. Document quota unlocks automatically on a rolling basis.";
+  }
+  if (reason === "presentation_quota_exceeded") {
+    return "You reached your beta presentation limit for now. Presentation quota unlocks automatically on a rolling basis.";
+  }
+  if (reason === "presentation_image_quota_exceeded") {
+    return "You reached your beta presentation image limit for now. Image quota unlocks automatically on a rolling basis.";
+  }
   return "You reached your beta usage limit for now. Quota unlocks automatically on a rolling basis.";
 }
 
@@ -606,7 +779,15 @@ function sendQuotaBlocked(
   req: any,
   res: any,
   params: {
-    reason: "text_quota_exceeded" | "voice_quota_exceeded" | "camera_quota_exceeded";
+    reason:
+      | "text_quota_exceeded"
+      | "voice_quota_exceeded"
+      | "camera_quota_exceeded"
+      | "creation_quota_exceeded"
+      | "coding_quota_exceeded"
+      | "document_quota_exceeded"
+      | "presentation_quota_exceeded"
+      | "presentation_image_quota_exceeded";
     quota: QuotaSummaryResponse;
   },
 ) {
@@ -623,6 +804,11 @@ function sendQuotaBlocked(
       text: params.quota.remaining.text,
       voiceSeconds: params.quota.remaining.voiceSeconds,
       cameraSeconds: params.quota.remaining.cameraSeconds,
+      creationRuns: params.quota.remaining.creationRuns,
+      codingTasks: params.quota.remaining.codingTasks,
+      documentTasks: params.quota.remaining.documentTasks,
+      presentationTasks: params.quota.remaining.presentationTasks,
+      presentationImages: params.quota.remaining.presentationImages,
       window: params.quota.window,
       windowDays: params.quota.windowDays,
       limits: params.quota.limits,
@@ -630,6 +816,160 @@ function sendQuotaBlocked(
       nextUnlockAt: params.quota.nextUnlockAt,
     },
   });
+}
+
+type CreationQuotaBlockReason =
+  | "creation_quota_exceeded"
+  | "coding_quota_exceeded"
+  | "document_quota_exceeded"
+  | "presentation_quota_exceeded"
+  | "presentation_image_quota_exceeded";
+
+function toCreationQuotaBlockReason(
+  metric: UsageEventMetric | undefined,
+): CreationQuotaBlockReason {
+  if (metric === "coding_task") return "coding_quota_exceeded";
+  if (metric === "document_task") return "document_quota_exceeded";
+  if (metric === "presentation_task") return "presentation_quota_exceeded";
+  if (metric === "presentation_image") return "presentation_image_quota_exceeded";
+  return "creation_quota_exceeded";
+}
+
+function buildTaskCreationQuotaItems(input: {
+  taskKind: AgentTaskKind;
+  prompt: string;
+  executionPrompt: string;
+  taskInputResolution?: TaskInputResolution | null;
+  limits: EffectiveQuotaLimits;
+}): Array<{ metric: UsageEventMetric; units: number; limit: number }> {
+  const items: Array<{ metric: UsageEventMetric; units: number; limit: number }> = [
+    {
+      metric: "creation_run",
+      units: 1,
+      limit: input.limits.creationRuns,
+    },
+  ];
+
+  const slotText = Object.values(input.taskInputResolution?.resolvedSlots ?? {})
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0)
+    .join(" ");
+  const combinedText = `${input.prompt} ${input.executionPrompt} ${slotText}`.trim();
+  const documentTypeHint = inferDocumentTypeHint(combinedText);
+  const isPresentation =
+    (input.taskKind === "doc_markdown" || input.taskKind === "mixed") &&
+    documentTypeHint === "presentation";
+
+  if (
+    input.taskKind === "mini_game" ||
+    input.taskKind === "web_build" ||
+    input.taskKind === "mixed"
+  ) {
+    items.push({
+      metric: "coding_task",
+      units: 1,
+      limit: input.limits.codingTasks,
+    });
+  }
+
+  if (input.taskKind === "doc_markdown" || input.taskKind === "mixed") {
+    if (isPresentation) {
+      items.push({
+        metric: "presentation_task",
+        units: 1,
+        limit: input.limits.presentationTasks,
+      });
+      items.push({
+        metric: "presentation_image",
+        units: BETA_PRESENTATION_IMAGE_UNITS_PER_TASK,
+        limit: input.limits.presentationImages,
+      });
+    } else {
+      items.push({
+        metric: "document_task",
+        units: 1,
+        limit: input.limits.documentTasks,
+      });
+    }
+  }
+
+  return items;
+}
+
+async function consumeCreationQuotaForTaskStart(input: {
+  req: any;
+  userId: string;
+  conversationId: string;
+  taskKind: AgentTaskKind;
+  prompt: string;
+  executionPrompt: string;
+  taskInputResolution?: TaskInputResolution | null;
+}): Promise<
+  | {
+      allowed: true;
+    }
+  | {
+      allowed: false;
+      reason: CreationQuotaBlockReason;
+      quota: QuotaSummaryResponse;
+    }
+> {
+  if (!ENABLE_BETA_QUOTAS) {
+    return { allowed: true };
+  }
+
+  const quotaLimits = await resolveQuotaLimitsForUser(input.userId);
+  const quotaItems = buildTaskCreationQuotaItems({
+    taskKind: input.taskKind,
+    prompt: input.prompt,
+    executionPrompt: input.executionPrompt,
+    taskInputResolution: input.taskInputResolution,
+    limits: quotaLimits,
+  });
+  const consumeResult = await storage.consumeQuotaBundle({
+    userId: input.userId,
+    items: quotaItems,
+    conversationId: input.conversationId,
+    meta: {
+      source: "agent.task.start",
+      taskKind: input.taskKind,
+      presentationImageUnitsReserved: BETA_PRESENTATION_IMAGE_UNITS_PER_TASK,
+    },
+  });
+
+  if (!consumeResult.allowed) {
+    const reason = toCreationQuotaBlockReason(consumeResult.blockedMetric);
+    const quota = await getQuotaSummaryResponseForUser(input.userId, quotaLimits);
+    trace(input.req, "quota.consume.creation.blocked", {
+      userId: input.userId,
+      conversationId: input.conversationId,
+      taskKind: input.taskKind,
+      reason,
+      blockedMetric: consumeResult.blockedMetric ?? null,
+      quotaItems,
+      remaining: quota.remaining,
+      limits: quota.limits,
+    });
+    return {
+      allowed: false,
+      reason,
+      quota,
+    };
+  }
+
+  trace(input.req, "quota.consume.creation.allowed", {
+    userId: input.userId,
+    conversationId: input.conversationId,
+    taskKind: input.taskKind,
+    quotaItems,
+    metrics: consumeResult.results.map((row) => ({
+      metric: row.metric,
+      units: row.units,
+      remaining: row.remaining,
+      limit: row.limit,
+    })),
+  });
+  return { allowed: true };
 }
 
 
@@ -2648,6 +2988,10 @@ async function acceptOfferAndStartOrClarify(input: {
   task: AgentTaskSummary | null;
   awaitingApproval: boolean;
   awaitingClarification: boolean;
+  quotaBlocked?: {
+    reason: CreationQuotaBlockReason;
+    quota: QuotaSummaryResponse;
+  };
   intentSession: AgentIntentSessionSummary | null;
   clarificationMessages: Message[];
   decisionPath: IntentDecisionPath;
@@ -2848,6 +3192,37 @@ async function acceptOfferAndStartOrClarify(input: {
     taskKind,
     conversationMessages,
   });
+  const creationQuota = await consumeCreationQuotaForTaskStart({
+    req: input.req,
+    userId: input.userId,
+    conversationId: offer.conversationId,
+    taskKind,
+    prompt: offer.proposedPrompt,
+    executionPrompt,
+    taskInputResolution,
+  });
+  if (!creationQuota.allowed) {
+    const blockedMessages = await storage.createAssistantTurnParts({
+      conversationId: offer.conversationId,
+      textParts: [quotaBlockedMessage(creationQuota.reason)],
+    });
+    return {
+      offer,
+      task: null,
+      awaitingApproval: false,
+      awaitingClarification: false,
+      quotaBlocked: {
+        reason: creationQuota.reason,
+        quota: creationQuota.quota,
+      },
+      intentSession: existingIntentSession
+        ? toAgentIntentSessionSummary(existingIntentSession)
+        : null,
+      clarificationMessages: blockedMessages as unknown as Message[],
+      decisionPath: "companion_reply",
+      decisionPathReason: "companion",
+    };
+  }
   const run = await startAgentTaskRun({
     userId: input.userId,
     conversationId: offer.conversationId,
@@ -6067,6 +6442,13 @@ export async function registerRoutes(
           offerMessage,
         });
 
+        if (acceptance.quotaBlocked) {
+          return sendQuotaBlocked(req, res, {
+            reason: acceptance.quotaBlocked.reason,
+            quota: acceptance.quotaBlocked.quota,
+          });
+        }
+
         if (acceptance.awaitingClarification) {
           const clarificationMessage = acceptance.clarificationMessages[0]?.text ?? null;
           trace(req, "agent.offer.accepted.awaiting_clarification", {
@@ -7226,6 +7608,34 @@ export async function registerRoutes(
           latestUserMessageId: userMessage.id,
         });
 
+        if (accepted.quotaBlocked) {
+          const blockedMessages =
+            accepted.clarificationMessages.length > 0
+              ? accepted.clarificationMessages
+              : await storage.createAssistantTurnParts({
+                  conversationId: conversation.id,
+                  textParts: [quotaBlockedMessage(accepted.quotaBlocked.reason)],
+                });
+          const legacyBlockedMessage = makeLegacyAssistantMessage(blockedMessages);
+          return res.status(201).json({
+            traceId: getTraceId(req),
+            conversationId: conversation.id,
+            userMessage: {
+              ...userMessage,
+              attachments: boundAttachments.map((attachment) =>
+                toAttachmentResponse(attachment, req.session.userId),
+              ),
+            },
+            assistantMessage: legacyBlockedMessage,
+            assistantMessages: blockedMessages,
+            model: "quota_guardrail_v1",
+            usage: null,
+            decisionPath: "companion_reply" satisfies IntentDecisionPath,
+            decisionPathReason: "companion" satisfies IntentDecisionPathReason,
+            elapsedMs: elapsedMs(startedAt),
+          });
+        }
+
         if (accepted.awaitingClarification) {
           const clarificationMessages = accepted.clarificationMessages;
           const legacyClarificationMessage = makeLegacyAssistantMessage(clarificationMessages);
@@ -7647,6 +8057,21 @@ export async function registerRoutes(
 
         if (!executionPrompt) {
           throw new Error("Agent execution prompt was not resolved");
+        }
+        const creationQuota = await consumeCreationQuotaForTaskStart({
+          req,
+          userId: req.session.userId,
+          conversationId: conversation.id,
+          taskKind,
+          prompt: parsed.text,
+          executionPrompt,
+          taskInputResolution,
+        });
+        if (!creationQuota.allowed) {
+          return sendQuotaBlocked(req, res, {
+            reason: creationQuota.reason,
+            quota: creationQuota.quota,
+          });
         }
         const run = await startAgentTaskRun({
           userId: req.session.userId,
@@ -8286,6 +8711,28 @@ export async function registerRoutes(
           },
         });
 
+        if (accepted.quotaBlocked) {
+          const blockedMessages =
+            accepted.clarificationMessages.length > 0
+              ? accepted.clarificationMessages
+              : await storage.createAssistantTurnParts({
+                  conversationId: conversation.id,
+                  textParts: [quotaBlockedMessage(accepted.quotaBlocked.reason)],
+                });
+          writeEvent({
+            type: "final",
+            assistantMessage: makeLegacyAssistantMessage(blockedMessages),
+            assistantMessages: blockedMessages,
+            model: "quota_guardrail_v1",
+            usage: null,
+            decisionPath: "companion_reply" satisfies IntentDecisionPath,
+            decisionPathReason: "companion" satisfies IntentDecisionPathReason,
+            elapsedMs: elapsedMs(startedAt),
+          });
+          res.end();
+          return;
+        }
+
         if (accepted.awaitingClarification) {
           const clarificationMessages = accepted.clarificationMessages;
           writeEvent({
@@ -8674,6 +9121,33 @@ export async function registerRoutes(
         }
         if (!executionPrompt) {
           throw new Error("Agent execution prompt was not resolved");
+        }
+        const creationQuota = await consumeCreationQuotaForTaskStart({
+          req,
+          userId: req.session.userId,
+          conversationId: conversation.id,
+          taskKind,
+          prompt: parsed.text,
+          executionPrompt,
+          taskInputResolution,
+        });
+        if (!creationQuota.allowed) {
+          const blockedMessages = await storage.createAssistantTurnParts({
+            conversationId: conversation.id,
+            textParts: [quotaBlockedMessage(creationQuota.reason)],
+          });
+          writeEvent({
+            type: "final",
+            assistantMessage: makeLegacyAssistantMessage(blockedMessages),
+            assistantMessages: blockedMessages,
+            model: "quota_guardrail_v1",
+            usage: null,
+            decisionPath: "companion_reply" satisfies IntentDecisionPath,
+            decisionPathReason: "companion" satisfies IntentDecisionPathReason,
+            elapsedMs: elapsedMs(startedAt),
+          });
+          res.end();
+          return;
         }
         const run = await startAgentTaskRun({
           userId: req.session.userId,

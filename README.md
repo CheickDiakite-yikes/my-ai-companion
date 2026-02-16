@@ -397,6 +397,11 @@ Server-authoritative rolling 30-day hard limits (defaults):
 - `600` text replies
 - `1800` voice seconds (30 minutes)
 - `900` camera seconds (15 minutes)
+- `40` creation runs (any agent build task start)
+- `20` coding tasks (`mini_game`, `web_build`, `mixed`)
+- `30` document tasks
+- `10` presentation tasks
+- `50` presentation slide images (default reserve is `5` image units per presentation task)
 
 Optional tiering:
 - `default` (all users unless matched by override lists)
@@ -407,6 +412,8 @@ Behavior:
 - hard lock on overage (`HTTP 429`)
 - response includes reason + quota summary for UX messaging
 - client shows remaining counters in composer/profile and proactively handles exhaustion states
+- creation quotas are consumed at task start (confirmation-first still applies)
+- presentation asks reserve slide-image units up front to cap image-gen spend
 
 ### Cost model (planning baseline as of Feb 16, 2026)
 Assumptions used for quota budgeting:
@@ -569,14 +576,30 @@ Source of truth: `.env.example`
 - `BETA_TEXT_QUOTA_30D`
 - `BETA_VOICE_QUOTA_SECONDS_30D`
 - `BETA_CAMERA_QUOTA_SECONDS_30D`
+- `BETA_CREATION_RUNS_QUOTA_30D`
+- `BETA_CODING_TASKS_QUOTA_30D`
+- `BETA_DOCUMENT_TASKS_QUOTA_30D`
+- `BETA_PRESENTATION_TASKS_QUOTA_30D`
+- `BETA_PRESENTATION_IMAGE_QUOTA_30D`
+- `BETA_PRESENTATION_IMAGE_UNITS_PER_TASK`
 - `BETA_POWER_QUOTA_EMAILS` (comma-separated emails with mid-tier quotas)
 - `BETA_POWER_TEXT_QUOTA_30D`
 - `BETA_POWER_VOICE_QUOTA_SECONDS_30D`
 - `BETA_POWER_CAMERA_QUOTA_SECONDS_30D`
+- `BETA_POWER_CREATION_RUNS_QUOTA_30D`
+- `BETA_POWER_CODING_TASKS_QUOTA_30D`
+- `BETA_POWER_DOCUMENT_TASKS_QUOTA_30D`
+- `BETA_POWER_PRESENTATION_TASKS_QUOTA_30D`
+- `BETA_POWER_PRESENTATION_IMAGE_QUOTA_30D`
 - `BETA_PRIVILEGED_QUOTA_EMAILS` (comma-separated emails with elevated quotas)
 - `BETA_PRIVILEGED_TEXT_QUOTA_30D`
 - `BETA_PRIVILEGED_VOICE_QUOTA_SECONDS_30D`
 - `BETA_PRIVILEGED_CAMERA_QUOTA_SECONDS_30D`
+- `BETA_PRIVILEGED_CREATION_RUNS_QUOTA_30D`
+- `BETA_PRIVILEGED_CODING_TASKS_QUOTA_30D`
+- `BETA_PRIVILEGED_DOCUMENT_TASKS_QUOTA_30D`
+- `BETA_PRIVILEGED_PRESENTATION_TASKS_QUOTA_30D`
+- `BETA_PRIVILEGED_PRESENTATION_IMAGE_QUOTA_30D`
 - `BETA_QUOTA_CACHE_TTL_MS` (preferred)
 - `BETA_PRIVILEGED_QUOTA_CACHE_TTL_MS` (deprecated alias)
 
