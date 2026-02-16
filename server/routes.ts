@@ -2122,10 +2122,11 @@ function toDecisionPathReason(input: {
 function isOfferAcceptMessage(text: string): boolean {
   const compact = toCompactMessageText(text);
   if (!compact) return false;
+  if (isExplicitBuildCommand(compact)) return false;
   if (OFFER_ACCEPT_MESSAGE_PATTERNS.some((pattern) => pattern.test(compact))) {
     return true;
   }
-  return /^(?:yes|yeah|yep|yup|sure|ok|okay|do it|go ahead|let'?s do it|please do)\b/i.test(
+  return /^\s*(?:yes|yeah|yep|yup|sure|ok|okay|please do|sounds good|that works|absolutely|of course)(?:\s*[,.-]?\s*(?:build it|do it|go ahead|start|let'?s do it))?\s*[.!?]*\s*$/i.test(
     compact,
   );
 }
@@ -2133,10 +2134,13 @@ function isOfferAcceptMessage(text: string): boolean {
 function isOfferDeclineMessage(text: string): boolean {
   const compact = toCompactMessageText(text);
   if (!compact) return false;
+  if (isExplicitBuildCommand(compact)) return false;
   if (OFFER_DECLINE_MESSAGE_PATTERNS.some((pattern) => pattern.test(compact))) {
     return true;
   }
-  return /^(?:no|nah|nope|not now|skip|later|hold off|cancel|stop)\b/i.test(compact);
+  return /^\s*(?:no|nah|nope|not now|skip|later|hold off|cancel|stop)(?:\s*[,.-]?\s*(?:for now|please))?\s*[.!?]*\s*$/i.test(
+    compact,
+  );
 }
 
 function countUserTurnsSinceLastOffer(messages: Message[]): number {
@@ -2410,7 +2414,7 @@ function inferExplicitOfferOpportunity(input: {
     summary = "I can draft this email with strong structure and clarity.";
   } else if (docType === "presentation") {
     title = "Presentation Build";
-    summary = "I can build up to 10 polished slides and export to PDF.";
+    summary = "I can build up to 5 polished slides and export to PDF.";
   } else if (taskKind === "mixed") {
     title = "Build Bundle";
     summary = "I can build this bundle and keep the output organized.";
@@ -7878,6 +7882,10 @@ export async function registerRoutes(
       const responseDecisionPath: IntentDecisionPath = proactiveOfferMessage
         ? "offer_required"
         : "companion_reply";
+      const responseDecisionPathReason = toDecisionPathReason({
+        decisionPath: responseDecisionPath,
+        hasPendingOffer: false,
+      });
       if (proactiveOfferMessage) {
         trace(req, "chat.proactive_offer.created", {
           conversationId: conversation.id,
@@ -7920,10 +7928,8 @@ export async function registerRoutes(
         model: aiResponse.model,
         usage: aiResponse.usage,
         decisionPath: responseDecisionPath,
-        decisionPathReason: toDecisionPathReason({
-          decisionPath: responseDecisionPath,
-          hasPendingOffer: false,
-        }),
+        decisionPathReason: responseDecisionPathReason,
+        routeReason: responseDecisionPathReason,
         elapsedMs: elapsedMs(startedAt),
       });
     } catch (error) {
@@ -9046,6 +9052,10 @@ export async function registerRoutes(
       const responseDecisionPath: IntentDecisionPath = proactiveOfferMessage
         ? "offer_required"
         : "companion_reply";
+      const responseDecisionPathReason = toDecisionPathReason({
+        decisionPath: responseDecisionPath,
+        hasPendingOffer: false,
+      });
       if (proactiveOfferMessage) {
         trace(req, "chat.proactive_offer.created", {
           conversationId: conversation.id,
@@ -9107,10 +9117,8 @@ export async function registerRoutes(
         model,
         usage,
         decisionPath: responseDecisionPath,
-        decisionPathReason: toDecisionPathReason({
-          decisionPath: responseDecisionPath,
-          hasPendingOffer: false,
-        }),
+        decisionPathReason: responseDecisionPathReason,
+        routeReason: responseDecisionPathReason,
         elapsedMs: elapsedMs(startedAt),
       });
 
