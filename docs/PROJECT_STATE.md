@@ -1,6 +1,6 @@
 # Project State: ZeeMe
 
-Last Updated: 2026-02-13
+Last Updated: 2026-02-16
 
 ## How To Resume Any Session
 1. Run `npm run dev:context`.
@@ -13,41 +13,41 @@ Last Updated: 2026-02-13
 Ship a production-grade multimodal AI companion where voice and text share one memory thread, with reliable personalization, image/camera context, quota safety, and App Store-ready UX quality.
 
 ## Current Focus
-- Execute agentic expansion roadmap tracked in `/Users/cheickdiakite/Codex/my-ai-companion/docs/AGENTIC_ROADMAP_V1.md`.
-- Prepare iOS/TestFlight readiness from the deployed web app baseline.
-- Keep live voice stability high on mobile browsers while improving natural response pacing.
+- Stabilize build-intent reliability so explicit requests consistently route through offer/intent-session/task flow.
+- Keep doc, presentation, and web-build artifact quality high with strict publish checks and deterministic QA repair loops.
+- Expand forensic debugging so every failed task can be traced by stage, reason, and tool output quickly.
+- Keep live voice stability high on mobile browsers while preserving text/voice memory continuity.
 - Keep Replit and local schema/runtime behavior strictly synchronized.
-- Maintain release safety with secret scanning, trace-driven debugging, and full regression gates.
 
 ## What Was Just Completed
-- Unified persona architecture around `Zee` with four voice options.
-- Gemini text + live integration with shared conversation memory stitching.
-- Streaming text endpoint with multipart assistant bursts and typing UX.
-- Image attachments in text chat with private storage and signed retrieval.
-- Live camera sharing in voice mode with auto-resume behavior.
-- Optional personalization profile with response-style controls.
-- Theme system across app surfaces including profile/onboarding.
-- Rolling 30-day beta quotas for text, voice, and camera usage.
-- Structured observability with `x-trace-id` and secret-safe redaction.
-- Local isolated E2E flow and deployment guardrails.
-- Remotion promo composition with exported preview/master videos.
-- AI-powered game generation enabled via `ENABLE_AGENT_MODEL_GAME_GENERATOR=true`.
-- Fixed artifact iframe rendering: switched from blob URLs to server `/render` endpoint for mobile Safari canvas compatibility.
-- Added `/api/agent/artifacts/:id/render` with CSP security headers and ownership validation.
-- Artifact query resilience: staleTime 0, retry 2, refetchOnWindowFocus for session recovery.
-- ArtifactViewer error/retry/reload UX for failed loads and game restarts.
-- Created `docs/AGENTIC_ENGINEERING_GUIDE.md` — comprehensive reference for agentic features, Replit-specific concerns, and gotchas.
-- Added live voice reliability hardening for interruption/cutoff issues:
-  - configurable `activityHandling` with stability-first default
-  - safer VAD/thinking/output guardrails in live token config
-  - duplex suppression path while assistant audio is active
-  - suppression of user transcript ingestion during assistant speech window
-  - enhanced `live.server.content` trace diagnostics
-- Deployed higher live output budget profile (`GEMINI_LIVE_MAX_OUTPUT_TOKENS=1000`) for richer responses.
-- Added three new repo-local skills for this expansion:
-  - `zeeme-live-voice-stability`
-  - `zeeme-agentic-roadmap-delivery`
-  - `zeeme-agentic-gamegen-eval`
+- Offer-gated agent routing is now first-class in chat (`ENABLE_AGENT_OFFERS_V2=true`):
+  - explicit and proactive offers persist in `agent_offers`
+  - accept/decline flows are supported in both stream and non-stream chat paths
+  - `decisionPath` + `decisionPathReason` now trace routing decisions
+- Intent-session continuity is implemented (`ENABLE_AGENT_INTENT_SESSIONS=true`):
+  - slot schema + slot values + missing slots persist in `agent_intent_sessions`
+  - clarification and follow-up requests can continue from existing intent context
+  - assumptions path exists when slot collection is incomplete
+- Agent runtime expanded beyond mini-games:
+  - `doc_markdown` generation with semantic/format checks and repair loop
+  - presentation generation with slide extraction, optional image rendering, and strict publish gate
+  - web build generation path for website/landing-page style asks
+- Artifact render-spec pipeline added:
+  - `server/artifact-render-spec.ts` builds and validates render specs
+  - JSON-render viewer integration in `client/src/components/artifacts/JsonRenderArtifactViewer.tsx`
+  - viewer/export flow now supports docs and presentations in a structured way
+- Unified in-thread task card UI matured:
+  - consolidated task timeline/status artifacts
+  - failure summaries now surfaced in card UI (instead of silent spinner failures)
+  - artifact open/reload/fallback handling improved
+- Memory/context hygiene and temporal grounding improved:
+  - `message_purpose` filter prevents agent UI rows from polluting model memory
+  - optional backfill script added for legacy rows
+  - timezone-aware calendar context injection added for text + live prompts
+- Live voice reliability baseline remained in place:
+  - `NO_INTERRUPTION` default activity handling
+  - conservative proactivity defaults
+  - stronger turn/transcript diagnostics in `LiveTrace`
 
 ## What Works Today
 - Auth, onboarding, conversations, and message persistence.
@@ -57,26 +57,46 @@ Ship a production-grade multimodal AI companion where voice and text share one m
 - Profile and preference persistence (including Zee avatar + theme).
 - Quota accounting and route enforcement with branded 429 responses.
 - Replit deployment currently live at `https://zeeme.replit.app`.
-- Agentic mini-game generation is live in-thread with artifact viewer flow.
+- Agent task lifecycle in a unified chat lane:
+  - offer -> intent session -> task execution -> artifact card
+  - approvals and risk gates are persisted and auditable
+- Artifact generation currently supports:
+  - mini-games
+  - documents (cover letters, resumes, papers, guides, etc.)
+  - presentations (markdown + image-backed slide flow)
+  - web-build style artifacts (landing pages / web app style outputs)
+- Structured artifact rendering and export:
+  - JSON-render viewer path for docs/presentations
+  - artifact render endpoint with CSP protection
+  - PDF export endpoint for documents/presentations
+- Message-purpose hygiene:
+  - model context can exclude `agent_*` UI rows when enabled
+  - legacy relabel/backfill tooling exists
 
 ## Known Gaps
-- Native packaging path (Expo/ejected native bridge) is not completed.
-- Transcript segmentation quality still needs tuning for longer utterances.
-- Live response handoff latency can still feel long in some conditions despite stability improvements.
-- Replit schema drift can still happen if DB apply is skipped.
-- Automated visual snapshot matrix across major iPhone sizes is incomplete.
+- Build-intent misroutes still occur in edge cases and need stronger deterministic test coverage.
+- Some task flows can still regress into plain chat verbosity instead of clean artifact-first delivery.
+- Presentation/document strict-publish and viewer constraints need tighter parity checks across all branches.
+- Replit data continuity and local-vs-Replit environment drift can hide regressions until deploy.
+- Native packaging path (WebView wrapper vs. full native migration) is not finalized.
+- Mobile voice still needs longer soak/evidence runs across real iPhone + Android browser conditions.
 
 ## Next Steps (Priority Order)
-1. Run post-deploy voice soak tests across iPhone + Android browsers using new stable profile.
-2. Add transcript aggregation tuning for long utterances and bilingual edge cases.
-3. Expand agentic roadmap delivery beyond mini-games (docs/presentations) behind flags.
-4. Add device-size visual regression suite for iPhone SE/mini/Plus/Max and iPad portrait checks.
-5. Complete App Store packaging path (WebView wrapper or native migration decision).
+1. Add forensic task failure tracing pack:
+   - decision reason, intent-session state, slot resolution, assumptions, qa summary, publish reason.
+2. Build deterministic scenario regression suite for agent requests:
+   - cover letter, resume, research paper, guide, presentation, landing page, mini-game.
+3. Tighten routing and continuity guardrails:
+   - explicit build asks always confirmation-gated
+   - active intent session continuation lock for follow-ups.
+4. Harden doc/presentation publish quality gates and eliminate raw artifact leakage in normal chat bubbles.
+5. Run cross-device voice soak tests and complete native packaging decision for TestFlight path.
 
 ## Blockers And Open Questions
 - Final native strategy: WebView-first wrapper vs full React Native migration.
-- How to handle quota UX near-limit nudges and upgrade paths.
-- Which transcript quality KPIs define “good enough” for beta-to-public transition.
+- Replit persistence strategy for chat history continuity and schema/version drift prevention.
+- Which runtime reliability SLO will trigger orchestration migration (if needed) to a workflow engine.
+- Which connector scope lands first after hardening (Gmail/Drive/browser/device control).
 
 ## Error Memory (Do Not Repeat)
 | Date | Error | Root Cause | Solution | Guardrail |
@@ -90,3 +110,5 @@ Ship a production-grade multimodal AI companion where voice and text share one m
 | 2026-02-12 | Game artifacts show black screen on mobile Safari | Blob URLs in sandboxed iframes break canvas initialization on mobile Safari | Serve game HTML via server `/render` endpoint instead of blob URLs or srcdoc | Never use blob URLs or srcdoc for iframe game rendering; see `docs/AGENTIC_ENGINEERING_GUIDE.md` |
 | 2026-02-12 | Games use template output instead of AI generation | `ENABLE_AGENT_MODEL_GAME_GENERATOR` env var not set to `true` | Set the flag in Replit Secrets | Document required env vars in engineering guide |
 | 2026-02-12 | Artifact viewer fails to load after session timeout | Query cache retained stale/error state with `staleTime: Infinity` | Override with `staleTime: 0`, `retry: 2`, `refetchOnWindowFocus: true` | Do not inherit global infinite stale time for artifact queries |
+| 2026-02-15 | Agent UI/system rows leaked into text memory context | Legacy `agent_*` messages were still marked `message_purpose=conversation` | Added context filters + purpose backfill tooling (`script/backfill-agent-ui-message-purpose.ts`) | Run purpose backfill in environments with legacy data before evaluating memory quality |
+| 2026-02-16 | Presentation image generation failed on unsupported model path | Wrong/unstable image model default in generation path | Set presentation image model to `gemini-3-pro-image-preview` and aligned generator defaults | Keep image model selection centralized and covered by smoke tests before deploy |

@@ -193,3 +193,29 @@ Use this file as a chronological handoff record so any new session can resume wo
   - Root cause: Unescaped `$` in command-line string during initializer execution.
   - Fix: Rewrote generated `agents/openai.yaml` files with explicit `$skill-name` default prompts.
   - Guardrail: Use single-quoted heredoc or escaped `$` when setting `default_prompt` values.
+
+## 2026-02-16 02:41 UTC - Project memory sync to current agentic architecture
+- Completed:
+  - Re-ran continuity resume protocol (`npm run dev:context`) and reconciled memory docs with current branch state.
+  - Updated `/Users/cheickdiakite/Codex/my-ai-companion/docs/PROJECT_STATE.md` to reflect current architecture:
+    - offer-gated execution (`agent_offers`) and intent-session continuity (`agent_intent_sessions`)
+    - expanded artifact scope (doc/presentation/web-build/mini-game)
+    - JSON-render artifact pipeline and structured viewer/export flow
+    - message-purpose filtering + legacy backfill guardrails
+    - timezone-aware calendar context support in prompts
+  - Updated `Error Memory` with recent non-obvious failures and guardrails:
+    - context contamination from legacy `message_purpose`
+    - presentation image model selection failures
+- Current state:
+  - Documentation now matches current routing/runtime/viewer architecture on `codex/agentic-gamegen-v1`.
+  - Prior stale framing (“mini-games only” as active artifact path) is removed from state memory.
+  - Next coding sessions can resume against current system behavior instead of older baseline assumptions.
+- Next actions:
+  - Add deterministic regression suite for explicit build asks and follow-up continuation.
+  - Add forensic trace bundle per task run (decision path, slot resolution, assumptions, QA/publish reasons).
+  - Continue hardening for no-random-run behavior and artifact quality stability in Replit.
+- Errors and fixes:
+  - Error: Project memory docs lagged behind live architecture, causing stale planning context.
+  - Root cause: Rapid feature merges outpaced explicit memory-file updates.
+  - Fix: Refreshed `PROJECT_STATE.md` + this session log entry with branch-accurate architecture.
+  - Guardrail: After major runtime/routing merges, always update memory docs in the same session before handoff.
