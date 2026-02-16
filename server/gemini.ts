@@ -69,7 +69,7 @@ const DEFAULT_TEXT_MODEL = "gemini-3-flash-preview";
 const DEFAULT_LIVE_MODEL = "gemini-2.5-flash-native-audio-preview-12-2025";
 const DEFAULT_AGENT_GAME_MODEL = "gemini-3-flash-preview";
 const DEFAULT_AGENT_DOC_MODEL = "gemini-3-flash-preview";
-const DEFAULT_AGENT_PRESENTATION_IMAGE_MODEL = "gemini-3-pro-image-preview";
+const DEFAULT_AGENT_PRESENTATION_IMAGE_MODEL = "gemini-2.5-flash-preview-image";
 const DEFAULT_ZEE_PROMPT_FALLBACK = [
   "You are Zee, a warm, emotionally intelligent AI companion.",
   "Stay helpful, grounded, and conversational.",
@@ -1734,7 +1734,7 @@ export async function generatePresentationSlideImages(
   const prompts = input.slidePrompts
     .map((prompt) => prompt.trim())
     .filter((prompt) => prompt.length > 0)
-    .slice(0, 5);
+    .slice(0, 10);
 
   if (prompts.length === 0) {
     throw new Error("No slide prompts provided");
@@ -1752,26 +1752,23 @@ export async function generatePresentationSlideImages(
       `Slide ${index + 1} brief: ${prompt}`,
     ].join("\n");
 
-    const response = await ai.models.generateImages({
+    const response = await ai.models.generateContent({
       model,
-      prompt: imagePrompt,
+      contents: [{ role: "user", parts: [{ text: imagePrompt }] }],
       config: {
-        numberOfImages: 1,
-        aspectRatio: "16:9",
-        outputMimeType: "image/png",
+        responseModalities: ["IMAGE"],
       },
     });
 
-    const generated = response.generatedImages?.[0]?.image as
-      | { imageBytes?: string | Uint8Array; mimeType?: string }
-      | undefined;
-    const rawBytes = generated?.imageBytes;
-    const imageBase64 =
-      typeof rawBytes === "string"
-        ? rawBytes.trim()
-        : rawBytes instanceof Uint8Array
-          ? Buffer.from(rawBytes).toString("base64")
-          : "";
+    const candidates = response.candidates ?? [];
+    const parts = candidates[0]?.content?.parts ?? [];
+    const imagePart = parts.find(
+      (p: any) => p.inlineData?.mimeType?.startsWith("image/"),
+    ) as { inlineData?: { data?: string; mimeType?: string } } | undefined;
+
+    const imageBase64 = imagePart?.inlineData?.data ?? "";
+    const mimeType = imagePart?.inlineData?.mimeType ?? "image/png";
+
     if (!imageBase64) {
       throw new Error(`Slide ${index + 1} image generation returned empty output`);
     }
@@ -1779,7 +1776,7 @@ export async function generatePresentationSlideImages(
     slides.push({
       index: index + 1,
       prompt,
-      mimeType: generated?.mimeType?.trim() || "image/png",
+      mimeType,
       imageBase64,
     });
   }
