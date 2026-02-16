@@ -57,3 +57,6 @@ defaultBucketID = "replit-objstore-b4d43eea-9e5f-4865-9488-56bf8827895e"
 ENABLE_AGENT_MODEL_GAME_GENERATOR = "true"
 AGENT_CODE_WORKER_BACKEND = "gemini_cli"
 AGENT_GEMINI_CLI_COMMAND = "npx -y @google/gemini-cli"
+
+[userenv.production]
+NPM_CONFIG_LEGACY_PEER_DEPS = "true"
