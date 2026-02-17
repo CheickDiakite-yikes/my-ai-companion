@@ -7191,7 +7191,7 @@ function App() {
     attachmentIds: string[];
     optimisticUserId: string;
     optimisticAssistantTurnId: string;
-  }) => {
+  }): Promise<{ ackedUserMessageId: string | null }> => {
     const response = await fetch("/api/chat/respond/stream", {
       method: "POST",
       credentials: "include",
@@ -7224,6 +7224,8 @@ function App() {
     let activeTaskSummary: AgentTaskSummary | null = null;
     const pendingPartDeltas = new Map<number, string>();
     let deltaFlushTimer: number | null = null;
+
+    let ackedUserMessageId: string | null = null;
 
     const primaryPartId = buildOptimisticAssistantPartId(
       params.optimisticAssistantTurnId,
@@ -7315,6 +7317,7 @@ function App() {
 
     const applyEvent = (event: ChatStreamEvent) => {
       if (event.type === "ack") {
+        ackedUserMessageId = event.userMessage?.id ?? null;
         updateConversationMessages(params.conversationId, (current) =>
           current.map((message) =>
             message.id === params.optimisticUserId ? event.userMessage : message,
@@ -7759,34 +7762,47 @@ function App() {
       if (event.type === "error") {
         clearPendingPartDeltaFlush();
         flushPendingPartDeltas();
-        throw new Error(event.message);
+        const err = new Error(event.message);
+        (err as any).ackedUserMessageId = ackedUserMessageId;
+        throw err;
       }
     };
 
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-
-      buffer += decoder.decode(value, { stream: true });
+    try {
       while (true) {
-        const lineBreakIndex = buffer.indexOf("\n");
-        if (lineBreakIndex === -1) break;
+        const { value, done } = await reader.read();
+        if (done) break;
 
-        const line = buffer.slice(0, lineBreakIndex).trim();
-        buffer = buffer.slice(lineBreakIndex + 1);
-        if (!line) continue;
+        buffer += decoder.decode(value, { stream: true });
+        while (true) {
+          const lineBreakIndex = buffer.indexOf("\n");
+          if (lineBreakIndex === -1) break;
 
-        const parsed = JSON.parse(line) as ChatStreamEvent;
-        applyEvent(parsed);
+          const line = buffer.slice(0, lineBreakIndex).trim();
+          buffer = buffer.slice(lineBreakIndex + 1);
+          if (!line) continue;
+
+          const parsed = JSON.parse(line) as ChatStreamEvent;
+          applyEvent(parsed);
+        }
       }
+    } catch (readError) {
+      if ((readError as any).ackedUserMessageId === undefined) {
+        (readError as any).ackedUserMessageId = ackedUserMessageId;
+      }
+      throw readError;
     }
 
     clearPendingPartDeltaFlush();
     flushPendingPartDeltas();
 
     if (!finalized) {
-      throw new Error("Stream ended before final response.");
+      const err = new Error("Stream ended before final response.");
+      (err as any).ackedUserMessageId = ackedUserMessageId;
+      throw err;
     }
+
+    return { ackedUserMessageId };
   };
 
   const fallbackChatResponse = async (params: {
@@ -7795,6 +7811,7 @@ function App() {
     attachmentIds: string[];
     optimisticUserId: string;
     optimisticAssistantTurnId: string;
+    existingUserMessageId?: string | null;
   }) => {
     const response = await apiRequest("POST", "/api/chat/respond", {
       conversationId: params.conversationId,
@@ -7802,6 +7819,7 @@ function App() {
       persona,
       attachmentIds: params.attachmentIds,
       clientTimeZone: detectClientTimeZone(),
+      existingUserMessageId: params.existingUserMessageId ?? undefined,
     });
     const payload = (await response.json()) as {
       userMessage: MessageData;
@@ -7932,6 +7950,8 @@ function App() {
           queryClient.invalidateQueries({ queryKey: ["/api/quota/summary"] });
           return;
         }
+        const streamAckedUserMessageId =
+          (streamError as any)?.ackedUserMessageId ?? null;
         try {
           await fallbackChatResponse({
             conversationId: resolvedConversationId,
@@ -7939,6 +7959,7 @@ function App() {
             attachmentIds,
             optimisticUserId,
             optimisticAssistantTurnId,
+            existingUserMessageId: streamAckedUserMessageId,
           });
           removePendingAttachmentsByLocalId(
             readyAttachments.map((item) => item.localId),

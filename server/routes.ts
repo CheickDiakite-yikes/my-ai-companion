@@ -124,6 +124,7 @@ const chatRespondSchema = z
     attachmentIds: z.array(z.string().min(1)).optional().default([]),
     persona: personaInputSchema.optional(),
     clientTimeZone: z.string().trim().min(1).max(80).optional(),
+    existingUserMessageId: z.string().uuid().optional(),
   })
   .superRefine((value, ctx) => {
     if (value.text.length === 0 && value.attachmentIds.length === 0) {
@@ -7408,7 +7409,9 @@ export async function registerRoutes(
         });
       }
 
-      if (ENABLE_BETA_QUOTAS) {
+      const isStreamFallback = Boolean(parsed.existingUserMessageId);
+
+      if (ENABLE_BETA_QUOTAS && !isStreamFallback) {
         const quotaLimits = await resolveQuotaLimitsForUser(req.session.userId);
         const textQuota = await storage.consumeQuota({
           userId: req.session.userId,
@@ -7448,17 +7451,40 @@ export async function registerRoutes(
         });
       }
 
-      const userMessage = await storage.createUserTurnMessage({
-        conversationId: conversation.id,
-        text: parsed.text,
-      });
+      let userMessage: any;
+      if (isStreamFallback) {
+        const existingMsg = await storage.getUserMessageById(parsed.existingUserMessageId!, req.session.userId);
+        if (existingMsg && existingMsg.conversationId === conversation.id) {
+          userMessage = existingMsg;
+          trace(req, "chat.respond.reusing_stream_message", {
+            conversationId: conversation.id,
+            existingUserMessageId: parsed.existingUserMessageId,
+          });
+        } else {
+          userMessage = await storage.createUserTurnMessage({
+            conversationId: conversation.id,
+            text: parsed.text,
+          });
+          trace(req, "chat.respond.existing_message_not_found", {
+            conversationId: conversation.id,
+            existingUserMessageId: parsed.existingUserMessageId,
+          });
+        }
+      } else {
+        userMessage = await storage.createUserTurnMessage({
+          conversationId: conversation.id,
+          text: parsed.text,
+        });
+      }
 
-      const boundAttachments = await storage.bindPendingAttachmentsToMessage(
-        conversation.id,
-        req.session.userId,
-        userMessage.id,
-        parsed.attachmentIds,
-      );
+      const boundAttachments = isStreamFallback
+        ? []
+        : await storage.bindPendingAttachmentsToMessage(
+            conversation.id,
+            req.session.userId,
+            userMessage.id,
+            parsed.attachmentIds,
+          );
 
       const existingConversationMessages = await storage.getMessages(conversation.id);
       let activeIntentSession = ENABLE_AGENT_INTENT_SESSIONS
