@@ -2525,7 +2525,7 @@ const ProfileView = ({
                                 {formatMinutesFromSeconds(quotaSummary.remaining.cameraSeconds)} left / {formatMinutesFromSeconds(quotaSummary.limits.cameraSeconds)}
                               </span>
                             </div>
-                            {typeof quotaSummary.remaining.creationRuns === "number" &&
+                            {ENABLE_AGENTIC_CREATIONS && typeof quotaSummary.remaining.creationRuns === "number" &&
                               typeof quotaSummary.limits.creationRuns === "number" && (
                                 <div className="flex items-center justify-between">
                                   <span style={{ color: "var(--app-on-dark-muted)" }}>Creations</span>
@@ -2534,7 +2534,7 @@ const ProfileView = ({
                                   </span>
                                 </div>
                               )}
-                            {typeof quotaSummary.remaining.codingTasks === "number" &&
+                            {ENABLE_AGENTIC_CREATIONS && typeof quotaSummary.remaining.codingTasks === "number" &&
                               typeof quotaSummary.limits.codingTasks === "number" && (
                                 <div className="flex items-center justify-between">
                                   <span style={{ color: "var(--app-on-dark-muted)" }}>Coding builds</span>
@@ -2543,7 +2543,7 @@ const ProfileView = ({
                                   </span>
                                 </div>
                               )}
-                            {typeof quotaSummary.remaining.documentTasks === "number" &&
+                            {ENABLE_AGENTIC_CREATIONS && typeof quotaSummary.remaining.documentTasks === "number" &&
                               typeof quotaSummary.limits.documentTasks === "number" && (
                                 <div className="flex items-center justify-between">
                                   <span style={{ color: "var(--app-on-dark-muted)" }}>Documents</span>
@@ -2552,7 +2552,7 @@ const ProfileView = ({
                                   </span>
                                 </div>
                               )}
-                            {typeof quotaSummary.remaining.presentationTasks === "number" &&
+                            {ENABLE_AGENTIC_CREATIONS && typeof quotaSummary.remaining.presentationTasks === "number" &&
                               typeof quotaSummary.limits.presentationTasks === "number" && (
                                 <div className="flex items-center justify-between">
                                   <span style={{ color: "var(--app-on-dark-muted)" }}>Presentations</span>
@@ -2561,7 +2561,7 @@ const ProfileView = ({
                                   </span>
                                 </div>
                               )}
-                            {typeof quotaSummary.remaining.presentationImages === "number" &&
+                            {ENABLE_AGENTIC_CREATIONS && typeof quotaSummary.remaining.presentationImages === "number" &&
                               typeof quotaSummary.limits.presentationImages === "number" && (
                                 <div className="flex items-center justify-between">
                                   <span style={{ color: "var(--app-on-dark-muted)" }}>Slide images</span>
