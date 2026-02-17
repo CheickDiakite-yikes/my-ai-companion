@@ -620,6 +620,27 @@ npm run dev
 
 The app will be available at `http://localhost:5000`.
 
+### Expo wrapper quick start (mobile shell)
+
+```bash
+# Install mobile wrapper dependencies
+npm run mobile:install
+
+# In terminal 1, run the web app backend+frontend
+npm run dev
+
+# In terminal 2, run Expo
+npm run mobile:start
+```
+
+Set `mobile/.env` with:
+
+```bash
+EXPO_PUBLIC_WEB_APP_URL=http://localhost:5000
+```
+
+Use `http://10.0.2.2:5000` for Android emulator, and your LAN IP for physical devices.
+
 ### Available scripts
 
 | Script | Purpose |
@@ -635,6 +656,11 @@ The app will be available at `http://localhost:5000`.
 | `npm run security:secrets:staged` | Scan staged files for secrets |
 | `npm run hooks:install` | Install pre-commit secret scanning hook |
 | `npm run test:local:e2e` | Run isolated local integration tests |
+| `npm run mobile:install` | Install dependencies for Expo wrapper (`mobile/`) |
+| `npm run mobile:start` | Start Expo dev server |
+| `npm run mobile:ios` | Run iOS native build via Expo |
+| `npm run mobile:android` | Run Android native build via Expo |
+| `npm run mobile:web` | Run Expo web target |
 
 ---
 

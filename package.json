@@ -3,9 +3,18 @@
   "version": "1.0.0",
   "type": "module",
   "license": "MIT",
+  "workspaces": [
+    "mobile",
+    "packages/*"
+  ],
   "scripts": {
     "dev:client": "vite dev --port 5000",
     "dev": "NODE_ENV=development tsx server/index.ts",
+    "mobile:install": "npm --prefix mobile install",
+    "mobile:start": "npm --prefix mobile run start",
+    "mobile:ios": "npm --prefix mobile run ios",
+    "mobile:android": "npm --prefix mobile run android",
+    "mobile:web": "npm --prefix mobile run web",
     "remotion:studio": "remotion studio video/index.ts",
     "remotion:render": "remotion render video/index.ts PromoOrbit45 output/remotion/zeeme-orbit-of-you.mp4 --codec=h264",
     "remotion:render:preview": "remotion render video/index.ts PromoOrbit45 output/remotion/zeeme-orbit-of-you-preview.mp4 --codec=h264 --scale=0.5",
