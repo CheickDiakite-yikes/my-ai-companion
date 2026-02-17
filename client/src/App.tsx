@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useId, useMemo, type ReactNode } from "react";
+import React, { useState, useEffect, useRef, useId, useMemo, type ReactNode } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Mic,
@@ -129,6 +129,79 @@ function sanitizeSplitTokenArtifacts(text: string): string {
     .replace(/\[\[ZEE[_\s]*SPLIT/gi, " ")
     .replace(/ZEE_SPLIT\]?\]?/gi, " ")
     .replace(/[ \t]{2,}/g, " ");
+}
+
+function renderSimpleMarkdown(text: string): React.ReactNode {
+  const lines = text.split("\n");
+  const elements: React.ReactNode[] = [];
+  let listItems: React.ReactNode[] = [];
+  let listType: "ul" | "ol" | null = null;
+  let keyCounter = 0;
+
+  const flushList = () => {
+    if (listItems.length > 0 && listType) {
+      const ListTag = listType;
+      elements.push(
+        <ListTag key={`list-${keyCounter++}`} className={listType === "ul" ? "list-disc pl-5 my-1" : "list-decimal pl-5 my-1"}>
+          {listItems}
+        </ListTag>
+      );
+      listItems = [];
+      listType = null;
+    }
+  };
+
+  const renderInline = (content: string): React.ReactNode[] => {
+    const parts: React.ReactNode[] = [];
+    const regex = /(\*\*\*(.+?)\*\*\*|\*\*(.+?)\*\*|\*(.+?)\*|__(.+?)__|_(.+?)_)/g;
+    let lastIndex = 0;
+    let match;
+    let inlineKey = 0;
+
+    while ((match = regex.exec(content)) !== null) {
+      if (match.index > lastIndex) {
+        parts.push(content.slice(lastIndex, match.index));
+      }
+      if (match[2]) {
+        parts.push(<strong key={`bi-${inlineKey++}`}><em>{match[2]}</em></strong>);
+      } else if (match[3]) {
+        parts.push(<strong key={`b-${inlineKey++}`}>{match[3]}</strong>);
+      } else if (match[4]) {
+        parts.push(<em key={`i-${inlineKey++}`}>{match[4]}</em>);
+      } else if (match[5]) {
+        parts.push(<strong key={`bu-${inlineKey++}`}>{match[5]}</strong>);
+      } else if (match[6]) {
+        parts.push(<em key={`iu-${inlineKey++}`}>{match[6]}</em>);
+      }
+      lastIndex = match.index + match[0].length;
+    }
+    if (lastIndex < content.length) {
+      parts.push(content.slice(lastIndex));
+    }
+    return parts;
+  };
+
+  for (const line of lines) {
+    const bulletMatch = line.match(/^\s*[-•]\s+(.+)/);
+    const numberedMatch = line.match(/^\s*(\d+)[.)]\s+(.+)/);
+
+    if (bulletMatch) {
+      if (listType !== "ul") { flushList(); listType = "ul"; }
+      listItems.push(<li key={`li-${keyCounter++}`}>{renderInline(bulletMatch[1])}</li>);
+    } else if (numberedMatch) {
+      if (listType !== "ol") { flushList(); listType = "ol"; }
+      listItems.push(<li key={`li-${keyCounter++}`}>{renderInline(numberedMatch[2])}</li>);
+    } else {
+      flushList();
+      if (line.trim() === "") {
+        elements.push(<br key={`br-${keyCounter++}`} />);
+      } else {
+        elements.push(<span key={`p-${keyCounter++}`}>{renderInline(line)}{"\n"}</span>);
+      }
+    }
+  }
+  flushList();
+  return <>{elements}</>;
 }
 
 interface MessageAttachmentData {
@@ -5204,7 +5277,7 @@ const TextView = ({
                       ))}
                     </div>
                   )}
-                  <div className={isUnifiedTaskCard ? "" : "px-5 py-3"}>
+                  <div className={isUnifiedTaskCard ? "" : `px-5 py-3 ${msg.sender === "user" ? "whitespace-pre-wrap" : ""}`}>
                     {msg.isTyping ? (
                       <div className="flex items-center gap-1.5 py-1">
                         <motion.span
@@ -5430,7 +5503,7 @@ const TextView = ({
                         </button>
                       </div>
                     ) : (
-                      msg.sender === "assistant" ? sanitizeSplitTokenArtifacts(msg.text) : msg.text
+                      msg.sender === "assistant" ? renderSimpleMarkdown(sanitizeSplitTokenArtifacts(msg.text)) : msg.text
                     )}
                   </div>
                 </div>

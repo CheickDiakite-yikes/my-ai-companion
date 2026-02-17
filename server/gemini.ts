@@ -336,14 +336,13 @@ function buildCalendarTimeContextBlock(clientTimeZone?: string | null): string {
   const timeZone = resolveCompanionTimeZone(clientTimeZone);
   const local = formatCalendarSnapshot(now, timeZone);
   return [
-    "CALENDAR / TIME CONTEXT:",
-    `- Current instant (UTC): ${local.utcIso}`,
-    `- Active timezone: ${local.timeZone}`,
-    `- Local date: ${local.date} (${local.weekday})`,
-    `- Local time: ${local.time}`,
-    `- Local date-time: ${local.dateTime}`,
-    "- Treat relative references like today/tomorrow/this week using the active timezone.",
+    "CALENDAR / TIME CONTEXT (AUTHORITATIVE — always use this, never guess):",
+    `- RIGHT NOW it is: ${local.weekday}, ${local.date} at ${local.time} (${local.timeZone})`,
+    `- UTC: ${local.utcIso}`,
+    `- Today is ${local.weekday}. Use this day name for any reference to "today", "tonight", etc.`,
+    "- Treat relative references like today/tomorrow/this week using the active timezone above.",
     "- If the user mentions a different timezone, quickly acknowledge and adapt.",
+    "- NEVER guess the day of the week — always use the day shown above.",
   ].join("\n");
 }
 
