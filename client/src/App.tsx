@@ -6223,6 +6223,7 @@ function App() {
   >([]);
   const [composerError, setComposerError] = useState<string | null>(null);
   const [isSendingMessage, setIsSendingMessage] = useState(false);
+  const isSendingMessageRef = useRef(false);
 
   useEffect(() => {
     if (!ENABLE_AGENTIC_CREATIONS) {
@@ -7859,7 +7860,7 @@ function App() {
 
   const handleSendMessage = async (text: string) => {
     const trimmed = text.trim();
-    if (isSendingMessage) return;
+    if (isSendingMessageRef.current) return;
 
     if (quotaSummary && quotaSummary.remaining.text <= 0) {
       setComposerError(
@@ -7885,6 +7886,7 @@ function App() {
     }
 
     setComposerError(null);
+    isSendingMessageRef.current = true;
     setIsSendingMessage(true);
 
     let conversationId: string | null = null;
@@ -8027,6 +8029,7 @@ function App() {
       }
       console.error("chat.send.failed", error);
     } finally {
+      isSendingMessageRef.current = false;
       setIsSendingMessage(false);
       if (conversationId) {
         queryClient.invalidateQueries({
