@@ -31,6 +31,7 @@ import {
   Terminal,
   Maximize2,
   Globe,
+  SwitchCamera,
 } from "lucide-react";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -3597,7 +3598,7 @@ const SharedHeader = ({
   );
 };
 
-const VoiceView = ({ isActive, isConnecting, onEndCall, onProfile, assistantName, assistantAvatar, selectedVoice, setSelectedVoice, mode, setMode, duration, userProfileImage, isVideoEnabled, onToggleVideo, onFlipCamera, videoStream, isVideoTransitioning }: { 
+const VoiceView = ({ isActive, isConnecting, onEndCall, onProfile, assistantName, assistantAvatar, selectedVoice, setSelectedVoice, mode, setMode, duration, userProfileImage, isVideoEnabled, onToggleVideo, onFlipCamera, videoStream, isVideoTransitioning, cameraFacingMode }: { 
   isActive: boolean; 
   isConnecting: boolean;
   onEndCall: () => void;
@@ -3615,6 +3616,7 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onProfile, assistantName
   onFlipCamera: () => void;
   videoStream: MediaStream | null;
   isVideoTransitioning: boolean;
+  cameraFacingMode: CameraFacingMode;
 }) => {
   const videoPreviewRef = useRef<HTMLVideoElement | null>(null);
 
@@ -3682,7 +3684,18 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onProfile, assistantName
                         muted
                         playsInline
                         className="h-full w-full object-cover"
+                        style={cameraFacingMode === "user" ? { transform: "scaleX(-1)" } : undefined}
                       />
+                      <button
+                        type="button"
+                        className="absolute top-3 right-3 w-10 h-10 rounded-full bg-black/50 backdrop-blur-sm flex items-center justify-center text-white/90 hover:bg-black/70 transition-colors active:scale-95"
+                        onClick={onFlipCamera}
+                        disabled={isVideoTransitioning}
+                        aria-label="Switch camera"
+                        data-testid="button-flip-camera"
+                      >
+                        <SwitchCamera className="w-5 h-5" />
+                      </button>
                       <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/65 to-transparent px-3 pb-3 pt-8 text-center text-sm text-white/95">
                         Camera on
                       </div>
@@ -6202,7 +6215,7 @@ function App() {
   const [isVideoEnabled, setIsVideoEnabled] = useState(false);
   const [isVideoTransitioning, setIsVideoTransitioning] = useState(false);
   const [cameraFacingMode, setCameraFacingMode] =
-    useState<CameraFacingMode>("environment");
+    useState<CameraFacingMode>("user");
   const [videoStream, setVideoStream] = useState<MediaStream | null>(null);
 
   const [pendingAttachments, setPendingAttachments] = useState<
@@ -6227,7 +6240,7 @@ function App() {
   const manualLiveStopRef = useRef(false);
   const autoResumeBudgetRef = useRef(1);
   const isVideoEnabledRef = useRef(false);
-  const cameraFacingModeRef = useRef<CameraFacingMode>("environment");
+  const cameraFacingModeRef = useRef<CameraFacingMode>("user");
   const pendingAttachmentsRef = useRef<PendingImageAttachment[]>([]);
   const selectedVoiceRef = useRef<LiveVoiceName>(DEFAULT_LIVE_VOICE);
   const selectedThemeRef = useRef<AppThemeId>(DEFAULT_APP_THEME_ID);
@@ -8584,6 +8597,7 @@ function App() {
             onFlipCamera={handleFlipCamera}
             videoStream={videoStream}
             isVideoTransitioning={isVideoTransitioning}
+            cameraFacingMode={cameraFacingMode}
           />
 
           <AnimatePresence>

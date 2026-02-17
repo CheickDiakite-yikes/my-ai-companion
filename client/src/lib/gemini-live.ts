@@ -368,7 +368,7 @@ export class GeminiLiveVoiceSession {
   private videoCanvas: HTMLCanvasElement | null = null;
   private videoCaptureInterval: number | null = null;
   private videoFrameInFlight = false;
-  private preferredFacingMode: CameraFacingMode = "environment";
+  private preferredFacingMode: CameraFacingMode = "user";
 
   private scheduledPlaybackTime = 0;
   private activePlaybackNodes = new Set<AudioBufferSourceNode>();
