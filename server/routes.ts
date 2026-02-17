@@ -4711,7 +4711,10 @@ function sanitizeMultipartArtifacts(input: string): string {
   const withoutTokens = withoutTrailingPrefix
     .replaceAll(ZEE_SPLIT_TOKEN, " ")
     .replace(/\[\[ZEE_SPLIT\]?\]?/gi, " ")
-    .replace(/\[\[ZE[E_]*[A-Z_]*\]?\]?/gi, " ");
+    .replace(/\[\[ZE[E_]*[A-Z_]*\]?\]?/gi, " ")
+    .replace(/\[\[[^\]]{0,10}SPLIT[^\]]*\]\]/gi, " ")
+    .replace(/ZEE[_\s]*SPLIT/gi, " ")
+    .replace(/ZEE_SPLIT\]?\]?/gi, " ");
 
   return withoutTokens
     .replace(/[ \t]{2,}/g, " ")

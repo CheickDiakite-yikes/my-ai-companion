@@ -120,6 +120,17 @@ function getPersonaAvatar(
   return PERSONA_AVATARS[persona as Persona] || zeeAvatar;
 }
 
+function sanitizeSplitTokenArtifacts(text: string): string {
+  return text
+    .replace(/\[\[ZEE_SPLIT\]\]/gi, " ")
+    .replace(/\[\[ZEE_SPLIT\]?/gi, " ")
+    .replace(/\[\[[^\]]{0,10}SPLIT[^\]]*\]\]/gi, " ")
+    .replace(/ZEE[_\s]*SPLIT/gi, " ")
+    .replace(/\[\[ZEE[_\s]*SPLIT/gi, " ")
+    .replace(/ZEE_SPLIT\]?\]?/gi, " ")
+    .replace(/[ \t]{2,}/g, " ");
+}
+
 interface MessageAttachmentData {
   id: string;
   conversationId: string;
@@ -701,15 +712,22 @@ function isLikelyAgentArtifactBodyLeak(text: string): boolean {
 
 function suppressLeakedArtifactBodies(messages: MessageData[]): MessageData[] {
   if (messages.length === 0) return messages;
-  const hasTaskUiPayload = messages.some(
+
+  const sanitized = messages.map((message) => {
+    if (message.sender !== "assistant" || !message.text) return message;
+    const cleaned = sanitizeSplitTokenArtifacts(message.text);
+    return cleaned !== message.text ? { ...message, text: cleaned } : message;
+  });
+
+  const hasTaskUiPayload = sanitized.some(
     (message) =>
       isAgentTaskStatusPayload(message.uiPayload) ||
       isAgentApprovalPayload(message.uiPayload) ||
       isAgentArtifactPayload(message.uiPayload),
   );
-  if (!hasTaskUiPayload) return messages;
+  if (!hasTaskUiPayload) return sanitized;
 
-  const filtered = messages.filter((message) => {
+  const filtered = sanitized.filter((message) => {
     if (message.sender !== "assistant") return true;
     if (
       isAgentTaskStatusPayload(message.uiPayload) ||
@@ -720,7 +738,7 @@ function suppressLeakedArtifactBodies(messages: MessageData[]): MessageData[] {
     }
     return !isLikelyAgentArtifactBodyLeak(message.text ?? "");
   });
-  return filtered.length > 0 ? filtered : messages;
+  return filtered.length > 0 ? filtered : sanitized;
 }
 
 function toIsoString(value: string | Date | null | undefined): string | null {
@@ -5277,7 +5295,7 @@ const TextView = ({
                             </button>
                           </div>
                         ) : (
-                          <p className="text-xs opacity-80">{msg.text}</p>
+                          <p className="text-xs opacity-80">{sanitizeSplitTokenArtifacts(msg.text)}</p>
                         )}
                       </div>
                     ) : isAgentTaskStatusPayload(msg.uiPayload) ? (
@@ -5387,7 +5405,7 @@ const TextView = ({
                               : "Doc"}
                           </span>
                         </div>
-                        <p className="text-xs opacity-80">{msg.text}</p>
+                        <p className="text-xs opacity-80">{sanitizeSplitTokenArtifacts(msg.text)}</p>
                         <button
                           type="button"
                           onClick={() => {
@@ -5412,7 +5430,7 @@ const TextView = ({
                         </button>
                       </div>
                     ) : (
-                      msg.text
+                      msg.sender === "assistant" ? sanitizeSplitTokenArtifacts(msg.text) : msg.text
                     )}
                   </div>
                 </div>
@@ -7346,7 +7364,7 @@ function App() {
           : 0;
         pendingPartDeltas.set(
           partIndex,
-          `${pendingPartDeltas.get(partIndex) ?? ""}${event.text}`,
+          sanitizeSplitTokenArtifacts(`${pendingPartDeltas.get(partIndex) ?? ""}${event.text}`),
         );
         schedulePartDeltaFlush();
         return;
