@@ -274,7 +274,7 @@ function normalizeTimeZone(timeZone: string | null | undefined): string | null {
   }
 }
 
-function resolveCompanionTimeZone(clientTimeZone?: string | null): string {
+export function resolveCompanionTimeZone(clientTimeZone?: string | null): string {
   const explicitClientTimeZone = normalizeTimeZone(clientTimeZone);
   if (explicitClientTimeZone) return explicitClientTimeZone;
 
@@ -285,7 +285,7 @@ function resolveCompanionTimeZone(clientTimeZone?: string | null): string {
   return "UTC";
 }
 
-function formatCalendarSnapshot(now: Date, timeZone: string): {
+export function formatCalendarSnapshot(now: Date, timeZone: string): {
   timeZone: string;
   date: string;
   time: string;
@@ -1029,6 +1029,8 @@ export async function createLiveToken(
     memoryPolicy,
     clientTimeZone: input.clientTimeZone ?? null,
   });
+  const timeMatch = systemInstruction.match(/RIGHT NOW it is:([^\n]+)/);
+  console.log(`[LIVE_TOKEN_TZ] clientTimeZone=${JSON.stringify(input.clientTimeZone)}, envTZ=${process.env.ZEE_CALENDAR_TIMEZONE}, timeInPrompt=${timeMatch ? timeMatch[1].trim() : "NOT_FOUND"}`);
 
   const now = Date.now();
   const expireInMs = parsePositiveInt(

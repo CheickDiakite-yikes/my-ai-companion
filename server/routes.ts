@@ -59,8 +59,10 @@ import {
   DEFAULT_LIVE_VOICE,
   DEFAULT_PERSONA,
   enforceGroundedReply,
+  formatCalendarSnapshot,
   generateTextReply,
   generateTextReplyStream,
+  resolveCompanionTimeZone,
   splitAssistantReplyParts,
   splitAssistantReplyPartsWithDiagnostics,
   summarizeImageForMemory,
@@ -1520,6 +1522,11 @@ async function buildLiveMemoryContext(params: {
   redactionCount += profileFacts.redactionCount;
 
   const sections: string[] = [];
+  const liveTZ = resolveCompanionTimeZone(null);
+  const liveSnap = formatCalendarSnapshot(new Date(), liveTZ);
+  sections.push(
+    `[LIVE TIME ANCHOR — current time is ${liveSnap.weekday}, ${liveSnap.date} at ${liveSnap.time} ${liveSnap.timeZone}. Any earlier timestamps in the conversation below are historical — always use THIS time for "now".]`,
+  );
   if (currentThreadLines.length > 0) {
     sections.push(
       ["Current Thread (recent raw turns):", ...currentThreadLines].join("\n"),
