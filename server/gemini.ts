@@ -765,7 +765,7 @@ function toGeminiRole(sender: string): "user" | "model" {
   return sender === "user" ? "user" : "model";
 }
 
-function buildConversationContents(messages: ConversationMessage[]) {
+function buildConversationContents(messages: ConversationMessage[], clientTimeZone?: string | null) {
   const recentWindow = parsePositiveInt(
     process.env.GEMINI_TEXT_MEMORY_WINDOW_MESSAGES,
     40,
@@ -773,7 +773,7 @@ function buildConversationContents(messages: ConversationMessage[]) {
 
   const clipped = messages.slice(-recentWindow);
 
-  return clipped
+  const contents = clipped
     .map((msg) => {
       const parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = [];
       const text = msg.text.trim();
@@ -806,6 +806,26 @@ function buildConversationContents(messages: ConversationMessage[]) {
       };
     })
     .filter((content): content is { role: "user" | "model"; parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> } => Boolean(content));
+
+  if (contents.length > 0) {
+    const lastUserIdx = findLastIndex(contents, (c) => c.role === "user");
+    if (lastUserIdx >= 0) {
+      const tz = resolveCompanionTimeZone(clientTimeZone);
+      const snap = formatCalendarSnapshot(new Date(), tz);
+      contents[lastUserIdx].parts.push({
+        text: `[current_time: ${snap.weekday}, ${snap.date} ${snap.time} ${snap.timeZone}]`,
+      });
+    }
+  }
+
+  return contents;
+}
+
+function findLastIndex<T>(arr: T[], predicate: (item: T) => boolean): number {
+  for (let i = arr.length - 1; i >= 0; i--) {
+    if (predicate(arr[i])) return i;
+  }
+  return -1;
 }
 
 export interface EnforceGroundedReplyInput {
@@ -2505,7 +2525,7 @@ export async function generateTextReply(
     enableMultipart,
     clientTimeZone: input.clientTimeZone,
   });
-  const contents = buildConversationContents(input.messages);
+  const contents = buildConversationContents(input.messages, input.clientTimeZone);
 
   if (contents.length === 0) {
     throw new Error("Conversation is empty. No content to generate a reply from.");
@@ -2836,7 +2856,7 @@ export async function generateTextReplyStream(
     enableMultipart,
     clientTimeZone: input.clientTimeZone,
   });
-  const contents = buildConversationContents(input.messages);
+  const contents = buildConversationContents(input.messages, input.clientTimeZone);
 
   if (contents.length === 0) {
     throw new Error("Conversation is empty. No content to generate a reply from.");
