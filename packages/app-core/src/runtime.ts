@@ -15,12 +15,6 @@ export function normalizeUrl(value: string | undefined | null): string | undefin
 }
 
 export function defaultLocalWebUrl(platform: MobilePlatform): string {
-  if (platform === "android") {
-    return "http://10.0.2.2:5000";
-  }
-  if (platform === "ios") {
-    return "http://localhost:5000";
-  }
   return HOSTED_WEB_URL;
 }
 
