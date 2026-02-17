@@ -1,39 +1,82 @@
-# ZeeMe - Multimodal AI Companion
+# ZeeMe — Multimodal AI Companion
 
-A full-stack, production-oriented AI companion application with unified text + live voice memory, image-aware chat, user personalization, themeable UI, and beta usage quotas.
+A production-grade, mobile-first AI companion application with unified text and live voice modes sharing one persistent memory thread, image and camera support, user personalization, themeable dark UI, and comprehensive quota management.
 
-Deployed web app: [https://zeeme.replit.app](https://zeeme.replit.app)
+**Live app:** [https://zeeme.replit.app](https://zeeme.replit.app)
 
-## 1) Product Snapshot
+---
 
-ZeeMe is designed as a mobile-first companion experience where users can:
-- Chat with Zee in text mode (including adaptive multi-part replies).
-- Talk to Zee in live voice mode with duplex-safe interruption control and trace-first tuning.
-- Share images in text chat (camera capture or library upload).
-- Share live camera frames during voice sessions.
-- Personalize Zee behavior via profile settings and response style presets.
-- Switch between voice and text while staying in one stitched conversation thread.
+## Table of Contents
 
-Current persona model:
-- Runtime persona: `Zee` (server-authoritative)
+1. [Product Overview](#1-product-overview)
+2. [Core Architecture](#2-core-architecture)
+3. [Tech Stack](#3-tech-stack)
+4. [Repository Layout](#4-repository-layout)
+5. [Data Model](#5-data-model-postgresql)
+6. [API Surface](#6-api-surface)
+7. [AI Integration](#7-ai-integration)
+8. [Memory System](#8-memory-system)
+9. [Theming and Design System](#9-theming-and-design-system)
+10. [Quota Management](#10-quota-management)
+11. [Security and Privacy](#11-security-and-privacy)
+12. [Getting Started](#12-getting-started)
+13. [Environment Variables](#13-environment-variables)
+14. [Testing and QA](#14-testing-and-qa)
+15. [Deployment](#15-deployment-replit)
+16. [Troubleshooting](#16-troubleshooting)
+17. [Contributor Workflow](#17-contributor-workflow)
+18. [Design Principles](#18-design-principles)
+
+---
+
+## 1) Product Overview
+
+ZeeMe is a companion AI experience where users build a continuous relationship with Zee through natural conversation — by text, by voice, or by switching seamlessly between both.
+
+### What users can do
+
+- **Text chat** with Zee, including adaptive multi-part replies and lightweight markdown formatting (bold, italic, lists)
+- **Live voice calls** with duplex-safe interruption control, real-time audio streaming, and transcript persistence
+- **Share images** in text chat via camera capture or photo library upload
+- **Share live camera** frames during voice sessions for visual context
+- **Personalize Zee** through profile settings, response style presets, and avatar customization
+- **Switch between voice and text** while staying in one stitched conversation thread with shared memory
+- **Customize appearance** with 4 color themes applied across the entire UI
+
+### Companion persona
+
+- Runtime persona: **Zee** (server-authoritative, private system prompt)
 - Voice options: `Aoede`, `Kore`, `Charon`, `Fenrir`
+- Response styles: `concise`, `balanced`, `expressive`, `playful`
 
-### Companion-only mode
+### Time and context awareness
 
-To run Zee as a pure companion (text + voice + memory) with agentic creation archived:
+ZeeMe uses a three-layer defense-in-depth system for accurate time/date reporting:
 
-```bash
-ENABLE_AGENTIC_CREATIONS=false
-VITE_ENABLE_AGENTIC_CREATIONS=false
+1. **System prompt** includes a calendar context block with current day, date, and time
+2. **Text mode** injects a `[current_time: ...]` tag directly into the last user message in conversation contents
+3. **Voice mode** injects a `[LIVE TIME ANCHOR]` at the top of the live memory context block
+
+This ensures Zee always reports the correct current time even when conversation history contains older timestamps.
+
+### Agentic creation features
+
+The codebase includes a full agentic runtime for task execution, game generation, document/presentation/web-build creation, and sandbox isolation. This runtime is controlled by a **master gate flag**:
+
+```
+ENABLE_AGENTIC_CREATIONS=false    # Master server-side gate
+VITE_ENABLE_AGENTIC_CREATIONS=false  # Master client-side gate
 ```
 
-When disabled, build offers/tasks/approvals/artifact cards are blocked server-side and hidden in chat/profile surfaces.
+When the master gate is `false` (current default), all agentic routing — build offers, tasks, approvals, artifact cards — is blocked server-side and hidden from UI surfaces, regardless of individual sub-feature flags. The underlying runtime code, sub-feature flags (e.g., `ENABLE_AGENT_MODEL_GAME_GENERATOR`, `ENABLE_AGENT_MODEL_DOC_GENERATOR`, `ENABLE_AGENT_PROACTIVE_OFFERS`), and database tables remain intact. Setting `ENABLE_AGENTIC_CREATIONS=true` re-enables the full agentic experience with all configured sub-features.
+
+---
 
 ## 2) Core Architecture
 
 ### High-level system map
 
-```text
+```
                                   +-----------------------------+
                                   |       Gemini APIs           |
                                   |-----------------------------|
@@ -43,23 +86,23 @@ When disabled, build offers/tasks/approvals/artifact cards are blocked server-si
                                   +--------------+--------------+
                                                  ^
                                                  |
-                                    generate/realtime WS
+                                    generate / realtime WS
                                                  |
 +--------------------+        HTTP/JSON + NDJSON +-----------------------------+
 | React + Vite SPA   | <-----------------------> | Express API (single server) |
-| (mobile-first UI)  |                           | /api/* routes                |
-|                    |                           | auth + quota + media + AI    |
+| (mobile-first UI)  |                           | /api/* routes               |
+|                    |                           | auth + quota + media + AI   |
 +---------+----------+                           +---------------+--------------+
           |                                                          |
           | local mic/cam capture                                    | Drizzle ORM
           v                                                          v
 +---------------------------+                             +-------------------------+
 | Browser Media APIs        |                             | PostgreSQL              |
-| getUserMedia, AudioContext|                             | users, sessions,        |
-| canvas video frame capture|                             | conversations, messages,|
+| getUserMedia, AudioContext |                             | users, sessions,        |
+| canvas video frame capture |                             | conversations, messages,|
 +---------------------------+                             | attachments, profiles,  |
                                                           | preferences, voice_logs,|
-                                                          | usage_events            |
+                                                          | usage_events, memory    |
                                                           +-------------------------+
                                                                     |
                                                                     | binary object refs
@@ -73,41 +116,51 @@ When disabled, build offers/tasks/approvals/artifact cards are blocked server-si
 
 ### Runtime topology
 
-```text
+```
 Development:
-  - One Node process runs Express + Vite middleware (HMR)
-  - Client served from Vite, API from same origin
+  - One Node.js process runs Express + Vite middleware (HMR)
+  - Client served from Vite dev server, API from same origin
 
 Production:
-  - Client built to dist/public
+  - Client built to dist/public (static assets)
   - Express serves static files + API from same origin
+  - Autoscale deployment on Replit
 ```
 
-### Text flow (streaming endpoint)
+### Text chat flow (streaming)
 
-```text
-Client submit text/image
+```
+Client submits text/image
    -> POST /api/chat/respond/stream
-      -> auth + ownership checks
-      -> quota consume (text_message)
+      -> auth + conversation ownership checks
+      -> quota gate (text_message)
       -> persist user message
       -> bind pending attachments
-      -> build model context window
+      -> inject current time context into conversation contents
+      -> build model context window (history + memory + profile)
       -> Gemini generateContentStream
       -> NDJSON events: ack -> delta* -> part_final* -> final
       -> persist assistant part messages (turnId + partIndex)
+      -> sanitize split tokens from output
       -> async image memory summaries
 ```
 
 ### Live voice flow
 
-```text
-Client start voice
+```
+Client starts voice call
   -> POST /api/live/token
      -> requires conversationId (ownership enforced)
      -> quota gate (voice remaining > 0)
-     -> build live memory context (thread + cross-chat + profile) with timeout fallback
-     -> create ephemeral live token
+     -> build live memory context:
+        - [LIVE TIME ANCHOR] with current timestamp
+        - active thread turns (recent raw)
+        - thread summary (compressed older turns)
+        - cross-chat relevant turns
+        - durable memory items
+        - profile facts + style preferences
+     -> compose system instruction with persona + memory
+     -> create ephemeral Gemini Live token with constrained config
   -> browser opens Gemini Live session (v1alpha)
   -> mic PCM stream -> sendRealtimeInput(audio)
   -> optional camera frames -> sendRealtimeInput(video) @ ~1 FPS
@@ -117,598 +170,724 @@ Client start voice
      -> consume voice + camera seconds quotas
 ```
 
-### Unified memory system (text + live voice + profile + durable memory)
-
-```text
-                           +----------------------------------------------+
-                           | User profile + preferences                   |
-                           | (bio, style, memory mode, cross-chat toggle)|
-                           +---------------------+------------------------+
-                                                 |
-                    +----------------------------v----------------------------+
-                    | Memory builder (server/routes.ts)                     |
-                    |--------------------------------------------------------|
-                    | 1) Active thread turns (recent raw)                   |
-                    | 2) Thread summary (compressed older turns)            |
-                    | 3) Cross-chat relevant turns (same user)              |
-                    | 4) Durable memory items (reinforced facts/preferences)|
-                    | 5) Safe selective redaction                           |
-                    +----------------------+---------------------------------+
-                                           |
-                     +---------------------v----------------------+
-                     | Gemini text / live prompt context         |
-                     +---------------------+----------------------+
-                                           |
-      +------------------------------------+------------------------------------+
-      |                                                                         |
-+-----v---------------------+                                      +------------v----------------------+
-| Text mode                |                                      | Live voice mode                  |
-| /api/chat/respond/stream |                                      | /api/live/token + WS session     |
-+-----+---------------------+                                      +------------+----------------------+
-      |                                                                         |
-      | persist user + assistant messages                                       | persist user + assistant transcripts
-      +------------------------------------------+------------------------------+
-                                                 |
-                                     +-----------v-----------+
-                                     | messages table        |
-                                     | (single shared thread)|
-                                     +-----------------------+
-```
-
-### Agentic runtime architecture (single chat lane, split backend lanes)
-
-```text
-User message in normal chat composer
-  -> /api/chat/respond/stream
-     -> turn classifier (companion_reply | agent_task)
-
-If companion_reply:
-  -> text generation -> stream deltas -> persist messages
-
-If agent_task:
-  -> create task + steps + approvals + artifacts records
-  -> runtime planner/executor
-  -> sandbox/tool calls (policy + risk gates)
-  -> QA checks (deterministic + optional Playwright)
-  -> artifact publish (e.g., mini game)
-  -> stream task events back into same chat thread
-```
+---
 
 ## 3) Tech Stack
 
 | Layer | Technology |
 |---|---|
-| Frontend | React 19, TypeScript, Vite, TanStack Query, Framer Motion, Tailwind 4, Radix UI |
-| Backend | Express 5, TypeScript, Node 20 |
+| Frontend | React 19, TypeScript, Vite, TanStack Query, Framer Motion, Tailwind CSS 4, Radix UI (shadcn/ui) |
+| Backend | Express 5, TypeScript, Node.js 20 |
 | Database | PostgreSQL 16 + Drizzle ORM + drizzle-kit |
-| Auth | Email/password, bcrypt, express-session + connect-pg-simple |
-| AI | `@google/genai` (text + live) |
-| Media | `@replit/object-storage` with local disk fallback |
-| Observability | Request trace IDs + structured redacted logs |
-| Security | Local/CI secret scanning script + git hooks |
+| Auth | Custom email/password, bcrypt, express-session + connect-pg-simple |
+| AI Models | `@google/genai` — Gemini text (Flash) + Gemini Live (native audio) |
+| Media Storage | `@replit/object-storage` with local disk fallback |
+| State Management | TanStack React Query (server state), React refs (local UI state) |
+| Observability | Request trace IDs (`x-trace-id`) + structured redacted logging |
+| Security | bcrypt password hashing, HMAC signed media URLs, secret scanning (local + CI) |
+
+---
 
 ## 4) Repository Layout
 
-```text
+```
 .
 ├── client/
 │   ├── src/
-│   │   ├── App.tsx                  # Main app shell (auth/onboarding/voice/text/profile)
-│   │   ├── components/OnboardingOrb.tsx
-│   │   ├── hooks/use-auth.ts
+│   │   ├── App.tsx                        # Main app shell (Landing/Onboarding/Voice/Text/Profile views)
+│   │   ├── main.tsx                       # React entry point
+│   │   ├── components/
+│   │   │   ├── OnboardingOrb.tsx          # Animated onboarding orb component
+│   │   │   ├── artifacts/                 # Artifact viewer components (archived)
+│   │   │   └── ui/                        # shadcn/ui component library
+│   │   ├── hooks/
+│   │   │   ├── use-auth.ts                # Auth state hook
+│   │   │   └── use-toast.ts               # Toast notification hook
 │   │   └── lib/
-│   │       ├── gemini-live.ts       # Browser live voice/camera session client
-│   │       ├── app-theme.ts         # Theme system + CSS variables
-│   │       └── queryClient.ts       # fetch helpers + trace headers
-│   └── public/
+│   │       ├── gemini-live.ts             # Browser live voice/camera session client
+│   │       ├── app-theme.ts               # Theme definitions (4 themes) + CSS variable application
+│   │       ├── auth-utils.ts              # Client-side auth helpers
+│   │       ├── queryClient.ts             # Fetch helpers + trace headers
+│   │       └── utils.ts                   # Shared utility functions
+│   ├── public/                            # Static assets
+│   └── index.html                         # HTML entry with OG meta tags
 ├── server/
-│   ├── index.ts                     # Express bootstrap + trace middleware
-│   ├── routes.ts                    # API routes + orchestration
-│   ├── auth.ts                      # Session auth routes + middleware
-│   ├── storage.ts                   # Drizzle persistence + quota accounting
-│   ├── gemini.ts                    # Text/live model integration
-│   ├── media-store.ts               # Replit/local media drivers
-│   ├── media-signing.ts             # Signed media URL HMAC
-│   ├── observability.ts             # trace + sanitization
-│   └── db.ts
+│   ├── index.ts                           # Express bootstrap + trace middleware
+│   ├── routes.ts                          # API routes + chat orchestration + memory builder (~9800 lines)
+│   ├── auth.ts                            # Session auth setup + middleware
+│   ├── storage.ts                         # Drizzle persistence layer + quota accounting (~2100 lines)
+│   ├── gemini.ts                          # Gemini text/live model integration + persona prompts (~2900 lines)
+│   ├── agent-runtime.ts                   # Agentic task runtime (archived, ~6200 lines)
+│   ├── agent-sandbox.ts                   # Sandbox job management (archived)
+│   ├── artifact-render-spec.ts            # Artifact render spec builder (archived)
+│   ├── media-store.ts                     # Replit Object Storage / local media drivers
+│   ├── media-signing.ts                   # Signed media URL HMAC generation + validation
+│   ├── observability.ts                   # Trace IDs, log redaction, structured forensic logging
+│   ├── db.ts                              # PostgreSQL connection pool (Neon-backed)
+│   ├── vite.ts                            # Vite dev server middleware
+│   ├── static.ts                          # Production static file serving
+│   └── replit_integrations/auth/          # Replit Auth integration (unused, custom auth active)
 ├── shared/
-│   ├── schema.ts                    # Core DB schema + zod insert types
-│   └── models/auth.ts               # users + sessions schema
-├── script/
-│   ├── local-isolated-e2e.sh        # isolated local integration tests
-│   ├── check-secrets.sh             # secret scanning
-│   ├── dev-context.sh               # session context helper
-│   └── dev-handoff.sh               # session handoff helper
+│   ├── schema.ts                          # Drizzle schema — all tables, enums, insert schemas, types
+│   ├── agent.ts                           # Shared agent event/artifact types (archived features)
+│   └── models/auth.ts                     # users + sessions table schema
 ├── docs/
-│   ├── PROJECT_STATE.md
-│   ├── SESSION_LOG.md
-│   ├── GEMINI_INTEGRATION.md
-│   └── AI_COMPANION_DESIGN_SPEC.md
-└── skills/                          # Repo-local skill pack for repeatable workflows
+│   ├── PROJECT_STATE.md                   # Canonical project state (resume any session here)
+│   ├── SESSION_LOG.md                     # Chronological session handoff log
+│   ├── AI_COMPANION_DESIGN_SPEC.md        # Original design spec + mockup reference
+│   ├── GEMINI_INTEGRATION.md              # Gemini API integration details
+│   ├── AGENTIC_ENGINEERING_GUIDE.md       # Full agentic feature engineering reference
+│   ├── AGENTIC_ROADMAP_V1.md             # Agentic feature roadmap
+│   ├── AGENT_MESSAGE_PURPOSE_BACKFILL.md  # Message purpose migration guide
+│   ├── QUOTA_PRICING_REEVALUATION_2026-02-16.md  # Cost model worksheet
+│   └── SKILLS_INDEX.md                    # Local skill pack index
+├── script/
+│   ├── local-isolated-e2e.sh              # Isolated local integration tests
+│   ├── check-secrets.sh                   # Secret scanning script
+│   ├── dev-context.sh                     # Session context loader
+│   └── dev-handoff.sh                     # Session handoff helper
+├── .env.example                           # Safe placeholder env template
+├── package.json                           # Dependencies + scripts
+├── tsconfig.json                          # TypeScript config with path aliases
+├── vite.config.ts                         # Vite build config
+├── drizzle.config.ts                      # Drizzle Kit DB config
+├── replit.md                              # Agent memory / project summary (Replit-specific)
+└── zee-persona.md                         # Zee persona reference (private)
 ```
+
+---
 
 ## 5) Data Model (PostgreSQL)
 
-Main tables (see `shared/schema.ts` + `shared/models/auth.ts`):
+All tables are defined in `shared/schema.ts` and `shared/models/auth.ts`. Schema is managed via Drizzle Kit (`npm run db:push`).
 
-- `users`
-  - account identity + profile baseline
-- `sessions`
-  - express-session store
-- `conversations`
-  - user-owned threads, persona label, timestamps
-- `messages`
-  - text + voice transcript entries
-  - includes `turnId` + `partIndex` for multi-bubble assistant turns
-- `message_attachments`
-  - image attachments for text chat
-  - pending -> bound -> deleted state
-  - signed media retrieval
-- `user_preferences`
-  - selected voice/persona/theme + onboarding completion
-- `user_profiles`
-  - personalization fields (bio/location/profession/gender/style)
-  - Zee avatar preset/custom image refs
-- `voice_sessions`
-  - session analytics + duration + cameraDuration
-- `usage_events`
-  - rolling 30-day quota accounting by metric:
-    - `text_message`
-    - `voice_second`
-    - `camera_second`
+### Core tables
 
-### Quota accounting semantics
+| Table | Purpose |
+|---|---|
+| `users` | Account identity — email, hashed password, timestamps |
+| `sessions` | express-session store (connect-pg-simple) |
+| `conversations` | User-owned chat threads, persona label, timestamps |
+| `messages` | Text + voice transcript entries. Supports multi-part assistant turns via `turnId` + `partIndex`. Includes `message_purpose` enum (`conversation`, `agent_ui`, `system`) for context filtering |
+| `message_attachments` | Image attachments for text chat — lifecycle: `pending` -> `bound` -> `deleted`. Signed media retrieval |
+| `user_preferences` | Selected voice, persona, theme, onboarding completion, memory mode, cross-chat memory toggle |
+| `user_profiles` | Personalization fields — display name, bio, location, age, profession, gender, response style preset/note, Zee avatar preset/custom image refs, user avatar |
+| `voice_sessions` | Voice call analytics — duration, camera duration, timestamps |
+| `usage_events` | Rolling 30-day quota accounting by metric type |
 
-```text
-Window: rolling 30 days (30 * 24h)
+### Quota metric types
 
-text_message:
-  +1 per successful /api/chat/respond or /api/chat/respond/stream request
+- `text_message` — +1 per successful chat respond request
+- `voice_second` — +duration at voice session save
+- `camera_second` — +cameraDuration at voice session save
+- `creation_run`, `coding_task`, `document_task`, `presentation_task`, `presentation_image` — agentic quotas (archived)
 
-voice_second:
-  +duration seconds at voice session save
+### Agentic tables (archived, schema retained)
 
-camera_second:
-  +cameraDuration seconds at voice session save
-  camera usage also requires available voice quota
-```
+| Table | Purpose |
+|---|---|
+| `agent_tasks` | Task lifecycle — status, kind, prompt, plan, error |
+| `agent_steps` | Individual execution steps within a task |
+| `agent_approvals` | Risk-gated approval requests |
+| `agent_artifacts` | Generated artifacts (games, docs, web builds) |
+| `agent_tool_calls` | Tool execution audit log |
+| `agent_offers` | Proactive/explicit creation offers |
+| `agent_intent_sessions` | Slot-based intent collection sessions |
+| `durable_memory_items` | Long-term extracted user facts/preferences/goals |
+
+---
 
 ## 6) API Surface
 
-All routes are same-origin under `/api/*` and (except auth routes) require session auth.
+All routes are same-origin under `/api/*`. Auth routes are public; all others require an active session.
 
-### Auth
-- `POST /api/auth/register`
-- `POST /api/auth/login`
-- `GET /api/auth/user`
-- `POST /api/auth/logout`
+### Authentication
 
-### Conversations / Messages
-- `GET /api/conversations`
-- `POST /api/conversations`
-- `GET /api/conversations/:id/messages`
-- `POST /api/conversations/:id/messages`
-- `POST /api/conversations/:id/voice-transcript`
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/api/auth/register` | Create account (email + password) |
+| `POST` | `/api/auth/login` | Sign in |
+| `GET` | `/api/auth/user` | Get current session user |
+| `POST` | `/api/auth/logout` | Sign out |
 
-### Attachments / Media
-- `POST /api/conversations/:id/attachments/image`
-- `DELETE /api/conversations/:id/attachments/:attachmentId`
-- `GET /api/media/:attachmentId?exp=...&sig=...`
+### Conversations and Messages
 
-### Profile / Preferences
-- `GET /api/profile/me`
-- `PATCH /api/profile/me`
-- `POST /api/profile/avatar`
-- `POST /api/profile/zee-avatar`
-- `GET /api/preferences`
-- `PUT /api/preferences`
-- `GET /api/memory/settings`
-- `PATCH /api/memory/settings`
-- `GET /api/memory/items`
-- `DELETE /api/memory/items/:id`
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/conversations` | List user's conversations |
+| `POST` | `/api/conversations` | Create new conversation |
+| `GET` | `/api/conversations/:id/messages` | Get messages (paginated) |
+| `POST` | `/api/conversations/:id/messages` | Post a message |
+| `POST` | `/api/conversations/:id/voice-transcript` | Save voice transcript segment |
 
-### AI + Live
-- `POST /api/live/token`
-- `POST /api/chat/respond`
-- `POST /api/chat/respond/stream` (`application/x-ndjson`)
+### Attachments and Media
 
-### Usage / Quotas
-- `GET /api/quota/summary`
-- `POST /api/voice-sessions`
-- `GET /api/voice-sessions`
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/api/conversations/:id/attachments/image` | Upload image attachment |
+| `DELETE` | `/api/conversations/:id/attachments/:attachmentId` | Delete pending attachment |
+| `GET` | `/api/media/:attachmentId` | Retrieve media (requires `exp` + `sig` query params) |
+
+### Profile and Preferences
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/profile/me` | Get user profile |
+| `PATCH` | `/api/profile/me` | Update profile fields |
+| `POST` | `/api/profile/avatar` | Upload user avatar |
+| `POST` | `/api/profile/zee-avatar` | Upload custom Zee avatar |
+| `GET` | `/api/preferences` | Get user preferences |
+| `PUT` | `/api/preferences` | Update preferences (voice, persona, theme) |
+| `GET` | `/api/memory/settings` | Get memory mode settings |
+| `PATCH` | `/api/memory/settings` | Update memory mode |
+| `GET` | `/api/memory/items` | List durable memory items |
+| `DELETE` | `/api/memory/items/:id` | Delete a memory item |
+
+### AI and Live Voice
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/api/live/token` | Mint ephemeral Gemini Live session token |
+| `POST` | `/api/chat/respond` | Non-streaming text reply (legacy) |
+| `POST` | `/api/chat/respond/stream` | Streaming text reply (NDJSON) |
+
+### Usage and Quotas
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/quota/summary` | Get current quota usage + remaining |
+| `POST` | `/api/voice-sessions` | Save voice session with duration |
+| `GET` | `/api/voice-sessions` | List voice session history |
 
 ### Streaming event protocol (`/api/chat/respond/stream`)
 
-```text
-ack        -> confirms accepted request + echoes user message
-(delta)*   -> incremental text chunks (includes partIndex)
-(part_final)* -> client-renderable assistant bubble finalization
-final      -> canonical persisted assistant message(s), model, usage, elapsedMs
-error      -> stream-level error payload
-```
+The streaming endpoint emits newline-delimited JSON events:
 
-## 7) AI Integration Details
+| Event | Description |
+|---|---|
+| `ack` | Request accepted, echoes user message |
+| `delta` | Incremental text chunk (includes `partIndex` for multi-part replies) |
+| `part_final` | Client-renderable assistant bubble finalization |
+| `final` | Canonical persisted assistant message(s), model name, token usage, elapsed time |
+| `error` | Stream-level error payload |
+
+---
+
+## 7) AI Integration
 
 ### Models
-- Text: `gemini-3-flash-preview`
-- Live audio/video: `gemini-2.5-flash-native-audio-preview-12-2025`
+
+| Purpose | Model | Notes |
+|---|---|---|
+| Text chat | `gemini-3-flash-preview` | Configurable via `GEMINI_TEXT_MODEL` |
+| Live voice/video | `gemini-2.5-flash-native-audio-preview-12-2025` | Configurable via `GEMINI_LIVE_MODEL` |
 
 ### Persona and prompting
-- Persona instructions are server-side and treated as private runtime configuration.
-- Public docs intentionally avoid exposing raw system-prompt wording.
-- If private prompt source is unavailable, server falls back to a safe default prompt.
+
+- Zee's persona instructions are **server-side only** and treated as private runtime configuration
+- Public documentation intentionally avoids exposing raw system-prompt wording
+- If the private persona source (`zee-persona.md`) is unavailable, the server falls back to a safe default prompt
 - Additional runtime prompt blocks include:
-  - profile context (optional user-provided fields)
-  - response style preset (`concise|balanced|expressive|playful`)
-  - human-texting cadence guidance
-  - grounding rules to prevent fabricated memory claims
+  - Profile context (user-provided fields like name, bio, profession)
+  - Response style preset instructions (`concise`, `balanced`, `expressive`, `playful`)
+  - Human-texting cadence guidance for natural message pacing
+  - Calendar/time context block for accurate temporal awareness
+  - Grounding rules to prevent fabricated memory claims
 
 ### Grounding guardrail
-A post-generation guardrail checks for ungrounded memory signals and can trigger a rewrite pass to keep responses anchored to:
-- conversation history
-- explicit profile context
 
-### Live conversation behavior
-- Server issues ephemeral live tokens with constrained config.
-- VAD, interruption, and duplex-suppression knobs are configurable via env.
-- Client streams mic audio and optional camera frames to Gemini Live.
-- Final transcript segments are persisted into shared conversation history.
+A post-generation guardrail (`enforceGroundedReply`) checks for ungrounded memory signals and can trigger a rewrite pass. This keeps responses anchored to:
+- Actual conversation history
+- Explicit profile context provided by the user
+- Verified durable memory items
 
-### Agentic capability status
-- Unified chat lane is active (no separate agent chat UI).
-- Agentic output is currently shipping as mini-game artifacts in-thread.
-- Task lifecycle events stream in normal chat flow (`task_created` to `task_artifact_ready`/`task_failed`).
+### Multi-part reply splitting
 
-### Agentic roadmap graph (phased delivery)
+Assistant responses can be split into multiple conversational bubbles for a natural texting feel. The splitting system:
+- Uses a configurable split token (`ZEE_SPLIT_TOKEN`)
+- Assigns each part a unique `partIndex` under the same `turnId`
+- Includes defense-in-depth sanitization to prevent split markers from leaking into visible messages
 
-```text
-Phase A (done): Unified task runtime scaffold
-  - stream task events in-thread
-  - artifact cards + viewer
-  - sandbox policy baseline
+### Live voice behavior
 
-Phase B (done): Adaptive game generation v1
-  - model-driven generation
-  - QA + retry loop
-  - artifact publish path
+- Server issues **ephemeral live tokens** with constrained configuration baked in
+- VAD (Voice Activity Detection) sensitivity, interruption handling, and duplex-suppression are fully configurable via environment variables
+- Client streams mic audio as PCM and optional camera frames to Gemini Live
+- Final transcript segments are persisted into the shared conversation `messages` table
+- Live memory context includes a time anchor, recent turns, compressed history, cross-chat context, and profile facts
+- Interruption behavior defaults to `NO_INTERRUPTION` for stability on mobile browsers
 
-Phase C (active): Voice/text continuity and reliability hardening
-  - live memory hydration
-  - transcript stitching quality
-  - mobile interruption stability
+---
 
-Phase D (next): Connectors and broader tool use
-  - Gmail/Drive/device control pilots
-  - stronger approval + audit surfaces
-  - expanded artifact categories (docs/presentations)
+## 8) Memory System
+
+ZeeMe implements a unified memory architecture where text and voice modes share a single conversation thread and memory context.
+
+### Memory context builder
+
+The memory context (used for both text model context and live voice system instructions) assembles these layers:
+
+```
+Layer 1: Live Time Anchor
+  -> Current day, date, time, timezone
+  -> Overrides any historical timestamps in conversation history
+
+Layer 2: Active Thread Turns
+  -> Recent raw conversation turns (configurable window)
+  -> Both user and assistant messages
+
+Layer 3: Thread Summary
+  -> Compressed representation of older turns beyond the active window
+
+Layer 4: Cross-Chat Context
+  -> Relevant turns from other conversations by the same user
+  -> Enabled via user preference (cross_chat_memory_enabled)
+
+Layer 5: Durable Memory Items
+  -> Extracted long-term facts: preferences, goals, profile details, relationships
+  -> Categorized by kind: preference, goal, profile, project, fact, schedule, relationship
+  -> Sensitivity levels: low, medium, high
+
+Layer 6: Profile Facts
+  -> User-provided profile fields (name, bio, profession, etc.)
+  -> Response style preferences
+
+Layer 7: Safe Selective Redaction
+  -> High-sensitivity items can be excluded based on memory mode setting
 ```
 
-## 8) Theming and Design System
+### Memory modes
 
-App themes are defined in `client/src/lib/app-theme.ts` and applied with CSS custom properties.
+- **safe_selective** (default): Applies redaction rules to sensitive memory items
+- **remember_everything**: All memory items included without redaction
 
-Available themes:
-- `classic_teal`
-- `sunset_path`
-- `violet_city`
-- `crimson_noir`
+### Message purpose filtering
 
-Theme variables cover:
-- shell/panel/header/footer backgrounds
-- accent colors + text contrast
-- message bubble colors (user vs assistant)
-- input states
-- media tray/card surfaces
+Messages have a `message_purpose` field that controls whether they're included in model context:
+- `conversation`: Normal chat messages (always included)
+- `agent_ui`: Agentic UI messages like task cards (excluded from model context when `ENABLE_CONTEXT_MESSAGE_PURPOSE_FILTER=true`)
+- `system`: System-generated messages
 
-This keeps visual branding consistent while allowing dynamic profile-level appearance customization.
+---
 
-## 9) Quotas (Beta Defaults)
+## 9) Theming and Design System
 
-Server-authoritative rolling 30-day hard limits (defaults):
-- `600` text replies
-- `1800` voice seconds (30 minutes)
-- `900` camera seconds (15 minutes)
-- `40` creation runs (any agent build task start)
-- `20` coding tasks (`mini_game`, `web_build`, `mixed`)
-- `30` document tasks
-- `10` presentation tasks
-- `50` presentation slide images (default reserve is `5` image units per presentation task)
+### Available themes
 
-Optional tiering:
-- `default` (all users unless matched by override lists)
-- `power` (email allowlist via `BETA_POWER_QUOTA_EMAILS`)
-- `privileged` (email allowlist via `BETA_PRIVILEGED_QUOTA_EMAILS`)
+Themes are defined in `client/src/lib/app-theme.ts` and applied via CSS custom properties:
 
-Behavior:
-- hard lock on overage (`HTTP 429`)
-- response includes reason + quota summary for UX messaging
-- client shows remaining counters in composer/profile and proactively handles exhaustion states
-- creation quotas are consumed at task start (confirmation-first still applies)
-- presentation asks reserve slide-image units up front to cap image-gen spend
+| Theme | Description |
+|---|---|
+| `classic_teal` | Original ZeeMe deep teal palette |
+| `sunset_path` | Warm sunset-inspired tones |
+| `violet_city` | Purple/violet urban palette |
+| `crimson_noir` | Dark red/noir aesthetic |
 
-### Cost model (planning baseline as of Feb 16, 2026)
-Assumptions used for quota budgeting:
-- Text model: `gemini-3-flash-preview` pricing at `$0.50 / 1M` input tokens and `$3.00 / 1M` output tokens.
-- Native audio model: `gemini-2.5-flash-native-audio-preview-12-2025` pricing at `$1.00 / 1M` input audio tokens and `$2.00 / 1M` output audio tokens.
-- Token conversion guidance: ~`32` audio tokens per second.
+### Theme variables
 
-Approximate monthly cost envelope per user (upper-bound planning, not billing truth):
-- `default` (`600` text, `30` voice min, `15` camera min): about `$1.8` / user / 30d.
-- `power` (`1500` text, `90` voice min, `45` camera min): about `$4.7` / user / 30d.
-- `privileged` (`5000` text, `360` voice min, `360` camera min): about `$19.2` / user / 30d.
+Each theme defines CSS variables covering:
+- Shell, panel, header, footer backgrounds
+- Accent colors and text contrast
+- Message bubble colors (user vs assistant)
+- Input field states
+- Media tray and card surfaces
+- Onboarding orb gradients
 
-Use this for product quota planning only; real cost varies with prompt size, memory depth, and response length.
-Detailed worksheet: `docs/QUOTA_PRICING_REEVALUATION_2026-02-16.md`.
+### Brand colors (classic_teal)
 
-## 10) Security and Privacy
+| Color | Hex | Usage |
+|---|---|---|
+| Deep Teal | `#10383A` | Primary backgrounds |
+| Sage Green | `#809276` | Secondary accents |
+| Olive | `#666E51` | Tertiary elements |
+| Mustard Yellow | `#DAA112` | Primary accent / CTA |
+| Gray | `#768886` | Neutral text/borders |
 
-### Session and auth
-- Password hashing via bcrypt.
-- HTTP-only session cookie (`connect.sid`).
-- PostgreSQL-backed session store.
+### Theme persistence
+
+Theme selection is stored in `user_preferences.selectedTheme` and synced to the server. CSS variables are applied dynamically on theme change via `applyTheme()`.
+
+---
+
+## 10) Quota Management
+
+### Overview
+
+ZeeMe uses server-authoritative rolling 30-day hard limits to manage API cost exposure. Quotas are enforced at the route level before any model call.
+
+### Default tier limits
+
+| Metric | Default | Power | Privileged |
+|---|---|---|---|
+| Text replies | 600 | 1,500 | 5,000 |
+| Voice seconds | 1,800 (30 min) | 5,400 (90 min) | 21,600 (6 hr) |
+| Camera seconds | 900 (15 min) | 2,700 (45 min) | 21,600 (6 hr) |
+
+### Tier assignment
+
+- **Default**: All users unless matched by override lists
+- **Power**: Email allowlist via `BETA_POWER_QUOTA_EMAILS`
+- **Privileged**: Email allowlist via `BETA_PRIVILEGED_QUOTA_EMAILS`
+
+### Enforcement behavior
+
+- Hard lock on overage: `HTTP 429` with reason and quota summary for client UX
+- Client shows remaining counters in the chat composer and profile
+- Client proactively handles exhaustion states with clear messaging
+- Quota cache TTL is configurable via `BETA_QUOTA_CACHE_TTL_MS` (default 5 minutes)
+
+### Cost model (planning baseline — February 2026)
+
+| Tier | Approx. monthly cost per user |
+|---|---|
+| Default | ~$1.80 |
+| Power | ~$4.70 |
+| Privileged | ~$19.20 |
+
+Based on: Gemini Flash text at $0.50/$3.00 per 1M input/output tokens; native audio at $1.00/$2.00 per 1M input/output audio tokens (~32 audio tokens/second).
+
+Detailed worksheet: `docs/QUOTA_PRICING_REEVALUATION_2026-02-16.md`
+
+---
+
+## 11) Security and Privacy
+
+### Authentication
+
+- Password hashing via **bcrypt** (10 salt rounds)
+- HTTP-only session cookie (`connect.sid`)
+- PostgreSQL-backed session store via `connect-pg-simple`
+- All non-auth API routes require active session
 
 ### Media privacy
-- Uploaded media is private.
-- Retrieval uses short-lived signed URLs (`exp`, `sig`).
-- HMAC validation required and bound to requesting user.
 
-### Log hygiene
-- Every request has trace IDs (`x-trace-id`).
-- Structured log sanitization redacts sensitive keys and signature/query token patterns.
+- Uploaded media is **private by default**
+- Retrieval requires short-lived **signed URLs** (`exp` + `sig` query params)
+- HMAC-SHA256 validation bound to requesting user
+- `MEDIA_SIGNING_SECRET` must be set for production
+
+### Observability and log hygiene
+
+- Every request gets a trace ID (`x-trace-id` header)
+- Structured log sanitization redacts:
+  - API keys and secrets
+  - Signature and query token patterns
+  - Sensitive user data
+- Forensic trace IDs link client requests to server-side log entries
 
 ### Secret scanning
-- Local full scan: `npm run security:secrets`
-- Staged scan: `npm run security:secrets:staged`
-- Pre-commit hook: `npm run hooks:install`
-- CI workflow includes secret scanning checks.
 
-## 11) Local Development
+| Command | Purpose |
+|---|---|
+| `npm run security:secrets` | Full repo secret scan |
+| `npm run security:secrets:staged` | Staged files only |
+| `npm run hooks:install` | Enable pre-commit secret scanning hook |
+
+CI workflow (`.github/workflows/secret-scan.yml`) runs Gitleaks + local rules on PRs and pushes.
+
+### File policies
+
+- `.env` and `.env.*` are git-ignored
+- `.env.example` contains only safe placeholder values
+- `zee-persona.md` contains private persona text — never expose in public docs or logs
+
+---
+
+## 12) Getting Started
 
 ### Prerequisites
+
 - Node.js 20+
 - PostgreSQL 16+
-- Gemini API key
+- Gemini API key ([Google AI Studio](https://aistudio.google.com/))
 
 ### Quick start
 
 ```bash
+# Install dependencies
 npm install
+
+# Set up environment
 cp .env.example .env
-# fill in DATABASE_URL, SESSION_SECRET, GEMINI_API_KEY
+# Edit .env: fill in DATABASE_URL, SESSION_SECRET, GEMINI_API_KEY
+
+# Push database schema
 npm run db:push
+
+# Start development server
 npm run dev
 ```
 
-Server defaults:
-- host: `0.0.0.0`
-- port: `5000` (or `PORT` env)
+The app will be available at `http://localhost:5000`.
 
-### Build and run production bundle
+### Available scripts
 
-```bash
-npm run build
-npm run start
-```
+| Script | Purpose |
+|---|---|
+| `npm run dev` | Start dev server (Express + Vite HMR) |
+| `npm run build` | Production build (client + server) |
+| `npm run start` | Run production build |
+| `npm run check` | TypeScript type checking |
+| `npm run db:push` | Push Drizzle schema to database |
+| `npm run dev:context` | Load session context (for AI-assisted development) |
+| `npm run dev:handoff -- "summary"` | Create session handoff entry |
+| `npm run security:secrets` | Full repository secret scan |
+| `npm run security:secrets:staged` | Scan staged files for secrets |
+| `npm run hooks:install` | Install pre-commit secret scanning hook |
+| `npm run test:local:e2e` | Run isolated local integration tests |
 
-## 12) Environment Variables
+---
+
+## 13) Environment Variables
 
 Source of truth: `.env.example`
 
 ### Required
-- `DATABASE_URL`
-- `SESSION_SECRET`
-- `GEMINI_API_KEY`
+
+| Variable | Description |
+|---|---|
+| `DATABASE_URL` | PostgreSQL connection string |
+| `SESSION_SECRET` | Express session signing secret |
+| `GEMINI_API_KEY` | Google Gemini API key |
 
 ### Model selection
-- `GEMINI_TEXT_MODEL`
-- `GEMINI_LIVE_MODEL`
-- `GEMINI_LIVE_MODEL_FALLBACKS`
+
+| Variable | Default | Description |
+|---|---|---|
+| `GEMINI_TEXT_MODEL` | `gemini-3-flash-preview` | Text chat model |
+| `GEMINI_LIVE_MODEL` | `gemini-2.5-flash-native-audio-preview-12-2025` | Live voice model |
+| `GEMINI_LIVE_MODEL_FALLBACKS` | — | Comma-separated fallback models |
 
 ### Text generation tuning
-- `GEMINI_TEXT_TEMPERATURE`
-- `GEMINI_TEXT_TOP_P`
-- `GEMINI_TEXT_MAX_OUTPUT_TOKENS`
-- `GEMINI_TEXT_MEMORY_WINDOW_MESSAGES`
 
-### Live token / VAD
-- `GEMINI_LIVE_TOKEN_USES`
-- `GEMINI_LIVE_TOKEN_EXPIRE_MS`
-- `GEMINI_LIVE_NEW_SESSION_EXPIRE_MS`
-- `GEMINI_LIVE_LOW_LATENCY_MODE`
-- `GEMINI_LIVE_ACTIVITY_HANDLING`
-- `GEMINI_LIVE_VAD_START_SENSITIVITY`
-- `GEMINI_LIVE_VAD_END_SENSITIVITY`
-- `GEMINI_LIVE_VAD_PREFIX_PADDING_MS`
-- `GEMINI_LIVE_VAD_SILENCE_MS`
-- `GEMINI_LIVE_MIN_VAD_PREFIX_PADDING_MS`
-- `GEMINI_LIVE_MIN_VAD_SILENCE_MS`
-- `GEMINI_LIVE_PROACTIVE_AUDIO`
-- `GEMINI_LIVE_FORCE_ALWAYS_RESPOND`
-- `GEMINI_LIVE_USE_THINKING_CONFIG`
-- `GEMINI_LIVE_ALLOW_ZERO_THINKING_BUDGET`
-- `GEMINI_LIVE_THINKING_BUDGET`
-- `GEMINI_LIVE_INCLUDE_THOUGHTS`
-- `GEMINI_LIVE_MAX_OUTPUT_TOKENS`
+| Variable | Default | Description |
+|---|---|---|
+| `GEMINI_TEXT_TEMPERATURE` | `0.85` | Sampling temperature |
+| `GEMINI_TEXT_TOP_P` | `0.95` | Top-p sampling |
+| `GEMINI_TEXT_MAX_OUTPUT_TOKENS` | `2048` | Max output tokens per reply |
+| `GEMINI_TEXT_MEMORY_WINDOW_MESSAGES` | `40` | Messages included in context window |
 
-### Client live audio capture (build-time `VITE_*`)
-- `VITE_LIVE_AUDIO_PROCESSOR_BUFFER_SIZE`
-- `VITE_LIVE_AUDIO_NOISE_GATE_ENABLED`
-- `VITE_LIVE_AUDIO_NOISE_GATE_RMS_THRESHOLD`
-- `VITE_LIVE_AUDIO_NOISE_GATE_HANGOVER_FRAMES`
-- `VITE_LIVE_AUDIO_NOISE_GATE_FAILOPEN_ENABLED`
-- `VITE_LIVE_AUDIO_NOISE_GATE_ASSISTANT_SPEECH_MULTIPLIER`
-- `VITE_LIVE_AUDIO_NOISE_GATE_FAILOPEN_AFTER_DROPS`
-- `VITE_LIVE_AUDIO_NOISE_GATE_FAILOPEN_FRAMES`
-- `VITE_LIVE_AUDIO_SUPPRESS_INPUT_WHILE_ASSISTANT_SPEAKING`
-- `VITE_LIVE_AUDIO_SUPPRESS_INPUT_COOLDOWN_MS`
-- `VITE_LIVE_AUDIO_SUPPRESS_USER_TRANSCRIPT_DURING_ASSISTANT_SPEECH`
+### Live voice / VAD configuration
+
+| Variable | Default | Description |
+|---|---|---|
+| `GEMINI_LIVE_ACTIVITY_HANDLING` | `NO_INTERRUPTION` | Interruption behavior |
+| `GEMINI_LIVE_LOW_LATENCY_MODE` | `true` | Low latency audio mode |
+| `GEMINI_LIVE_VAD_START_SENSITIVITY` | `LOW` | VAD start sensitivity |
+| `GEMINI_LIVE_VAD_END_SENSITIVITY` | `HIGH` | VAD end sensitivity |
+| `GEMINI_LIVE_VAD_PREFIX_PADDING_MS` | `60` | VAD prefix padding |
+| `GEMINI_LIVE_VAD_SILENCE_MS` | `220` | VAD silence threshold |
+| `GEMINI_LIVE_PROACTIVE_AUDIO` | `false` | Proactive audio generation |
+| `GEMINI_LIVE_TEMPERATURE` | `0.45` | Live model temperature |
+| `GEMINI_LIVE_MAX_OUTPUT_TOKENS` | `1000` | Max live output tokens |
+| `GEMINI_LIVE_USE_THINKING_CONFIG` | `true` | Enable thinking tokens |
+| `GEMINI_LIVE_THINKING_BUDGET` | `64` | Thinking token budget |
+
+### Client live audio capture (`VITE_*` — build-time)
+
+| Variable | Default | Description |
+|---|---|---|
+| `VITE_LIVE_AUDIO_PROCESSOR_BUFFER_SIZE` | `512` | Audio processor buffer |
+| `VITE_LIVE_AUDIO_NOISE_GATE_ENABLED` | `false` | Client-side noise gate |
+| `VITE_LIVE_AUDIO_SUPPRESS_INPUT_WHILE_ASSISTANT_SPEAKING` | `true` | Duplex suppression |
+| `VITE_LIVE_AUDIO_SUPPRESS_INPUT_COOLDOWN_MS` | `240` | Suppression cooldown |
 
 ### Memory controls
-- `ENABLE_LIVE_MEMORY_CONTEXT`
-- `LIVE_MEMORY_BUILD_TIMEOUT_MS`
-- `LIVE_MEMORY_ACTIVE_THREAD_MAX_MESSAGES`
-- `LIVE_MEMORY_CROSS_CHAT_MAX_MESSAGES`
-- `LIVE_MEMORY_POLICY_DEFAULT`
 
-### Media
-- `MEDIA_STORAGE_DRIVER` (`auto|replit|local`)
-- `MEDIA_REPLIT_BUCKET_ID`
-- `MEDIA_LOCAL_DIR`
-- `MEDIA_SIGNING_SECRET`
+| Variable | Default | Description |
+|---|---|---|
+| `ENABLE_LIVE_MEMORY_CONTEXT` | `true` | Include memory in live tokens |
+| `LIVE_MEMORY_BUILD_TIMEOUT_MS` | `1800` | Memory build timeout |
+| `LIVE_MEMORY_ACTIVE_THREAD_MAX_MESSAGES` | `60` | Active thread window |
+| `LIVE_MEMORY_CROSS_CHAT_MAX_MESSAGES` | `80` | Cross-chat context window |
+| `LIVE_MEMORY_POLICY_DEFAULT` | `safe_selective` | Default memory redaction policy |
+| `ZEE_CALENDAR_TIMEZONE` | `America/New_York` | Fallback timezone for time context |
 
-### Chat attachments
-- `CHAT_IMAGE_MAX_COUNT`
-- `CHAT_IMAGE_MAX_BYTES`
+### Media storage
+
+| Variable | Default | Description |
+|---|---|---|
+| `MEDIA_STORAGE_DRIVER` | `auto` | Storage driver (`auto`, `replit`, `local`) |
+| `MEDIA_REPLIT_BUCKET_ID` | — | Replit Object Storage bucket ID |
+| `MEDIA_LOCAL_DIR` | `/tmp/my-ai-companion-media` | Local media storage path |
+| `MEDIA_SIGNING_SECRET` | — | HMAC secret for signed media URLs |
+| `CHAT_IMAGE_MAX_COUNT` | `3` | Max images per message |
+| `CHAT_IMAGE_MAX_BYTES` | `8388608` | Max image file size (8 MB) |
 
 ### Feature flags
-- `ENABLE_MULTIPART_TEXT`
-- `ENABLE_AGENT_MODEL_PLANNER`
-- `ENABLE_AGENT_MODEL_GAME_GENERATOR`
-- `ENABLE_AGENT_PROACTIVE_OFFERS`
-- `ENABLE_AGENT_PRESENTATION_IMAGE_GENERATION`
-- `ENABLE_PROFILE_PERSONALIZATION`
-- `ENABLE_BETA_QUOTAS`
 
-### Agentic game generation
-- `AGENT_GAME_MODEL`
-- `AGENT_GAME_MAX_RETRIES`
-- `AGENT_GAME_MAX_FILES`
-- `AGENT_GAME_MAX_TOTAL_BYTES`
-- `AGENT_GAME_ENABLE_LIGHT_3D`
-
-### Agentic doc generation
-- `ENABLE_AGENT_MODEL_DOC_GENERATOR`
-- `AGENT_DOC_MODEL`
-- `AGENT_DOC_MAX_RETRIES`
-- `AGENT_PRESENTATION_MAX_SLIDES` (hard-capped to 5)
-- `AGENT_PRESENTATION_IMAGE_MODEL` (presentation slide-image model, e.g. Nanobanana-compatible Gemini image model)
+| Variable | Default | Description |
+|---|---|---|
+| `ENABLE_MULTIPART_TEXT` | `true` | Multi-part assistant replies |
+| `ENABLE_AGENTIC_CREATIONS` | `false` | Master gate for agentic creation features (server) |
+| `VITE_ENABLE_AGENTIC_CREATIONS` | `false` | Master gate for agentic creation UI (client) |
+| `ENABLE_PROFILE_PERSONALIZATION` | `true` | Profile-based personalization |
+| `ENABLE_BETA_QUOTAS` | `true` | Quota enforcement |
+| `ENABLE_CONTEXT_MESSAGE_PURPOSE_FILTER` | `true` | Filter agent_ui messages from model context |
 
 ### Quota limits
-- `BETA_TEXT_QUOTA_30D`
-- `BETA_VOICE_QUOTA_SECONDS_30D`
-- `BETA_CAMERA_QUOTA_SECONDS_30D`
-- `BETA_CREATION_RUNS_QUOTA_30D`
-- `BETA_CODING_TASKS_QUOTA_30D`
-- `BETA_DOCUMENT_TASKS_QUOTA_30D`
-- `BETA_PRESENTATION_TASKS_QUOTA_30D`
-- `BETA_PRESENTATION_IMAGE_QUOTA_30D`
-- `BETA_PRESENTATION_IMAGE_UNITS_PER_TASK`
-- `BETA_POWER_QUOTA_EMAILS` (comma-separated emails with mid-tier quotas)
-- `BETA_POWER_TEXT_QUOTA_30D`
-- `BETA_POWER_VOICE_QUOTA_SECONDS_30D`
-- `BETA_POWER_CAMERA_QUOTA_SECONDS_30D`
-- `BETA_POWER_CREATION_RUNS_QUOTA_30D`
-- `BETA_POWER_CODING_TASKS_QUOTA_30D`
-- `BETA_POWER_DOCUMENT_TASKS_QUOTA_30D`
-- `BETA_POWER_PRESENTATION_TASKS_QUOTA_30D`
-- `BETA_POWER_PRESENTATION_IMAGE_QUOTA_30D`
-- `BETA_PRIVILEGED_QUOTA_EMAILS` (comma-separated emails with elevated quotas)
-- `BETA_PRIVILEGED_TEXT_QUOTA_30D`
-- `BETA_PRIVILEGED_VOICE_QUOTA_SECONDS_30D`
-- `BETA_PRIVILEGED_CAMERA_QUOTA_SECONDS_30D`
-- `BETA_PRIVILEGED_CREATION_RUNS_QUOTA_30D`
-- `BETA_PRIVILEGED_CODING_TASKS_QUOTA_30D`
-- `BETA_PRIVILEGED_DOCUMENT_TASKS_QUOTA_30D`
-- `BETA_PRIVILEGED_PRESENTATION_TASKS_QUOTA_30D`
-- `BETA_PRIVILEGED_PRESENTATION_IMAGE_QUOTA_30D`
-- `BETA_QUOTA_CACHE_TTL_MS` (preferred)
-- `BETA_PRIVILEGED_QUOTA_CACHE_TTL_MS` (deprecated alias)
 
-### Deployed voice profile note
-- Current production deployment intentionally uses higher response headroom (`GEMINI_LIVE_MAX_OUTPUT_TOKENS=1000`) to reduce clipped replies.
+See `.env.example` for the full list of quota variables covering default, power, and privileged tiers across all metric types.
 
-## 13) Testing and QA
+---
 
-### Type checks
+## 14) Testing and QA
+
+### Type checking
+
 ```bash
 npm run check
 ```
 
-### Isolated local E2E
+### Isolated local E2E tests
+
 ```bash
 npm run test:local:e2e
 ```
 
-What this script validates:
-- local isolated DB bootstrap + schema push
-- auth + conversation creation
-- chat respond + streaming behavior
-- attachment upload/media retrieval paths
-- profile endpoints
-- live token endpoint
-- transcript stitching
+This script:
+- Creates/uses a local isolated database (`my_ai_companion_local`)
+- Pushes schema only to that database
+- Starts the app on `127.0.0.1:5599`
+- Validates end-to-end flows:
+  - Auth (register + login)
+  - Conversation creation
+  - Chat respond (streaming + non-streaming)
+  - Attachment upload and media retrieval
+  - Profile endpoints
+  - Live token endpoint
+  - Transcript stitching
+  - Quota enforcement
 
-### Useful test overrides
+### Test overrides
+
 ```bash
 TEST_PORT=5600 npm run test:local:e2e
 TEST_DB_NAME=my_ai_companion_local_alt npm run test:local:e2e
 START_SERVER=0 TEST_HOST=127.0.0.1 TEST_PORT=5599 npm run test:local:e2e
 ```
 
-## 14) Deployment Notes (Replit)
+---
 
-- `.replit` is configured for autoscale deployment.
+## 15) Deployment (Replit)
+
+### Configuration
+
+- Deployment mode: **Autoscale**
 - Build command: `npm run build`
 - Run command: `node ./dist/index.cjs`
 - Internal app port: `5000`
-- Object storage bucket configured via Replit object storage integration.
-- Any `VITE_*` secret change requires full rebuild/redeploy (restart alone is not enough).
-- Keep persona/system-prompt source private; never document or log raw prompt text in public channels.
+- Object storage: Configured via Replit Object Storage integration
 
-Checklist before production promote:
-1. `npm run db:push` against production DB.
-2. Verify required env vars are set (especially secrets and Gemini keys).
-3. Run smoke tests on deployed URL for:
-   - auth
-   - text + stream chat
-   - live token
-   - voice session logging
-   - quota boundaries
-   - media upload/view
+### Pre-deployment checklist
 
-## 15) Operational Troubleshooting
+1. Run `npm run db:push` against the production database
+2. Verify all required secrets are set (`GEMINI_API_KEY`, `SESSION_SECRET`, `MEDIA_SIGNING_SECRET`)
+3. Smoke test on deployed URL:
+   - Registration and login
+   - Text chat (streaming)
+   - Live voice token minting
+   - Voice session logging
+   - Image upload and retrieval
+   - Quota enforcement boundaries
+   - Profile and preference persistence
+
+### Important notes
+
+- Any `VITE_*` secret/env change requires a **full rebuild and redeploy** (restart alone is insufficient because Vite bakes these values at build time)
+- Never document or log raw persona/system-prompt text in public channels
+- The app binds to `0.0.0.0:5000` — this is required for Replit's proxy
+
+---
+
+## 16) Troubleshooting
 
 ### `Failed to generate Live API token` (502)
-Common causes:
-- missing/invalid `GEMINI_API_KEY`
-- unavailable model in current project/region/tier
-- live model mismatch
 
-Actions:
-- verify model env vars
-- inspect `traceId` in response and server logs
-- check configured live model fallbacks
+**Common causes:**
+- Missing or invalid `GEMINI_API_KEY`
+- Model unavailable in current project/region/tier
+- Live model name mismatch
+
+**Actions:**
+- Verify model environment variables match available models
+- Inspect `traceId` in response headers and server logs
+- Check configured live model fallbacks
 
 ### 429 quota blocks
-- inspect `GET /api/quota/summary`
-- verify rolling-window usage totals in `usage_events`
-- ensure client is sending `cameraDuration` for voice session saves
+
+- Inspect `GET /api/quota/summary` for current usage
+- Verify rolling-window totals in `usage_events` table
+- Ensure client sends `cameraDuration` in voice session saves
+- Check if user is on correct tier (default/power/privileged)
 
 ### Media access failures
-- verify signed URL (`exp` not expired, valid `sig`)
-- confirm attachment ownership and non-deleted status
-- check media driver config and bucket permissions
 
-## 16) Contributor Workflow
+- Verify signed URL: `exp` not expired, `sig` valid
+- Confirm attachment ownership and non-deleted status
+- Check `MEDIA_STORAGE_DRIVER` config and bucket permissions
+- Verify `MEDIA_SIGNING_SECRET` matches between signing and verification
 
-Session continuity helpers:
-- `npm run dev:context`
-- `npm run dev:handoff -- "summary"`
+### Voice call quality issues
 
-Reference docs:
-- `docs/PROJECT_STATE.md`
-- `docs/SESSION_LOG.md`
-- `docs/AI_COMPANION_DESIGN_SPEC.md`
-- `docs/GEMINI_INTEGRATION.md`
+- Check VAD sensitivity settings (`GEMINI_LIVE_VAD_*`)
+- Verify `GEMINI_LIVE_ACTIVITY_HANDLING` is set to `NO_INTERRUPTION` for stability
+- Inspect live trace diagnostics in server logs for interruption vs completion classification
+- Check client noise gate settings (`VITE_LIVE_AUDIO_NOISE_GATE_*`)
 
-## 17) Design + Product Principles
+### Time/date reporting incorrect
 
-- Mobile-first and immersion-first UI
-- One shared memory thread across voice and text
-- Fast perceived response with streaming and typing affordances
-- Profile-driven personalization with user control
-- Server-authoritative security and quota enforcement
-- Traceable, redacted observability for forensic debugging
+- Verify `ZEE_CALENDAR_TIMEZONE` environment variable is set correctly
+- Check that the time anchor appears in server logs during live token creation
+- For text mode, the time is injected into conversation contents automatically
+- For voice mode, the `[LIVE TIME ANCHOR]` is injected at the top of the memory context
+
+---
+
+## 17) Contributor Workflow
+
+### Session continuity
+
+ZeeMe uses a structured session continuity system for AI-assisted development:
+
+```bash
+# Start any session — loads context
+npm run dev:context
+
+# End session — creates handoff entry
+npm run dev:handoff -- "brief summary of what was done"
+```
+
+### Reference documents
+
+| Document | Purpose |
+|---|---|
+| `docs/PROJECT_STATE.md` | Canonical project state — start here |
+| `docs/SESSION_LOG.md` | Chronological handoff log |
+| `docs/AI_COMPANION_DESIGN_SPEC.md` | Original design spec and mockup reference |
+| `docs/GEMINI_INTEGRATION.md` | Gemini API integration details |
+| `docs/AGENTIC_ENGINEERING_GUIDE.md` | Full agentic feature engineering reference |
+| `docs/AGENTIC_ROADMAP_V1.md` | Agentic feature roadmap (archived scope) |
+| `docs/QUOTA_PRICING_REEVALUATION_2026-02-16.md` | Cost model worksheet |
+
+### Commit security
+
+- Always run `npm run security:secrets:staged` before committing
+- Install the pre-commit hook with `npm run hooks:install` for automatic scanning
+- Never commit `.env` files — only `.env.example` with safe placeholders
+
+---
+
+## 18) Design Principles
+
+- **Mobile-first, immersion-first UI** — Dark, full-screen experience optimized for phone interaction
+- **One shared memory thread** — Voice and text operate on the same conversation with unified history
+- **Fast perceived response** — Streaming text deltas and typing affordances for natural pacing
+- **Profile-driven personalization** — User controls how Zee responds (style, verbosity, personality)
+- **Server-authoritative security** — All quota, auth, and media access enforced server-side
+- **Traceable observability** — Every request has a trace ID; all logs are redacted and structured
+- **Privacy by default** — Media is private, secrets are scanned, persona prompts are never exposed
+- **Graceful degradation** — Fallback paths exist for media storage, model selection, and memory context
 
 ---
 
