@@ -4,6 +4,7 @@
 A production-grade multimodal AI companion app with persona Zee. Users interact via text chat and live voice calls with shared memory, camera support, image sharing, user personalization, and 4 customizable color themes. Dark, immersive, mobile-first UI. Agentic creation features are archived (code retained, disabled by default).
 
 ## Recent Changes
+- 2026-02-18: Fixed voice connection timeout — added 15s connection timeout with orphaned-session cleanup, auto-retry (up to 2 retries with exponential backoff), and user-friendly timeout error message
 - 2026-02-17: Updated README.md with comprehensive documentation for main branch
 - 2026-02-17: Fixed live voice timezone with three-layer defense-in-depth: system prompt calendar block, text mode `[current_time]` injection, voice mode `[LIVE TIME ANCHOR]` injection, and `ZEE_CALENDAR_TIMEZONE` env var fallback
 - 2026-02-16: Fixed split token leak bug with defense-in-depth sanitization
