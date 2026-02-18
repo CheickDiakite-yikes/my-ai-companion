@@ -94,6 +94,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { JsonRenderArtifactViewer } from "@/components/artifacts/JsonRenderArtifactViewer";
+import MarketingLandingPage from "@/components/MarketingLandingPage";
 
 // --- Types ---
 type Mode = "voice" | "text" | "profile";
@@ -1441,15 +1442,16 @@ const OnboardingOrb = ({
   <CanvasOrb config={slide} size={size} />
 );
 
-const AuthPage = ({ onLogin, onRegister, loginError, registerError, isLoggingIn, isRegistering }: {
+const AuthPage = ({ onLogin, onRegister, loginError, registerError, isLoggingIn, isRegistering, initialMode = "welcome" }: {
   onLogin: (data: { email: string; password: string }) => Promise<any>;
   onRegister: (data: { email: string; password: string; confirmPassword?: string; firstName: string; lastName: string; profession?: string; referralSource?: string }) => Promise<any>;
   loginError: Error | null;
   registerError: Error | null;
   isLoggingIn: boolean;
   isRegistering: boolean;
+  initialMode?: "welcome" | "login";
 }) => {
-  const [authMode, setAuthMode] = useState<"welcome" | "login" | "register">("welcome");
+  const [authMode, setAuthMode] = useState<"welcome" | "login" | "register">(initialMode);
   const [showPassword, setShowPassword] = useState(false);
   const [formData, setFormData] = useState({
     email: "",
@@ -6290,6 +6292,9 @@ function App() {
     applyAppTheme(DEFAULT_APP_THEME_ID);
   }, []);
 
+  const [showMarketingLanding, setShowMarketingLanding] = useState(true);
+  const [authEntryMode, setAuthEntryMode] = useState<"welcome" | "login">("welcome");
+
   const [mode, setMode] = useState<Mode>("voice");
   const [isCalling, setIsCalling] = useState(false);
   const [isLiveConnecting, setIsLiveConnecting] = useState(false);
@@ -8612,6 +8617,20 @@ function App() {
   }
 
   if (!isAuthenticated) {
+    if (showMarketingLanding) {
+      return (
+        <MarketingLandingPage
+          onGetStarted={() => {
+            setAuthEntryMode("welcome");
+            setShowMarketingLanding(false);
+          }}
+          onSignIn={() => {
+            setAuthEntryMode("login");
+            setShowMarketingLanding(false);
+          }}
+        />
+      );
+    }
     return (
       <AuthPage
         onLogin={login}
@@ -8620,6 +8639,7 @@ function App() {
         registerError={registerError}
         isLoggingIn={isLoggingIn}
         isRegistering={isRegistering}
+        initialMode={authEntryMode}
       />
     );
   }
