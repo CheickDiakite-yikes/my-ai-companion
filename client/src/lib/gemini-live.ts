@@ -22,6 +22,7 @@ export interface GeminiLiveVoiceSessionCallbacks {
 export interface GeminiLiveVoiceSessionStartParams {
   ephemeralToken: string;
   model: string;
+  preAcquiredMicStream?: MediaStream;
 }
 
 const INPUT_SAMPLE_RATE = 16000;
@@ -314,7 +315,7 @@ async function getUserMediaWithTimeout(
   }
 }
 
-async function getMicrophoneStreamWithFallback(): Promise<MediaStream> {
+export async function getMicrophoneStreamWithFallback(): Promise<MediaStream> {
   const attemptConstraints: MediaStreamConstraints[] = [
     {
       audio: {
@@ -533,7 +534,7 @@ export class GeminiLiveVoiceSession {
         SUPPRESS_USER_TRANSCRIPT_DURING_ASSISTANT_SPEECH,
     });
 
-    await this.startMicrophoneStream();
+    await this.startMicrophoneStream(params.preAcquiredMicStream);
   }
 
   async stop(): Promise<void> {
@@ -855,13 +856,13 @@ export class GeminiLiveVoiceSession {
     );
   }
 
-  private async startMicrophoneStream(): Promise<void> {
+  private async startMicrophoneStream(preAcquiredStream?: MediaStream): Promise<void> {
     if (!this.session) {
       throw new Error("Cannot start microphone stream without a live session");
     }
 
     try {
-      this.mediaStream = await getMicrophoneStreamWithFallback();
+      this.mediaStream = preAcquiredStream ?? await getMicrophoneStreamWithFallback();
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "Microphone permission was denied or unavailable";

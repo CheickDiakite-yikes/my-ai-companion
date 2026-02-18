@@ -48,7 +48,7 @@ import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/use-auth";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, getResponseTraceId } from "@/lib/queryClient";
-import { GeminiLiveVoiceSession } from "@/lib/gemini-live";
+import { GeminiLiveVoiceSession, getMicrophoneStreamWithFallback } from "@/lib/gemini-live";
 import {
   APP_THEME_OPTIONS,
   DEFAULT_APP_THEME_ID,
@@ -8144,6 +8144,50 @@ function App() {
     liveRunIdRef.current = runId;
     setLiveError(null);
     setIsLiveConnecting(true);
+
+    let preAcquiredMicStream: MediaStream | null = null;
+    if (!options?.autoResumed) {
+      try {
+        preAcquiredMicStream = await getMicrophoneStreamWithFallback();
+      } catch (micError: any) {
+        setIsLiveConnecting(false);
+        const msg = micError?.message ?? "";
+        if (/denied|not allowed|permission/i.test(msg)) {
+          setLiveError(
+            "Microphone access was denied. To use voice calls, please allow microphone access in your browser settings and try again."
+          );
+        } else if (/not available|not supported/i.test(msg)) {
+          setLiveError(
+            "Your browser does not support microphone access. Please try using Safari or Chrome."
+          );
+        } else if (/timed?\s*out/i.test(msg)) {
+          setLiveError(
+            "Microphone permission request timed out. Please tap the call button again and allow microphone access when prompted."
+          );
+        } else {
+          setLiveError(
+            "Could not access your microphone. Please check your browser settings and try again."
+          );
+        }
+        try {
+          await fetch("/api/live/client-error", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "include",
+            body: JSON.stringify({
+              event: "live.mic.permission_failed",
+              data: {
+                error: msg,
+                errorName: micError?.name,
+                userAgent: navigator.userAgent,
+              },
+            }),
+          });
+        } catch {}
+        return;
+      }
+    }
+
     transcriptSeenRef.current = new Map();
     transcriptQueueRef.current = Promise.resolve();
     manualLiveStopRef.current = false;
@@ -8160,6 +8204,7 @@ function App() {
       liveConversationRef.current = conversationId;
 
       if (startNonce !== liveStartNonceRef.current) {
+        preAcquiredMicStream?.getTracks().forEach(t => t.stop());
         return;
       }
 
@@ -8180,6 +8225,7 @@ function App() {
       tokenModel = tokenPayload.model;
 
       if (startNonce !== liveStartNonceRef.current) {
+        preAcquiredMicStream?.getTracks().forEach(t => t.stop());
         return;
       }
 
@@ -8270,6 +8316,7 @@ function App() {
       await liveSessionRef.current.start({
         ephemeralToken: tokenPayload.ephemeralToken,
         model: tokenPayload.model,
+        preAcquiredMicStream: preAcquiredMicStream ?? undefined,
       });
 
       if (startNonce !== liveStartNonceRef.current) {
@@ -8298,6 +8345,10 @@ function App() {
         conversationId,
       });
     } catch (error: any) {
+      if (preAcquiredMicStream) {
+        preAcquiredMicStream.getTracks().forEach(t => t.stop());
+      }
+
       console.error("Failed to start Gemini Live session:", error);
 
       const isTimeout = /timed?\s*out/i.test(error?.message ?? "");
