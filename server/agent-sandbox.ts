@@ -158,6 +158,7 @@ export interface EphemeralSandboxJob {
 export function getSandboxToolPolicy(
   toolName: string,
 ): SandboxToolPolicy | undefined {
+  if (!Object.prototype.hasOwnProperty.call(TOOL_POLICIES, toolName)) return undefined;
   return TOOL_POLICIES[toolName];
 }
 
@@ -304,6 +305,7 @@ function buildCodeWorkerInvocation(params: {
 }
 
 export function getSandboxToolApprovalMessage(toolName: string): string | null {
+  if (!Object.prototype.hasOwnProperty.call(TOOL_POLICIES, toolName)) return null;
   const policy = TOOL_POLICIES[toolName];
   if (!policy || !policy.requiresApproval) return null;
   const reason = policy.approvalReason ?? "This tool requires explicit approval.";
@@ -314,6 +316,9 @@ export function assertSandboxToolAccess(params: {
   toolName: string;
   requestedHosts?: string[];
 }): SandboxToolPolicy {
+  if (!Object.prototype.hasOwnProperty.call(TOOL_POLICIES, params.toolName)) {
+    throw new Error(`Tool access denied by default: ${params.toolName}`);
+  }
   const policy = TOOL_POLICIES[params.toolName];
   if (!policy) {
     throw new Error(`Tool access denied by default: ${params.toolName}`);
