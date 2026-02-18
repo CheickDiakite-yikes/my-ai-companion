@@ -7337,6 +7337,7 @@ export async function registerRoutes(
         forceAlwaysRespond: token.configSummary.forceAlwaysRespond,
         vadSilenceMs: token.configSummary.vadSilenceMs,
         thinkingBudget: token.configSummary.thinkingBudget,
+        userAgent: req.headers?.["user-agent"] ?? null,
         elapsedMs: elapsedMs(startedAt),
       });
 

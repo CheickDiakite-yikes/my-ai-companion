@@ -417,7 +417,7 @@ export class GeminiLiveVoiceSession {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           credentials: "include",
-          body: JSON.stringify({ event, data }),
+          body: JSON.stringify({ event, data: { ...data, userAgent: navigator.userAgent } }),
         }).catch(() => {});
       } catch {}
     };

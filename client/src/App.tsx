@@ -8318,6 +8318,7 @@ function App() {
               isTimeout,
               retryAttempt,
               model: tokenModel,
+              userAgent: navigator.userAgent,
             },
           }),
         });
