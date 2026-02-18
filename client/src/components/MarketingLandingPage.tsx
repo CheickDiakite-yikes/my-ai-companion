@@ -355,114 +355,109 @@ function FloatingParticle({ delay, x, y, size }: { delay: number; x: string; y: 
   );
 }
 
-function CompanionMomentCard({
+function ScrollAccordionItem({
   index,
   title,
   label,
   body,
   icon: Icon,
+  total,
 }: {
   index: number;
   title: string;
   label: string;
   body: string;
   icon: React.ComponentType<{ className?: string }>;
+  total: number;
 }) {
-  const cardRef = useRef<HTMLDivElement>(null);
+  const itemRef = useRef<HTMLDivElement>(null);
   const { scrollYProgress } = useScroll({
-    target: cardRef,
-    offset: ["start 92%", "center 45%"],
+    target: itemRef,
+    offset: ["start 85%", "start 35%"],
   });
 
-  const y = useTransform(scrollYProgress, [0, 1], [80, 0]);
-  const opacity = useTransform(scrollYProgress, [0, 0.4, 1], [0, 0.6, 1]);
-  const scale = useTransform(scrollYProgress, [0, 1], [0.88, 1]);
-  const xSlide = useTransform(
-    scrollYProgress,
-    [0, 1],
-    [index % 2 === 0 ? -40 : 40, 0]
-  );
-  const glowOpacity = useTransform(scrollYProgress, [0, 0.6, 1], [0, 0.4, 0.9]);
-  const borderGlow = useTransform(
-    scrollYProgress,
-    [0, 1],
-    ["rgba(255, 224, 194, 0.08)", "rgba(255, 224, 194, 0.25)"]
-  );
+  const contentMaxH = useTransform(scrollYProgress, [0, 0.4, 0.7], [0, 0, 200]);
+  const contentOpacity = useTransform(scrollYProgress, [0, 0.45, 0.75], [0, 0, 1]);
+  const titleOpacity = useTransform(scrollYProgress, [0, 0.15], [0.45, 1]);
+  const iconScale = useTransform(scrollYProgress, [0, 0.3], [0.85, 1]);
+  const accentWidth = useTransform(scrollYProgress, [0, 0.5, 1], ["0%", "0%", "100%"]);
+  const chevronRotate = useTransform(scrollYProgress, [0, 0.5, 0.7], [0, 0, 180]);
+  const romanNumerals = ["i", "ii", "iii", "iv", "v", "vi"];
 
   return (
-    <motion.article
-      ref={cardRef}
-      style={{
-        y,
-        opacity,
-        scale,
-        x: xSlide,
-        background: "linear-gradient(160deg, rgba(255, 223, 194, 0.1), rgba(255, 188, 158, 0.06))",
-        borderColor: borderGlow,
-        boxShadow: "0 18px 45px rgba(43, 25, 24, 0.38)",
-      }}
-      whileHover={{ y: -6, scale: 1.015, transition: { duration: 0.3 } }}
-      className="relative rounded-none p-7 md:p-8 border backdrop-blur-md overflow-hidden"
+    <motion.div
+      ref={itemRef}
+      className="relative"
       data-testid={`card-moment-${index + 1}`}
-      aria-label={title}
-      role="article"
-      tabIndex={0}
     >
-      <motion.div
-        aria-hidden
-        className="absolute inset-0 pointer-events-none"
-        style={{
-          opacity: glowOpacity,
-          background: index % 2 === 0
-            ? "radial-gradient(circle at 85% 15%, rgba(255, 208, 164, 0.28), transparent 55%)"
-            : "radial-gradient(circle at 15% 85%, rgba(255, 208, 164, 0.22), transparent 55%)",
-        }}
-      />
-      <motion.div
-        aria-hidden
-        className="absolute inset-0 pointer-events-none"
-        style={{
-          opacity: glowOpacity,
-          background: "linear-gradient(135deg, rgba(255, 220, 180, 0.06) 0%, transparent 50%)",
-        }}
-      />
-      <div
-        className="absolute -right-8 -bottom-8 w-36 h-36 rounded-full pointer-events-none"
-        style={{
-          background: "radial-gradient(circle, rgba(255, 202, 154, 0.18) 0%, rgba(255, 202, 154, 0) 70%)",
-        }}
-      />
-      <div className="relative flex items-start gap-4">
-        <motion.div
-          animate={{ y: [0, -5, 0] }}
-          transition={{ duration: 3.5, repeat: Infinity, repeatType: "loop", ease: "easeInOut", delay: index * 0.4 }}
-        >
-          <StoryIcon>
-            <Icon className="w-7 h-7" />
-          </StoryIcon>
-        </motion.div>
-        <div className="pt-1 flex-1">
-          <p
-            className="text-xs tracking-wide uppercase mb-1.5"
-            style={{ color: "rgba(255, 229, 202, 0.58)" }}
+      <div className="relative py-6 md:py-8">
+        <div className="flex items-start gap-5">
+          <motion.div
+            className="flex flex-col items-center gap-2 pt-1 shrink-0"
+            style={{ scale: iconScale }}
           >
-            {label}
-          </p>
-          <h3
-            className="text-[1.7rem] leading-[1.15] font-semibold mb-2.5"
-            style={{ color: "#FFEFD8", fontFamily: "'Fraunces', serif" }}
-          >
-            {title}
-          </h3>
-          <p
-            className="text-base leading-relaxed"
-            style={{ color: "rgba(255, 225, 196, 0.75)" }}
-          >
-            {body}
-          </p>
+            <StoryIcon>
+              <Icon className="w-6 h-6" />
+            </StoryIcon>
+            <span
+              className="text-[10px] tracking-[0.2em] font-light"
+              style={{ color: "rgba(255, 214, 172, 0.3)", fontFamily: "'Fraunces', serif" }}
+            >
+              {romanNumerals[index]}
+            </span>
+          </motion.div>
+
+          <div className="flex-1 min-w-0">
+            <motion.div style={{ opacity: titleOpacity }}>
+              <p
+                className="text-[10px] tracking-[0.25em] uppercase mb-1.5"
+                style={{ color: "rgba(255, 229, 202, 0.4)" }}
+              >
+                {label}
+              </p>
+              <h3
+                className="text-xl md:text-[1.5rem] font-semibold leading-tight"
+                style={{ color: "#FFEFD8", fontFamily: "'Fraunces', serif" }}
+              >
+                {title}
+              </h3>
+            </motion.div>
+
+            <motion.div
+              className="overflow-hidden"
+              style={{ maxHeight: contentMaxH, opacity: contentOpacity }}
+            >
+              <p
+                className="text-[15px] leading-[1.85] mt-3 pb-1"
+                style={{ color: "rgba(255, 225, 196, 0.7)" }}
+              >
+                {body}
+              </p>
+            </motion.div>
+          </div>
+
+          <motion.div className="shrink-0 pt-2" style={{ rotate: chevronRotate }}>
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+              <path d="M3 5.5 L7 9.5 L11 5.5" stroke="rgba(255, 214, 172, 0.35)" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </motion.div>
         </div>
+
+        <motion.div
+          className="absolute bottom-0 left-0 h-px"
+          style={{
+            width: accentWidth,
+            background: "linear-gradient(90deg, rgba(255, 214, 172, 0.25), rgba(255, 214, 172, 0.08), transparent)",
+          }}
+        />
       </div>
-    </motion.article>
+
+      {index < total - 1 && (
+        <div className="flex items-center justify-center">
+          <div className="w-1 h-1 rotate-45" style={{ background: "rgba(255, 214, 172, 0.15)" }} />
+        </div>
+      )}
+    </motion.div>
   );
 }
 
@@ -573,52 +568,28 @@ function TimelineMoments({ moments }: { moments: Array<{ title: string; label: s
   const lineScaleY = useTransform(scrollYProgress, [0, 1], [0, 1]);
 
   return (
-    <div ref={containerRef} className="relative">
+    <div ref={containerRef} className="relative max-w-xl mx-auto">
       <div
-        className="hidden md:block absolute left-1/2 top-4 bottom-4 w-px -translate-x-1/2"
-        style={{
-          background: "rgba(255, 214, 172, 0.1)",
-        }}
+        className="absolute left-[22px] md:left-[26px] top-8 bottom-8 w-px"
+        style={{ background: "rgba(255, 214, 172, 0.08)" }}
       />
       <motion.div
-        className="hidden md:block absolute left-1/2 top-4 bottom-4 w-px -translate-x-1/2 origin-top"
+        className="absolute left-[22px] md:left-[26px] top-8 bottom-8 w-px origin-top"
         style={{
-          background: "linear-gradient(180deg, rgba(255, 214, 172, 0.55), rgba(255, 195, 148, 0.25))",
+          background: "linear-gradient(180deg, rgba(255, 214, 172, 0.35), rgba(255, 195, 148, 0.1))",
           scaleY: lineScaleY,
         }}
       />
       {moments.map((moment, index) => (
-        <div key={moment.title} className="relative">
-          <motion.div
-            className="hidden md:flex absolute left-1/2 -translate-x-1/2 w-3 h-3 rounded-full items-center justify-center z-10"
-            style={{
-              top: "2rem",
-              background: "linear-gradient(135deg, #FFD3A8, #EBBA62)",
-              boxShadow: "0 0 12px rgba(255, 200, 150, 0.4)",
-            }}
-            initial={{ scale: 0 }}
-            whileInView={{ scale: 1 }}
-            viewport={{ once: true, margin: "-50px" }}
-            transition={{ duration: 0.4, delay: 0.15, type: "spring" }}
-          >
-            <div className="w-1.5 h-1.5 rounded-full bg-white/50" />
-          </motion.div>
-          <div
-            className={`mb-7 md:mb-10 ${
-              index % 2 === 0
-                ? "md:w-[calc(50%-2rem)] md:mr-auto"
-                : "md:w-[calc(50%-2rem)] md:ml-auto"
-            }`}
-          >
-            <CompanionMomentCard
-              index={index}
-              title={moment.title}
-              label={moment.label}
-              body={moment.body}
-              icon={moment.icon}
-            />
-          </div>
-        </div>
+        <ScrollAccordionItem
+          key={moment.title}
+          index={index}
+          title={moment.title}
+          label={moment.label}
+          body={moment.body}
+          icon={moment.icon}
+          total={moments.length}
+        />
       ))}
     </div>
   );
