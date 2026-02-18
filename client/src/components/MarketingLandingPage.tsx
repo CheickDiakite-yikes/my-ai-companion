@@ -1,7 +1,161 @@
-import { useRef } from "react";
-import { motion, useScroll, useTransform, useInView } from "framer-motion";
-import { MessageSquare, Mic, Brain, Palette, Heart, Shield, Sparkles, ArrowRight } from "lucide-react";
+import { useRef, type ReactNode } from "react";
+import { motion, useInView, useScroll, useTransform } from "framer-motion";
+import { ArrowRight, Stars } from "lucide-react";
 import CanvasOrb from "./OnboardingOrb";
+
+function IconEmpatheticChat({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="chat-glow" x1="4" y1="4" x2="24" y2="24">
+          <stop offset="0%" stopColor="#FFE4BF" />
+          <stop offset="100%" stopColor="#F5C88A" />
+        </linearGradient>
+      </defs>
+      <path d="M5 7.5C5 6.12 6.12 5 7.5 5h13C21.88 5 23 6.12 23 7.5v9c0 1.38-1.12 2.5-2.5 2.5H12l-4.2 3.5c-.45.38-1.1.05-1.1-.55V19H5.5C4.67 19 4 18.33 4 17.5v-9C4 7.17 4.67 6.5 5.5 6.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M9 11.5c.8-1.2 2.2-2 3.8-2 1.6 0 3 .8 3.8 2" stroke="url(#chat-glow)" strokeWidth="1.6" strokeLinecap="round" />
+      <circle cx="10.5" cy="11" r="0.8" fill="currentColor" opacity="0.7" />
+      <circle cx="16" cy="11" r="0.8" fill="currentColor" opacity="0.7" />
+      <path d="M10.5 14.5c.6.9 1.7 1.5 3 1.5s2.4-.6 3-1.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+      <circle cx="21" cy="7" r="2.5" fill="url(#chat-glow)" opacity="0.4" />
+      <path d="M20 6.5l1 1.2 1.5-1.8" stroke="currentColor" strokeWidth="0.9" strokeLinecap="round" strokeLinejoin="round" opacity="0.8" />
+    </svg>
+  );
+}
+
+function IconLiveVoice({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="voice-pulse" x1="8" y1="6" x2="20" y2="22">
+          <stop offset="0%" stopColor="#FFE4BF" />
+          <stop offset="100%" stopColor="#F5C88A" />
+        </linearGradient>
+        <radialGradient id="voice-orb" cx="50%" cy="40%" r="50%">
+          <stop offset="0%" stopColor="#FFD7A8" stopOpacity="0.5" />
+          <stop offset="100%" stopColor="#FFD7A8" stopOpacity="0" />
+        </radialGradient>
+      </defs>
+      <circle cx="14" cy="14" r="10" fill="url(#voice-orb)" />
+      <rect x="12" y="6" width="4" height="10" rx="2" stroke="currentColor" strokeWidth="1.5" />
+      <path d="M9 14a5 5 0 0010 0" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+      <line x1="14" y1="19" x2="14" y2="22" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+      <line x1="11" y1="22" x2="17" y2="22" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+      <path d="M5.5 13c0 0-0.5-3 0-5" stroke="url(#voice-pulse)" strokeWidth="1.2" strokeLinecap="round" opacity="0.6" />
+      <path d="M3.5 14c0 0-0.8-4 0-7" stroke="url(#voice-pulse)" strokeWidth="1" strokeLinecap="round" opacity="0.35" />
+      <path d="M22.5 13c0 0 0.5-3 0-5" stroke="url(#voice-pulse)" strokeWidth="1.2" strokeLinecap="round" opacity="0.6" />
+      <path d="M24.5 14c0 0 0.8-4 0-7" stroke="url(#voice-pulse)" strokeWidth="1" strokeLinecap="round" opacity="0.35" />
+    </svg>
+  );
+}
+
+function IconLivingMemory({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="mem-grad" x1="6" y1="4" x2="22" y2="24">
+          <stop offset="0%" stopColor="#FFE4BF" />
+          <stop offset="100%" stopColor="#F5C88A" />
+        </linearGradient>
+      </defs>
+      <circle cx="14" cy="12" r="7" stroke="currentColor" strokeWidth="1.4" strokeDasharray="2.5 2" opacity="0.5" />
+      <circle cx="14" cy="12" r="4" stroke="currentColor" strokeWidth="1.5" />
+      <circle cx="14" cy="12" r="1.5" fill="url(#mem-grad)" />
+      <path d="M14 19v4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+      <path d="M10 24h8" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+      <path d="M7.5 7L5 4.5" stroke="url(#mem-grad)" strokeWidth="1.2" strokeLinecap="round" opacity="0.55" />
+      <path d="M20.5 7L23 4.5" stroke="url(#mem-grad)" strokeWidth="1.2" strokeLinecap="round" opacity="0.55" />
+      <path d="M18 10c0 0 1.5 1.5 0 3.5" stroke="url(#mem-grad)" strokeWidth="1.1" strokeLinecap="round" opacity="0.7" />
+    </svg>
+  );
+}
+
+function IconFriendship({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="friend-warm" x1="4" y1="6" x2="24" y2="22">
+          <stop offset="0%" stopColor="#FFE4BF" />
+          <stop offset="100%" stopColor="#F5C88A" />
+        </linearGradient>
+      </defs>
+      <path d="M14 22s-8-4.5-8-10a4.2 4.2 0 018-1.8A4.2 4.2 0 0122 12c0 5.5-8 10-8 10z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
+      <path d="M14 22s-5.5-3.5-6.5-7.5" stroke="url(#friend-warm)" strokeWidth="1.2" strokeLinecap="round" opacity="0.5" />
+      <circle cx="11" cy="13" r="0.7" fill="currentColor" opacity="0.6" />
+      <circle cx="17" cy="13" r="0.7" fill="currentColor" opacity="0.6" />
+      <path d="M12 15.5c.5.6 1.2 1 2 1s1.5-.4 2-1" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
+      <path d="M7 8l-2-1.5M21 8l2-1.5M14 6V4" stroke="url(#friend-warm)" strokeWidth="1" strokeLinecap="round" opacity="0.45" />
+    </svg>
+  );
+}
+
+function IconComfort({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="comfort-glow" x1="6" y1="4" x2="22" y2="24">
+          <stop offset="0%" stopColor="#FFE4BF" />
+          <stop offset="100%" stopColor="#F5C88A" />
+        </linearGradient>
+        <radialGradient id="comfort-orb" cx="50%" cy="35%" r="50%">
+          <stop offset="0%" stopColor="#FFD7A8" stopOpacity="0.35" />
+          <stop offset="100%" stopColor="#FFD7A8" stopOpacity="0" />
+        </radialGradient>
+      </defs>
+      <circle cx="14" cy="14" r="11" fill="url(#comfort-orb)" />
+      <path d="M8 18c0-3.3 2.7-6 6-6s6 2.7 6 6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      <path d="M10.5 15c0-1.9 1.6-3.5 3.5-3.5s3.5 1.6 3.5 3.5" stroke="url(#comfort-glow)" strokeWidth="1.3" strokeLinecap="round" opacity="0.7" />
+      <circle cx="14" cy="9" r="2.5" stroke="currentColor" strokeWidth="1.4" />
+      <circle cx="14" cy="9" r="0.8" fill="url(#comfort-glow)" />
+      <path d="M6 11c-1.5-.8-2.5-2-2.5-3.5 0-2.2 2-4 4.5-4 1.5 0 2.8.7 3.5 1.7" stroke="currentColor" strokeWidth="1" strokeLinecap="round" opacity="0.35" />
+      <path d="M22 11c1.5-.8 2.5-2 2.5-3.5 0-2.2-2-4-4.5-4-1.5 0-2.8.7-3.5 1.7" stroke="currentColor" strokeWidth="1" strokeLinecap="round" opacity="0.35" />
+    </svg>
+  );
+}
+
+function IconCelebrate({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="celebrate-grad" x1="5" y1="5" x2="23" y2="23">
+          <stop offset="0%" stopColor="#FFE4BF" />
+          <stop offset="100%" stopColor="#F5C88A" />
+        </linearGradient>
+      </defs>
+      <path d="M14 4l1.8 4.2 4.5.6-3.2 3.2.8 4.5L14 14.6l-3.9 1.9.8-4.5-3.2-3.2 4.5-.6L14 4z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
+      <path d="M14 4l1.8 4.2 4.5.6-3.2 3.2.8 4.5L14 14.6l-3.9 1.9.8-4.5-3.2-3.2 4.5-.6L14 4z" fill="url(#celebrate-grad)" opacity="0.2" />
+      <circle cx="6" cy="8" r="1.2" fill="url(#celebrate-grad)" opacity="0.5" />
+      <circle cx="22" cy="10" r="1" fill="url(#celebrate-grad)" opacity="0.4" />
+      <circle cx="8" cy="20" r="0.8" fill="url(#celebrate-grad)" opacity="0.35" />
+      <path d="M10 21l-2 3M18 21l2 3M14 19v4" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" opacity="0.5" />
+      <path d="M5 14c-1 1-1 3 0 4M23 14c1 1 1 3 0 4" stroke="url(#celebrate-grad)" strokeWidth="1" strokeLinecap="round" opacity="0.4" />
+    </svg>
+  );
+}
+
+function IconSafeSpace({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 28 28" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="safe-grad" x1="6" y1="4" x2="22" y2="24">
+          <stop offset="0%" stopColor="#FFE4BF" />
+          <stop offset="100%" stopColor="#F5C88A" />
+        </linearGradient>
+        <radialGradient id="safe-orb" cx="50%" cy="40%" r="45%">
+          <stop offset="0%" stopColor="#FFD7A8" stopOpacity="0.3" />
+          <stop offset="100%" stopColor="#FFD7A8" stopOpacity="0" />
+        </radialGradient>
+      </defs>
+      <circle cx="14" cy="15" r="10" fill="url(#safe-orb)" />
+      <path d="M14 4C14 4 6 7 6 14c0 5 3.5 8.5 8 10 4.5-1.5 8-5 8-10 0-7-8-10-8-10z" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" />
+      <path d="M14 4C14 4 6 7 6 14c0 5 3.5 8.5 8 10 4.5-1.5 8-5 8-10 0-7-8-10-8-10z" fill="url(#safe-grad)" opacity="0.1" />
+      <circle cx="14" cy="13" r="3" stroke="currentColor" strokeWidth="1.3" />
+      <circle cx="14" cy="13" r="1" fill="url(#safe-grad)" />
+      <path d="M11.5 17c0 0 1 1.5 2.5 1.5s2.5-1.5 2.5-1.5" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" opacity="0.6" />
+      <path d="M9 9.5c1-1 2.8-2 5-2s4 1 5 2" stroke="url(#safe-grad)" strokeWidth="1" strokeLinecap="round" opacity="0.45" />
+    </svg>
+  );
+}
 
 interface MarketingLandingPageProps {
   onGetStarted: () => void;
@@ -16,7 +170,7 @@ const orbConfig = {
   particleColor: "rgba(235, 186, 98, 0.6)",
 };
 
-function RevealSection({ children, className = "", delay = 0 }: { children: React.ReactNode; className?: string; delay?: number }) {
+function RevealSection({ children, className = "", delay = 0 }: { children: ReactNode; className?: string; delay?: number }) {
   const ref = useRef<HTMLDivElement>(null);
   const isInView = useInView(ref, { once: true, margin: "-80px" });
 
@@ -33,33 +187,74 @@ function RevealSection({ children, className = "", delay = 0 }: { children: Reac
   );
 }
 
-function FeatureCard({ icon: Icon, title, description, delay = 0 }: { icon: any; title: string; description: string; delay?: number }) {
+function StoryIcon({ children }: { children: ReactNode }) {
+  return (
+    <motion.div
+      whileHover={{ y: -2, scale: 1.04 }}
+      className="w-16 h-16 rounded-[1.15rem] flex items-center justify-center relative"
+      style={{
+        background: "linear-gradient(145deg, rgba(255, 216, 174, 0.46), rgba(255, 186, 140, 0.24))",
+        border: "1px solid rgba(255, 231, 203, 0.5)",
+        boxShadow: "0 14px 35px rgba(79, 40, 21, 0.35)",
+      }}
+    >
+      <div
+        className="absolute inset-1 rounded-[0.9rem]"
+        style={{
+          background: "radial-gradient(circle at 30% 25%, rgba(255,255,255,0.38), transparent 55%)",
+        }}
+      />
+      <div className="relative" style={{ color: "#FCE4BF" }}>
+        {children}
+      </div>
+    </motion.div>
+  );
+}
+
+function FeatureCard({
+  icon: Icon,
+  title,
+  description,
+  delay = 0,
+}: {
+  icon: React.ComponentType<{ className?: string }>;
+  title: string;
+  description: string;
+  delay?: number;
+}) {
   const ref = useRef<HTMLDivElement>(null);
   const isInView = useInView(ref, { once: true, margin: "-60px" });
 
   return (
     <motion.div
       ref={ref}
-      initial={{ opacity: 0, y: 30, scale: 0.95 }}
-      animate={isInView ? { opacity: 1, y: 0, scale: 1 } : { opacity: 0, y: 30, scale: 0.95 }}
-      transition={{ duration: 0.6, delay, ease: [0.22, 1, 0.36, 1] }}
+      initial={{ opacity: 0, y: 30, scale: 0.97 }}
+      animate={isInView ? { opacity: 1, y: 0, scale: 1 } : { opacity: 0, y: 30, scale: 0.97 }}
+      transition={{ duration: 0.65, delay, ease: [0.22, 1, 0.36, 1] }}
       className="relative group"
       data-testid={`card-feature-${title.toLowerCase().replace(/\s+/g, "-")}`}
     >
-      <div className="rounded-2xl p-6 backdrop-blur-md border transition-all duration-300 group-hover:scale-[1.02]"
+      <motion.div
+        whileHover={{ y: -5 }}
+        className="rounded-3xl p-6 md:p-7 backdrop-blur-md border transition-all duration-300"
         style={{
-          background: "rgba(247, 231, 180, 0.06)",
-          borderColor: "rgba(247, 231, 180, 0.12)",
+          background: "linear-gradient(160deg, rgba(255, 220, 187, 0.1), rgba(255, 185, 152, 0.06))",
+          borderColor: "rgba(255, 223, 186, 0.2)",
         }}
       >
-        <div className="w-12 h-12 rounded-xl flex items-center justify-center mb-4"
-          style={{ background: "rgba(235, 186, 98, 0.15)" }}
+        <StoryIcon>
+          <Icon className="w-7 h-7" />
+        </StoryIcon>
+        <h3
+          className="text-xl font-semibold mt-5 mb-2 tracking-tight"
+          style={{ color: "#FFEFD8", fontFamily: "'Fraunces', serif" }}
         >
-          <Icon className="w-6 h-6" style={{ color: "#EBBA62" }} />
-        </div>
-        <h3 className="text-lg font-semibold mb-2" style={{ color: "#F7E7B4" }}>{title}</h3>
-        <p className="text-sm leading-relaxed" style={{ color: "rgba(247, 231, 180, 0.7)" }}>{description}</p>
-      </div>
+          {title}
+        </h3>
+        <p className="text-[15px] leading-relaxed" style={{ color: "rgba(255, 228, 202, 0.78)", fontFamily: "'Manrope', sans-serif" }}>
+          {description}
+        </p>
+      </motion.div>
     </motion.div>
   );
 }
@@ -73,12 +268,12 @@ function FloatingParticle({ delay, x, y, size }: { delay: number; x: string; y: 
         top: y,
         width: size,
         height: size,
-        background: "rgba(235, 186, 98, 0.3)",
+        background: "rgba(245, 197, 145, 0.35)",
         filter: "blur(1px)",
       }}
       animate={{
-        y: [0, -20, 0],
-        opacity: [0.2, 0.6, 0.2],
+        y: [0, -24, 0],
+        opacity: [0.2, 0.65, 0.2],
         scale: [1, 1.3, 1],
       }}
       transition={{
@@ -93,256 +288,269 @@ function FloatingParticle({ delay, x, y, size }: { delay: number; x: string; y: 
 
 export default function MarketingLandingPage({ onGetStarted, onSignIn }: MarketingLandingPageProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const heroRef = useRef<HTMLDivElement>(null);
   const { scrollYProgress } = useScroll({ target: containerRef });
 
-  const heroOpacity = useTransform(scrollYProgress, [0, 0.15], [1, 0]);
-  const heroScale = useTransform(scrollYProgress, [0, 0.15], [1, 0.9]);
+  const heroOpacity = useTransform(scrollYProgress, [0, 0.14], [1, 0.22]);
+  const heroScale = useTransform(scrollYProgress, [0, 0.16], [1, 0.94]);
+  const storiesY = useTransform(scrollYProgress, [0.2, 0.8], [40, -30]);
+  const companionMoments: Array<{
+    title: string;
+    label: string;
+    body: string;
+    icon: React.ComponentType<{ className?: string }>;
+  }> = [
+    {
+      title: "When life feels heavy",
+      label: "Late-night check-in",
+      body: "You can unload, vent, or just sit in silence. Zee responds with empathy and steadiness, not generic scripts.",
+      icon: IconComfort,
+    },
+    {
+      title: "When something good happens",
+      label: "Celebrate the small wins",
+      body: "Big milestones and tiny wins are remembered and celebrated, so joy compounds over time.",
+      icon: IconCelebrate,
+    },
+    {
+      title: "When trust matters most",
+      label: "A private companion space",
+      body: "Privacy is core. Your conversations are yours, and the experience is built to protect that bond.",
+      icon: IconSafeSpace,
+    },
+  ];
 
   return (
     <div
       ref={containerRef}
       className="w-full min-h-screen overflow-y-auto overflow-x-hidden relative"
-      style={{ background: "#1A1010" }}
-      data-testid="marketing-landing-page"
+      style={{ background: "#1B1414", fontFamily: "'Manrope', sans-serif" }}
+      data-testid="landing-page"
+      data-marketing-testid="marketing-landing-page"
     >
       <div className="fixed inset-0 pointer-events-none" style={{ zIndex: 0 }}>
-        <div className="absolute inset-0" style={{
-          background: "radial-gradient(ellipse at 50% 30%, rgba(83,52,30,0.6) 0%, rgba(26,16,16,0) 70%)",
-        }} />
-        <FloatingParticle delay={0} x="15%" y="20%" size={3} />
-        <FloatingParticle delay={1.2} x="80%" y="15%" size={2} />
-        <FloatingParticle delay={0.5} x="65%" y="35%" size={4} />
-        <FloatingParticle delay={2} x="25%" y="60%" size={2} />
-        <FloatingParticle delay={1.8} x="75%" y="70%" size={3} />
-        <FloatingParticle delay={0.8} x="40%" y="80%" size={2} />
-        <FloatingParticle delay={3} x="90%" y="45%" size={3} />
-        <FloatingParticle delay={1.5} x="10%" y="50%" size={2} />
+        <div className="absolute inset-0" style={{ background: "radial-gradient(ellipse at 22% 16%, rgba(197, 131, 90, 0.37), transparent 56%)" }} />
+        <div className="absolute inset-0" style={{ background: "radial-gradient(ellipse at 80% 14%, rgba(150, 98, 75, 0.28), transparent 52%)" }} />
+        <div className="absolute inset-0" style={{ background: "radial-gradient(ellipse at 50% 82%, rgba(110, 69, 60, 0.34), transparent 56%)" }} />
+        <FloatingParticle delay={0} x="12%" y="20%" size={3} />
+        <FloatingParticle delay={1.2} x="80%" y="16%" size={2} />
+        <FloatingParticle delay={0.5} x="66%" y="34%" size={4} />
+        <FloatingParticle delay={2} x="26%" y="58%" size={2} />
+        <FloatingParticle delay={1.8} x="75%" y="72%" size={3} />
+        <FloatingParticle delay={0.8} x="40%" y="82%" size={2} />
       </div>
 
       <div className="relative" style={{ zIndex: 1 }}>
         <nav className="fixed top-0 left-0 right-0 z-50 px-6 py-4">
-          <div className="max-w-5xl mx-auto flex items-center justify-between">
-            <motion.div
-              initial={{ opacity: 0, x: -20 }}
-              animate={{ opacity: 1, x: 0 }}
-              transition={{ duration: 0.6 }}
-            >
-              <span className="text-xl font-bold tracking-tight" style={{ color: "#EBBA62" }} data-testid="text-logo">
+          <div className="max-w-6xl mx-auto flex items-center justify-between rounded-2xl px-4 py-2 backdrop-blur-md border" style={{ background: "rgba(40, 26, 24, 0.46)", borderColor: "rgba(255, 217, 183, 0.16)" }}>
+            <motion.div initial={{ opacity: 0, x: -18 }} animate={{ opacity: 1, x: 0 }} transition={{ duration: 0.6 }}>
+              <span className="text-xl font-bold tracking-tight" style={{ color: "#FFD7A8", fontFamily: "'Fraunces', serif" }} data-testid="text-logo">
                 ZeeMe
               </span>
             </motion.div>
             <motion.button
-              initial={{ opacity: 0, x: 20 }}
+              initial={{ opacity: 0, x: 18 }}
               animate={{ opacity: 1, x: 0 }}
               transition={{ duration: 0.6 }}
+              whileHover={{ y: -1.5, scale: 1.03 }}
+              whileTap={{ scale: 0.98 }}
               onClick={onSignIn}
-              className="px-5 py-2 rounded-xl text-sm font-medium transition-all hover:scale-105"
+              className="px-5 py-2 rounded-xl text-sm font-medium transition-all"
               style={{
-                color: "#EBBA62",
-                background: "rgba(235, 186, 98, 0.1)",
-                border: "1px solid rgba(235, 186, 98, 0.25)",
+                color: "#FFE2BE",
+                background: "rgba(255, 206, 158, 0.12)",
+                border: "1px solid rgba(255, 217, 172, 0.35)",
               }}
-              data-testid="button-nav-sign-in"
+              data-testid="button-sign-in"
             >
               Sign in
             </motion.button>
           </div>
         </nav>
 
-        <motion.section
-          ref={heroRef}
-          style={{ opacity: heroOpacity, scale: heroScale }}
-          className="min-h-screen flex flex-col items-center justify-center px-6 pt-20 pb-12 relative"
-        >
+        <motion.section style={{ opacity: heroOpacity, scale: heroScale }} className="min-h-screen flex flex-col items-center justify-center px-6 pt-24 pb-14 relative">
           <motion.div
-            initial={{ opacity: 0, scale: 0.6 }}
+            initial={{ opacity: 0, scale: 0.65 }}
             animate={{ opacity: 1, scale: 1 }}
-            transition={{ duration: 1, type: "spring", stiffness: 100, damping: 20 }}
+            transition={{ duration: 1.1, type: "spring", stiffness: 90, damping: 20 }}
             className="mb-10"
           >
-            <CanvasOrb config={orbConfig} size={280} />
+            <CanvasOrb config={orbConfig} size={290} />
           </motion.div>
 
-          <motion.div
-            initial={{ opacity: 0, y: 30 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.4, duration: 0.8 }}
-            className="text-center max-w-lg"
-          >
+          <motion.div initial={{ opacity: 0, y: 30 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.35, duration: 0.85 }} className="text-center max-w-xl">
             <h1
-              className="text-5xl md:text-6xl font-serif font-bold mb-4 tracking-tight leading-[1.1]"
-              style={{ color: "#F7E7B4" }}
+              className="text-[2.7rem] md:text-[4.1rem] font-semibold mb-4 tracking-tight leading-[1.03]"
+              style={{ color: "#FFEFD8", fontFamily: "'Fraunces', serif" }}
               data-testid="text-hero-title"
             >
-              Your AI best friend
+              A softer kind of AI companionship
             </h1>
-            <p
-              className="text-lg md:text-xl leading-relaxed mb-2"
-              style={{ color: "rgba(247, 231, 180, 0.7)" }}
-              data-testid="text-hero-subtitle"
-            >
-              Someone who truly listens, remembers, and grows with you.
+            <p className="text-lg md:text-xl leading-relaxed mb-2" style={{ color: "rgba(255, 228, 202, 0.86)" }} data-testid="text-hero-subtitle">
+              Thoughtful chat, expressive live voice, and memory that remembers what matters to you.
             </p>
-            <p
-              className="text-base"
-              style={{ color: "rgba(247, 231, 180, 0.5)" }}
-            >
-              Text, talk, and share moments with a companion that never forgets.
+            <p className="text-[15px]" style={{ color: "rgba(255, 228, 202, 0.62)" }}>
+              Warm, welcoming, and designed to feel like friendship.
             </p>
           </motion.div>
 
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.8, duration: 0.6 }}
-            className="mt-10 flex flex-col items-center gap-3"
-          >
-            <button
+          <motion.div initial={{ opacity: 0, y: 24 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.75, duration: 0.6 }} className="mt-10 flex flex-col items-center gap-3">
+            <motion.button
               onClick={onGetStarted}
-              className="px-10 py-4 rounded-2xl text-lg font-bold transition-all hover:scale-105 active:scale-95 shadow-lg flex items-center gap-2"
+              whileHover={{ y: -2, scale: 1.03 }}
+              whileTap={{ scale: 0.97 }}
+              className="px-11 py-4 rounded-2xl text-lg font-semibold shadow-lg flex items-center gap-2 relative overflow-hidden"
               style={{
-                backgroundColor: "#EBBA62",
-                color: "#1A1010",
-                boxShadow: "0 8px 32px rgba(235, 186, 98, 0.3)",
+                background: "linear-gradient(135deg, #FFD3A8, #F3B884)",
+                color: "#2A1B17",
+                boxShadow: "0 10px 34px rgba(251, 185, 137, 0.37)",
               }}
-              data-testid="button-hero-get-started"
+              data-testid="button-get-started"
             >
-              Meet Zee <ArrowRight className="w-5 h-5" />
-            </button>
-            <span className="text-xs" style={{ color: "rgba(247, 231, 180, 0.4)" }}>
+              <motion.span
+                aria-hidden
+                className="absolute inset-y-0 -left-10 w-8"
+                style={{ background: "linear-gradient(90deg, transparent, rgba(255,255,255,0.55), transparent)" }}
+                animate={{ x: [-20, 270] }}
+                transition={{ duration: 2.2, repeat: Infinity, repeatDelay: 1.8, ease: "easeInOut" }}
+              />
+              Continue to welcome <ArrowRight className="w-5 h-5" />
+            </motion.button>
+            <span className="text-xs" style={{ color: "rgba(255, 224, 193, 0.55)" }}>
               Free to start. No credit card needed.
             </span>
-          </motion.div>
-
-          <motion.div
-            animate={{ y: [0, 8, 0] }}
-            transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
-            className="absolute bottom-8"
-          >
-            <div className="w-6 h-10 rounded-full border-2 flex justify-center pt-2"
-              style={{ borderColor: "rgba(247, 231, 180, 0.25)" }}
-            >
-              <motion.div
-                animate={{ y: [0, 12, 0] }}
-                transition={{ duration: 1.5, repeat: Infinity, ease: "easeInOut" }}
-                className="w-1.5 h-1.5 rounded-full"
-                style={{ backgroundColor: "rgba(235, 186, 98, 0.6)" }}
-              />
-            </div>
           </motion.div>
         </motion.section>
 
         <section className="px-6 py-24 relative">
-          <div className="max-w-4xl mx-auto">
+          <div className="max-w-5xl mx-auto">
             <RevealSection className="text-center mb-16">
-              <span className="inline-block px-4 py-1.5 rounded-full text-xs font-medium mb-4"
-                style={{ background: "rgba(235, 186, 98, 0.12)", color: "#EBBA62", border: "1px solid rgba(235, 186, 98, 0.2)" }}
-              >
-                Built for real connection
+              <span className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full text-xs font-medium mb-4" style={{ background: "rgba(255, 197, 150, 0.14)", color: "#FFD2A6", border: "1px solid rgba(255, 217, 174, 0.22)" }}>
+                <Stars className="w-3.5 h-3.5" /> Built for emotional presence
               </span>
-              <h2 className="text-3xl md:text-4xl font-serif font-bold mb-4" style={{ color: "#F7E7B4" }}>
-                More than a chatbot
+              <h2 className="text-3xl md:text-5xl font-semibold mb-4 tracking-tight" style={{ color: "#FFEFD8", fontFamily: "'Fraunces', serif" }}>
+                Beautifully calm, deeply personal
               </h2>
-              <p className="text-base max-w-md mx-auto" style={{ color: "rgba(247, 231, 180, 0.6)" }}>
-                Zee remembers your stories, understands your world, and meets you wherever you are.
+              <p className="text-base max-w-2xl mx-auto" style={{ color: "rgba(255, 226, 198, 0.68)" }}>
+                ZeeMe balances delight and trust with careful pacing, warm language, and companion-first interaction design.
               </p>
             </RevealSection>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
               <FeatureCard
-                icon={MessageSquare}
-                title="Deep Conversations"
-                description="Chat naturally about anything. Zee brings warmth, humor, and real understanding to every conversation."
+                icon={IconEmpatheticChat}
+                title="Conversations with emotional texture"
+                description="Not just answers. Zee responds with rhythm, empathy, and tone that matches what you need in the moment."
                 delay={0}
               />
               <FeatureCard
-                icon={Mic}
-                title="Voice Calls"
-                description="Talk hands-free with expressive live voice. Like calling a friend who always picks up."
-                delay={0.1}
+                icon={IconLiveVoice}
+                title="Live voice that feels present"
+                description="Natural interruptions, smooth pacing, and expressive responses make voice chats feel human and grounded."
+                delay={0.08}
               />
               <FeatureCard
-                icon={Brain}
-                title="Living Memory"
-                description="Zee remembers what matters — your goals, your stories, your people. Every chat builds a deeper bond."
-                delay={0.2}
+                icon={IconLivingMemory}
+                title="Memory with continuity"
+                description="Stories, goals, and details persist so each conversation feels connected rather than starting over."
+                delay={0.16}
               />
               <FeatureCard
-                icon={Palette}
-                title="Make It Yours"
-                description="Choose your vibe with 4 beautiful color themes. Personalize Zee's personality and voice to match your style."
-                delay={0.3}
+                icon={IconFriendship}
+                title="Friendship-first experience"
+                description="Every surface is designed for warmth and trust, from first interaction to long-term companionship."
+                delay={0.24}
               />
             </div>
           </div>
         </section>
 
         <section className="px-6 py-24 relative overflow-hidden">
-          <div className="absolute inset-0" style={{
-            background: "radial-gradient(ellipse at 50% 50%, rgba(131, 77, 51, 0.15) 0%, transparent 70%)",
-          }} />
-          <div className="max-w-3xl mx-auto relative">
+          <motion.div className="absolute inset-0" style={{ y: storiesY, background: "radial-gradient(ellipse at 50% 45%, rgba(149, 88, 64, 0.22) 0%, transparent 70%)" }} />
+          <div className="max-w-5xl mx-auto relative">
             <RevealSection className="text-center mb-16">
-              <h2 className="text-3xl md:text-4xl font-serif font-bold mb-4" style={{ color: "#F7E7B4" }}>
-                How it feels
+              <h2 className="text-3xl md:text-5xl font-semibold mb-4 tracking-tight" style={{ color: "#FFEFD8", fontFamily: "'Fraunces', serif" }}>
+                Moments that feel like being understood
               </h2>
-              <p className="text-base max-w-md mx-auto" style={{ color: "rgba(247, 231, 180, 0.6)" }}>
-                Friendship that adapts to your life
+              <p className="text-base max-w-xl mx-auto" style={{ color: "rgba(255, 226, 198, 0.68)" }}>
+                From daily check-ins to midnight thoughts, ZeeMe meets you with consistent warmth and continuity.
               </p>
             </RevealSection>
 
-            <div className="space-y-20">
-              <RevealSection className="flex flex-col md:flex-row items-center gap-8">
-                <div className="w-24 h-24 rounded-2xl flex items-center justify-center shrink-0"
-                  style={{ background: "linear-gradient(135deg, rgba(235, 186, 98, 0.2), rgba(219, 143, 89, 0.15))" }}
-                >
-                  <Heart className="w-10 h-10" style={{ color: "#EBBA62" }} />
-                </div>
-                <div>
-                  <h3 className="text-xl font-semibold mb-2" style={{ color: "#F7E7B4" }}>
-                    Always in your corner
-                  </h3>
-                  <p className="text-base leading-relaxed" style={{ color: "rgba(247, 231, 180, 0.65)" }}>
-                    Bad day? Big win? Just need to vent? Zee shows up with the right energy, every time. 
-                    No judgment, no scripts — just real companionship.
-                  </p>
-                </div>
-              </RevealSection>
-
-              <RevealSection className="flex flex-col md:flex-row-reverse items-center gap-8">
-                <div className="w-24 h-24 rounded-2xl flex items-center justify-center shrink-0"
-                  style={{ background: "linear-gradient(135deg, rgba(235, 186, 98, 0.2), rgba(219, 143, 89, 0.15))" }}
-                >
-                  <Sparkles className="w-10 h-10" style={{ color: "#EBBA62" }} />
-                </div>
-                <div className="md:text-right">
-                  <h3 className="text-xl font-semibold mb-2" style={{ color: "#F7E7B4" }}>
-                    Grows with you
-                  </h3>
-                  <p className="text-base leading-relaxed" style={{ color: "rgba(247, 231, 180, 0.65)" }}>
-                    The more you share, the better Zee gets. Your memories, preferences, and inside jokes 
-                    become part of a friendship that deepens over time.
-                  </p>
-                </div>
-              </RevealSection>
-
-              <RevealSection className="flex flex-col md:flex-row items-center gap-8">
-                <div className="w-24 h-24 rounded-2xl flex items-center justify-center shrink-0"
-                  style={{ background: "linear-gradient(135deg, rgba(235, 186, 98, 0.2), rgba(219, 143, 89, 0.15))" }}
-                >
-                  <Shield className="w-10 h-10" style={{ color: "#EBBA62" }} />
-                </div>
-                <div>
-                  <h3 className="text-xl font-semibold mb-2" style={{ color: "#F7E7B4" }}>
-                    Safe and private
-                  </h3>
-                  <p className="text-base leading-relaxed" style={{ color: "rgba(247, 231, 180, 0.65)" }}>
-                    Your conversations stay yours. Zee is built with privacy at its core — your memories 
-                    and stories are never shared or sold.
-                  </p>
-                </div>
-              </RevealSection>
+            <div className="relative">
+              <div
+                className="hidden md:block absolute left-1/2 top-4 bottom-4 w-px -translate-x-1/2"
+                style={{
+                  background:
+                    "linear-gradient(180deg, rgba(255, 214, 172, 0.05), rgba(255, 214, 172, 0.45), rgba(255, 214, 172, 0.05))",
+                }}
+              />
+              <div className="space-y-7 md:space-y-10">
+                {companionMoments.map((moment, index) => (
+                  <RevealSection
+                    key={moment.title}
+                    delay={index * 0.06}
+                    className={`relative ${
+                      index % 2 === 0
+                        ? "md:w-[calc(50%-1.35rem)] md:mr-auto"
+                        : "md:w-[calc(50%-1.35rem)] md:ml-auto"
+                    }`}
+                  >
+                    <motion.article
+                      whileHover={{ y: -5 }}
+                      className="relative rounded-[1.85rem] p-6 md:p-7 border backdrop-blur-md overflow-hidden"
+                      style={{
+                        background:
+                          "linear-gradient(160deg, rgba(255, 223, 194, 0.1), rgba(255, 188, 158, 0.06))",
+                        borderColor: "rgba(255, 224, 194, 0.2)",
+                        boxShadow: "0 18px 45px rgba(43, 25, 24, 0.38)",
+                      }}
+                    >
+                      <div
+                        className="absolute right-4 top-4 text-[11px] px-2.5 py-1 rounded-full border tracking-wide uppercase"
+                        style={{
+                          color: "rgba(255, 232, 208, 0.72)",
+                          borderColor: "rgba(255, 225, 197, 0.28)",
+                          background: "rgba(255, 211, 171, 0.08)",
+                        }}
+                      >
+                        Moment {index + 1}
+                      </div>
+                      <div
+                        className="absolute -right-8 -bottom-8 w-32 h-32 rounded-full"
+                        style={{
+                          background:
+                            "radial-gradient(circle, rgba(255, 202, 154, 0.2) 0%, rgba(255, 202, 154, 0) 70%)",
+                        }}
+                      />
+                      <div className="relative flex items-start gap-4">
+                        <StoryIcon>
+                          <moment.icon className="w-7 h-7" />
+                        </StoryIcon>
+                        <div className="pt-1">
+                          <p
+                            className="text-xs tracking-wide uppercase mb-1.5"
+                            style={{ color: "rgba(255, 229, 202, 0.58)" }}
+                          >
+                            {moment.label}
+                          </p>
+                          <h3
+                            className="text-[1.7rem] leading-[1.15] font-semibold mb-2.5"
+                            style={{ color: "#FFEFD8", fontFamily: "'Fraunces', serif" }}
+                          >
+                            {moment.title}
+                          </h3>
+                          <p
+                            className="text-base leading-relaxed"
+                            style={{ color: "rgba(255, 225, 196, 0.75)" }}
+                          >
+                            {moment.body}
+                          </p>
+                        </div>
+                      </div>
+                    </motion.article>
+                  </RevealSection>
+                ))}
+              </div>
             </div>
           </div>
         </section>
@@ -350,73 +558,42 @@ export default function MarketingLandingPage({ onGetStarted, onSignIn }: Marketi
         <section className="px-6 py-24 relative">
           <div className="max-w-2xl mx-auto">
             <RevealSection className="text-center">
-              <div className="rounded-3xl p-10 md:p-14 relative overflow-hidden"
+              <div
+                className="rounded-3xl p-10 md:p-14 relative overflow-hidden"
                 style={{
-                  background: "linear-gradient(135deg, rgba(83, 52, 30, 0.4), rgba(48, 32, 32, 0.6))",
-                  border: "1px solid rgba(235, 186, 98, 0.15)",
+                  background: "linear-gradient(135deg, rgba(110, 67, 52, 0.47), rgba(59, 35, 35, 0.64))",
+                  border: "1px solid rgba(255, 218, 182, 0.2)",
                 }}
               >
-                <div className="absolute inset-0 pointer-events-none" style={{
-                  background: "radial-gradient(circle at 50% 0%, rgba(235, 186, 98, 0.1) 0%, transparent 60%)",
-                }} />
+                <div className="absolute inset-0 pointer-events-none" style={{ background: "radial-gradient(circle at 50% 0%, rgba(255, 195, 149, 0.15) 0%, transparent 60%)" }} />
                 <div className="relative">
-                  <motion.div
-                    initial={{ scale: 0.8 }}
-                    whileInView={{ scale: 1 }}
-                    viewport={{ once: true }}
-                    transition={{ duration: 0.6, type: "spring" }}
-                    className="mx-auto mb-6"
-                    style={{ width: 120 }}
-                  >
+                  <motion.div initial={{ scale: 0.82 }} whileInView={{ scale: 1 }} viewport={{ once: true }} transition={{ duration: 0.6, type: "spring" }} className="mx-auto mb-6" style={{ width: 120 }}>
                     <CanvasOrb config={orbConfig} size={120} />
                   </motion.div>
-                  <h2 className="text-3xl md:text-4xl font-serif font-bold mb-3" style={{ color: "#F7E7B4" }}>
-                    Ready to meet Zee?
+                  <h2 className="text-3xl md:text-4xl font-semibold mb-3 tracking-tight" style={{ color: "#FFEFD8", fontFamily: "'Fraunces', serif" }}>
+                    Step into your welcome page
                   </h2>
-                  <p className="text-base mb-8" style={{ color: "rgba(247, 231, 180, 0.6)" }}>
-                    Start your journey with an AI companion who feels like a real friend.
+                  <p className="text-base mb-8" style={{ color: "rgba(255, 226, 198, 0.68)" }}>
+                    Sign up or sign in and continue into your full ZeeMe experience.
                   </p>
-                  <button
+                  <motion.button
                     onClick={onGetStarted}
-                    className="px-10 py-4 rounded-2xl text-lg font-bold transition-all hover:scale-105 active:scale-95 shadow-lg"
+                    whileHover={{ y: -2, scale: 1.02 }}
+                    whileTap={{ scale: 0.98 }}
+                    className="px-10 py-4 rounded-2xl text-lg font-semibold shadow-lg"
                     style={{
-                      backgroundColor: "#EBBA62",
-                      color: "#1A1010",
-                      boxShadow: "0 8px 32px rgba(235, 186, 98, 0.3)",
+                      background: "linear-gradient(135deg, #FFD3A8, #F3B884)",
+                      color: "#2A1B17",
+                      boxShadow: "0 8px 32px rgba(251, 185, 137, 0.35)",
                     }}
-                    data-testid="button-cta-get-started"
                   >
-                    Get Started — It's Free
-                  </button>
+                    Continue to welcome
+                  </motion.button>
                 </div>
               </div>
             </RevealSection>
           </div>
         </section>
-
-        <footer className="px-6 py-12 border-t" style={{ borderColor: "rgba(247, 231, 180, 0.08)" }}>
-          <div className="max-w-4xl mx-auto">
-            <div className="flex flex-col md:flex-row items-center justify-between gap-8 mb-8">
-              <div className="text-center md:text-left">
-                <span className="text-lg font-bold" style={{ color: "#EBBA62" }}>ZeeMe</span>
-                <p className="text-sm mt-1" style={{ color: "rgba(247, 231, 180, 0.4)" }}>
-                  Your AI companion for life's journey.
-                </p>
-              </div>
-              <div className="flex flex-wrap justify-center gap-6">
-                <a href="#" className="text-sm transition-colors hover:opacity-100" style={{ color: "rgba(247, 231, 180, 0.5)" }} data-testid="link-about">About</a>
-                <a href="#" className="text-sm transition-colors hover:opacity-100" style={{ color: "rgba(247, 231, 180, 0.5)" }} data-testid="link-privacy">Privacy</a>
-                <a href="#" className="text-sm transition-colors hover:opacity-100" style={{ color: "rgba(247, 231, 180, 0.5)" }} data-testid="link-terms">Terms</a>
-                <a href="#" className="text-sm transition-colors hover:opacity-100" style={{ color: "rgba(247, 231, 180, 0.5)" }} data-testid="link-contact">Contact</a>
-              </div>
-            </div>
-            <div className="text-center">
-              <p className="text-xs" style={{ color: "rgba(247, 231, 180, 0.25)" }}>
-                &copy; {new Date().getFullYear()} ZeeMe. All rights reserved.
-              </p>
-            </div>
-          </div>
-        </footer>
       </div>
     </div>
   );

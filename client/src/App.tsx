@@ -1503,75 +1503,11 @@ const AuthPage = ({ onLogin, onRegister, loginError, registerError, isLoggingIn,
   const inputClass = "w-full h-12 px-4 rounded-xl bg-white/10 border border-white/20 text-white placeholder:text-white/40 focus:outline-none focus:border-[var(--app-accent)] focus:ring-1 focus:ring-[var(--app-accent)] transition-colors";
 
   if (authMode === "welcome") {
-    const landingSlide = {
-      id: 1,
-      title: "Welcome",
-      description: "I can't wait to meet you :)",
-      orbColor: "#EBBA62",
-      orbGlow: "rgba(235, 186, 98, 0.45)",
-      bgGradient: "radial-gradient(ellipse at 50% 40%, rgba(83,52,30,0.95) 0%, #1A1010 70%)",
-      accentRing: "rgba(235, 186, 98, 0.25)",
-      particleColor: "rgba(235, 186, 98, 0.6)",
-      headlineColor: "#FFE3C8",
-      bodyColor: "rgba(255, 216, 185, 0.86)",
-      skipColor: "rgba(255, 206, 162, 0.72)",
-      dotInactive: "rgba(255, 203, 160, 0.2)",
-      ctaText: "#FFF2E4",
-      ctaBackground: "linear-gradient(135deg, rgba(255,255,255,0.15), rgba(255,196,141,0.12))",
-      ctaBorder: "rgba(255, 191, 144, 0.5)",
-    };
     return (
-      <div className="w-full h-[100dvh] min-h-[100dvh] flex items-center justify-center overflow-hidden" style={{ background: landingSlide.bgGradient }} data-testid="landing-page">
-        <div className="w-full h-full md:max-w-[400px] md:h-[850px] md:rounded-[2.5rem] shadow-2xl overflow-hidden relative flex flex-col items-center justify-between p-8" style={{ background: landingSlide.bgGradient }}>
-          <div className="flex-1 flex flex-col items-center justify-center w-full">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.8 }}
-              animate={{ opacity: 1, scale: 1 }}
-              transition={{ delay: 0.2, type: "spring", stiffness: 150, damping: 20 }}
-              className="mb-8"
-            >
-              <OnboardingOrb slide={landingSlide} />
-            </motion.div>
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.4, duration: 0.5 }}
-              className="text-center space-y-4"
-            >
-              <h1 className="text-4xl font-serif font-bold text-white tracking-tight">
-                Welcome
-              </h1>
-              <p className="text-lg leading-relaxed font-medium text-white/60">
-                {landingSlide.description}
-              </p>
-            </motion.div>
-          </div>
-
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.6, duration: 0.5 }}
-            className="w-full space-y-3 mb-8"
-          >
-            <Button
-              className="w-full h-14 text-lg rounded-2xl shadow-xl transition-transform active:scale-95 font-bold"
-              style={{ backgroundColor: landingSlide.orbColor, color: "#0A0A0A" }}
-              onClick={() => setAuthMode("register")}
-              data-testid="button-get-started"
-            >
-              Get Started
-            </Button>
-            <Button 
-              variant="ghost"
-              className="w-full h-12 text-base text-white/50 hover:text-white hover:bg-white/10 rounded-2xl"
-              onClick={() => setAuthMode("login")}
-              data-testid="button-sign-in"
-            >
-              Already have an account? Sign in
-            </Button>
-          </motion.div>
-        </div>
-      </div>
+      <MarketingLandingPage
+        onGetStarted={() => setAuthMode("register")}
+        onSignIn={() => setAuthMode("login")}
+      />
     );
   }
 
