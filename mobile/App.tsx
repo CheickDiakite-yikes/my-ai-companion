@@ -66,6 +66,10 @@ export default function App() {
         allowsBackForwardNavigationGestures
         mediaPlaybackRequiresUserAction={false}
         setSupportMultipleWindows={false}
+        style={{ backgroundColor: "#070b14" }}
+        bounces={false}
+        overScrollMode="never"
+        scrollEnabled={false}
       />
     </SafeAreaView>
   );
