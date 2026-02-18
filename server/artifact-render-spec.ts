@@ -316,40 +316,33 @@ function buildDocumentSpec(input: {
 
   blocks.forEach((block, index) => {
     const key = `doc-block-${index + 1}`;
+    let element: ArtifactRenderSpecV1["elements"][string];
     if (block.kind === "heading") {
-      elements[key] = {
+      element = {
         type: "ZeeHeading",
-        props: {
-          level: block.level,
-          text: block.text,
-        },
+        props: { level: block.level, text: block.text },
         children: [],
       };
     } else if (block.kind === "list") {
-      elements[key] = {
+      element = {
         type: "ZeeBulletList",
-        props: {
-          items: block.items,
-        },
+        props: { items: block.items },
         children: [],
       };
     } else if (block.kind === "table" || block.kind === "hr") {
-      elements[key] = {
+      element = {
         type: "ZeeParagraph",
-        props: {
-          text: block.kind === "hr" ? "---" : "[table]",
-        },
+        props: { text: block.kind === "hr" ? "---" : "[table]" },
         children: [],
       };
     } else {
-      elements[key] = {
+      element = {
         type: "ZeeParagraph",
-        props: {
-          text: block.text,
-        },
+        props: { text: block.text },
         children: [],
       };
     }
+    Object.defineProperty(elements, key, { value: element, writable: true, enumerable: true, configurable: true });
     elements["doc-shell"].children?.push(key);
   });
 
@@ -378,16 +371,17 @@ function buildPresentationSpec(input: {
 
   input.slides.forEach((slide, index) => {
     const key = `slide-${index + 1}`;
-    elements[key] = {
-      type: "ZeeSlideCard",
+    const element = {
+      type: "ZeeSlideCard" as const,
       props: {
         index: slide.index,
         title: slide.title,
         body: slide.body || null,
         imageDataUrl: slide.imageDataUrl,
       },
-      children: [],
+      children: [] as string[],
     };
+    Object.defineProperty(elements, key, { value: element, writable: true, enumerable: true, configurable: true });
     elements["deck-shell"].children?.push(key);
   });
 
