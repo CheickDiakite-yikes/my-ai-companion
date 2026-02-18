@@ -659,126 +659,238 @@ function InfoPageOverlay({
           transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
           className="max-w-3xl mx-auto px-6 pt-8 pb-20"
         >
-          <header className="text-center mb-14">
-            <motion.div
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.4, delay: 0.15 }}
-              className="mb-3"
-            >
-              <span
-                className="inline-block px-3 py-1 rounded-full text-[11px] font-semibold tracking-widest uppercase"
-                style={{
-                  background: "rgba(255, 197, 150, 0.12)",
-                  color: "rgba(255, 214, 172, 0.7)",
-                  border: "1px solid rgba(255, 217, 174, 0.18)",
-                }}
-              >
-                {content.accentWord}
-              </span>
-            </motion.div>
-            <motion.h1
-              initial={{ opacity: 0, y: 18 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.5, delay: 0.22, ease: [0.22, 1, 0.36, 1] }}
-              className="text-3xl md:text-[2.8rem] font-semibold tracking-tight leading-tight mb-3"
-              style={{ color: "#FFEFD8", fontFamily: "'Fraunces', serif" }}
-            >
-              {content.title}
-            </motion.h1>
-            <motion.p
-              initial={{ opacity: 0, y: 14 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.45, delay: 0.32, ease: [0.22, 1, 0.36, 1] }}
-              className="text-base md:text-lg max-w-lg mx-auto leading-relaxed"
-              style={{ color: "rgba(255, 226, 198, 0.65)" }}
-            >
-              {content.subtitle}
-            </motion.p>
-            <motion.p
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              transition={{ duration: 0.4, delay: 0.45 }}
-              className="text-xs mt-4"
-              style={{ color: "rgba(255, 220, 188, 0.4)" }}
-            >
-              Last updated {content.updatedAt}
-            </motion.p>
+          <header className={`text-center ${page === "about" ? "mb-8" : "mb-14"}`}>
+            {page === "about" ? (
+              <>
+                <motion.div
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  transition={{ duration: 0.6, delay: 0.1 }}
+                  className="flex items-center justify-center gap-3 mb-5"
+                >
+                  <svg width="50" height="10" viewBox="0 0 50 10" fill="none" className="opacity-30">
+                    <path d="M0 5 C6 5, 8 2, 14 2 C20 2, 22 8, 28 8 C34 8, 36 3, 42 3 C46 3, 48 5, 50 5" stroke="rgba(255, 214, 172, 0.7)" strokeWidth="0.7" fill="none" />
+                  </svg>
+                  <span className="text-xs tracking-[0.35em] uppercase" style={{ color: "rgba(255, 214, 172, 0.4)" }}>
+                    {content.accentWord}
+                  </span>
+                  <svg width="50" height="10" viewBox="0 0 50 10" fill="none" className="opacity-30" style={{ transform: "scaleX(-1)" }}>
+                    <path d="M0 5 C6 5, 8 2, 14 2 C20 2, 22 8, 28 8 C34 8, 36 3, 42 3 C46 3, 48 5, 50 5" stroke="rgba(255, 214, 172, 0.7)" strokeWidth="0.7" fill="none" />
+                  </svg>
+                </motion.div>
+                <motion.h1
+                  initial={{ opacity: 0, y: 16 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.6, delay: 0.2, ease: [0.22, 1, 0.36, 1] }}
+                  className="text-[2.2rem] md:text-[3.2rem] font-semibold tracking-tight leading-[1.08] mb-4"
+                  style={{ color: "#FFEFD8", fontFamily: "'Fraunces', serif" }}
+                >
+                  {content.title}
+                </motion.h1>
+                <motion.p
+                  initial={{ opacity: 0, y: 12 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.5, delay: 0.32, ease: [0.22, 1, 0.36, 1] }}
+                  className="text-base md:text-[17px] max-w-md mx-auto leading-[1.8] italic"
+                  style={{ color: "rgba(255, 226, 198, 0.58)", fontFamily: "'Fraunces', serif" }}
+                >
+                  {content.subtitle}
+                </motion.p>
+                <motion.div
+                  initial={{ scaleX: 0, opacity: 0 }}
+                  animate={{ scaleX: 1, opacity: 1 }}
+                  transition={{ duration: 0.7, delay: 0.45 }}
+                  className="flex items-center justify-center gap-2 mt-7"
+                >
+                  <div className="w-16 h-px" style={{ background: "linear-gradient(90deg, transparent, rgba(255, 214, 172, 0.3))" }} />
+                  <div className="w-2 h-2 rotate-45 border" style={{ borderColor: "rgba(255, 214, 172, 0.25)" }} />
+                  <div className="w-16 h-px" style={{ background: "linear-gradient(90deg, rgba(255, 214, 172, 0.3), transparent)" }} />
+                </motion.div>
+              </>
+            ) : (
+              <>
+                <motion.div
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.4, delay: 0.15 }}
+                  className="mb-3"
+                >
+                  <span
+                    className="inline-block px-3 py-1 rounded-full text-[11px] font-semibold tracking-widest uppercase"
+                    style={{
+                      background: "rgba(255, 197, 150, 0.12)",
+                      color: "rgba(255, 214, 172, 0.7)",
+                      border: "1px solid rgba(255, 217, 174, 0.18)",
+                    }}
+                  >
+                    {content.accentWord}
+                  </span>
+                </motion.div>
+                <motion.h1
+                  initial={{ opacity: 0, y: 18 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.5, delay: 0.22, ease: [0.22, 1, 0.36, 1] }}
+                  className="text-3xl md:text-[2.8rem] font-semibold tracking-tight leading-tight mb-3"
+                  style={{ color: "#FFEFD8", fontFamily: "'Fraunces', serif" }}
+                >
+                  {content.title}
+                </motion.h1>
+                <motion.p
+                  initial={{ opacity: 0, y: 14 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.45, delay: 0.32, ease: [0.22, 1, 0.36, 1] }}
+                  className="text-base md:text-lg max-w-lg mx-auto leading-relaxed"
+                  style={{ color: "rgba(255, 226, 198, 0.65)" }}
+                >
+                  {content.subtitle}
+                </motion.p>
+                <motion.p
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  transition={{ duration: 0.4, delay: 0.45 }}
+                  className="text-xs mt-4"
+                  style={{ color: "rgba(255, 220, 188, 0.4)" }}
+                >
+                  Last updated {content.updatedAt}
+                </motion.p>
+              </>
+            )}
           </header>
 
-          <motion.div
-            initial={{ scaleX: 0, opacity: 0 }}
-            animate={{ scaleX: 1, opacity: 1 }}
-            transition={{ duration: 0.6, delay: 0.4, ease: [0.22, 1, 0.36, 1] }}
-            className="h-px mb-10 mx-auto max-w-xs"
-            style={{
-              background: "linear-gradient(90deg, transparent, rgba(255, 214, 172, 0.25), transparent)",
-            }}
-          />
+          {page !== "about" && (
+            <motion.div
+              initial={{ scaleX: 0, opacity: 0 }}
+              animate={{ scaleX: 1, opacity: 1 }}
+              transition={{ duration: 0.6, delay: 0.4, ease: [0.22, 1, 0.36, 1] }}
+              className="h-px mb-10 mx-auto max-w-xs"
+              style={{
+                background: "linear-gradient(90deg, transparent, rgba(255, 214, 172, 0.25), transparent)",
+              }}
+            />
+          )}
 
           {page === "about" ? (
-            <div className="space-y-16">
-              {content.sections.map((section, idx) => (
-                <motion.section
-                  key={section.heading}
-                  initial={{ opacity: 0, y: 30 }}
-                  whileInView={{ opacity: 1, y: 0 }}
-                  viewport={{ once: true, margin: "-40px" }}
-                  transition={{ duration: 0.55, delay: idx * 0.06, ease: [0.22, 1, 0.36, 1] }}
-                  className="relative"
+            <div>
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                whileInView={{ opacity: 1, y: 0 }}
+                viewport={{ once: true }}
+                transition={{ duration: 0.6, ease: [0.22, 1, 0.36, 1] }}
+                className="text-center mb-14 px-4"
+              >
+                <div
+                  className="relative max-w-md mx-auto rounded-none p-8 md:p-10"
+                  style={{
+                    border: "1px solid rgba(255, 214, 172, 0.15)",
+                    background: "linear-gradient(180deg, rgba(255, 220, 190, 0.03), transparent)",
+                  }}
                 >
-                  {idx > 0 && (
-                    <motion.div
-                      initial={{ scaleX: 0 }}
-                      whileInView={{ scaleX: 1 }}
-                      viewport={{ once: true }}
-                      transition={{ duration: 0.5 }}
-                      className="h-px mb-16 mx-auto max-w-[120px]"
-                      style={{ background: "linear-gradient(90deg, transparent, rgba(255, 214, 172, 0.2), transparent)" }}
-                    />
-                  )}
-                  <div className="flex items-start gap-5">
-                    {section.icon && (
-                      <motion.div
-                        initial={{ scale: 0.5, opacity: 0 }}
-                        whileInView={{ scale: 1, opacity: 1 }}
-                        viewport={{ once: true }}
-                        transition={{ duration: 0.4, delay: 0.1, type: "spring", stiffness: 180 }}
-                        className="w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 mt-1"
-                        style={{
-                          background: "linear-gradient(145deg, rgba(255, 216, 174, 0.2), rgba(255, 186, 140, 0.1))",
-                          border: "1px solid rgba(255, 225, 197, 0.15)",
-                        }}
-                      >
-                        <span className="text-lg">{section.icon}</span>
-                      </motion.div>
-                    )}
-                    <div className="flex-1">
+                  <div className="absolute -top-px left-4 right-4 h-px" style={{ background: "linear-gradient(90deg, transparent, rgba(255, 214, 172, 0.35), transparent)" }} />
+                  <div className="absolute -bottom-px left-4 right-4 h-px" style={{ background: "linear-gradient(90deg, transparent, rgba(255, 214, 172, 0.35), transparent)" }} />
+                  <div className="absolute top-4 bottom-4 -left-px w-px" style={{ background: "linear-gradient(180deg, transparent, rgba(255, 214, 172, 0.35), transparent)" }} />
+                  <div className="absolute top-4 bottom-4 -right-px w-px" style={{ background: "linear-gradient(180deg, transparent, rgba(255, 214, 172, 0.35), transparent)" }} />
+
+                  <p
+                    className="text-[17px] md:text-lg leading-[1.9] italic"
+                    style={{ color: "rgba(255, 230, 205, 0.78)", fontFamily: "'Fraunces', serif" }}
+                  >
+                    "We believe AI companionship should feel emotionally intelligent, gentle, and genuinely useful in daily life."
+                  </p>
+                  <div className="flex items-center justify-center gap-3 mt-6">
+                    <div className="w-8 h-px" style={{ background: "rgba(255, 214, 172, 0.25)" }} />
+                    <span className="text-xs tracking-[0.25em] uppercase" style={{ color: "rgba(255, 214, 172, 0.4)" }}>
+                      Our Philosophy
+                    </span>
+                    <div className="w-8 h-px" style={{ background: "rgba(255, 214, 172, 0.25)" }} />
+                  </div>
+                </div>
+              </motion.div>
+
+              <div className="space-y-0">
+                {content.sections.map((section, idx) => {
+                  const romanNumerals = ["I", "II", "III", "IV", "V", "VI"];
+                  return (
+                    <motion.section
+                      key={section.heading}
+                      initial={{ opacity: 0, y: 28 }}
+                      whileInView={{ opacity: 1, y: 0 }}
+                      viewport={{ once: true, margin: "-40px" }}
+                      transition={{ duration: 0.55, delay: idx * 0.05, ease: [0.22, 1, 0.36, 1] }}
+                      className="relative text-center py-10 md:py-14"
+                    >
+                      <div className="flex items-center justify-center gap-4 mb-6">
+                        <svg width="40" height="8" viewBox="0 0 40 8" fill="none" className="opacity-40">
+                          <path d="M0 4 C8 4, 8 1, 16 1 C24 1, 24 7, 32 7 C36 7, 38 5.5, 40 4" stroke="rgba(255, 214, 172, 0.6)" strokeWidth="0.8" fill="none" />
+                        </svg>
+                        <span
+                          className="text-[13px] tracking-[0.3em] font-light"
+                          style={{ color: "rgba(255, 214, 172, 0.45)", fontFamily: "'Fraunces', serif" }}
+                        >
+                          {romanNumerals[idx]}
+                        </span>
+                        <svg width="40" height="8" viewBox="0 0 40 8" fill="none" className="opacity-40" style={{ transform: "scaleX(-1)" }}>
+                          <path d="M0 4 C8 4, 8 1, 16 1 C24 1, 24 7, 32 7 C36 7, 38 5.5, 40 4" stroke="rgba(255, 214, 172, 0.6)" strokeWidth="0.8" fill="none" />
+                        </svg>
+                      </div>
+
                       <h3
-                        className="text-2xl md:text-[1.7rem] font-semibold mb-4 tracking-tight"
+                        className="text-[1.6rem] md:text-[1.85rem] font-semibold mb-5 tracking-tight"
                         style={{ color: "#FFEFD8", fontFamily: "'Fraunces', serif" }}
                       >
                         {section.heading}
                       </h3>
-                      <div className="space-y-4">
+
+                      <div className="max-w-lg mx-auto space-y-4">
                         {section.paragraphs.map((paragraph, pIdx) => (
                           <motion.p
                             key={paragraph.substring(0, 40)}
                             initial={{ opacity: 0, y: 10 }}
                             whileInView={{ opacity: 1, y: 0 }}
                             viewport={{ once: true }}
-                            transition={{ duration: 0.4, delay: 0.15 + pIdx * 0.06, ease: [0.22, 1, 0.36, 1] }}
-                            className="text-[15px] leading-[1.85]"
-                            style={{ color: "rgba(255, 224, 196, 0.72)" }}
+                            transition={{ duration: 0.4, delay: 0.12 + pIdx * 0.06, ease: [0.22, 1, 0.36, 1] }}
+                            className="text-[15px] leading-[1.9]"
+                            style={{ color: "rgba(255, 224, 196, 0.7)", fontFamily: "'Manrope', sans-serif" }}
                           >
                             {paragraph}
                           </motion.p>
                         ))}
                       </div>
-                    </div>
-                  </div>
-                </motion.section>
-              ))}
+
+                      {idx < content.sections.length - 1 && (
+                        <motion.div
+                          initial={{ scaleX: 0, opacity: 0 }}
+                          whileInView={{ scaleX: 1, opacity: 1 }}
+                          viewport={{ once: true }}
+                          transition={{ duration: 0.6 }}
+                          className="mt-10 md:mt-14 flex items-center justify-center gap-3"
+                        >
+                          <div className="w-12 h-px" style={{ background: "linear-gradient(90deg, transparent, rgba(255, 214, 172, 0.2))" }} />
+                          <div className="w-1.5 h-1.5 rounded-full" style={{ background: "rgba(255, 214, 172, 0.2)" }} />
+                          <div className="w-12 h-px" style={{ background: "linear-gradient(90deg, rgba(255, 214, 172, 0.2), transparent)" }} />
+                        </motion.div>
+                      )}
+                    </motion.section>
+                  );
+                })}
+              </div>
+
+              <motion.div
+                initial={{ opacity: 0 }}
+                whileInView={{ opacity: 1 }}
+                viewport={{ once: true }}
+                transition={{ duration: 0.6 }}
+                className="mt-10 text-center"
+              >
+                <svg width="80" height="20" viewBox="0 0 80 20" fill="none" className="mx-auto mb-6 opacity-30">
+                  <path d="M0 10 C10 10, 12 3, 20 3 C28 3, 28 17, 40 10 C52 3, 52 17, 60 17 C68 17, 70 10, 80 10" stroke="rgba(255, 214, 172, 0.6)" strokeWidth="0.8" fill="none" />
+                </svg>
+                <p
+                  className="text-sm italic"
+                  style={{ color: "rgba(255, 226, 198, 0.4)", fontFamily: "'Fraunces', serif" }}
+                >
+                  Crafted with intention and care
+                </p>
+              </motion.div>
             </div>
           ) : page === "blog" ? (
             <div className="space-y-8">
