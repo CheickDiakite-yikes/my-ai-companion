@@ -411,6 +411,17 @@ export class GeminiLiveVoiceSession {
       throw new Error("Live voice session is already running");
     }
 
+    const reportError = (event: string, data: Record<string, any>) => {
+      try {
+        fetch("/api/live/client-error", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ event, data }),
+        }).catch(() => {});
+      } catch {}
+    };
+
     const ai = new GoogleGenAI({
       apiKey: params.ephemeralToken,
       apiVersion: "v1alpha",
@@ -465,11 +476,15 @@ export class GeminiLiveVoiceSession {
           if (!timedOut) this.handleServerMessage(message);
         },
         onerror: (event) => {
+          reportError("live.ws.error", { message: event.message, model: params.model });
           if (timedOut) return;
           const error = new Error(event.message || "Gemini Live session error");
           this.emitError(error);
         },
         onclose: (event) => {
+          if (!connectionOpened) {
+            reportError("live.ws.closed_before_open", { reason: event.reason, model: params.model });
+          }
           if (timedOut) return;
           this.debug("live.session.closed", { reason: event.reason || "unknown" });
           this.callbacks.onClosed?.(event.reason || undefined);
@@ -481,6 +496,7 @@ export class GeminiLiveVoiceSession {
       timeoutId = setTimeout(() => {
         if (!connectionOpened) {
           timedOut = true;
+          reportError("live.ws.connection_timeout", { model: params.model, timeoutMs: CONNECTION_TIMEOUT_MS });
           connectPromise.then((session) => {
             try { session.close(); } catch {}
           }).catch(() => {});
@@ -496,6 +512,7 @@ export class GeminiLiveVoiceSession {
         clearTimeout(timeoutId);
         timeoutId = undefined;
       }
+      reportError("live.ws.start_failed", { error: (err as any)?.message, model: params.model });
       throw err;
     }
 

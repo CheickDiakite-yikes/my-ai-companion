@@ -7378,6 +7378,40 @@ export async function registerRoutes(
     }
   });
 
+  app.post("/api/live/client-error", isAuthenticated, async (req: any, res) => {
+    const clientEvent = typeof req.body?.event === "string" ? req.body.event : "unknown";
+    const clientData = typeof req.body?.data === "object" && req.body.data !== null ? req.body.data : {};
+    traceError(req, "live.client.error", new Error(clientEvent), {
+      clientEvent,
+      ...clientData,
+    });
+    res.status(204).end();
+  });
+
+  app.get("/api/live/health", isAuthenticated, async (req: any, res) => {
+    const startedAt = Date.now();
+    const model = process.env.GEMINI_LIVE_MODEL || "gemini-2.5-flash-native-audio-preview-12-2025";
+    try {
+      const { GoogleGenAI } = await import("@google/genai");
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+      const info = await ai.models.get({ model });
+      const elapsed = elapsedMs(startedAt);
+      trace(req, "live.health.ok", {
+        model,
+        elapsedMs: elapsed,
+        displayName: (info as any)?.displayName ?? null,
+      });
+      res.json({ healthy: true, model, elapsedMs: elapsed, displayName: (info as any)?.displayName ?? null, traceId: getTraceId(req) });
+    } catch (error: any) {
+      const elapsed = elapsedMs(startedAt);
+      traceError(req, "live.health.failed", error, {
+        model,
+        elapsedMs: elapsed,
+      });
+      res.json({ healthy: false, model, error: error?.message, elapsedMs: elapsed, traceId: getTraceId(req) });
+    }
+  });
+
   app.post("/api/chat/respond", isAuthenticated, async (req: any, res) => {
     const startedAt = Date.now();
     try {

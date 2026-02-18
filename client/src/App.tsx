@@ -8153,6 +8153,7 @@ function App() {
 
     let conversationId: string | null = null;
     let liveSession: GeminiLiveVoiceSession | null = null;
+    let tokenModel: string | null = null;
 
     try {
       conversationId = await ensureActiveConversationId();
@@ -8176,6 +8177,7 @@ function App() {
         conversationId,
         deviceClass: detectLiveDeviceClass(),
       });
+      tokenModel = tokenPayload.model;
 
       if (startNonce !== liveStartNonceRef.current) {
         return;
@@ -8298,6 +8300,29 @@ function App() {
     } catch (error: any) {
       console.error("Failed to start Gemini Live session:", error);
 
+      const isTimeout = /timed?\s*out/i.test(error?.message ?? "");
+      const retryAttempt = (options as any)?._retryAttempt ?? 0;
+
+      try {
+        await fetch("/api/live/client-error", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({
+            event: "live.start.catch",
+            data: {
+              runId,
+              conversationId,
+              error: error?.message ?? String(error),
+              errorName: error?.name,
+              isTimeout,
+              retryAttempt,
+              model: tokenModel,
+            },
+          }),
+        });
+      } catch {}
+
       if (liveSession) {
         await liveSession.stop().catch(() => undefined);
       }
@@ -8305,8 +8330,6 @@ function App() {
         liveSessionRef.current = null;
       }
 
-      const isTimeout = /timed?\s*out/i.test(error?.message ?? "");
-      const retryAttempt = (options as any)?._retryAttempt ?? 0;
       const MAX_RETRIES = 2;
 
       if (isTimeout && retryAttempt < MAX_RETRIES && startNonce === liveStartNonceRef.current && !manualLiveStopRef.current) {
