@@ -1,0 +1,60 @@
+<svg width="1400" height="880" viewBox="0 0 1400 880" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">ZeeMe case study delivery timeline</title>
+  <desc id="desc">A publication style timeline showing major delivery events in February 2026.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#231414"/>
+      <stop offset="100%" stop-color="#120b0b"/>
+    </linearGradient>
+    <linearGradient id="line" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#e8bf83" stop-opacity="0.9"/>
+      <stop offset="100%" stop-color="#e8bf83" stop-opacity="0.2"/>
+    </linearGradient>
+    <linearGradient id="card" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#3a2725" stop-opacity="0.82"/>
+      <stop offset="100%" stop-color="#2a1b1a" stop-opacity="0.78"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="0" y="0" width="1400" height="880" fill="url(#bg)"/>
+  <rect x="70" y="66" width="1260" height="748" rx="28" fill="none" stroke="#e8bf83" stroke-opacity="0.25"/>
+
+  <text x="700" y="132" fill="#f8e2bf" text-anchor="middle" font-size="46" font-family="'Georgia', 'Times New Roman', serif" font-weight="700">
+    ZeeMe Delivery Timeline
+  </text>
+  <text x="700" y="172" fill="#e8bf83" text-anchor="middle" font-size="20" font-family="'Inter', Arial, sans-serif" letter-spacing="2">
+    FIRST STABILIZATION CYCLE · FEBRUARY 2026
+  </text>
+
+  <line x1="700" y1="220" x2="700" y2="760" stroke="url(#line)" stroke-width="4"/>
+
+  <circle cx="700" cy="260" r="10" fill="#e8bf83"/>
+  <rect x="220" y="225" width="430" height="94" rx="14" fill="url(#card)" stroke="#e8bf83" stroke-opacity="0.35"/>
+  <text x="246" y="258" fill="#f9e9ce" font-size="18" font-family="'Inter', Arial, sans-serif" font-weight="700">2026-02-08 · Foundation</text>
+  <text x="246" y="286" fill="#f2d8b0" font-size="16" font-family="'Inter', Arial, sans-serif">Project memory workflow + handoff protocol established.</text>
+
+  <circle cx="700" cy="350" r="10" fill="#e8bf83"/>
+  <rect x="750" y="315" width="430" height="94" rx="14" fill="url(#card)" stroke="#e8bf83" stroke-opacity="0.35"/>
+  <text x="776" y="348" fill="#f9e9ce" font-size="18" font-family="'Inter', Arial, sans-serif" font-weight="700">2026-02-08 · Core Integration</text>
+  <text x="776" y="376" fill="#f2d8b0" font-size="16" font-family="'Inter', Arial, sans-serif">Gemini text route + live token route + transcript persistence.</text>
+
+  <circle cx="700" cy="440" r="10" fill="#e8bf83"/>
+  <rect x="220" y="405" width="430" height="94" rx="14" fill="url(#card)" stroke="#e8bf83" stroke-opacity="0.35"/>
+  <text x="246" y="438" fill="#f9e9ce" font-size="18" font-family="'Inter', Arial, sans-serif" font-weight="700">2026-02-13 · Voice Stability</text>
+  <text x="246" y="466" fill="#f2d8b0" font-size="16" font-family="'Inter', Arial, sans-serif">Conservative interruption/VAD profile + live trace diagnostics.</text>
+
+  <circle cx="700" cy="530" r="10" fill="#e8bf83"/>
+  <rect x="750" y="495" width="430" height="94" rx="14" fill="url(#card)" stroke="#e8bf83" stroke-opacity="0.35"/>
+  <text x="776" y="528" fill="#f9e9ce" font-size="18" font-family="'Inter', Arial, sans-serif" font-weight="700">2026-02-15 · Context Hygiene</text>
+  <text x="776" y="556" fill="#f2d8b0" font-size="16" font-family="'Inter', Arial, sans-serif">`message_purpose` filtering + legacy backfill protections.</text>
+
+  <circle cx="700" cy="620" r="10" fill="#e8bf83"/>
+  <rect x="220" y="585" width="430" height="94" rx="14" fill="url(#card)" stroke="#e8bf83" stroke-opacity="0.35"/>
+  <text x="246" y="618" fill="#f9e9ce" font-size="18" font-family="'Inter', Arial, sans-serif" font-weight="700">2026-02-16 · Stabilization Sprint</text>
+  <text x="246" y="646" fill="#f2d8b0" font-size="16" font-family="'Inter', Arial, sans-serif">Hybrid release gates + reliability-first hardening plan.</text>
+
+  <circle cx="700" cy="710" r="10" fill="#e8bf83"/>
+  <rect x="750" y="675" width="430" height="94" rx="14" fill="url(#card)" stroke="#e8bf83" stroke-opacity="0.35"/>
+  <text x="776" y="708" fill="#f9e9ce" font-size="18" font-family="'Inter', Arial, sans-serif" font-weight="700">Current Trajectory</text>
+  <text x="776" y="736" fill="#f2d8b0" font-size="16" font-family="'Inter', Arial, sans-serif">Companion-first roadmap: text, voice, memory, reliability.</text>
+</svg>

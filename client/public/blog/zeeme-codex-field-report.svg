@@ -1,0 +1,60 @@
+<svg width="1440" height="900" viewBox="0 0 1440 900" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1440" y2="900" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#170E10"/>
+      <stop offset="0.5" stop-color="#2B1718"/>
+      <stop offset="1" stop-color="#140A0D"/>
+    </linearGradient>
+    <linearGradient id="panel" x1="220" y1="180" x2="1220" y2="760" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#3C2627" stop-opacity="0.84"/>
+      <stop offset="1" stop-color="#271819" stop-opacity="0.84"/>
+    </linearGradient>
+    <linearGradient id="lineGlow" x1="280" y1="0" x2="1160" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F2C58B" stop-opacity="0"/>
+      <stop offset="0.5" stop-color="#F2C58B" stop-opacity="0.62"/>
+      <stop offset="1" stop-color="#F2C58B" stop-opacity="0"/>
+    </linearGradient>
+    <radialGradient id="orb" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(1040 260) rotate(90) scale(250 250)">
+      <stop stop-color="#DDAE79" stop-opacity="0.32"/>
+      <stop offset="1" stop-color="#DDAE79" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="1440" height="900" fill="url(#bg)"/>
+  <rect x="170" y="130" width="1100" height="640" rx="28" fill="url(#panel)" stroke="#A77657" stroke-opacity="0.38"/>
+
+  <circle cx="1040" cy="260" r="250" fill="url(#orb)"/>
+  <circle cx="1040" cy="260" r="120" stroke="#C28E63" stroke-opacity="0.45"/>
+  <circle cx="1040" cy="260" r="88" stroke="#C28E63" stroke-opacity="0.3"/>
+
+  <path d="M280 202 H1160" stroke="url(#lineGlow)"/>
+  <path d="M280 706 H1160" stroke="url(#lineGlow)"/>
+
+  <text x="280" y="248" fill="#D9AF7D" font-family="'Fraunces', serif" font-size="22" letter-spacing="0.26em">ZEEME RESEARCH ARCHIVE</text>
+  <text x="280" y="324" fill="#F8E8D0" font-family="'Fraunces', serif" font-size="64" font-weight="600">Field Report I</text>
+  <text x="280" y="388" fill="#F8E8D0" font-family="'Fraunces', serif" font-size="48" font-weight="500">Building ZeeMe with Agentic Coding</text>
+
+  <text x="280" y="468" fill="#E0C19A" font-family="'DM Sans', sans-serif" font-size="30">
+    From initial sketch to production companion runtime:
+  </text>
+  <text x="280" y="512" fill="#E0C19A" font-family="'DM Sans', sans-serif" font-size="30">
+    architecture contracts, forensic traces, and release gates.
+  </text>
+
+  <g opacity="0.9">
+    <rect x="280" y="564" width="760" height="116" rx="16" fill="#241618" stroke="#B98762" stroke-opacity="0.45"/>
+    <text x="314" y="611" fill="#F7D7AE" font-family="'DM Sans', sans-serif" font-size="25" letter-spacing="0.08em">
+      OPERATOR + AGENTIC MODEL
+    </text>
+    <text x="314" y="647" fill="#D9B995" font-family="'DM Sans', sans-serif" font-size="22">
+      Velocity multiplied by contract rigor and replayable diagnostics.
+    </text>
+  </g>
+
+  <text x="1040" y="264" text-anchor="middle" fill="#F7D6AC" font-family="'Fraunces', serif" font-size="30" font-weight="600">v1.0</text>
+  <text x="1040" y="298" text-anchor="middle" fill="#D9B995" font-family="'DM Sans', sans-serif" font-size="18" letter-spacing="0.18em">FEB 2026</text>
+
+  <text x="280" y="730" fill="#CFA37A" font-family="'DM Sans', sans-serif" font-size="18" letter-spacing="0.22em">
+    CASE STUDY • SYSTEMS PAPER • COMPANION AI
+  </text>
+</svg>

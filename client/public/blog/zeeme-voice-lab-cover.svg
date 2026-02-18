@@ -1,0 +1,43 @@
+<svg width="1600" height="900" viewBox="0 0 1600 900" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">ZeeMe Mobile Voice Lab Case Study Cover</title>
+  <desc id="desc">Editorial cover for mobile voice latency and interruption reliability case study.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#31171A"/>
+      <stop offset="45%" stop-color="#231215"/>
+      <stop offset="100%" stop-color="#170D10"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="50%" cy="45%" r="60%">
+      <stop offset="0%" stop-color="#E5B15E" stop-opacity="0.38"/>
+      <stop offset="52%" stop-color="#E5B15E" stop-opacity="0.14"/>
+      <stop offset="100%" stop-color="#E5B15E" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="1600" height="900" fill="url(#bg)"/>
+  <ellipse cx="800" cy="430" rx="680" ry="360" fill="url(#glow)"/>
+
+  <rect x="90" y="90" width="1420" height="720" rx="34" fill="none" stroke="#C8985F" stroke-opacity="0.3" stroke-width="2"/>
+
+  <text x="800" y="190" text-anchor="middle" fill="#E7C89E" font-family="Georgia, 'Times New Roman', serif" font-size="30" letter-spacing="9">ZEEME CASE STUDY V</text>
+
+  <text x="800" y="340" text-anchor="middle" fill="#F9E7CB" font-family="Georgia, 'Times New Roman', serif" font-size="74" font-weight="700">Mobile Voice Stability</text>
+  <text x="800" y="418" text-anchor="middle" fill="#F9E7CB" font-family="Georgia, 'Times New Roman', serif" font-size="58" font-weight="700">Latency + Interruption Recovery</text>
+
+  <g transform="translate(240 530)">
+    <rect x="0" y="0" width="260" height="190" rx="24" fill="none" stroke="#D4A063" stroke-opacity="0.58"/>
+    <path d="M40 96 C65 46, 95 146, 120 96 C145 46, 175 146, 200 96" fill="none" stroke="#E2BE86" stroke-width="4"/>
+    <text x="130" y="165" text-anchor="middle" fill="#E2BE86" font-family="'DM Sans', Arial, sans-serif" font-size="24">INPUT</text>
+  </g>
+
+  <g transform="translate(1100 530)">
+    <rect x="0" y="0" width="260" height="190" rx="24" fill="none" stroke="#D4A063" stroke-opacity="0.58"/>
+    <path d="M40 96 C65 66, 95 126, 120 96 C145 66, 175 126, 200 96" fill="none" stroke="#E2BE86" stroke-width="4"/>
+    <text x="130" y="165" text-anchor="middle" fill="#E2BE86" font-family="'DM Sans', Arial, sans-serif" font-size="24">OUTPUT</text>
+  </g>
+
+  <line x1="500" y1="625" x2="1100" y2="625" stroke="#D7A96A" stroke-opacity="0.62" stroke-width="2" stroke-dasharray="10 8"/>
+  <text x="800" y="612" text-anchor="middle" fill="#E6C390" font-family="'DM Sans', Arial, sans-serif" font-size="24" letter-spacing="1">trace packet: runId, interrupted, generationComplete, turnComplete</text>
+
+  <text x="800" y="840" text-anchor="middle" fill="#CDA06A" font-family="'DM Sans', Arial, sans-serif" font-size="22" letter-spacing="3">MOBILE RELIABILITY LAB • FEBRUARY 2026</text>
+</svg>

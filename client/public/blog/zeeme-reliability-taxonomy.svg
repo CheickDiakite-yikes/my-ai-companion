@@ -1,0 +1,82 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000" viewBox="0 0 1600 1000" fill="none">
+  <defs>
+    <linearGradient id="bg2" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#191211"/>
+      <stop offset="50%" stop-color="#2a1a17"/>
+      <stop offset="100%" stop-color="#15100f"/>
+    </linearGradient>
+    <linearGradient id="panel" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#382722"/>
+      <stop offset="100%" stop-color="#261b18"/>
+    </linearGradient>
+    <radialGradient id="halo" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0%" stop-color="#e8bb77" stop-opacity="0.22"/>
+      <stop offset="100%" stop-color="#e8bb77" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="1600" height="1000" fill="url(#bg2)"/>
+  <circle cx="810" cy="500" r="320" fill="url(#halo)"/>
+
+  <text x="800" y="90" text-anchor="middle" fill="#f8e2bc" font-family="Georgia, 'Times New Roman', serif" font-size="46" font-weight="700">
+    ZeeMe Reliability Taxonomy and Recovery Loop
+  </text>
+  <text x="800" y="126" text-anchor="middle" fill="#d8b88a" font-family="Inter, Arial, sans-serif" font-size="20">
+    Forensic classification, root-cause isolation, and deterministic remediation
+  </text>
+
+  <rect x="110" y="210" rx="24" ry="24" width="420" height="180" fill="url(#panel)" stroke="#c8a16a" stroke-opacity="0.45" stroke-width="2"/>
+  <text x="320" y="262" text-anchor="middle" fill="#f7d9aa" font-family="Inter, Arial, sans-serif" font-size="30" font-weight="700">Routing Faults</text>
+  <text x="320" y="305" text-anchor="middle" fill="#e4bd8a" font-family="Inter, Arial, sans-serif" font-size="21">build intent misclassification</text>
+  <text x="320" y="336" text-anchor="middle" fill="#e4bd8a" font-family="Inter, Arial, sans-serif" font-size="21">session continuity downgrades</text>
+
+  <rect x="590" y="210" rx="24" ry="24" width="420" height="180" fill="url(#panel)" stroke="#c8a16a" stroke-opacity="0.45" stroke-width="2"/>
+  <text x="800" y="262" text-anchor="middle" fill="#f7d9aa" font-family="Inter, Arial, sans-serif" font-size="30" font-weight="700">State Faults</text>
+  <text x="800" y="305" text-anchor="middle" fill="#e4bd8a" font-family="Inter, Arial, sans-serif" font-size="21">stale approval or in-progress labels</text>
+  <text x="800" y="336" text-anchor="middle" fill="#e4bd8a" font-family="Inter, Arial, sans-serif" font-size="21">terminal card reconciliation drift</text>
+
+  <rect x="1070" y="210" rx="24" ry="24" width="420" height="180" fill="url(#panel)" stroke="#c8a16a" stroke-opacity="0.45" stroke-width="2"/>
+  <text x="1280" y="262" text-anchor="middle" fill="#f7d9aa" font-family="Inter, Arial, sans-serif" font-size="30" font-weight="700">Voice Faults</text>
+  <text x="1280" y="305" text-anchor="middle" fill="#e4bd8a" font-family="Inter, Arial, sans-serif" font-size="21">VAD clipping and false interruption</text>
+  <text x="1280" y="336" text-anchor="middle" fill="#e4bd8a" font-family="Inter, Arial, sans-serif" font-size="21">low-latency instability trade-offs</text>
+
+  <rect x="320" y="470" rx="30" ry="30" width="960" height="220" fill="url(#panel)" stroke="#e0b97f" stroke-opacity="0.6" stroke-width="2.4"/>
+  <text x="800" y="535" text-anchor="middle" fill="#ffe8c1" font-family="Inter, Arial, sans-serif" font-size="35" font-weight="700">Forensic Decision Pipeline</text>
+  <text x="800" y="580" text-anchor="middle" fill="#e6c492" font-family="Inter, Arial, sans-serif" font-size="23">trace id capture -> stage attribution -> failure code classification</text>
+  <text x="800" y="615" text-anchor="middle" fill="#e6c492" font-family="Inter, Arial, sans-serif" font-size="23">targeted patch -> scenario replay -> release gate verification</text>
+  <text x="800" y="655" text-anchor="middle" fill="#f2d5a6" font-family="Inter, Arial, sans-serif" font-size="20">No patch ships without deterministic repro and post-fix checks</text>
+
+  <rect x="200" y="760" rx="20" ry="20" width="330" height="140" fill="url(#panel)" stroke="#b68f60" stroke-opacity="0.4" stroke-width="1.8"/>
+  <text x="365" y="812" text-anchor="middle" fill="#efd09f" font-family="Inter, Arial, sans-serif" font-size="27" font-weight="700">Signal Layer</text>
+  <text x="365" y="847" text-anchor="middle" fill="#dcb784" font-family="Inter, Arial, sans-serif" font-size="20">decisionPathReason</text>
+  <text x="365" y="875" text-anchor="middle" fill="#dcb784" font-family="Inter, Arial, sans-serif" font-size="20">failureReasonCode</text>
+
+  <rect x="635" y="760" rx="20" ry="20" width="330" height="140" fill="url(#panel)" stroke="#b68f60" stroke-opacity="0.4" stroke-width="1.8"/>
+  <text x="800" y="812" text-anchor="middle" fill="#efd09f" font-family="Inter, Arial, sans-serif" font-size="27" font-weight="700">Control Layer</text>
+  <text x="800" y="847" text-anchor="middle" fill="#dcb784" font-family="Inter, Arial, sans-serif" font-size="20">intent session lock</text>
+  <text x="800" y="875" text-anchor="middle" fill="#dcb784" font-family="Inter, Arial, sans-serif" font-size="20">confirmation-first gating</text>
+
+  <rect x="1070" y="760" rx="20" ry="20" width="330" height="140" fill="url(#panel)" stroke="#b68f60" stroke-opacity="0.4" stroke-width="1.8"/>
+  <text x="1235" y="812" text-anchor="middle" fill="#efd09f" font-family="Inter, Arial, sans-serif" font-size="27" font-weight="700">Quality Layer</text>
+  <text x="1235" y="847" text-anchor="middle" fill="#dcb784" font-family="Inter, Arial, sans-serif" font-size="20">strict publish checks</text>
+  <text x="1235" y="875" text-anchor="middle" fill="#dcb784" font-family="Inter, Arial, sans-serif" font-size="20">raw artifact leak suppression</text>
+
+  <path d="M530 300 L590 300" stroke="#e3bf86" stroke-width="3" marker-end="url(#a)"/>
+  <path d="M1010 300 L1070 300" stroke="#e3bf86" stroke-width="3" marker-end="url(#a)"/>
+  <path d="M800 390 L800 470" stroke="#e3bf86" stroke-width="3" marker-end="url(#a)"/>
+  <path d="M530 830 L635 830" stroke="#c79f6a" stroke-width="2.5" marker-end="url(#b)"/>
+  <path d="M965 830 L1070 830" stroke="#c79f6a" stroke-width="2.5" marker-end="url(#b)"/>
+
+  <defs>
+    <marker id="a" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L9,3 z" fill="#e3bf86"/>
+    </marker>
+    <marker id="b" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L9,3 z" fill="#c79f6a"/>
+    </marker>
+  </defs>
+
+  <text x="800" y="950" text-anchor="middle" fill="#c8a270" font-family="Inter, Arial, sans-serif" font-size="18">
+    Case-study figure: stabilization control model for companion runtime quality
+  </text>
+</svg>
