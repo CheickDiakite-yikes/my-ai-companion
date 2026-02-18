@@ -1246,7 +1246,7 @@ export default function MarketingLandingPage({ onGetStarted, onSignIn }: Marketi
                   animate={{ x: [-20, 270] }}
                   transition={{ duration: 2.2, repeat: Infinity, repeatDelay: 1.8, ease: "easeInOut" }}
                 />
-                Continue to welcome <ArrowRight className="w-5 h-5" />
+                Meet Zee <ArrowRight className="w-5 h-5" />
               </motion.button>
               <span className="text-xs tracking-widest uppercase" style={{ color: "rgba(255, 224, 193, 0.4)" }}>
                 Free to start
