@@ -265,32 +265,50 @@ function FeatureCard({
   title,
   description,
   delay = 0,
+  index = 0,
 }: {
   icon: React.ComponentType<{ className?: string }>;
   title: string;
   description: string;
   delay?: number;
+  index?: number;
 }) {
   const ref = useRef<HTMLDivElement>(null);
-  const isInView = useInView(ref, { once: true, margin: "-60px" });
+  const { scrollYProgress } = useScroll({
+    target: ref,
+    offset: ["start 90%", "center 60%"],
+  });
+
+  const y = useTransform(scrollYProgress, [0, 1], [50, 0]);
+  const opacity = useTransform(scrollYProgress, [0, 0.3, 1], [0, 0.5, 1]);
+  const scale = useTransform(scrollYProgress, [0, 1], [0.92, 1]);
+  const cardX = useTransform(
+    scrollYProgress,
+    [0, 1],
+    [index % 2 === 0 ? -25 : 25, 0]
+  );
 
   return (
     <motion.div
       ref={ref}
-      initial={{ opacity: 0, y: 30, scale: 0.97 }}
-      animate={isInView ? { opacity: 1, y: 0, scale: 1 } : { opacity: 0, y: 30, scale: 0.97 }}
-      transition={{ duration: 0.65, delay, ease: [0.22, 1, 0.36, 1] }}
+      style={{ y, opacity, scale, x: cardX }}
       className="relative group"
       data-testid={`card-feature-${title.toLowerCase().replace(/\s+/g, "-")}`}
     >
       <motion.div
-        whileHover={{ y: -5 }}
-        className="rounded-3xl p-6 md:p-7 backdrop-blur-md border transition-all duration-300"
+        whileHover={{ y: -6, scale: 1.02, transition: { duration: 0.25 } }}
+        className="rounded-3xl p-6 md:p-7 backdrop-blur-md border transition-all duration-300 relative overflow-hidden"
         style={{
           background: "linear-gradient(160deg, rgba(255, 220, 187, 0.1), rgba(255, 185, 152, 0.06))",
           borderColor: "rgba(255, 223, 186, 0.2)",
         }}
       >
+        <div
+          className="absolute -right-6 -top-6 w-28 h-28 rounded-full pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity duration-500"
+          style={{
+            background: "radial-gradient(circle, rgba(255, 208, 164, 0.15) 0%, transparent 70%)",
+          }}
+        />
         <StoryIcon>
           <Icon className="w-7 h-7" />
         </StoryIcon>
@@ -351,20 +369,37 @@ function CompanionMomentCard({
   const cardRef = useRef<HTMLDivElement>(null);
   const { scrollYProgress } = useScroll({
     target: cardRef,
-    offset: ["start 85%", "center 55%"],
+    offset: ["start 92%", "center 45%"],
   });
 
-  const y = useTransform(scrollYProgress, [0, 1], [56, 0]);
-  const opacity = useTransform(scrollYProgress, [0, 1], [0.24, 1]);
-  const scale = useTransform(scrollYProgress, [0, 1], [0.94, 1]);
-  const rotate = useTransform(scrollYProgress, [0, 1], [index % 2 === 0 ? -2 : 2, 0]);
-  const glowOpacity = useTransform(scrollYProgress, [0, 1], [0.25, 0.85]);
+  const y = useTransform(scrollYProgress, [0, 1], [80, 0]);
+  const opacity = useTransform(scrollYProgress, [0, 0.4, 1], [0, 0.6, 1]);
+  const scale = useTransform(scrollYProgress, [0, 1], [0.88, 1]);
+  const xSlide = useTransform(
+    scrollYProgress,
+    [0, 1],
+    [index % 2 === 0 ? -40 : 40, 0]
+  );
+  const glowOpacity = useTransform(scrollYProgress, [0, 0.6, 1], [0, 0.4, 0.9]);
+  const borderGlow = useTransform(
+    scrollYProgress,
+    [0, 1],
+    ["rgba(255, 224, 194, 0.08)", "rgba(255, 224, 194, 0.25)"]
+  );
 
   return (
     <motion.article
       ref={cardRef}
-      style={{ y, opacity, scale, rotate }}
-      whileHover={{ y: -5 }}
+      style={{
+        y,
+        opacity,
+        scale,
+        x: xSlide,
+        background: "linear-gradient(160deg, rgba(255, 223, 194, 0.1), rgba(255, 188, 158, 0.06))",
+        borderColor: borderGlow,
+        boxShadow: "0 18px 45px rgba(43, 25, 24, 0.38)",
+      }}
+      whileHover={{ y: -6, scale: 1.015, transition: { duration: 0.3 } }}
       className="relative rounded-[1.85rem] p-6 md:p-7 border backdrop-blur-md overflow-hidden"
       data-testid={`card-moment-${index + 1}`}
       aria-label={title}
@@ -376,36 +411,35 @@ function CompanionMomentCard({
         className="absolute inset-0 pointer-events-none"
         style={{
           opacity: glowOpacity,
-          background: "radial-gradient(circle at 80% 20%, rgba(255, 208, 164, 0.22), transparent 52%)",
+          background: index % 2 === 0
+            ? "radial-gradient(circle at 85% 15%, rgba(255, 208, 164, 0.28), transparent 55%)"
+            : "radial-gradient(circle at 15% 85%, rgba(255, 208, 164, 0.22), transparent 55%)",
+        }}
+      />
+      <motion.div
+        aria-hidden
+        className="absolute inset-0 pointer-events-none"
+        style={{
+          opacity: glowOpacity,
+          background: "linear-gradient(135deg, rgba(255, 220, 180, 0.06) 0%, transparent 50%)",
         }}
       />
       <div
-        className="absolute right-4 top-4 text-[11px] px-2.5 py-1 rounded-full border tracking-wide uppercase"
+        className="absolute -right-8 -bottom-8 w-36 h-36 rounded-full pointer-events-none"
         style={{
-          color: "rgba(255, 232, 208, 0.72)",
-          borderColor: "rgba(255, 225, 197, 0.28)",
-          background: "rgba(255, 211, 171, 0.08)",
-        }}
-      >
-        Moment {index + 1}
-      </div>
-      <div
-        className="absolute -right-8 -bottom-8 w-32 h-32 rounded-full"
-        style={{
-          background:
-            "radial-gradient(circle, rgba(255, 202, 154, 0.2) 0%, rgba(255, 202, 154, 0) 70%)",
+          background: "radial-gradient(circle, rgba(255, 202, 154, 0.18) 0%, rgba(255, 202, 154, 0) 70%)",
         }}
       />
       <div className="relative flex items-start gap-4">
         <motion.div
-          animate={{ y: [0, -4, 0] }}
-          transition={{ duration: 3, repeat: Infinity, repeatType: "loop", ease: "easeInOut" }}
+          animate={{ y: [0, -5, 0] }}
+          transition={{ duration: 3.5, repeat: Infinity, repeatType: "loop", ease: "easeInOut", delay: index * 0.4 }}
         >
           <StoryIcon>
             <Icon className="w-7 h-7" />
           </StoryIcon>
         </motion.div>
-        <div className="pt-1">
+        <div className="pt-1 flex-1">
           <p
             className="text-xs tracking-wide uppercase mb-1.5"
             style={{ color: "rgba(255, 229, 202, 0.58)" }}
@@ -427,6 +461,138 @@ function CompanionMomentCard({
         </div>
       </div>
     </motion.article>
+  );
+}
+
+function CtaSection({ onGetStarted, orbConfig }: { onGetStarted: () => void; orbConfig: any }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const { scrollYProgress } = useScroll({
+    target: ref,
+    offset: ["start 85%", "center 50%"],
+  });
+
+  const cardY = useTransform(scrollYProgress, [0, 1], [60, 0]);
+  const cardOpacity = useTransform(scrollYProgress, [0, 0.3, 1], [0, 0.6, 1]);
+  const cardScale = useTransform(scrollYProgress, [0, 1], [0.9, 1]);
+  const glowSize = useTransform(scrollYProgress, [0, 1], [0.4, 1]);
+
+  return (
+    <section className="px-6 py-24 relative">
+      <div className="max-w-2xl mx-auto">
+        <motion.div
+          ref={ref}
+          style={{ y: cardY, opacity: cardOpacity, scale: cardScale }}
+          className="text-center"
+        >
+          <div
+            className="rounded-3xl p-10 md:p-14 relative overflow-hidden"
+            style={{
+              background: "linear-gradient(135deg, rgba(110, 67, 52, 0.47), rgba(59, 35, 35, 0.64))",
+              border: "1px solid rgba(255, 218, 182, 0.2)",
+            }}
+          >
+            <motion.div
+              className="absolute inset-0 pointer-events-none"
+              style={{
+                scale: glowSize,
+                background: "radial-gradient(circle at 50% 0%, rgba(255, 195, 149, 0.2) 0%, transparent 55%)",
+              }}
+            />
+            <div className="relative">
+              <motion.div
+                initial={{ scale: 0.7, opacity: 0 }}
+                whileInView={{ scale: 1, opacity: 1 }}
+                viewport={{ once: true }}
+                transition={{ duration: 0.7, type: "spring", bounce: 0.3 }}
+                className="mx-auto mb-6"
+                style={{ width: 120 }}
+              >
+                <CanvasOrb config={orbConfig} size={120} />
+              </motion.div>
+              <h2 className="text-3xl md:text-4xl font-semibold mb-3 tracking-tight" style={{ color: "#FFEFD8", fontFamily: "'Fraunces', serif" }}>
+                Step into your welcome page
+              </h2>
+              <p className="text-base mb-8" style={{ color: "rgba(255, 226, 198, 0.68)" }}>
+                Sign up or sign in and continue into your full ZeeMe experience.
+              </p>
+              <motion.button
+                onClick={onGetStarted}
+                whileHover={{ y: -3, scale: 1.04, boxShadow: "0 14px 40px rgba(251, 185, 137, 0.5)" }}
+                whileTap={{ scale: 0.97 }}
+                className="px-10 py-4 rounded-2xl text-lg font-semibold shadow-lg"
+                style={{
+                  background: "linear-gradient(135deg, #FFD3A8, #F3B884)",
+                  color: "#2A1B17",
+                  boxShadow: "0 8px 32px rgba(251, 185, 137, 0.35)",
+                }}
+              >
+                Continue to welcome
+              </motion.button>
+            </div>
+          </div>
+        </motion.div>
+      </div>
+    </section>
+  );
+}
+
+function TimelineMoments({ moments }: { moments: Array<{ title: string; label: string; body: string; icon: React.ComponentType<{ className?: string }> }> }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const { scrollYProgress } = useScroll({
+    target: containerRef,
+    offset: ["start 80%", "end 30%"],
+  });
+  const lineScaleY = useTransform(scrollYProgress, [0, 1], [0, 1]);
+
+  return (
+    <div ref={containerRef} className="relative">
+      <div
+        className="hidden md:block absolute left-1/2 top-4 bottom-4 w-px -translate-x-1/2"
+        style={{
+          background: "rgba(255, 214, 172, 0.1)",
+        }}
+      />
+      <motion.div
+        className="hidden md:block absolute left-1/2 top-4 bottom-4 w-px -translate-x-1/2 origin-top"
+        style={{
+          background: "linear-gradient(180deg, rgba(255, 214, 172, 0.55), rgba(255, 195, 148, 0.25))",
+          scaleY: lineScaleY,
+        }}
+      />
+      {moments.map((moment, index) => (
+        <div key={moment.title} className="relative">
+          <motion.div
+            className="hidden md:flex absolute left-1/2 -translate-x-1/2 w-3 h-3 rounded-full items-center justify-center z-10"
+            style={{
+              top: "2rem",
+              background: "linear-gradient(135deg, #FFD3A8, #EBBA62)",
+              boxShadow: "0 0 12px rgba(255, 200, 150, 0.4)",
+            }}
+            initial={{ scale: 0 }}
+            whileInView={{ scale: 1 }}
+            viewport={{ once: true, margin: "-50px" }}
+            transition={{ duration: 0.4, delay: 0.15, type: "spring" }}
+          >
+            <div className="w-1.5 h-1.5 rounded-full bg-white/50" />
+          </motion.div>
+          <div
+            className={`mb-7 md:mb-10 ${
+              index % 2 === 0
+                ? "md:w-[calc(50%-2rem)] md:mr-auto"
+                : "md:w-[calc(50%-2rem)] md:ml-auto"
+            }`}
+          >
+            <CompanionMomentCard
+              index={index}
+              title={moment.title}
+              label={moment.label}
+              body={moment.body}
+              icon={moment.icon}
+            />
+          </div>
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -765,25 +931,25 @@ export default function MarketingLandingPage({ onGetStarted, onSignIn }: Marketi
                   icon={MessageSquareHeart}
                   title="Conversations with emotional texture"
                   description="Not just answers. Zee responds with rhythm, empathy, and tone that matches what you need in the moment."
-                  delay={0}
+                  index={0}
                 />
                 <FeatureCard
                   icon={Mic}
                   title="Live voice that feels present"
                   description="Natural interruptions, smooth pacing, and expressive responses make voice chats feel human and grounded."
-                  delay={0.08}
+                  index={1}
                 />
                 <FeatureCard
                   icon={Brain}
                   title="Memory with continuity"
                   description="Stories, goals, and details persist so each conversation feels connected rather than starting over."
-                  delay={0.16}
+                  index={2}
                 />
                 <FeatureCard
                   icon={HeartHandshake}
                   title="Friendship-first experience"
                   description="Every surface is designed for warmth and trust, from first interaction to long-term companionship."
-                  delay={0.24}
+                  index={3}
                 />
               </div>
             </div>
@@ -801,77 +967,11 @@ export default function MarketingLandingPage({ onGetStarted, onSignIn }: Marketi
                 </p>
               </RevealSection>
 
-              <div className="relative">
-                <div
-                  className="hidden md:block absolute left-1/2 top-4 bottom-4 w-px -translate-x-1/2"
-                  style={{
-                    background:
-                      "linear-gradient(180deg, rgba(255, 214, 172, 0.05), rgba(255, 214, 172, 0.45), rgba(255, 214, 172, 0.05))",
-                  }}
-                />
-                <div className="space-y-7 md:space-y-10">
-                  {companionMoments.map((moment, index) => (
-                    <div
-                      key={moment.title}
-                      className={
-                        index % 2 === 0
-                          ? "md:w-[calc(50%-1.35rem)] md:mr-auto"
-                          : "md:w-[calc(50%-1.35rem)] md:ml-auto"
-                      }
-                    >
-                      <CompanionMomentCard
-                        index={index}
-                        title={moment.title}
-                        label={moment.label}
-                        body={moment.body}
-                        icon={moment.icon}
-                      />
-                    </div>
-                  ))}
-                </div>
-              </div>
+              <TimelineMoments moments={companionMoments} />
             </div>
           </section>
 
-          <section className="px-6 py-24 relative">
-            <div className="max-w-2xl mx-auto">
-              <RevealSection className="text-center">
-                <div
-                  className="rounded-3xl p-10 md:p-14 relative overflow-hidden"
-                  style={{
-                    background: "linear-gradient(135deg, rgba(110, 67, 52, 0.47), rgba(59, 35, 35, 0.64))",
-                    border: "1px solid rgba(255, 218, 182, 0.2)",
-                  }}
-                >
-                  <div className="absolute inset-0 pointer-events-none" style={{ background: "radial-gradient(circle at 50% 0%, rgba(255, 195, 149, 0.15) 0%, transparent 60%)" }} />
-                  <div className="relative">
-                    <motion.div initial={{ scale: 0.82 }} whileInView={{ scale: 1 }} viewport={{ once: true }} transition={{ duration: 0.6, type: "spring" }} className="mx-auto mb-6" style={{ width: 120 }}>
-                      <CanvasOrb config={orbConfig} size={120} />
-                    </motion.div>
-                    <h2 className="text-3xl md:text-4xl font-semibold mb-3 tracking-tight" style={{ color: "#FFEFD8", fontFamily: "'Fraunces', serif" }}>
-                      Step into your welcome page
-                    </h2>
-                    <p className="text-base mb-8" style={{ color: "rgba(255, 226, 198, 0.68)" }}>
-                      Sign up or sign in and continue into your full ZeeMe experience.
-                    </p>
-                    <motion.button
-                      onClick={onGetStarted}
-                      whileHover={{ y: -2, scale: 1.02 }}
-                      whileTap={{ scale: 0.98 }}
-                      className="px-10 py-4 rounded-2xl text-lg font-semibold shadow-lg"
-                      style={{
-                        background: "linear-gradient(135deg, #FFD3A8, #F3B884)",
-                        color: "#2A1B17",
-                        boxShadow: "0 8px 32px rgba(251, 185, 137, 0.35)",
-                      }}
-                    >
-                      Continue to welcome
-                    </motion.button>
-                  </div>
-                </div>
-              </RevealSection>
-            </div>
-          </section>
+          <CtaSection onGetStarted={onGetStarted} orbConfig={orbConfig} />
 
           <footer
             className="relative mt-12"
