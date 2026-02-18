@@ -661,14 +661,6 @@ function InfoPageOverlay({
         >
           <header className="text-center mb-14">
             <motion.div
-              initial={{ scale: 0.4, opacity: 0, rotate: -15 }}
-              animate={{ scale: 1, opacity: 1, rotate: 0 }}
-              transition={{ duration: 0.6, type: "spring", stiffness: 120, damping: 12 }}
-              className="text-5xl mb-5"
-            >
-              {content.heroIcon}
-            </motion.div>
-            <motion.div
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 0.4, delay: 0.15 }}
