@@ -23,6 +23,7 @@ type InfoPageId = "about" | "terms" | "privacy" | "blog";
 
 interface InfoPageSection {
   heading: string;
+  icon?: string;
   paragraphs: string[];
 }
 
@@ -30,6 +31,8 @@ interface InfoPageContent {
   title: string;
   subtitle: string;
   updatedAt: string;
+  heroIcon: string;
+  accentWord: string;
   sections: InfoPageSection[];
 }
 
@@ -45,10 +48,13 @@ const INFO_PAGE_CONTENT: Record<InfoPageId, InfoPageContent> = {
   about: {
     title: "About ZeeMe",
     subtitle: "A companion experience designed for warmth, continuity, and trust.",
-    updatedAt: "February 18, 2026",
+    updatedAt: "February 2026",
+    heroIcon: "\u2728",
+    accentWord: "Companion",
     sections: [
       {
         heading: "Our mission",
+        icon: "\uD83C\uDFAF",
         paragraphs: [
           "ZeeMe is built to make AI companionship feel emotionally intelligent, gentle, and useful in daily life.",
           "We focus on conversation quality, thoughtful pacing, and long-term continuity so the experience feels like a relationship, not a tool.",
@@ -56,6 +62,7 @@ const INFO_PAGE_CONTENT: Record<InfoPageId, InfoPageContent> = {
       },
       {
         heading: "What makes ZeeMe different",
+        icon: "\uD83D\uDCA1",
         paragraphs: [
           "Voice and text are part of one continuous thread, so your context carries naturally between modes.",
           "We prioritize small moments of delight: warm visual tone, expressive motion, and interaction details that reduce friction.",
@@ -63,19 +70,32 @@ const INFO_PAGE_CONTENT: Record<InfoPageId, InfoPageContent> = {
       },
       {
         heading: "How we build",
+        icon: "\uD83D\uDEE0\uFE0F",
         paragraphs: [
           "We iterate carefully, protect privacy by default, and ship improvements that strengthen trust before adding complexity.",
+          "Every feature is tested against a simple question: does this make the companion experience feel more genuine?",
+        ],
+      },
+      {
+        heading: "The team behind Zee",
+        icon: "\uD83E\uDDE1",
+        paragraphs: [
+          "We're a small team obsessed with emotional presence in technology. We believe AI can be warm without being manipulative, and helpful without being cold.",
+          "ZeeMe is designed and built by people who care deeply about the quality of digital relationships.",
         ],
       },
     ],
   },
   terms: {
-    title: "Terms of Use",
+    title: "Terms of Service",
     subtitle: "Clear expectations for using ZeeMe responsibly and safely.",
-    updatedAt: "February 18, 2026",
+    updatedAt: "February 2026",
+    heroIcon: "\uD83D\uDCDC",
+    accentWord: "Agreement",
     sections: [
       {
         heading: "Using ZeeMe",
+        icon: "\u2705",
         paragraphs: [
           "You may use ZeeMe for personal, lawful purposes. You agree not to misuse the service, attempt unauthorized access, or interfere with platform integrity.",
           "ZeeMe may evolve features over time, including interface, models, and limits, to improve reliability and safety.",
@@ -83,69 +103,116 @@ const INFO_PAGE_CONTENT: Record<InfoPageId, InfoPageContent> = {
       },
       {
         heading: "Accounts and access",
+        icon: "\uD83D\uDD11",
         paragraphs: [
           "You are responsible for maintaining account security and accurate registration details.",
           "We may suspend access for abuse, fraud, policy violations, or behavior that risks system safety.",
         ],
       },
       {
+        heading: "Content and conduct",
+        icon: "\uD83D\uDCAC",
+        paragraphs: [
+          "You retain ownership of any content you share in conversations. We use your content solely to provide and improve the ZeeMe service.",
+          "You agree not to use ZeeMe to generate harmful, illegal, or misleading content, or to harass, threaten, or impersonate others.",
+        ],
+      },
+      {
         heading: "Service boundaries",
+        icon: "\u26A0\uFE0F",
         paragraphs: [
           "AI responses can be imperfect. ZeeMe does not provide guaranteed factual, legal, financial, or medical advice.",
-          "Use judgment and consult qualified professionals for high-stakes decisions.",
+          "Use judgment and consult qualified professionals for high-stakes decisions. ZeeMe is a companion, not a licensed advisor.",
+        ],
+      },
+      {
+        heading: "Changes to terms",
+        icon: "\uD83D\uDD04",
+        paragraphs: [
+          "We may update these terms as the product evolves. Continued use after changes constitutes acceptance.",
+          "We will communicate significant changes through the app or email notification.",
         ],
       },
     ],
   },
   privacy: {
-    title: "Privacy",
-    subtitle: "Companionship only works when privacy is respected.",
-    updatedAt: "February 18, 2026",
+    title: "Privacy Policy",
+    subtitle: "Companionship only works when privacy is respected. Here's how we protect yours.",
+    updatedAt: "February 2026",
+    heroIcon: "🔒",
+    accentWord: "Protected",
     sections: [
       {
-        heading: "What we store",
+        heading: "What we collect",
+        icon: "📋",
         paragraphs: [
-          "We store account information, conversation content, and settings needed to provide continuity and core functionality.",
-          "We keep data handling focused on product operation, quality, and safety controls.",
+          "We collect account information (email, name), conversation content, usage patterns, and device information needed for authentication and service delivery.",
+          "We keep data collection focused and purposeful — we only gather what's needed to run and improve ZeeMe.",
         ],
       },
       {
-        heading: "How data is used",
+        heading: "How your data is used",
+        icon: "🔧",
         paragraphs: [
-          "Your data is used to run the experience: authentication, memory continuity, and service reliability.",
-          "We do not position ZeeMe as a data marketplace and we design defaults around user trust.",
+          "Your data powers the core experience: authentication, memory continuity, personalization, and service reliability.",
+          "We do not sell your data. We do not position ZeeMe as a data marketplace. Your conversations are yours.",
         ],
       },
       {
-        heading: "Security posture",
+        heading: "Data storage and security",
+        icon: "🛡️",
         paragraphs: [
-          "We apply access controls, signed media access, and operational safeguards to reduce unauthorized exposure.",
-          "No system is perfect, but privacy-preserving architecture is part of how we ship every release.",
+          "Data is stored using encrypted databases with access controls and operational safeguards.",
+          "We apply signed media access, rate limiting, and monitoring to reduce unauthorized exposure. No system is perfect, but privacy-preserving architecture is built into every release.",
+        ],
+      },
+      {
+        heading: "Your rights",
+        icon: "⚖️",
+        paragraphs: [
+          "You can request access to, correction of, or deletion of your personal data at any time.",
+          "To exercise these rights, reach out through the app's settings or contact us directly. We aim to respond within 30 days.",
         ],
       },
     ],
   },
   blog: {
     title: "ZeeMe Blog",
-    subtitle: "Product notes, design thinking, and behind-the-scenes updates.",
-    updatedAt: "February 18, 2026",
+    subtitle: "Product notes, design thinking, and behind-the-scenes updates from the team.",
+    updatedAt: "February 2026",
+    heroIcon: "📝",
+    accentWord: "Stories",
     sections: [
       {
         heading: "Designing for emotional safety",
+        icon: "🎨",
         paragraphs: [
           "We treat emotional tone as part of the product surface. This means calmer pacing, cleaner interfaces, and less cognitive noise.",
+          "Every interaction detail — from animation timing to word choice — is tuned to feel present without being overwhelming. We want Zee to feel like a steady presence, not a demanding one.",
         ],
       },
       {
         heading: "Building continuity across voice and text",
+        icon: "🌐",
         paragraphs: [
           "A core challenge in companion AI is preserving context while keeping interactions natural. We invest in memory systems that feel coherent without being intrusive.",
+          "Whether you're typing at your desk or talking on a walk, the conversation thread stays connected. Context isn't just stored — it's woven naturally into how Zee responds.",
         ],
       },
       {
-        heading: "What’s next",
+        heading: "The warmth in the details",
+        icon: "☕",
+        paragraphs: [
+          "Great companion experiences aren't built from features alone. They come from hundreds of small decisions: the way a message appears, the pause before a voice response, the color temperature of a screen.",
+          "We obsess over these details because they're what separate a tool from a friend.",
+        ],
+      },
+      {
+        heading: "What's next for ZeeMe",
+        icon: "🚀",
         paragraphs: [
           "Upcoming work focuses on richer personalization, stronger mobile polish, and better companion moments that feel genuinely delightful.",
+          "We're also exploring deeper memory capabilities, so Zee can reference shared experiences more naturally over time. Stay tuned.",
         ],
       },
     ],
@@ -377,68 +444,168 @@ function InfoPageOverlay({
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
-      className="fixed inset-0 z-[120] flex items-end md:items-center justify-center p-3 md:p-6"
-      style={{ background: "rgba(18, 11, 11, 0.7)", backdropFilter: "blur(8px)" }}
+      className="fixed inset-0 z-[120] overflow-y-auto"
+      style={{
+        background: "linear-gradient(180deg, #1A1010 0%, #140D0D 100%)",
+      }}
     >
-      <motion.div
-        initial={{ opacity: 0, y: 24, scale: 0.98 }}
-        animate={{ opacity: 1, y: 0, scale: 1 }}
-        exit={{ opacity: 0, y: 18, scale: 0.98 }}
-        transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
-        className="w-full max-w-3xl max-h-[86vh] overflow-y-auto rounded-[2rem] border p-6 md:p-8"
-        style={{
-          background: "linear-gradient(155deg, rgba(46, 29, 28, 0.95), rgba(24, 15, 15, 0.96))",
-          borderColor: "rgba(255, 214, 176, 0.22)",
-          boxShadow: "0 20px 60px rgba(0, 0, 0, 0.45)",
-        }}
-      >
-        <div className="flex items-start justify-between gap-4 mb-7">
-          <div>
-            <p className="text-xs uppercase tracking-wide mb-1" style={{ color: "rgba(255, 220, 188, 0.58)" }}>
-              Updated {content.updatedAt}
-            </p>
-            <h2 className="text-3xl md:text-4xl leading-tight" style={{ color: "#FFEFD8", fontFamily: "'Fraunces', serif" }}>
+      <div className="fixed inset-0 pointer-events-none">
+        <div className="absolute inset-0" style={{ background: "radial-gradient(ellipse at 30% 10%, rgba(197, 131, 90, 0.2), transparent 60%)" }} />
+        <div className="absolute inset-0" style={{ background: "radial-gradient(ellipse at 75% 80%, rgba(110, 69, 60, 0.18), transparent 55%)" }} />
+      </div>
+
+      <div className="relative min-h-screen">
+        <nav className="sticky top-0 z-50 px-6 py-4">
+          <div
+            className="max-w-3xl mx-auto flex items-center justify-between rounded-2xl px-4 py-2.5 backdrop-blur-xl border"
+            style={{
+              background: "rgba(40, 26, 24, 0.65)",
+              borderColor: "rgba(255, 217, 183, 0.16)",
+            }}
+          >
+            <span
+              className="text-lg font-bold tracking-tight"
+              style={{ color: "#FFD7A8", fontFamily: "'Fraunces', serif" }}
+            >
+              ZeeMe
+            </span>
+            <button
+              type="button"
+              onClick={onClose}
+              className="flex items-center gap-2 px-4 py-1.5 rounded-xl text-sm font-medium transition-all hover:scale-105"
+              style={{
+                color: "#FFE2BE",
+                background: "rgba(255, 206, 158, 0.12)",
+                border: "1px solid rgba(255, 217, 172, 0.3)",
+              }}
+              aria-label="Back to home"
+              data-testid="button-close-info"
+            >
+              <ArrowRight className="w-4 h-4 rotate-180" />
+              Back
+            </button>
+          </div>
+        </nav>
+
+        <motion.div
+          initial={{ opacity: 0, y: 30 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
+          className="max-w-3xl mx-auto px-6 pt-8 pb-20"
+        >
+          <header className="text-center mb-14">
+            <motion.div
+              initial={{ scale: 0.7, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              transition={{ duration: 0.5, type: "spring", stiffness: 120 }}
+              className="text-5xl mb-5"
+            >
+              {content.heroIcon}
+            </motion.div>
+            <div className="mb-3">
+              <span
+                className="inline-block px-3 py-1 rounded-full text-[11px] font-semibold tracking-widest uppercase"
+                style={{
+                  background: "rgba(255, 197, 150, 0.12)",
+                  color: "rgba(255, 214, 172, 0.7)",
+                  border: "1px solid rgba(255, 217, 174, 0.18)",
+                }}
+              >
+                {content.accentWord}
+              </span>
+            </div>
+            <h1
+              className="text-3xl md:text-[2.8rem] font-semibold tracking-tight leading-tight mb-3"
+              style={{ color: "#FFEFD8", fontFamily: "'Fraunces', serif" }}
+            >
               {content.title}
-            </h2>
-            <p className="text-sm mt-2" style={{ color: "rgba(255, 226, 198, 0.72)" }}>
+            </h1>
+            <p
+              className="text-base md:text-lg max-w-lg mx-auto leading-relaxed"
+              style={{ color: "rgba(255, 226, 198, 0.65)" }}
+            >
               {content.subtitle}
             </p>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="w-10 h-10 shrink-0 rounded-xl border flex items-center justify-center transition-colors"
-            style={{ borderColor: "rgba(255, 220, 188, 0.25)", color: "rgba(255, 226, 198, 0.9)" }}
-            aria-label="Close page"
-          >
-            <X className="w-5 h-5" />
-          </button>
-        </div>
+            <p className="text-xs mt-4" style={{ color: "rgba(255, 220, 188, 0.4)" }}>
+              Last updated {content.updatedAt}
+            </p>
+          </header>
 
-        <div className="space-y-6">
-          {content.sections.map((section) => (
-            <section
-              key={section.heading}
-              className="rounded-2xl border p-5"
+          <div
+            className="h-px mb-10 mx-auto max-w-xs"
+            style={{
+              background: "linear-gradient(90deg, transparent, rgba(255, 214, 172, 0.25), transparent)",
+            }}
+          />
+
+          <div className="space-y-6">
+            {content.sections.map((section, idx) => (
+              <motion.section
+                key={section.heading}
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.45, delay: 0.1 + idx * 0.06 }}
+                className="rounded-2xl border p-6 md:p-7 relative overflow-hidden"
+                style={{
+                  background: "linear-gradient(160deg, rgba(255, 220, 190, 0.06), rgba(255, 185, 152, 0.03))",
+                  borderColor: "rgba(255, 220, 188, 0.15)",
+                }}
+              >
+                <div
+                  className="absolute -right-6 -top-6 w-24 h-24 rounded-full pointer-events-none"
+                  style={{
+                    background: "radial-gradient(circle, rgba(255, 202, 154, 0.1) 0%, transparent 70%)",
+                  }}
+                />
+                <div className="relative">
+                  <div className="flex items-center gap-3 mb-3">
+                    {section.icon && (
+                      <span className="text-xl">{section.icon}</span>
+                    )}
+                    <h3
+                      className="text-lg md:text-xl font-semibold"
+                      style={{ color: "#FFE7CC", fontFamily: "'Fraunces', serif" }}
+                    >
+                      {section.heading}
+                    </h3>
+                  </div>
+                  <div className="space-y-3 pl-0 md:pl-9">
+                    {section.paragraphs.map((paragraph) => (
+                      <p
+                        key={paragraph.substring(0, 40)}
+                        className="text-[15px] leading-[1.7]"
+                        style={{ color: "rgba(255, 224, 196, 0.72)" }}
+                      >
+                        {paragraph}
+                      </p>
+                    ))}
+                  </div>
+                </div>
+              </motion.section>
+            ))}
+          </div>
+
+          <div className="mt-14 text-center">
+            <div
+              className="h-px mb-8 mx-auto max-w-xs"
               style={{
-                background: "rgba(255, 220, 190, 0.04)",
-                borderColor: "rgba(255, 220, 188, 0.18)",
+                background: "linear-gradient(90deg, transparent, rgba(255, 214, 172, 0.2), transparent)",
               }}
+            />
+            <p className="text-xs mb-4" style={{ color: "rgba(255, 220, 188, 0.35)" }}>
+              &copy; {new Date().getFullYear()} ZeeMe. All rights reserved.
+            </p>
+            <button
+              type="button"
+              onClick={onClose}
+              className="text-sm font-medium transition-all hover:scale-105"
+              style={{ color: "rgba(255, 214, 172, 0.6)" }}
             >
-              <h3 className="text-xl mb-2" style={{ color: "#FFE7CC", fontFamily: "'Fraunces', serif" }}>
-                {section.heading}
-              </h3>
-              <div className="space-y-2.5">
-                {section.paragraphs.map((paragraph) => (
-                  <p key={paragraph} className="text-[15px] leading-relaxed" style={{ color: "rgba(255, 224, 196, 0.76)" }}>
-                    {paragraph}
-                  </p>
-                ))}
-              </div>
-            </section>
-          ))}
-        </div>
-      </motion.div>
+              &larr; Back to home
+            </button>
+          </div>
+        </motion.div>
+      </div>
     </motion.div>
   );
 }
