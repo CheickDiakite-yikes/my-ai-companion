@@ -26,6 +26,7 @@ A production-grade, mobile-first AI companion application with unified text and 
 16. [Troubleshooting](#16-troubleshooting)
 17. [Contributor Workflow](#17-contributor-workflow)
 18. [Design Principles](#18-design-principles)
+19. [License](#19-license)
 
 ---
 
@@ -918,3 +919,9 @@ npm run dev:handoff -- "brief summary of what was done"
 ---
 
 Built for expressive, safe, and continuous AI companionship.
+
+---
+
+## 19) License
+
+This project is open-source and available under the [MIT License](LICENSE).
