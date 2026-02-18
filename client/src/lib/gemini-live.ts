@@ -440,7 +440,12 @@ export class GeminiLiveVoiceSession {
     this.assistantTurnActive = false;
     this.assistantPlaybackTailUntilMs = 0;
 
-    this.session = await ai.live.connect({
+    const CONNECTION_TIMEOUT_MS = 15_000;
+    let connectionOpened = false;
+    let timedOut = false;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+
+    const connectPromise = ai.live.connect({
       model: params.model,
       config: {
         responseModalities: [Modality.AUDIO],
@@ -449,19 +454,50 @@ export class GeminiLiveVoiceSession {
       },
       callbacks: {
         onopen: () => {
+          connectionOpened = true;
+          if (timeoutId !== undefined) {
+            clearTimeout(timeoutId);
+            timeoutId = undefined;
+          }
           this.debug("live.session.open", { model: params.model });
         },
-        onmessage: (message) => this.handleServerMessage(message),
+        onmessage: (message) => {
+          if (!timedOut) this.handleServerMessage(message);
+        },
         onerror: (event) => {
+          if (timedOut) return;
           const error = new Error(event.message || "Gemini Live session error");
           this.emitError(error);
         },
         onclose: (event) => {
+          if (timedOut) return;
           this.debug("live.session.closed", { reason: event.reason || "unknown" });
           this.callbacks.onClosed?.(event.reason || undefined);
         },
       },
     });
+
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutId = setTimeout(() => {
+        if (!connectionOpened) {
+          timedOut = true;
+          connectPromise.then((session) => {
+            try { session.close(); } catch {}
+          }).catch(() => {});
+          reject(new Error("Connection timed out. Please check your network and try again."));
+        }
+      }, CONNECTION_TIMEOUT_MS);
+    });
+
+    try {
+      this.session = await Promise.race([connectPromise, timeoutPromise]);
+    } catch (err) {
+      if (timeoutId !== undefined) {
+        clearTimeout(timeoutId);
+        timeoutId = undefined;
+      }
+      throw err;
+    }
 
     this.debug("live.audio.capture_config", {
       processorBufferSize: PROCESSOR_BUFFER_SIZE,

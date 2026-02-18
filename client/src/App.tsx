@@ -8297,6 +8297,32 @@ function App() {
       });
     } catch (error: any) {
       console.error("Failed to start Gemini Live session:", error);
+
+      if (liveSession) {
+        await liveSession.stop().catch(() => undefined);
+      }
+      if (liveSessionRef.current === liveSession) {
+        liveSessionRef.current = null;
+      }
+
+      const isTimeout = /timed?\s*out/i.test(error?.message ?? "");
+      const retryAttempt = (options as any)?._retryAttempt ?? 0;
+      const MAX_RETRIES = 2;
+
+      if (isTimeout && retryAttempt < MAX_RETRIES && startNonce === liveStartNonceRef.current && !manualLiveStopRef.current) {
+        logLiveTrace("live.start.retry", {
+          runId,
+          conversationId,
+          attempt: retryAttempt + 1,
+          maxRetries: MAX_RETRIES,
+        });
+        const backoffMs = (retryAttempt + 1) * 1500;
+        await new Promise((r) => setTimeout(r, backoffMs));
+        if (startNonce === liveStartNonceRef.current) {
+          return startLiveSession({ ...options, _retryAttempt: retryAttempt + 1 } as any);
+        }
+      }
+
       const quotaError = parseQuotaError(error);
       if (quotaError) {
         setLiveError(
@@ -8306,18 +8332,12 @@ function App() {
         queryClient.invalidateQueries({ queryKey: ["/api/quota/summary"] });
       } else {
         setLiveError(
-          error?.message ??
-            "We could not start the live voice session. Please try again.",
+          isTimeout
+            ? "Connection timed out. Please check your signal and try again."
+            : (error?.message ?? "We could not start the live voice session. Please try again."),
         );
       }
 
-      if (liveSession) {
-        await liveSession.stop().catch(() => undefined);
-      }
-
-      if (liveSessionRef.current === liveSession) {
-        liveSessionRef.current = null;
-      }
       setIsCalling(false);
       setCallStartTime(null);
       liveConversationRef.current = null;
@@ -8329,6 +8349,8 @@ function App() {
         runId,
         conversationId,
         error: getErrorMessage(error),
+        wasTimeout: isTimeout,
+        retriesExhausted: isTimeout && retryAttempt >= MAX_RETRIES,
       });
     } finally {
       if (startNonce === liveStartNonceRef.current) {
