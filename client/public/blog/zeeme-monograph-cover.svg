@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#150f10"/>
+      <stop offset="48%" stop-color="#271718"/>
+      <stop offset="100%" stop-color="#120d0e"/>
+    </linearGradient>
+    <radialGradient id="halo" cx="0.5" cy="0.3" r="0.7">
+      <stop offset="0%" stop-color="#e9bd76" stop-opacity="0.3"/>
+      <stop offset="100%" stop-color="#e9bd76" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="panel" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#3b2924"/>
+      <stop offset="100%" stop-color="#241917"/>
+    </linearGradient>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <path d="M32 0H0V32" stroke="#f2ce97" stroke-opacity="0.08" stroke-width="1"/>
+    </pattern>
+  </defs>
+
+  <rect width="1600" height="900" fill="url(#bg)"/>
+  <rect width="1600" height="900" fill="url(#grid)"/>
+  <rect width="1600" height="900" fill="url(#halo)"/>
+
+  <rect x="130" y="110" width="1340" height="680" rx="30" fill="url(#panel)" stroke="#cfa76c" stroke-opacity="0.45" stroke-width="2"/>
+
+  <text x="190" y="180" fill="#d8b782" font-family="Inter, Arial, sans-serif" font-size="18" letter-spacing="6">RESEARCH MONOGRAPH</text>
+  <text x="190" y="246" fill="#fbe8c7" font-family="Georgia, 'Times New Roman', serif" font-size="64" font-weight="700">ZeeMe Companion</text>
+  <text x="190" y="314" fill="#fbe8c7" font-family="Georgia, 'Times New Roman', serif" font-size="64" font-weight="700">Operating System</text>
+
+  <text x="190" y="376" fill="#e4c496" font-family="Inter, Arial, sans-serif" font-size="28">Unified memory orchestration for text + live voice companionship</text>
+
+  <rect x="190" y="430" width="740" height="190" rx="20" fill="#1a1212" fill-opacity="0.46" stroke="#cfa76c" stroke-opacity="0.3"/>
+  <text x="230" y="480" fill="#f4d4a4" font-family="Inter, Arial, sans-serif" font-size="22" font-weight="700">Core Thesis</text>
+  <text x="230" y="523" fill="#e7c89a" font-family="Inter, Arial, sans-serif" font-size="24">Companion trust is an engineering reliability property.</text>
+  <text x="230" y="560" fill="#e7c89a" font-family="Inter, Arial, sans-serif" font-size="24">One ledger, one time anchor, one safety boundary.</text>
+  <text x="230" y="597" fill="#e7c89a" font-family="Inter, Arial, sans-serif" font-size="24">No continuity without deterministic context hygiene.</text>
+
+  <g opacity="0.9">
+    <rect x="980" y="430" width="420" height="70" rx="14" fill="#2f211d" stroke="#d4ad73" stroke-opacity="0.45"/>
+    <text x="1010" y="473" fill="#f2d2a1" font-family="Inter, Arial, sans-serif" font-size="24">Interaction Layer</text>
+    <rect x="980" y="525" width="420" height="70" rx="14" fill="#2f211d" stroke="#d4ad73" stroke-opacity="0.45"/>
+    <text x="1010" y="568" fill="#f2d2a1" font-family="Inter, Arial, sans-serif" font-size="24">Context Assembly Core</text>
+    <rect x="980" y="620" width="420" height="70" rx="14" fill="#2f211d" stroke="#d4ad73" stroke-opacity="0.45"/>
+    <text x="1010" y="663" fill="#f2d2a1" font-family="Inter, Arial, sans-serif" font-size="24">Model + Persistence + Traces</text>
+    <path d="M1190 500V524" stroke="#e7c188" stroke-width="3"/>
+    <path d="M1190 595V619" stroke="#e7c188" stroke-width="3"/>
+    <path d="M1190 500l-8 10h16l-8-10z" fill="#e7c188"/>
+    <path d="M1190 595l-8 10h16l-8-10z" fill="#e7c188"/>
+  </g>
+
+  <text x="190" y="742" fill="#c39a62" font-family="Inter, Arial, sans-serif" font-size="18">Figure A · Companion OS publication cover</text>
+</svg>

@@ -41,7 +41,14 @@ type BlogPostBlock =
   | { type: "heading"; text: string }
   | { type: "paragraph"; text: string }
   | { type: "quote"; text: string }
+  | { type: "meta"; items: { label: string; value: string }[] }
+  | { type: "callout"; title: string; text: string }
+  | { type: "code"; code: string; language?: string; caption?: string }
+  | { type: "equation"; expression: string; caption?: string; terms?: { symbol: string; meaning: string }[] }
+  | { type: "metrics"; items: { label: string; value: string; detail?: string }[] }
   | { type: "list"; items: string[] }
+  | { type: "table"; columns: string[]; rows: string[][]; caption?: string }
+  | { type: "references"; items: { title: string; href: string; note?: string }[] }
   | { type: "ascii"; text: string }
   | { type: "image"; src: string; alt: string; caption?: string };
 
@@ -197,42 +204,51 @@ const INFO_PAGE_CONTENT: Record<InfoPageId, InfoPageContent> = {
     ],
   },
   blog: {
-    title: "ZeeMe Blog",
-    subtitle: "Product notes, design thinking, and behind-the-scenes updates from the team.",
+    title: "ZeeMe Research Archive",
+    subtitle:
+      "Peer-style technical monographs and engineering case studies on companion AI architecture, continuity, memory integrity, and reliability operations.",
     updatedAt: "February 2026",
     heroIcon: "📝",
-    accentWord: "Stories",
+    accentWord: "Papers",
     sections: [
       {
-        heading: "Designing for emotional safety",
-        icon: "🎨",
+        heading: "Archive scope",
+        icon: "📚",
         paragraphs: [
-          "We treat emotional tone as part of the product surface. This means calmer pacing, cleaner interfaces, and less cognitive noise.",
-          "Every interaction detail — from animation timing to word choice — is tuned to feel present without being overwhelming. We want Zee to feel like a steady presence, not a demanding one.",
+          "This archive is intentionally curated as publication-grade monographs and case studies, not launch copy. Each piece records architecture decisions, incident classes, and concrete controls shipped in response.",
+          "The objective is reproducibility: a senior engineer or full product team should be able to implement the same reliability behavior from these papers without needing hidden prompt internals.",
         ],
       },
       {
-        heading: "Building continuity across voice and text",
-        icon: "🌐",
+        heading: "Method and evidence",
+        icon: "🔬",
         paragraphs: [
-          "A core challenge in companion AI is preserving context while keeping interactions natural. We invest in memory systems that feel coherent without being intrusive.",
-          "Whether you're typing at your desk or talking on a walk, the conversation thread stays connected. Context isn't just stored — it's woven naturally into how Zee responds.",
+          "Claims are grounded in implementation artifacts: runtime routes, storage behavior, release gates, and forensic traces captured during real incidents.",
+          "Every product claim must map to an owning mechanism and a verification path. If we cannot replay it, we do not publish it.",
         ],
       },
       {
-        heading: "The warmth in the details",
-        icon: "☕",
+        heading: "Review standard",
+        icon: "📏",
         paragraphs: [
-          "Great companion experiences aren't built from features alone. They come from hundreds of small decisions: the way a message appears, the pause before a voice response, the color temperature of a screen.",
-          "We obsess over these details because they're what separate a tool from a friend.",
+          "Each article is written like an engineering paper: abstract, method, findings, limitations, and references.",
+          "Narrative style is allowed, but claims must map to concrete controls or observed failure classes.",
         ],
       },
       {
-        heading: "What's next for ZeeMe",
-        icon: "🚀",
+        heading: "Why this format",
+        icon: "🧭",
         paragraphs: [
-          "Upcoming work focuses on richer personalization, stronger mobile polish, and better companion moments that feel genuinely delightful.",
-          "We're also exploring deeper memory capabilities, so Zee can reference shared experiences more naturally over time. Stay tuned.",
+          "Companion AI quality is usually discussed as tone or persona. In practice, quality emerges from deterministic state handling: continuity, routing integrity, and time/context correctness.",
+          "These papers therefore focus on systems behavior first, then expression layer outcomes.",
+        ],
+      },
+      {
+        heading: "Reader contract",
+        icon: "🛡️",
+        paragraphs: [
+          "We do not publish private persona prompts or hidden instruction text. The archive explains architecture and reliability controls without exposing secret prompt assets.",
+          "Use this archive as a technical blueprint, not as a prompt dump.",
         ],
       },
     ],
@@ -241,208 +257,534 @@ const INFO_PAGE_CONTENT: Record<InfoPageId, InfoPageContent> = {
 
 const BLOG_POSTS: BlogPost[] = [
   {
-    id: "what-zeeme-is",
-    title: "ZeeMe Is a Companion OS: One Relationship Across Voice and Text",
+    id: "zeeme-platform-thesis-2026",
+    title: "Research Paper I: ZeeMe as a Companion Operating System",
     subtitle:
-      "ZeeMe is not a chatbot skin. It is a continuity-first companion system built for presence, memory, and trust.",
+      "A systems research paper on the architecture, memory contract, and continuity guarantees that make ZeeMe feel like one consistent companion across text and live voice.",
     excerpt:
-      "The product contract behind ZeeMe: unified thread, live voice, durable memory, and privacy-preserving personalization.",
-    publishedAt: "February 17, 2026",
-    readTime: "10 min read",
-    tags: ["Product", "Companion OS", "Voice + Text", "Memory"],
+      "This paper treats companion quality as a reliability discipline. It documents the concrete architecture and controls that produce emotional continuity under real production load.",
+    publishedAt: "February 26, 2026",
+    readTime: "32 min read",
+    tags: ["Research Paper", "Companion OS", "Architecture", "Voice + Text"],
     blocks: [
       {
-        type: "paragraph",
-        text: "Most AI products are optimized for one-shot answers. ZeeMe is optimized for relationship continuity. That shifts everything: interaction pacing, response style, memory boundaries, and how voice and text share one identity.",
+        type: "image",
+        src: "/blog/zeeme-platform-paper-cover.svg",
+        alt: "Cover illustration for the ZeeMe companion operating system research paper.",
+        caption: "Plate I. Companion operating system thesis.",
       },
       {
-        type: "heading",
-        text: "The product contract",
-      },
-      {
-        type: "list",
+        type: "meta",
         items: [
-          "One persistent conversation thread for voice and text, so context is not reset when you switch modes.",
-          "Live voice sessions that persist transcripts back into the same message history used by text chat.",
-          "Memory composition from active thread + cross-chat relevance + profile facts, with safe-selective defaults.",
-          "Timezone-aware time anchors so Zee always knows the current day and time context.",
-          "Server-authoritative privacy boundaries where persona/system prompts stay private and never leak to UI.",
+          { label: "Paper type", value: "Architecture thesis with production evidence" },
+          { label: "Primary question", value: "What makes one AI companion feel continuous across voice and text?" },
+          { label: "System boundary", value: "Unified chat lane + live voice + shared memory + profile context" },
+          { label: "Evidence base", value: "Architecture docs, incident logs, trace instrumentation, release gates" },
+          { label: "Confidentiality policy", value: "Private persona/system prompt is intentionally excluded" },
         ],
       },
-      {
-        type: "heading",
-        text: "Architecture at a glance",
-      },
-      {
-        type: "ascii",
-        text:
-          "Mobile/Web UI\n   -> /api/chat/respond(/stream)\n   -> /api/live/token\n      -> Gemini text (flash)\n      -> Gemini live native audio\n   -> Postgres (messages, preferences, memory)\n   -> shared context builder (thread + cross-chat + profile)",
-      },
+      { type: "heading", text: "Abstract" },
       {
         type: "paragraph",
-        text: "This architecture is designed for emotional realism, not just throughput. If you talked to Zee in voice at 8:10 AM and switched to text at 8:12 AM, Zee should still sound like the same companion in the same conversation.",
+        text: "ZeeMe was designed around a strict product thesis: companionship is a continuity problem, not a copywriting problem. Users do not evaluate a companion by isolated messages; they evaluate whether the same presence persists across voice, text, pauses, and restarts. This paper formalizes ZeeMe as a companion operating system with four non-negotiable boundaries: route determinism, memory hygiene, temporal grounding, and traceable recovery. The central result is consistent across incidents: state correctness drives perceived emotional intelligence more than stylistic flair.",
       },
+      { type: "heading", text: "Structured Abstract" },
       {
-        type: "heading",
-        text: "What we intentionally do not expose",
-      },
-      {
-        type: "list",
-        items: [
-          "Private system/persona prompt internals.",
-          "Raw sensitive model traces or secrets.",
-          "Over-aggressive memory reuse in safe-selective mode.",
+        type: "table",
+        caption: "Table 1. Structured abstract for rapid technical review.",
+        columns: ["Section", "Statement"],
+        rows: [
+          ["Background", "Most companion products optimize tone before systems integrity, which causes trust drift under normal use."],
+          ["Objective", "Guarantee one coherent companion identity across text and live voice in a single relationship lane."],
+          ["Method", "Boundary-level analysis, incident replay, and endpoint contract verification against production traces."],
+          ["Key finding", "Deterministic routing and clean memory assembly have the highest leverage on user trust."],
+          ["Practical implication", "Companion teams should invest in reliability controls before adding stylistic complexity."],
         ],
       },
-      {
-        type: "quote",
-        text: "A real companion should feel warm and consistent, not noisy, pushy, or forgetful.",
-      },
-      {
-        type: "paragraph",
-        text: "ZeeMe is built for long-term trust: clear boundaries, strong memory continuity, and an interface that stays calm while still feeling alive.",
-      },
-    ],
-  },
-  {
-    id: "how-we-built-zeeme",
-    title: "From Mock to Production: How ZeeMe Was Built with Agentic Coding",
-    subtitle:
-      "The actual build log, architecture milestones, and the agentic engineering loop that compressed months of work into days.",
-    excerpt:
-      "A transparent look at what was built, when it was built, and how iterative agentic execution accelerated shipping quality.",
-    publishedAt: "February 17, 2026",
-    readTime: "12 min read",
-    tags: ["Engineering", "Architecture", "Agentic Coding", "Journey"],
-    blocks: [
-      {
-        type: "paragraph",
-        text: "ZeeMe started as a rough sketch with one hard requirement: voice and text must feel like one continuous relationship. The build process was intensely iterative, contract-driven, and powered by agentic coding.",
-      },
+      { type: "heading", text: "1. Design Thesis and Constraints" },
       {
         type: "image",
         src: "/blog/initial-mock-and-inspiration.png",
-        alt: "Initial ZeeMe mock and inspiration board showing early voice, text, and profile flows.",
-        caption: "The original mock: voice-first core, swipe-to-chat continuity, and profile-centered personalization.",
+        alt: "Original ZeeMe concept mock and interaction storyboard.",
+        caption: "Figure 1. The original mock was treated as a systems contract, not just visual inspiration.",
       },
       {
-        type: "heading",
-        text: "Milestones from the real build timeline",
+        type: "paragraph",
+        text: "The original concept artifact encoded the product constraint that still governs every release: voice and text are two surfaces for one companion identity. This constraint eliminated an entire class of architecture mistakes, including mode-specific state stores and fragmented memory behavior.",
       },
       {
-        type: "list",
-        items: [
-          "Feb 8: project memory workflow established (`PROJECT_STATE.md`, `SESSION_LOG.md`, dev context scripts).",
-          "Feb 8: Gemini text + live token backend integrated with persistent chat writes.",
-          "Feb 8: live audio streaming client wired with transcript persistence into shared history.",
-          "Feb 11-13: release guardrails, forensic skills, and live voice stability hardening.",
-          "Feb 16: context hygiene, intent/session reliability, and artifact pipeline hardening.",
-          "Main3 pivot: narrowed focus back to world-class voice + text companion quality.",
+        type: "table",
+        caption: "Table 2. Product constraints inherited directly from the initial concept.",
+        columns: ["Constraint", "Engineering implication", "Failure signature when violated"],
+        rows: [
+          ["Single relationship lane", "One canonical conversation identity across interfaces", "Companion behaves differently by mode"],
+          ["Voice-text continuity", "Persist voice transcripts into shared message history", "Voice cannot recall text context"],
+          ["Profile-aware personalization", "Inject stable user profile context in memory assembly", "Companion feels generic and reset-prone"],
+          ["Calm UX over noisy UX", "Favor deterministic state transitions and concise status semantics", "User perceives random or chaotic behavior"],
+        ],
+      },
+      { type: "heading", text: "2. Reference Architecture" },
+      {
+        type: "image",
+        src: "/blog/zeeme-companion-os-map.svg",
+        alt: "Architecture map showing text, live voice, memory, and observability boundaries.",
+        caption: "Figure 2. Companion OS map used as an implementation baseline.",
+      },
+      {
+        type: "code",
+        language: "http",
+        caption: "Listing 1. Core endpoint contract carrying continuity behavior.",
+        code:
+          "POST /api/chat/respond\\nPOST /api/chat/respond/stream\\nPOST /api/live/token\\nPOST /api/conversations/:id/voice-transcript\\nGET  /api/conversations/:id/messages",
+      },
+      {
+        type: "table",
+        caption: "Table 3. Boundary ownership model.",
+        columns: ["Boundary", "Owner function", "What users feel if it fails"],
+        rows: [
+          ["Routing", "Decide companion vs structured execution path", "Random behavior"],
+          ["Memory assembly", "Hydrate relevant context while excluding operational rows", "Forgetting and drift"],
+          ["Live voice runtime", "Turn-taking, interruption, transcript integrity", "Cutoffs or delayed responses"],
+          ["Client reconciliation", "Render canonical task and message state", "Contradictory UI status"],
+          ["Observability", "Attach forensic metadata to every critical turn", "No reliable root-cause path"],
+        ],
+      },
+      { type: "heading", text: "3. Memory Contract and Context Hygiene" },
+      {
+        type: "equation",
+        expression:
+          "memory_bundle_t = active_thread + compressed_thread + cross_chat_recall + profile_context + durable_memory - operational_rows",
+        caption: "Eq. 1. Shared memory bundle used by text generation and live token hydration.",
+        terms: [
+          { symbol: "active_thread", meaning: "Recent turns in the active conversation" },
+          { symbol: "compressed_thread", meaning: "Summarized older turns in the same thread" },
+          { symbol: "cross_chat_recall", meaning: "Relevant context from other conversations when enabled" },
+          { symbol: "profile_context", meaning: "Stable user facts from profile settings" },
+          { symbol: "durable_memory", meaning: "Long-horizon memory entries when policy allows" },
+          { symbol: "operational_rows", meaning: "Rows marked as agent_ui/system and excluded from model context" },
         ],
       },
       {
-        type: "heading",
-        text: "The engineering loop that actually worked",
+        type: "table",
+        caption: "Table 4. Defense-in-depth controls that prevent memory contamination.",
+        columns: ["Control", "Layer", "Why it exists"],
+        rows: [
+          ["messagePurpose filtering", "Read-time", "Prevents operational rows from entering generation context"],
+          ["uiPayload class exclusion", "Read-time", "Catches legacy or mislabeled rows"],
+          ["Legacy purpose backfill", "Data hygiene", "Repairs historical rows so current logic remains reliable"],
+          ["memoryMeta trace packet", "Observability", "Shows exactly which memory path was used in a turn"],
+        ],
       },
       {
         type: "ascii",
         text:
-          "observe real behavior\n   -> convert failure to explicit contract\n   -> patch smallest reliable surface\n   -> run checks + browser validation\n   -> deploy + trace + repeat",
+          "voice transcript -> messages table\\n                -> memory assembly\\n                -> purpose/uiPayload exclusion\\n                -> temporal anchor injection\\n                -> model generation (text + live)",
       },
+      { type: "heading", text: "4. Temporal Grounding and Calendar Correctness" },
       {
         type: "paragraph",
-        text: "Agentic coding mattered because it collapsed handoff overhead. Instead of slow ticket ping-pong, we could trace failures, patch quickly, run deterministic checks, and iterate in one loop.",
+        text: "Companion continuity is temporal as well as semantic. ZeeMe resolves relative references with explicit day, date, and timezone anchors so responses about today, tomorrow, and later this week remain stable across long sessions.",
       },
       {
-        type: "heading",
-        text: "Core runtime architecture",
+        type: "code",
+        language: "json",
+        caption: "Listing 2. Time-context anchor packet (conceptual).",
+        code:
+          "{\\n  \\\"today\\\": \\\"2026-02-26\\\",\\n  \\\"weekday\\\": \\\"Thursday\\\",\\n  \\\"timezone\\\": \\\"America/New_York\\\",\\n  \\\"relativeDateRule\\\": \\\"resolve to absolute date when ambiguity is detected\\\"\\n}",
+      },
+      { type: "heading", text: "5. Evaluation Protocol and Findings" },
+      {
+        type: "table",
+        caption: "Table 5. Continuity scenario matrix used during verification.",
+        columns: ["Scenario", "Expected behavior", "Failure signature"],
+        rows: [
+          ["Text -> voice handoff", "Voice continues same context without re-priming", "Voice asks for context already in chat"],
+          ["Voice -> text handoff", "Text continues in same thread naturally", "Text behaves as fresh conversation"],
+          ["Pause and resume", "Companion preserves context and tone continuity", "Restart-like behavior"],
+          ["Relative date query", "Absolute date with timezone-consistent interpretation", "Ambiguous or contradictory time answer"],
+          ["Casual non-build message", "Remain in companion lane", "Unintended structured task behavior"],
+        ],
       },
       {
-        type: "ascii",
-        text:
-          "React + Vite UI\n  -> Express API (routing, auth, quotas)\n     -> Gemini text + Live APIs\n     -> Postgres via Drizzle\n     -> media store + signed URLs\n  -> trace-first observability (x-trace-id, redacted logs)",
+        type: "metrics",
+        items: [
+          { label: "Primary reliability gain", value: "State correctness", detail: "Deterministic route and memory controls produced the largest trust improvements." },
+          { label: "Highest-risk failure class", value: "Context contamination", detail: "Operational rows in memory had outsized impact on conversation quality." },
+          { label: "Most effective debug strategy", value: "Trace-first replay", detail: "Typed decision and memory metadata reduced speculative fixes." },
+          { label: "Product implication", value: "Reliability before style", detail: "Tone quality compounds only after continuity contracts are stable." },
+        ],
       },
+      { type: "heading", text: "6. Limitations and Forward Work" },
       {
-        type: "paragraph",
-        text: "The result is a system that feels designed, not stitched together: clear API contracts, persistent memory continuity, and reliable fallback behavior under real user pressure.",
+        type: "list",
+        items: [
+          "Cross-chat relevance still requires threshold tuning for edge prompts.",
+          "Mobile browser audio stacks remain the biggest external variance for live quality.",
+          "Long-horizon memory policy requires continuous privacy and sensitivity review.",
+          "Future work should include larger longitudinal cohorts and automated continuity scoring.",
+        ],
       },
+      { type: "heading", text: "References" },
       {
-        type: "quote",
-        text: "The breakthrough was not code generation alone. It was turning feedback into enforceable contracts at high speed.",
-      },
-      {
-        type: "paragraph",
-        text: "This is why we believe agentic engineering can outperform traditional large-team velocity in early product formation: faster loop closure, tighter traceability, and less ambiguity between intent and implementation.",
+        type: "references",
+        items: [
+          {
+            title: "AI Companion Design Spec",
+            href: "https://github.com/CheickDiakite-yikes/my-ai-companion/blob/main3/docs/AI_COMPANION_DESIGN_SPEC.md",
+            note: "Original product constraints and multimodal behavior goals.",
+          },
+          {
+            title: "PROJECT_STATE",
+            href: "https://github.com/CheickDiakite-yikes/my-ai-companion/blob/main3/docs/PROJECT_STATE.md",
+            note: "Current architecture status, guardrails, and operational priorities.",
+          },
+          {
+            title: "GEMINI_INTEGRATION",
+            href: "https://github.com/CheickDiakite-yikes/my-ai-companion/blob/main3/docs/GEMINI_INTEGRATION.md",
+            note: "Endpoint contracts and live/text model behavior baseline.",
+          },
+          {
+            title: "SESSION_LOG",
+            href: "https://github.com/CheickDiakite-yikes/my-ai-companion/blob/main3/docs/SESSION_LOG.md",
+            note: "Chronological incident and stabilization history.",
+          },
+        ],
       },
     ],
   },
   {
-    id: "memory-with-heart",
-    title: "Reliability Over Novelty: Lessons from Real ZeeMe Conversations",
+    id: "zeeme-engineering-case-study-2026",
+    title: "Case Study II: How ZeeMe Was Built with Founder Context + Agentic Pair Engineering",
     subtitle:
-      "The hard problems we hit in production-like usage, and the guardrails that made Zee substantially more dependable.",
+      "A detailed engineering case study of the build journey from initial sketch to production hardening, including incident classes, release gates, and the operating model used to ship quickly without sacrificing trust.",
     excerpt:
-      "A practical postmortem on misroutes, voice cutoffs, stale state, and memory contamination, plus the fixes that held.",
-    publishedAt: "February 17, 2026",
-    readTime: "11 min read",
-    tags: ["Reliability", "Memory", "Voice", "Quality"],
+      "This case study documents the exact workflow that turned fast iteration into dependable delivery: founder context, Codex pair engineering, deterministic gates, and forensic replay.",
+    publishedAt: "February 26, 2026",
+    readTime: "29 min read",
+    tags: ["Case Study", "Agentic Coding", "Build Journey", "Reliability"],
     blocks: [
       {
+        type: "image",
+        src: "/blog/zeeme-case-study-cover.svg",
+        alt: "Cover image for the ZeeMe engineering case study.",
+        caption: "Plate II. Founder-led engineering case study.",
+      },
+      {
+        type: "meta",
+        items: [
+          { label: "Case type", value: "Longitudinal production case study" },
+          { label: "Study window", value: "Initial concept through main3 baseline" },
+          { label: "Delivery model", value: "Founder + Codex pair engineering + scripted release gates" },
+          { label: "Outcome lens", value: "Incident closure speed, recurrence, and continuity quality" },
+          { label: "Audience", value: "Startup teams, engineering leaders, applied AI builders" },
+        ],
+      },
+      { type: "heading", text: "Executive Summary" },
+      {
         type: "paragraph",
-        text: "The fastest way to lose trust in a companion app is unpredictability: random task starts, half-finished replies, stale status cards, or memory that references the wrong thing. We hit these issues and treated each as a reliability bug, not a cosmetic issue.",
+        text: "The most important ZeeMe lesson is operational, not philosophical: velocity is useful only when it is paired with deterministic quality gates. During high-pressure iterations, user complaints initially appeared subjective (\"it feels random\", \"it cut off\", \"it forgot context\"). The team converted those statements into typed failure classes, patched a single owning boundary at a time, and required replay evidence before promotion. This model created compounding reliability rather than compounding regressions.",
+      },
+      { type: "heading", text: "1. Problem Framing" },
+      {
+        type: "quote",
+        text: "Companion quality is a systems property. If state is unstable, personality style cannot rescue trust.",
       },
       {
-        type: "heading",
-        text: "Failures we observed in real usage",
+        type: "table",
+        caption: "Table 1. Core case questions and acceptance criteria.",
+        columns: ["Case question", "Method", "Pass condition"],
+        rows: [
+          ["Can a compact team deliver companion-grade reliability?", "Founder context + agentic coding + hard gates", "Failure classes trend down without widening regression surface"],
+          ["Can speed and trust coexist?", "Fast implementation, conservative release discipline", "Each high-risk patch has replay proof before deploy"],
+          ["What creates perceived intelligence?", "Boundary-level incident mapping", "State-correctness fixes outperform style-only tuning"],
+        ],
+      },
+      { type: "heading", text: "2. Origin: Mock to Contract" },
+      {
+        type: "image",
+        src: "/blog/initial-mock-and-inspiration.png",
+        alt: "Original interaction mock used as ZeeMe system contract.",
+        caption: "Figure 1. The mock encoded the one-lane companion contract early.",
       },
       {
-        type: "list",
-        items: [
-          "Explicit build asks occasionally drifting into companion chat.",
-          "Older intent/session context bleeding into new user requests.",
-          "Raw artifact-like text leaking into normal assistant bubbles.",
-          "Voice responses sounding clipped when VAD/noise settings were too aggressive.",
-          "Agent UI rows polluting memory context when legacy message-purpose labels were wrong.",
+        type: "paragraph",
+        text: "The initial mock defined two enduring constraints: one identity across voice and text, and one continuous memory thread. Treating these as engineering constraints prevented fragmented architecture and reduced expensive rewrites later.",
+      },
+      { type: "heading", text: "3. Chronology and Inflection Points" },
+      {
+        type: "image",
+        src: "/blog/zeeme-case-study-timeline.svg",
+        alt: "Timeline of ZeeMe milestones and reliability inflection points.",
+        caption: "Figure 2. Timeline of build and stabilization decisions.",
+      },
+      {
+        type: "table",
+        caption: "Table 2. Milestones that changed system behavior.",
+        columns: ["Milestone", "Shipped capability", "Observed impact"],
+        rows: [
+          ["Text runtime baseline", "Streaming chat + persistence", "Durable conversation continuity in one lane"],
+          ["Live voice integration", "Token minting + transcript persistence", "Voice context joined the same memory model"],
+          ["Memory hygiene controls", "purpose filters + legacy backfill", "Operational contamination incidents reduced"],
+          ["Temporal grounding", "Server date/day/timezone injection", "Relative time responses became more consistent"],
+          ["main3 refocus", "Scope reduction to companion core", "Higher reliability focus and lower roadmap entropy"],
+        ],
+      },
+      { type: "heading", text: "4. Incident Ledger and Recovery" },
+      {
+        type: "table",
+        caption: "Table 3. High-signal incident classes and corrective actions.",
+        columns: ["Observed symptom", "Root cause class", "Patch strategy", "Verification"],
+        rows: [
+          ["No response after user speech", "Live boundary profile mismatch", "Conservative activity handling + response budget tuning", "Trace replay with transcript parity"],
+          ["Assistant cuts off mid-turn", "False interruption sensitivity", "NO_INTERRUPTION baseline + capture safeguards", "Turn-complete replay validation"],
+          ["Companion leaks status-like phrasing", "Memory contamination", "purpose/uiPayload filtering + data backfill", "Context contamination regression suite"],
+          ["UI status mismatch", "Client/server state precedence drift", "Canonical task-detail reconciliation", "UI parity checks on terminal states"],
         ],
       },
       {
-        type: "heading",
-        text: "Guardrails that stabilized behavior",
-      },
-      {
-        type: "list",
-        items: [
-          "Confirmation-first build gating for explicit creation requests.",
-          "Intent-session continuity locks for follow-up prompts and slot collection.",
-          "Message-purpose filtering and backfill to keep agent UI/system rows out of memory prompts.",
-          "Live voice defaults tuned for completeness (`NO_INTERRUPTION`, conservative VAD, trace-driven tuning).",
-          "Trace-first debugging with route reason, decision path, and task failure metadata.",
-        ],
-      },
-      {
-        type: "heading",
-        text: "Companion reliability checklist",
+        type: "code",
+        language: "json",
+        caption: "Listing 1. Minimal forensic packet used during incident analysis.",
+        code:
+          "{\\n  \\\"traceId\\\": \\\"...\\\",\\n  \\\"decisionPathReason\\\": \\\"...\\\",\\n  \\\"routeReason\\\": \\\"...\\\",\\n  \\\"conversationId\\\": \\\"...\\\",\\n  \\\"intentSessionId\\\": \\\"optional\\\",\\n  \\\"taskId\\\": \\\"optional\\\",\\n  \\\"failureReasonCode\\\": \\\"optional\\\"\\n}",
       },
       {
         type: "ascii",
         text:
-          "[ ] Does this route correctly?\n[ ] Does this preserve active context?\n[ ] Can this fail clearly?\n[ ] Is memory clean and relevant?\n[ ] Does voice finish responses naturally?\n[ ] Does the UI reflect true task state?",
+          "user complaint -> trace packet -> failure class -> owning boundary\\n               -> minimal patch -> deterministic replay -> gate pass -> release",
+      },
+      { type: "heading", text: "5. The Founder + Codex Operating Loop" },
+      {
+        type: "image",
+        src: "/blog/zeeme-codex-field-report.svg",
+        alt: "Visual summary of founder and Codex pair-engineering workflow.",
+        caption: "Figure 3. Pair-engineering workflow used throughout delivery.",
       },
       {
-        type: "paragraph",
-        text: "The product direction is now explicit: fewer gimmicks, stronger fundamentals. A best-friend companion experience is won by continuity, clarity, and calm reliability over thousands of turns.",
+        type: "table",
+        caption: "Table 4. Why the pair-engineering model worked in this case.",
+        columns: ["Work mode", "Primary strength", "Primary risk", "Control used"],
+        rows: [
+          ["Founder-only execution", "Deep product context", "Execution bottleneck", "Codex-assisted implementation acceleration"],
+          ["Agent-only generation", "High output speed", "Context drift and regressions", "Founder constraint checks + gated release"],
+          ["Founder + Codex with gates", "Context-rich velocity", "Requires discipline", "Hard gate chain + replay-first policy"],
+        ],
       },
+      { type: "heading", text: "6. Release Discipline and Governance" },
+      {
+        type: "code",
+        language: "bash",
+        caption: "Listing 2. Release gate chain run before promotion.",
+        code:
+          "npm run check\\nnpm run test:agent:contract\\nnpm run test:agent:smoke\\nnpm run test:agent:flow\\nnpm run test:agent:ui",
+      },
+      {
+        type: "table",
+        caption: "Table 5. Hybrid gate policy.",
+        columns: ["Gate class", "Policy", "Operator action"],
+        rows: [
+          ["Type + contract + flow", "Hard block", "Do not deploy until fixed"],
+          ["UI non-critical edge cases", "Soft block with incident watch", "Deploy only with kill-switch readiness"],
+          ["Memory contamination signal", "Hard block", "Backfill/repair before promotion"],
+          ["Live voice regressions", "Hard block for broad rollout", "Constrain rollout to internal cohort"],
+        ],
+      },
+      { type: "heading", text: "7. What Failed and What Was Learned" },
+      {
+        type: "list",
+        items: [
+          "Fast expansion without strict controls increased random-behavior risk.",
+          "Unclear routing semantics made complaint diagnosis slower than necessary.",
+          "Historical data hygiene defects produced outsized memory side effects.",
+          "Voice tuning without trace discipline created repeatable blind loops.",
+          "Scope reduction at main3 was the correct strategic move for product trust.",
+        ],
+      },
+      { type: "heading", text: "8. Replication Blueprint for Other Teams" },
+      {
+        type: "list",
+        items: [
+          "Treat early product mocks as hard constraints, not optional inspiration.",
+          "Attach trace metadata to every high-context routing and runtime decision.",
+          "Patch one owning boundary at a time, then replay deterministically.",
+          "Use aggressive implementation velocity with conservative release discipline.",
+          "Reduce roadmap breadth whenever reliability debt begins to rise.",
+        ],
+      },
+      { type: "heading", text: "References" },
+      {
+        type: "references",
+        items: [
+          {
+            title: "PROJECT_STATE",
+            href: "https://github.com/CheickDiakite-yikes/my-ai-companion/blob/main3/docs/PROJECT_STATE.md",
+            note: "Current architecture posture, active priorities, and known gaps.",
+          },
+          {
+            title: "SESSION_LOG",
+            href: "https://github.com/CheickDiakite-yikes/my-ai-companion/blob/main3/docs/SESSION_LOG.md",
+            note: "Chronological timeline of build events and corrective decisions.",
+          },
+          {
+            title: "GEMINI_INTEGRATION",
+            href: "https://github.com/CheickDiakite-yikes/my-ai-companion/blob/main3/docs/GEMINI_INTEGRATION.md",
+            note: "Runtime model contracts and live/text behavior controls.",
+          },
+          {
+            title: "AI Companion Design Spec",
+            href: "https://github.com/CheickDiakite-yikes/my-ai-companion/blob/main3/docs/AI_COMPANION_DESIGN_SPEC.md",
+            note: "Original product design and continuity goals.",
+          },
+        ],
+      },
+    ],
+  },
+  {
+    id: "zeeme-memory-lab-paper-2026",
+    title: "Research Paper III: Memory Continuity Lab — Voice, Text, and Time Anchoring",
+    subtitle:
+      "A practical research paper on how ZeeMe assembles memory safely, prevents contamination, and keeps continuity stable across conversation restarts.",
+    excerpt:
+      "This paper details the memory pipeline, contamination controls, and replay protocol that make continuity measurable instead of anecdotal.",
+    publishedAt: "February 26, 2026",
+    readTime: "24 min read",
+    tags: ["Research Paper", "Memory", "Temporal Grounding", "Companion Reliability"],
+    blocks: [
+      {
+        type: "image",
+        src: "/blog/zeeme-memory-paper-cover.svg",
+        alt: "Cover image for the ZeeMe memory continuity lab paper.",
+        caption: "Plate III. Memory continuity laboratory report.",
+      },
+      {
+        type: "meta",
+        items: [
+          { label: "Paper type", value: "Applied memory systems paper" },
+          { label: "Core objective", value: "Preserve companion identity across mode switches and restarts" },
+          { label: "Data boundary", value: "Conversation history + profile context + trace metadata" },
+          { label: "Risk class", value: "Context contamination and temporal ambiguity" },
+          { label: "Verification style", value: "Scenario matrix + replay evidence" },
+        ],
+      },
+      { type: "heading", text: "Abstract" },
+      {
+        type: "paragraph",
+        text: "Memory failures in companion systems are trust failures. ZeeMe's memory lab focused on one question: how can a companion remain context-aware without leaking operational noise or over-claiming certainty? The answer was a deterministic memory assembly pipeline with explicit exclusions, temporal anchors, and trace-backed diagnostics. The lab showed that context quality depends more on filtering policy than memory volume.",
+      },
+      { type: "heading", text: "1. Research Motivation" },
       {
         type: "quote",
-        text: "Great companionship AI is not magic. It is disciplined engineering in service of emotional consistency.",
+        text: "\"When I stop a conversation and come back later, it should still remember me.\" This user expectation became the primary acceptance criterion for memory design.",
+      },
+      {
+        type: "table",
+        caption: "Table 1. Complaint-to-hypothesis mapping.",
+        columns: ["User complaint", "Hypothesis", "Owning surface", "Expected correction"],
+        rows: [
+          ["No recall after restart", "Live session starts without enough memory context", "Live token memory builder", "Inject active thread + relevant cross-chat + profile"],
+          ["Voice does not know text context", "Memory assembly differs by mode", "Shared context builder", "Unify text and live memory contracts"],
+          ["Companion repeats operational phrasing", "agent_ui/system rows leak into context", "Context filtering", "Exclude by purpose + uiPayload class"],
+          ["Date references feel wrong", "Relative-time interpretation lacks anchor", "Temporal injector", "Add day/date/timezone context per turn"],
+        ],
+      },
+      { type: "heading", text: "2. Memory Assembly Pipeline" },
+      {
+        type: "code",
+        language: "pseudo",
+        caption: "Listing 1. Deterministic memory assembly sequence.",
+        code:
+          "load active conversation turns\\nload cross-chat candidates (same user)\\nappend profile facts\\nexclude purpose in ['agent_ui', 'system']\\nexclude rows with agent_* uiPayload classes\\ninject timezone/day/date anchor\\nemit memoryMeta and route metadata",
+      },
+      {
+        type: "table",
+        caption: "Table 2. Memory sections and purpose.",
+        columns: ["Section", "Purpose", "Failure if missing"],
+        rows: [
+          ["Active thread", "Near-term continuity", "Companion asks for context user just provided"],
+          ["Cross-chat recall", "Longer-horizon continuity", "Repeated re-introduction by user"],
+          ["Profile context", "Stable personalization", "Tone feels generic and detached"],
+          ["Temporal anchor", "Correct day/date reasoning", "Today/tomorrow confusion"],
+          ["Exclusion filter", "Prevent contamination", "Status/task language leaks into chat"],
+        ],
+      },
+      { type: "heading", text: "3. Temporal Grounding Policy" },
+      {
+        type: "code",
+        language: "json",
+        caption: "Listing 2. Temporal context packet applied during generation.",
+        code:
+          "{\\n  \\\"date\\\": \\\"2026-02-26\\\",\\n  \\\"weekday\\\": \\\"Thursday\\\",\\n  \\\"timezone\\\": \\\"America/New_York\\\",\\n  \\\"policy\\\": \\\"resolve relative references to absolute date when uncertain\\\"\\n}",
       },
       {
         type: "paragraph",
-        text: "That discipline is what turns Zee from a neat demo into a companion users can actually depend on daily.",
+        text: "This policy prevents subtle continuity erosion in long conversations. Even a one-day mismatch in interpretation can make a companion feel inattentive, especially when users return after a pause.",
+      },
+      { type: "heading", text: "4. Experimental Matrix" },
+      {
+        type: "table",
+        caption: "Table 3. Memory lab scenarios and expected behavior.",
+        columns: ["Scenario", "Expected behavior", "Failure signature"],
+        rows: [
+          ["Text-first then voice", "Voice response uses earlier text context naturally", "Voice asks for details already in text history"],
+          ["Voice-first then text", "Text response continues same topic without reset", "Text behaves like a first interaction"],
+          ["Session stop and restart", "Companion recalls key context with calibrated confidence", "Companion loses thread or fabricates certainty"],
+          ["Operational-row injection test", "No agent status text in conversational response", "Task/status phrasing appears in normal chat"],
+          ["Relative date query", "Absolute date with timezone clarity", "Ambiguous or conflicting date answer"],
+        ],
+      },
+      { type: "heading", text: "5. Findings and Implications" },
+      {
+        type: "metrics",
+        items: [
+          { label: "Highest leverage control", value: "Context exclusion policy", detail: "Filtering quality had stronger impact than raw memory volume." },
+          { label: "Most expensive failure class", value: "Contamination", detail: "Small data hygiene errors created broad user-visible trust regressions." },
+          { label: "Debug acceleration", value: "Trace packets", detail: "memoryMeta + route metadata reduced diagnosis cycles significantly." },
+          { label: "Product implication", value: "Reliability compounds trust", detail: "Consistent memory behavior made the companion feel more human and attentive." },
+        ],
+      },
+      { type: "heading", text: "6. Limitations and Next Steps" },
+      {
+        type: "list",
+        items: [
+          "Cross-chat relevance ranking remains heuristic and should be continuously tuned.",
+          "Mobile network and browser variability can affect transcript timing under load.",
+          "Durable memory policy requires ongoing privacy review and user control transparency.",
+          "Future work should add automated continuity scoring over larger longitudinal datasets.",
+        ],
+      },
+      { type: "heading", text: "References" },
+      {
+        type: "references",
+        items: [
+          {
+            title: "GEMINI_INTEGRATION",
+            href: "https://github.com/CheickDiakite-yikes/my-ai-companion/blob/main3/docs/GEMINI_INTEGRATION.md",
+            note: "Live/text endpoint contracts and memory hydration behavior.",
+          },
+          {
+            title: "PROJECT_STATE",
+            href: "https://github.com/CheickDiakite-yikes/my-ai-companion/blob/main3/docs/PROJECT_STATE.md",
+            note: "Current memory hygiene priorities and risk tracking.",
+          },
+          {
+            title: "AGENT_MESSAGE_PURPOSE_BACKFILL",
+            href: "https://github.com/CheickDiakite-yikes/my-ai-companion/blob/main3/docs/AGENT_MESSAGE_PURPOSE_BACKFILL.md",
+            note: "Historical remediation of mislabeled message-purpose rows.",
+          },
+          {
+            title: "SESSION_LOG",
+            href: "https://github.com/CheickDiakite-yikes/my-ai-companion/blob/main3/docs/SESSION_LOG.md",
+            note: "Incident chronology for memory and continuity stabilization.",
+          },
+        ],
       },
     ],
   },
 ];
+function getBlogCoverBlock(post: BlogPost): Extract<BlogPostBlock, { type: "image" }> | null {
+  const cover = post.blocks.find((block): block is Extract<BlogPostBlock, { type: "image" }> => block.type === "image");
+  return cover ?? null;
+}
 
 function RevealSection({ children, className = "", delay = 0 }: { children: ReactNode; className?: string; delay?: number }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -835,6 +1177,24 @@ function InfoPageOverlay({
     page === "blog"
       ? BLOG_POSTS.find((post) => post.id === activeBlogPostId) ?? null
       : null;
+  const activeBlogSections = useMemo(() => {
+    if (!activeBlogPost) return [];
+    let index = 0;
+    return activeBlogPost.blocks
+      .filter((block): block is Extract<BlogPostBlock, { type: "heading" }> => block.type === "heading")
+      .map((block) => {
+        index += 1;
+        const slug = block.text
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, "-")
+          .replace(/^-+|-+$/g, "");
+        return {
+          index,
+          text: block.text,
+          id: `${activeBlogPost.id}-section-${index}-${slug || "section"}`,
+        };
+      });
+  }, [activeBlogPost]);
 
   useEffect(() => {
     if (page !== "blog") {
@@ -842,6 +1202,30 @@ function InfoPageOverlay({
       setShareNotice(null);
     }
   }, [page]);
+
+  useEffect(() => {
+    if (page !== "blog" || typeof window === "undefined") return;
+    const pathname = window.location.pathname.replace(/\/+$/, "") || "/";
+    if (!pathname.startsWith("/blog/")) return;
+    const deepLinkedPostId = decodeURIComponent(pathname.slice("/blog/".length));
+    const exists = BLOG_POSTS.some((post) => post.id === deepLinkedPostId);
+    if (exists) {
+      setActiveBlogPostId(deepLinkedPostId);
+    }
+  }, [page]);
+
+  useEffect(() => {
+    if (page !== "blog" || typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    const nextPath = activeBlogPostId
+      ? `/blog/${encodeURIComponent(activeBlogPostId)}`
+      : "/blog";
+    if (url.pathname !== nextPath) {
+      url.pathname = nextPath;
+      url.hash = "";
+      window.history.replaceState({}, "", `${url.pathname}${url.search}`);
+    }
+  }, [page, activeBlogPostId]);
 
   useEffect(() => {
     if (!shareNotice) return;
@@ -852,8 +1236,8 @@ function InfoPageOverlay({
   const handleShareBlogPost = async (post: BlogPost) => {
     const shareUrl =
       typeof window !== "undefined"
-        ? `${window.location.origin}${window.location.pathname}#blog-${post.id}`
-        : `#blog-${post.id}`;
+        ? `${window.location.origin}/blog/${encodeURIComponent(post.id)}`
+        : `/blog/${post.id}`;
     const sharePayload = {
       title: post.title,
       text: post.subtitle,
@@ -890,7 +1274,7 @@ function InfoPageOverlay({
       <div className="relative min-h-screen">
         <nav className="sticky top-0 z-50 px-6 py-4">
           <div
-            className="max-w-3xl mx-auto flex items-center justify-between rounded-2xl px-4 py-2.5 backdrop-blur-xl border"
+            className="max-w-3xl mx-auto flex items-center justify-between rounded-none px-4 py-2.5 backdrop-blur-xl border"
             style={{
               background: "rgba(40, 26, 24, 0.65)",
               borderColor: "rgba(255, 217, 183, 0.16)",
@@ -905,11 +1289,11 @@ function InfoPageOverlay({
             <button
               type="button"
               onClick={onClose}
-              className="flex items-center gap-2 px-4 py-1.5 rounded-xl text-sm font-medium transition-all hover:scale-105"
+              className="flex items-center gap-2 px-4 py-1.5 rounded-none text-sm font-medium transition-all hover:scale-105"
               style={{
                 color: "#FFE2BE",
-                background: "rgba(255, 206, 158, 0.12)",
-                border: "1px solid rgba(255, 217, 172, 0.3)",
+                background: "rgba(255, 206, 158, 0.06)",
+                border: "1px solid rgba(255, 217, 172, 0.22)",
               }}
               aria-label="Back to home"
               data-testid="button-close-info"
@@ -1164,17 +1548,17 @@ function InfoPageOverlay({
                 initial={{ opacity: 0, y: 16 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.45, ease: [0.22, 1, 0.36, 1] }}
-                className="mx-auto max-w-2xl"
+                className="mx-auto max-w-3xl"
               >
                 <div className="mb-6 flex items-center justify-between gap-3">
                   <button
                     type="button"
                     onClick={() => setActiveBlogPostId(null)}
-                    className="rounded-full border px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.16em]"
+                    className="rounded-none border px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.16em]"
                     style={{
-                      borderColor: "rgba(255, 217, 172, 0.3)",
+                      borderColor: "rgba(255, 217, 172, 0.22)",
                       color: "rgba(255, 220, 188, 0.76)",
-                      background: "rgba(255, 206, 158, 0.08)",
+                      background: "rgba(255, 206, 158, 0.04)",
                     }}
                   >
                     Back to stories
@@ -1182,11 +1566,11 @@ function InfoPageOverlay({
                   <button
                     type="button"
                     onClick={() => void handleShareBlogPost(activeBlogPost)}
-                    className="inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.16em]"
+                    className="inline-flex items-center gap-2 rounded-none border px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.16em]"
                     style={{
-                      borderColor: "rgba(255, 217, 172, 0.3)",
+                      borderColor: "rgba(255, 217, 172, 0.22)",
                       color: "rgba(255, 220, 188, 0.76)",
-                      background: "rgba(255, 206, 158, 0.08)",
+                      background: "rgba(255, 206, 158, 0.04)",
                     }}
                   >
                     <Share2 className="h-3.5 w-3.5" />
@@ -1226,11 +1610,11 @@ function InfoPageOverlay({
                     {activeBlogPost.tags.map((tag) => (
                       <span
                         key={`${activeBlogPost.id}-${tag}`}
-                        className="rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em]"
+                        className="rounded-none border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em]"
                         style={{
-                          borderColor: "rgba(255, 217, 172, 0.2)",
+                          borderColor: "rgba(255, 217, 172, 0.16)",
                           color: "rgba(255, 214, 172, 0.66)",
-                          background: "rgba(255, 206, 158, 0.08)",
+                          background: "rgba(255, 206, 158, 0.03)",
                         }}
                       >
                         {tag}
@@ -1239,16 +1623,50 @@ function InfoPageOverlay({
                   </div>
                 </header>
 
+                {activeBlogSections.length > 0 && (
+                  <nav
+                    className="mb-10 border-l pl-4 pr-1 py-1"
+                    style={{
+                      borderColor: "rgba(255, 217, 172, 0.28)",
+                    }}
+                  >
+                    <p
+                      className="mb-3 text-[11px] font-semibold uppercase tracking-[0.22em]"
+                      style={{ color: "rgba(255, 214, 172, 0.64)" }}
+                    >
+                      Contents
+                    </p>
+                    <ol className="space-y-2.5">
+                      {activeBlogSections.map((section) => (
+                        <li key={section.id}>
+                          <a
+                            href={`#${section.id}`}
+                            className="text-[15px] leading-relaxed transition-colors hover:underline underline-offset-4"
+                            style={{ color: "rgba(255, 224, 196, 0.8)" }}
+                          >
+                            {section.index}. {section.text}
+                          </a>
+                        </li>
+                      ))}
+                    </ol>
+                  </nav>
+                )}
+
                 <div className="space-y-6">
-                  {activeBlogPost.blocks.map((block, idx) => {
+                  {(() => {
+                    let headingRenderIndex = 0;
+                    return activeBlogPost.blocks.map((block, idx) => {
                     if (block.type === "heading") {
+                      const sectionAnchor = activeBlogSections[headingRenderIndex];
+                      headingRenderIndex += 1;
                       return (
                         <h3
                           key={`${activeBlogPost.id}-heading-${idx}`}
+                          id={sectionAnchor?.id}
                           className="pt-2 text-[1.45rem] md:text-[1.6rem]"
                           style={{ color: "#FFE9CF", fontFamily: "'Fraunces', serif" }}
                         >
-                          {block.text}
+                          {sectionAnchor ? `${sectionAnchor.index}. ${block.text}` : block.text}
                         </h3>
                       );
                     }
@@ -1263,14 +1681,201 @@ function InfoPageOverlay({
                         </p>
                       );
                     }
+                    if (block.type === "meta") {
+                      return (
+                        <div
+                          key={`${activeBlogPost.id}-meta-${idx}`}
+                          className="border-y py-1"
+                          style={{
+                            borderColor: "rgba(255, 217, 172, 0.22)",
+                          }}
+                        >
+                          {block.items.map((item, itemIndex) => (
+                            <div
+                              key={`${activeBlogPost.id}-meta-${idx}-${item.label}`}
+                              className="flex items-start gap-3 px-1 py-2.5"
+                              style={
+                                itemIndex > 0
+                                  ? { borderTop: "1px solid rgba(255, 217, 172, 0.12)" }
+                                  : undefined
+                              }
+                            >
+                              <p
+                                className="w-[34%] text-[10px] font-semibold uppercase tracking-[0.22em]"
+                                style={{ color: "rgba(255, 214, 172, 0.6)" }}
+                              >
+                                {item.label}
+                              </p>
+                              <p
+                                className="flex-1 text-[13px] leading-relaxed"
+                                style={{ color: "rgba(255, 224, 196, 0.82)" }}
+                              >
+                                {item.value}
+                              </p>
+                            </div>
+                          ))}
+                        </div>
+                      );
+                    }
+                    if (block.type === "callout") {
+                      return (
+                        <aside
+                          key={`${activeBlogPost.id}-callout-${idx}`}
+                          className="border-l-2 pl-5 pr-1 py-2"
+                          style={{
+                            borderColor: "rgba(255, 217, 172, 0.28)",
+                          }}
+                        >
+                          <p
+                            className="text-[11px] font-semibold uppercase tracking-[0.2em]"
+                            style={{ color: "rgba(255, 214, 172, 0.72)" }}
+                          >
+                            {block.title}
+                          </p>
+                          <p
+                            className="mt-2 text-[14.5px] leading-[1.88]"
+                            style={{ color: "rgba(255, 224, 196, 0.8)" }}
+                          >
+                            {block.text}
+                          </p>
+                        </aside>
+                      );
+                    }
+                    if (block.type === "code") {
+                      return (
+                        <figure
+                          key={`${activeBlogPost.id}-code-${idx}`}
+                          className="border-y px-3 py-4"
+                          style={{
+                            borderColor: "rgba(255, 217, 172, 0.18)",
+                            background: "rgba(12, 8, 8, 0.34)",
+                          }}
+                        >
+                          {block.language ? (
+                            <p
+                              className="mb-2 text-[10px] font-semibold uppercase tracking-[0.18em]"
+                              style={{ color: "rgba(255, 214, 172, 0.62)" }}
+                            >
+                              {block.language}
+                            </p>
+                          ) : null}
+                          <pre
+                            className="overflow-x-auto text-[12.5px] leading-[1.85]"
+                            style={{
+                              color: "rgba(255, 235, 212, 0.86)",
+                              fontFamily:
+                                "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
+                            }}
+                          >
+                            {block.code}
+                          </pre>
+                          {block.caption ? (
+                            <figcaption
+                              className="mt-2 text-xs italic"
+                              style={{ color: "rgba(255, 214, 172, 0.56)" }}
+                            >
+                              {block.caption}
+                            </figcaption>
+                          ) : null}
+                        </figure>
+                      );
+                    }
+                    if (block.type === "equation") {
+                      return (
+                        <figure
+                          key={`${activeBlogPost.id}-equation-${idx}`}
+                          className="border-y px-3 py-4"
+                          style={{
+                            borderColor: "rgba(255, 217, 172, 0.18)",
+                            background: "rgba(10, 7, 7, 0.28)",
+                          }}
+                        >
+                          <pre
+                            className="overflow-x-auto text-[12.5px] leading-[1.8]"
+                            style={{
+                              color: "rgba(255, 235, 212, 0.86)",
+                              fontFamily:
+                                "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
+                            }}
+                          >
+                            {block.expression}
+                          </pre>
+                          {block.caption ? (
+                            <figcaption
+                              className="mt-2 text-xs italic"
+                              style={{ color: "rgba(255, 214, 172, 0.56)" }}
+                            >
+                              {block.caption}
+                            </figcaption>
+                          ) : null}
+                          {block.terms && block.terms.length > 0 ? (
+                            <ul
+                              className="mt-3 space-y-1 text-xs leading-relaxed"
+                              style={{ color: "rgba(255, 224, 196, 0.74)" }}
+                            >
+                              {block.terms.map((term) => (
+                                <li key={`${activeBlogPost.id}-equation-${idx}-${term.symbol}`}>
+                                  <span className="font-semibold" style={{ color: "rgba(255, 214, 172, 0.86)" }}>
+                                    {term.symbol}
+                                  </span>{" "}
+                                  — {term.meaning}
+                                </li>
+                              ))}
+                            </ul>
+                          ) : null}
+                        </figure>
+                      );
+                    }
+                    if (block.type === "metrics") {
+                      return (
+                        <div
+                          key={`${activeBlogPost.id}-metrics-${idx}`}
+                          className="border-y"
+                          style={{ borderColor: "rgba(255, 217, 172, 0.2)" }}
+                        >
+                          {block.items.map((item, itemIndex) => (
+                            <article
+                              key={`${activeBlogPost.id}-metrics-${idx}-${item.label}`}
+                              className="grid gap-2 px-1 py-3 sm:grid-cols-[220px_1fr]"
+                              style={{
+                                borderTop:
+                                  itemIndex > 0 ? "1px solid rgba(255, 217, 172, 0.12)" : undefined,
+                              }}
+                            >
+                              <p
+                                className="text-[10px] font-semibold uppercase tracking-[0.22em]"
+                                style={{ color: "rgba(255, 214, 172, 0.62)" }}
+                              >
+                                {item.label}
+                              </p>
+                              <div>
+                                <p
+                                  className="text-xl leading-tight"
+                                  style={{ color: "#FFECD0", fontFamily: "'Fraunces', serif" }}
+                                >
+                                  {item.value}
+                                </p>
+                                {item.detail ? (
+                                  <p
+                                    className="mt-1.5 text-xs leading-relaxed"
+                                    style={{ color: "rgba(255, 224, 196, 0.66)" }}
+                                  >
+                                    {item.detail}
+                                  </p>
+                                ) : null}
+                              </div>
+                            </article>
+                          ))}
+                        </div>
+                      );
+                    }
                     if (block.type === "quote") {
                       return (
                         <blockquote
                           key={`${activeBlogPost.id}-quote-${idx}`}
-                          className="rounded-xl border px-5 py-4 text-[15px] italic leading-[1.9]"
+                          className="border-l-2 pl-5 pr-1 py-2 text-[15px] italic leading-[1.9]"
                           style={{
-                            borderColor: "rgba(255, 217, 172, 0.2)",
-                            background: "rgba(255, 206, 158, 0.06)",
+                            borderColor: "rgba(255, 217, 172, 0.28)",
                             color: "rgba(255, 230, 206, 0.78)",
                             fontFamily: "'Fraunces', serif",
                           }}
@@ -1292,14 +1897,101 @@ function InfoPageOverlay({
                         </ul>
                       );
                     }
+                    if (block.type === "references") {
+                      return (
+                        <ol
+                          key={`${activeBlogPost.id}-references-${idx}`}
+                          className="space-y-3 pl-5 text-[14px] leading-[1.8] list-decimal"
+                          style={{ color: "rgba(255, 224, 196, 0.76)" }}
+                        >
+                          {block.items.map((reference) => (
+                            <li key={`${activeBlogPost.id}-references-${idx}-${reference.title.slice(0, 24)}`}>
+                              <a
+                                href={reference.href}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="underline decoration-dotted underline-offset-4 transition-opacity hover:opacity-80"
+                                style={{ color: "rgba(255, 224, 196, 0.9)" }}
+                              >
+                                {reference.title}
+                              </a>
+                              {reference.note ? (
+                                <span style={{ color: "rgba(255, 214, 172, 0.58)" }}> — {reference.note}</span>
+                              ) : null}
+                            </li>
+                          ))}
+                        </ol>
+                      );
+                    }
+                    if (block.type === "table") {
+                      return (
+                        <figure
+                          key={`${activeBlogPost.id}-table-${idx}`}
+                          className="border-y py-2"
+                          style={{
+                            borderColor: "rgba(255, 217, 172, 0.2)",
+                          }}
+                        >
+                          <div className="overflow-x-auto">
+                            <table className="min-w-full table-fixed text-left">
+                              <thead>
+                                <tr>
+                                  {block.columns.map((column) => (
+                                    <th
+                                      key={`${activeBlogPost.id}-table-${idx}-head-${column}`}
+                                      className="border-b px-3 py-2 text-xs uppercase tracking-[0.14em]"
+                                      style={{
+                                        borderColor: "rgba(255, 217, 172, 0.2)",
+                                        color: "rgba(255, 214, 172, 0.72)",
+                                      }}
+                                    >
+                                      {column}
+                                    </th>
+                                  ))}
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {block.rows.map((row, rowIndex) => (
+                                  <tr key={`${activeBlogPost.id}-table-${idx}-row-${rowIndex}`}>
+                                    {row.map((cell, cellIndex) => (
+                                      <td
+                                        key={`${activeBlogPost.id}-table-${idx}-row-${rowIndex}-cell-${cellIndex}`}
+                                        className="border-b px-3 py-2 text-sm leading-relaxed align-top break-words"
+                                        style={{
+                                          borderColor: "rgba(255, 217, 172, 0.12)",
+                                          color: "rgba(255, 224, 196, 0.78)",
+                                        }}
+                                      >
+                                        {cell}
+                                      </td>
+                                    ))}
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                          {block.caption && (
+                            <figcaption
+                              className="border-t px-1 pt-2 text-xs italic"
+                              style={{
+                                borderColor: "rgba(255, 217, 172, 0.16)",
+                                color: "rgba(255, 214, 172, 0.56)",
+                              }}
+                            >
+                              {block.caption}
+                            </figcaption>
+                          )}
+                        </figure>
+                      );
+                    }
                     if (block.type === "ascii") {
                       return (
                         <pre
                           key={`${activeBlogPost.id}-ascii-${idx}`}
-                          className="overflow-x-auto rounded-xl border px-4 py-4 text-xs leading-relaxed"
+                          className="overflow-x-auto border-y px-3 py-4 text-xs leading-relaxed"
                           style={{
                             borderColor: "rgba(255, 217, 172, 0.2)",
-                            background: "rgba(15, 8, 8, 0.48)",
+                            background: "rgba(15, 8, 8, 0.34)",
                             color: "rgba(255, 224, 196, 0.76)",
                             fontFamily:
                               "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
@@ -1312,17 +2004,16 @@ function InfoPageOverlay({
                     return (
                       <figure
                         key={`${activeBlogPost.id}-image-${idx}`}
-                        className="rounded-xl border p-3"
+                        className="border-y py-3"
                         style={{
                           borderColor: "rgba(255, 217, 172, 0.2)",
-                          background: "rgba(255, 206, 158, 0.06)",
                         }}
                       >
                         <img
                           src={block.src}
                           alt={block.alt}
-                          className="w-full rounded-lg border"
-                          style={{ borderColor: "rgba(255, 217, 172, 0.2)" }}
+                          className="w-full border"
+                          style={{ borderColor: "rgba(255, 217, 172, 0.24)" }}
                         />
                         {block.caption && (
                           <figcaption
@@ -1334,25 +2025,42 @@ function InfoPageOverlay({
                         )}
                       </figure>
                     );
-                  })}
+                    });
+                  })()}
                 </div>
               </motion.article>
             ) : (
               <div className="space-y-6">
                 {BLOG_POSTS.map((post, idx) => (
+                  (() => {
+                    const coverBlock = getBlogCoverBlock(post);
+                    return (
                   <motion.article
                     key={post.id}
                     initial={{ opacity: 0, y: 18 }}
                     whileInView={{ opacity: 1, y: 0 }}
                     viewport={{ once: true, margin: "-20px" }}
                     transition={{ duration: 0.48, delay: idx * 0.04, ease: [0.22, 1, 0.36, 1] }}
-                    className="rounded-2xl border p-5 md:p-6"
+                    className="border-b pb-8 md:pb-10"
                     style={{
-                      borderColor: "rgba(255, 217, 172, 0.15)",
-                      background:
-                        "linear-gradient(180deg, rgba(255, 206, 158, 0.08) 0%, rgba(255, 206, 158, 0.02) 100%)",
+                      borderColor: "rgba(255, 217, 172, 0.16)",
                     }}
                   >
+                    {coverBlock && (
+                      <figure
+                        className="mb-4 overflow-hidden border"
+                        style={{
+                          borderColor: "rgba(255, 217, 172, 0.2)",
+                        }}
+                      >
+                        <img
+                          src={coverBlock.src}
+                          alt={coverBlock.alt}
+                          className="h-44 w-full object-cover md:h-52"
+                          loading="lazy"
+                        />
+                      </figure>
+                    )}
                     <p
                       className="mb-2 text-[11px] tracking-[0.24em] uppercase"
                       style={{ color: "rgba(255, 214, 172, 0.44)" }}
@@ -1375,11 +2083,11 @@ function InfoPageOverlay({
                       {post.tags.map((tag) => (
                         <span
                           key={`${post.id}-${tag}`}
-                          className="rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em]"
+                          className="border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em]"
                           style={{
-                            borderColor: "rgba(255, 217, 172, 0.2)",
+                            borderColor: "rgba(255, 217, 172, 0.16)",
                             color: "rgba(255, 214, 172, 0.64)",
-                            background: "rgba(255, 206, 158, 0.08)",
+                            background: "rgba(255, 206, 158, 0.03)",
                           }}
                         >
                           {tag}
@@ -1390,19 +2098,21 @@ function InfoPageOverlay({
                       <button
                         type="button"
                         onClick={() => setActiveBlogPostId(post.id)}
-                        className="inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.14em]"
+                        className="inline-flex items-center gap-2 border px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.14em]"
                         style={{
-                          borderColor: "rgba(255, 217, 172, 0.3)",
+                          borderColor: "rgba(255, 217, 172, 0.22)",
                           color: "rgba(255, 220, 188, 0.76)",
-                          background: "rgba(255, 206, 158, 0.08)",
+                          background: "rgba(255, 206, 158, 0.03)",
                         }}
                         data-testid={`button-open-blog-post-${post.id}`}
                       >
-                        Read story
+                        Read paper
                         <ArrowRight className="h-3.5 w-3.5" />
                       </button>
                     </div>
                   </motion.article>
+                    );
+                  })()
                 ))}
               </div>
             )
@@ -1535,6 +2245,25 @@ export default function MarketingLandingPage({ onGetStarted, onSignIn }: Marketi
     ],
     [],
   );
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const pathname = window.location.pathname.replace(/\/+$/, "") || "/";
+    if (pathname === "/blog" || pathname.startsWith("/blog/")) {
+      setActiveInfoPage("blog");
+    }
+  }, []);
+
+  const handleCloseInfoPage = () => {
+    setActiveInfoPage(null);
+    if (typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    if (url.pathname === "/blog" || url.pathname.startsWith("/blog/")) {
+      url.pathname = "/";
+      url.hash = "";
+      window.history.replaceState({}, "", `${url.pathname}${url.search}`);
+    }
+  };
 
   return (
     <>
@@ -1887,7 +2616,7 @@ export default function MarketingLandingPage({ onGetStarted, onSignIn }: Marketi
         </div>
       </div>
 
-      {activeInfoPage ? <InfoPageOverlay page={activeInfoPage} onClose={() => setActiveInfoPage(null)} /> : null}
+      {activeInfoPage ? <InfoPageOverlay page={activeInfoPage} onClose={handleCloseInfoPage} /> : null}
     </>
   );
 }
