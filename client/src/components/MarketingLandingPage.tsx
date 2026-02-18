@@ -511,7 +511,7 @@ function CtaSection({ onGetStarted, orbConfig }: { onGetStarted: () => void; orb
                   <path d="M0 4 C8 4, 8 1, 16 1 C24 1, 24 7, 32 7 C36 7, 38 5.5, 40 4" stroke="rgba(255, 214, 172, 0.7)" strokeWidth="0.8" fill="none" />
                 </svg>
                 <span className="text-[11px] tracking-[0.35em] uppercase" style={{ color: "rgba(255, 214, 172, 0.4)" }}>
-                  III
+                  Your Journey
                 </span>
                 <svg width="40" height="8" viewBox="0 0 40 8" fill="none" className="opacity-25" style={{ transform: "scaleX(-1)" }}>
                   <path d="M0 4 C8 4, 8 1, 16 1 C24 1, 24 7, 32 7 C36 7, 38 5.5, 40 4" stroke="rgba(255, 214, 172, 0.7)" strokeWidth="0.8" fill="none" />
@@ -529,21 +529,24 @@ function CtaSection({ onGetStarted, orbConfig }: { onGetStarted: () => void; orb
                 <CanvasOrb config={orbConfig} size={120} />
               </motion.div>
               <h2 className="text-3xl md:text-[2.6rem] font-semibold mb-3 tracking-tight leading-[1.1]" style={{ color: "#FFEFD8", fontFamily: "'Fraunces', serif" }}>
-                Step into your welcome page
+                Begin your journey with Zee
               </h2>
-              <div className="flex items-center justify-center gap-2 mb-4">
+              <div className="flex items-center justify-center gap-2 mb-5">
                 <div className="w-8 h-px" style={{ background: "linear-gradient(90deg, transparent, rgba(255, 214, 172, 0.25))" }} />
                 <div className="w-1.5 h-1.5 rotate-45 border" style={{ borderColor: "rgba(255, 214, 172, 0.2)" }} />
                 <div className="w-8 h-px" style={{ background: "linear-gradient(90deg, rgba(255, 214, 172, 0.25), transparent)" }} />
               </div>
-              <p className="text-base italic mb-8" style={{ color: "rgba(255, 226, 198, 0.6)", fontFamily: "'Fraunces', serif" }}>
-                Sign up or sign in and continue into your full ZeeMe experience.
+              <p className="text-[15px] leading-[1.85] max-w-sm mx-auto mb-4" style={{ color: "rgba(255, 226, 198, 0.65)" }}>
+                A companion who listens, remembers, and grows alongside you. Your first conversation is the beginning of something meaningful.
+              </p>
+              <p className="text-sm italic mb-9" style={{ color: "rgba(255, 226, 198, 0.45)", fontFamily: "'Fraunces', serif" }}>
+                Free to start. No credit card needed.
               </p>
               <motion.button
                 onClick={onGetStarted}
                 whileHover={{ y: -3, scale: 1.04, boxShadow: "0 14px 40px rgba(251, 185, 137, 0.5)" }}
                 whileTap={{ scale: 0.97 }}
-                className="px-10 py-4 rounded-none text-lg font-semibold shadow-lg"
+                className="px-12 py-4 rounded-none text-lg font-semibold shadow-lg flex items-center gap-2.5 mx-auto"
                 style={{
                   background: "linear-gradient(135deg, #FFD3A8, #F3B884)",
                   color: "#2A1B17",
@@ -551,7 +554,7 @@ function CtaSection({ onGetStarted, orbConfig }: { onGetStarted: () => void; orb
                   border: "1px solid rgba(255, 230, 200, 0.5)",
                 }}
               >
-                Continue to welcome
+                Meet Zee <ArrowRight className="w-5 h-5" />
               </motion.button>
             </div>
           </div>
