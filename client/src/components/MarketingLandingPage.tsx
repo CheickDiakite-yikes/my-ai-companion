@@ -242,22 +242,18 @@ const INFO_PAGE_CONTENT: Record<InfoPageId, InfoPageContent> = {
 const BLOG_POSTS: BlogPost[] = [
   {
     id: "what-zeeme-is",
-    title: "What ZeeMe Is: A Companion Platform, Not Just a Chatbot",
+    title: "ZeeMe Is a Companion OS: One Relationship Across Voice and Text",
     subtitle:
-      "ZeeMe is built to feel like your best friend in your pocket: emotionally present, useful, and always in-context.",
+      "ZeeMe is not a chatbot skin. It is a continuity-first companion system built for presence, memory, and trust.",
     excerpt:
-      "Why we designed ZeeMe around emotional presence, continuity, and trust instead of feature bloat.",
+      "The product contract behind ZeeMe: unified thread, live voice, durable memory, and privacy-preserving personalization.",
     publishedAt: "February 17, 2026",
-    readTime: "8 min read",
-    tags: ["Product", "Companion OS", "Voice + Text"],
+    readTime: "10 min read",
+    tags: ["Product", "Companion OS", "Voice + Text", "Memory"],
     blocks: [
       {
         type: "paragraph",
-        text: "Most AI products are optimized for answers. ZeeMe is optimized for relationship. That sounds simple, but it changes everything: pacing, tone, memory, and the way every screen behaves.",
-      },
-      {
-        type: "paragraph",
-        text: "We see Zee as a true companion layer for daily life. Some moments are practical, like drafting a message or helping you think through a decision. Other moments are emotional, like checking in when a day feels heavy.",
+        text: "Most AI products are optimized for one-shot answers. ZeeMe is optimized for relationship continuity. That shifts everything: interaction pacing, response style, memory boundaries, and how voice and text share one identity.",
       },
       {
         type: "heading",
@@ -266,110 +262,183 @@ const BLOG_POSTS: BlogPost[] = [
       {
         type: "list",
         items: [
-          "One thread for voice and text, so conversation feels continuous.",
-          "Calm, warm interaction design that reduces cognitive noise.",
-          "Memory that helps with continuity, not creepy overreach.",
-          "Safety-first defaults with clear boundaries on sensitive behavior.",
+          "One persistent conversation thread for voice and text, so context is not reset when you switch modes.",
+          "Live voice sessions that persist transcripts back into the same message history used by text chat.",
+          "Memory composition from active thread + cross-chat relevance + profile facts, with safe-selective defaults.",
+          "Timezone-aware time anchors so Zee always knows the current day and time context.",
+          "Server-authoritative privacy boundaries where persona/system prompts stay private and never leak to UI.",
+        ],
+      },
+      {
+        type: "heading",
+        text: "Architecture at a glance",
+      },
+      {
+        type: "ascii",
+        text:
+          "Mobile/Web UI\n   -> /api/chat/respond(/stream)\n   -> /api/live/token\n      -> Gemini text (flash)\n      -> Gemini live native audio\n   -> Postgres (messages, preferences, memory)\n   -> shared context builder (thread + cross-chat + profile)",
+      },
+      {
+        type: "paragraph",
+        text: "This architecture is designed for emotional realism, not just throughput. If you talked to Zee in voice at 8:10 AM and switched to text at 8:12 AM, Zee should still sound like the same companion in the same conversation.",
+      },
+      {
+        type: "heading",
+        text: "What we intentionally do not expose",
+      },
+      {
+        type: "list",
+        items: [
+          "Private system/persona prompt internals.",
+          "Raw sensitive model traces or secrets.",
+          "Over-aggressive memory reuse in safe-selective mode.",
         ],
       },
       {
         type: "quote",
-        text: "A great companion should feel present without feeling intrusive.",
+        text: "A real companion should feel warm and consistent, not noisy, pushy, or forgetful.",
       },
       {
         type: "paragraph",
-        text: "This is the core of ZeeMe: not a demo, not a gimmick, not a novelty assistant. It is a companion platform designed for long-term trust.",
+        text: "ZeeMe is built for long-term trust: clear boundaries, strong memory continuity, and an interface that stays calm while still feeling alive.",
       },
     ],
   },
   {
     id: "how-we-built-zeeme",
-    title: "How We Built ZeeMe: From Mock to Product with Agentic Coding",
+    title: "From Mock to Production: How ZeeMe Was Built with Agentic Coding",
     subtitle:
-      "A deep dive into the real architecture, daily build loop, and why agentic coding let a tiny team ship at extraordinary velocity.",
+      "The actual build log, architecture milestones, and the agentic engineering loop that compressed months of work into days.",
     excerpt:
-      "From first sketch to production reliability: the stack, system design, and the operating rhythm that built ZeeMe.",
+      "A transparent look at what was built, when it was built, and how iterative agentic execution accelerated shipping quality.",
     publishedAt: "February 17, 2026",
-    readTime: "11 min read",
-    tags: ["Engineering", "Architecture", "Agentic Coding"],
+    readTime: "12 min read",
+    tags: ["Engineering", "Architecture", "Agentic Coding", "Journey"],
     blocks: [
       {
         type: "paragraph",
-        text: "ZeeMe started as a rough product sketch and a clear promise: make companionship across voice and text feel real. We used an agentic build loop to move from idea to production-grade behavior faster than a traditional linear sprint.",
+        text: "ZeeMe started as a rough sketch with one hard requirement: voice and text must feel like one continuous relationship. The build process was intensely iterative, contract-driven, and powered by agentic coding.",
       },
       {
         type: "image",
         src: "/blog/initial-mock-and-inspiration.png",
         alt: "Initial ZeeMe mock and inspiration board showing early voice, text, and profile flows.",
-        caption: "The original mock that anchored the product direction.",
+        caption: "The original mock: voice-first core, swipe-to-chat continuity, and profile-centered personalization.",
       },
       {
         type: "heading",
-        text: "The architecture in one view",
+        text: "Milestones from the real build timeline",
+      },
+      {
+        type: "list",
+        items: [
+          "Feb 8: project memory workflow established (`PROJECT_STATE.md`, `SESSION_LOG.md`, dev context scripts).",
+          "Feb 8: Gemini text + live token backend integrated with persistent chat writes.",
+          "Feb 8: live audio streaming client wired with transcript persistence into shared history.",
+          "Feb 11-13: release guardrails, forensic skills, and live voice stability hardening.",
+          "Feb 16: context hygiene, intent/session reliability, and artifact pipeline hardening.",
+          "Main3 pivot: narrowed focus back to world-class voice + text companion quality.",
+        ],
+      },
+      {
+        type: "heading",
+        text: "The engineering loop that actually worked",
       },
       {
         type: "ascii",
         text:
-          "User UI (voice/text)\n   -> Express API (auth + routing + quotas)\n      -> Gemini (text + live voice)\n      -> Postgres (messages + memory + profiles)\n      -> Shared context builder (thread + cross-chat + profile)",
+          "observe real behavior\n   -> convert failure to explicit contract\n   -> patch smallest reliable surface\n   -> run checks + browser validation\n   -> deploy + trace + repeat",
       },
       {
         type: "paragraph",
-        text: "The key unlock was not just generating code. It was codifying behavior contracts quickly, testing them in loops, and turning production feedback into deterministic patches.",
+        text: "Agentic coding mattered because it collapsed handoff overhead. Instead of slow ticket ping-pong, we could trace failures, patch quickly, run deterministic checks, and iterate in one loop.",
+      },
+      {
+        type: "heading",
+        text: "Core runtime architecture",
       },
       {
         type: "ascii",
         text:
-          "┌──────────────── Zee Build Loop ────────────────┐\n│ Observe real user behavior                      │\n│ Convert issue -> contract + test                │\n│ Implement focused patch                         │\n│ Validate in logs + browser flows                │\n│ Ship and re-measure                             │\n└─────────────────────────────────────────────────┘",
+          "React + Vite UI\n  -> Express API (routing, auth, quotas)\n     -> Gemini text + Live APIs\n     -> Postgres via Drizzle\n     -> media store + signed URLs\n  -> trace-first observability (x-trace-id, redacted logs)",
       },
       {
         type: "paragraph",
-        text: "Agentic coding gave us leverage that typically requires larger teams: parallel analysis, fast implementation, and high-iteration debugging with tight traceability.",
+        text: "The result is a system that feels designed, not stitched together: clear API contracts, persistent memory continuity, and reliable fallback behavior under real user pressure.",
       },
       {
         type: "quote",
-        text: "Velocity mattered, but reliability mattered more. Every patch had to hold under real conversations.",
+        text: "The breakthrough was not code generation alone. It was turning feedback into enforceable contracts at high speed.",
+      },
+      {
+        type: "paragraph",
+        text: "This is why we believe agentic engineering can outperform traditional large-team velocity in early product formation: faster loop closure, tighter traceability, and less ambiguity between intent and implementation.",
       },
     ],
   },
   {
     id: "memory-with-heart",
-    title: "Memory with Heart: How ZeeMe Keeps Conversations Continuous",
+    title: "Reliability Over Novelty: Lessons from Real ZeeMe Conversations",
     subtitle:
-      "Designing memory for warmth and coherence while preserving user control and privacy.",
+      "The hard problems we hit in production-like usage, and the guardrails that made Zee substantially more dependable.",
     excerpt:
-      "How thread memory, cross-chat recall, and profile context combine to make Zee feel continuous.",
+      "A practical postmortem on misroutes, voice cutoffs, stale state, and memory contamination, plus the fixes that held.",
     publishedAt: "February 17, 2026",
-    readTime: "9 min read",
-    tags: ["Memory", "Voice", "Product Design"],
+    readTime: "11 min read",
+    tags: ["Reliability", "Memory", "Voice", "Quality"],
     blocks: [
       {
         type: "paragraph",
-        text: "Companion memory should never feel like surveillance. It should feel like care. ZeeMe memory is designed to help you continue a relationship across sessions and modes without turning into invasive over-collection.",
+        text: "The fastest way to lose trust in a companion app is unpredictability: random task starts, half-finished replies, stale status cards, or memory that references the wrong thing. We hit these issues and treated each as a reliability bug, not a cosmetic issue.",
       },
       {
         type: "heading",
-        text: "How memory is composed",
+        text: "Failures we observed in real usage",
       },
       {
         type: "list",
         items: [
-          "Active thread context for immediate continuity.",
-          "Cross-chat relevance for long-term recall when useful.",
-          "Profile context for personalization and communication style.",
-          "Safety filtering so sensitive information is handled conservatively.",
+          "Explicit build asks occasionally drifting into companion chat.",
+          "Older intent/session context bleeding into new user requests.",
+          "Raw artifact-like text leaking into normal assistant bubbles.",
+          "Voice responses sounding clipped when VAD/noise settings were too aggressive.",
+          "Agent UI rows polluting memory context when legacy message-purpose labels were wrong.",
         ],
       },
       {
+        type: "heading",
+        text: "Guardrails that stabilized behavior",
+      },
+      {
+        type: "list",
+        items: [
+          "Confirmation-first build gating for explicit creation requests.",
+          "Intent-session continuity locks for follow-up prompts and slot collection.",
+          "Message-purpose filtering and backfill to keep agent UI/system rows out of memory prompts.",
+          "Live voice defaults tuned for completeness (`NO_INTERRUPTION`, conservative VAD, trace-driven tuning).",
+          "Trace-first debugging with route reason, decision path, and task failure metadata.",
+        ],
+      },
+      {
+        type: "heading",
+        text: "Companion reliability checklist",
+      },
+      {
+        type: "ascii",
+        text:
+          "[ ] Does this route correctly?\n[ ] Does this preserve active context?\n[ ] Can this fail clearly?\n[ ] Is memory clean and relevant?\n[ ] Does voice finish responses naturally?\n[ ] Does the UI reflect true task state?",
+      },
+      {
         type: "paragraph",
-        text: "In practice, this means Zee can pick up where you left off whether you type at night, talk while walking, or jump back in a day later. The thread feels alive rather than reset.",
+        text: "The product direction is now explicit: fewer gimmicks, stronger fundamentals. A best-friend companion experience is won by continuity, clarity, and calm reliability over thousands of turns.",
       },
       {
         type: "quote",
-        text: "Memory is not about storing everything. It's about remembering what matters to the relationship.",
+        text: "Great companionship AI is not magic. It is disciplined engineering in service of emotional consistency.",
       },
       {
         type: "paragraph",
-        text: "This continuity is what makes ZeeMe fun and useful at the same time. You get the emotional rhythm of a best friend with the practical support of a capable AI system.",
+        text: "That discipline is what turns Zee from a neat demo into a companion users can actually depend on daily.",
       },
     ],
   },
