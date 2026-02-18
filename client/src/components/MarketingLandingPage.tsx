@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { motion, useInView, useScroll, useTransform } from "framer-motion";
 import {
   ArrowRight,
@@ -8,6 +8,7 @@ import {
   MessageSquareHeart,
   Mic,
   Shield,
+  Share2,
   Sparkles,
   Stars,
   X,
@@ -34,6 +35,25 @@ interface InfoPageContent {
   heroIcon: string;
   accentWord: string;
   sections: InfoPageSection[];
+}
+
+type BlogPostBlock =
+  | { type: "heading"; text: string }
+  | { type: "paragraph"; text: string }
+  | { type: "quote"; text: string }
+  | { type: "list"; items: string[] }
+  | { type: "ascii"; text: string }
+  | { type: "image"; src: string; alt: string; caption?: string };
+
+interface BlogPost {
+  id: string;
+  title: string;
+  subtitle: string;
+  excerpt: string;
+  publishedAt: string;
+  readTime: string;
+  tags: string[];
+  blocks: BlogPostBlock[];
 }
 
 const orbConfig = {
@@ -218,6 +238,142 @@ const INFO_PAGE_CONTENT: Record<InfoPageId, InfoPageContent> = {
     ],
   },
 };
+
+const BLOG_POSTS: BlogPost[] = [
+  {
+    id: "what-zeeme-is",
+    title: "What ZeeMe Is: A Companion Platform, Not Just a Chatbot",
+    subtitle:
+      "ZeeMe is built to feel like your best friend in your pocket: emotionally present, useful, and always in-context.",
+    excerpt:
+      "Why we designed ZeeMe around emotional presence, continuity, and trust instead of feature bloat.",
+    publishedAt: "February 17, 2026",
+    readTime: "8 min read",
+    tags: ["Product", "Companion OS", "Voice + Text"],
+    blocks: [
+      {
+        type: "paragraph",
+        text: "Most AI products are optimized for answers. ZeeMe is optimized for relationship. That sounds simple, but it changes everything: pacing, tone, memory, and the way every screen behaves.",
+      },
+      {
+        type: "paragraph",
+        text: "We see Zee as a true companion layer for daily life. Some moments are practical, like drafting a message or helping you think through a decision. Other moments are emotional, like checking in when a day feels heavy.",
+      },
+      {
+        type: "heading",
+        text: "The product contract",
+      },
+      {
+        type: "list",
+        items: [
+          "One thread for voice and text, so conversation feels continuous.",
+          "Calm, warm interaction design that reduces cognitive noise.",
+          "Memory that helps with continuity, not creepy overreach.",
+          "Safety-first defaults with clear boundaries on sensitive behavior.",
+        ],
+      },
+      {
+        type: "quote",
+        text: "A great companion should feel present without feeling intrusive.",
+      },
+      {
+        type: "paragraph",
+        text: "This is the core of ZeeMe: not a demo, not a gimmick, not a novelty assistant. It is a companion platform designed for long-term trust.",
+      },
+    ],
+  },
+  {
+    id: "how-we-built-zeeme",
+    title: "How We Built ZeeMe: From Mock to Product with Agentic Coding",
+    subtitle:
+      "A deep dive into the real architecture, daily build loop, and why agentic coding let a tiny team ship at extraordinary velocity.",
+    excerpt:
+      "From first sketch to production reliability: the stack, system design, and the operating rhythm that built ZeeMe.",
+    publishedAt: "February 17, 2026",
+    readTime: "11 min read",
+    tags: ["Engineering", "Architecture", "Agentic Coding"],
+    blocks: [
+      {
+        type: "paragraph",
+        text: "ZeeMe started as a rough product sketch and a clear promise: make companionship across voice and text feel real. We used an agentic build loop to move from idea to production-grade behavior faster than a traditional linear sprint.",
+      },
+      {
+        type: "image",
+        src: "/blog/initial-mock-and-inspiration.png",
+        alt: "Initial ZeeMe mock and inspiration board showing early voice, text, and profile flows.",
+        caption: "The original mock that anchored the product direction.",
+      },
+      {
+        type: "heading",
+        text: "The architecture in one view",
+      },
+      {
+        type: "ascii",
+        text:
+          "User UI (voice/text)\n   -> Express API (auth + routing + quotas)\n      -> Gemini (text + live voice)\n      -> Postgres (messages + memory + profiles)\n      -> Shared context builder (thread + cross-chat + profile)",
+      },
+      {
+        type: "paragraph",
+        text: "The key unlock was not just generating code. It was codifying behavior contracts quickly, testing them in loops, and turning production feedback into deterministic patches.",
+      },
+      {
+        type: "ascii",
+        text:
+          "┌──────────────── Zee Build Loop ────────────────┐\n│ Observe real user behavior                      │\n│ Convert issue -> contract + test                │\n│ Implement focused patch                         │\n│ Validate in logs + browser flows                │\n│ Ship and re-measure                             │\n└─────────────────────────────────────────────────┘",
+      },
+      {
+        type: "paragraph",
+        text: "Agentic coding gave us leverage that typically requires larger teams: parallel analysis, fast implementation, and high-iteration debugging with tight traceability.",
+      },
+      {
+        type: "quote",
+        text: "Velocity mattered, but reliability mattered more. Every patch had to hold under real conversations.",
+      },
+    ],
+  },
+  {
+    id: "memory-with-heart",
+    title: "Memory with Heart: How ZeeMe Keeps Conversations Continuous",
+    subtitle:
+      "Designing memory for warmth and coherence while preserving user control and privacy.",
+    excerpt:
+      "How thread memory, cross-chat recall, and profile context combine to make Zee feel continuous.",
+    publishedAt: "February 17, 2026",
+    readTime: "9 min read",
+    tags: ["Memory", "Voice", "Product Design"],
+    blocks: [
+      {
+        type: "paragraph",
+        text: "Companion memory should never feel like surveillance. It should feel like care. ZeeMe memory is designed to help you continue a relationship across sessions and modes without turning into invasive over-collection.",
+      },
+      {
+        type: "heading",
+        text: "How memory is composed",
+      },
+      {
+        type: "list",
+        items: [
+          "Active thread context for immediate continuity.",
+          "Cross-chat relevance for long-term recall when useful.",
+          "Profile context for personalization and communication style.",
+          "Safety filtering so sensitive information is handled conservatively.",
+        ],
+      },
+      {
+        type: "paragraph",
+        text: "In practice, this means Zee can pick up where you left off whether you type at night, talk while walking, or jump back in a day later. The thread feels alive rather than reset.",
+      },
+      {
+        type: "quote",
+        text: "Memory is not about storing everything. It's about remembering what matters to the relationship.",
+      },
+      {
+        type: "paragraph",
+        text: "This continuity is what makes ZeeMe fun and useful at the same time. You get the emotional rhythm of a best friend with the practical support of a capable AI system.",
+      },
+    ],
+  },
+];
 
 function RevealSection({ children, className = "", delay = 0 }: { children: ReactNode; className?: string; delay?: number }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -603,6 +759,50 @@ function InfoPageOverlay({
   onClose: () => void;
 }) {
   const content = INFO_PAGE_CONTENT[page];
+  const [activeBlogPostId, setActiveBlogPostId] = useState<string | null>(null);
+  const [shareNotice, setShareNotice] = useState<string | null>(null);
+
+  const activeBlogPost =
+    page === "blog"
+      ? BLOG_POSTS.find((post) => post.id === activeBlogPostId) ?? null
+      : null;
+
+  useEffect(() => {
+    if (page !== "blog") {
+      setActiveBlogPostId(null);
+      setShareNotice(null);
+    }
+  }, [page]);
+
+  useEffect(() => {
+    if (!shareNotice) return;
+    const timeout = window.setTimeout(() => setShareNotice(null), 1800);
+    return () => window.clearTimeout(timeout);
+  }, [shareNotice]);
+
+  const handleShareBlogPost = async (post: BlogPost) => {
+    const shareUrl =
+      typeof window !== "undefined"
+        ? `${window.location.origin}${window.location.pathname}#blog-${post.id}`
+        : `#blog-${post.id}`;
+    const sharePayload = {
+      title: post.title,
+      text: post.subtitle,
+      url: shareUrl,
+    };
+
+    try {
+      if (navigator.share) {
+        await navigator.share(sharePayload);
+        setShareNotice("Shared.");
+        return;
+      }
+      await navigator.clipboard.writeText(shareUrl);
+      setShareNotice("Link copied.");
+    } catch {
+      setShareNotice("Share not available.");
+    }
+  };
 
   return (
     <motion.div
@@ -889,79 +1089,254 @@ function InfoPageOverlay({
               </motion.div>
             </div>
           ) : page === "blog" ? (
-            <div className="space-y-0">
-              {content.sections.map((section, idx) => {
-                const romanNumerals = ["I", "II", "III", "IV", "V", "VI"];
-                return (
-                  <motion.article
-                    key={section.heading}
-                    initial={{ opacity: 0, y: 28 }}
-                    whileInView={{ opacity: 1, y: 0 }}
-                    viewport={{ once: true, margin: "-40px" }}
-                    transition={{ duration: 0.55, delay: idx * 0.05, ease: [0.22, 1, 0.36, 1] }}
-                    className="relative text-center py-10 md:py-14"
+            activeBlogPost ? (
+              <motion.article
+                key={activeBlogPost.id}
+                initial={{ opacity: 0, y: 16 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.45, ease: [0.22, 1, 0.36, 1] }}
+                className="mx-auto max-w-2xl"
+              >
+                <div className="mb-6 flex items-center justify-between gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setActiveBlogPostId(null)}
+                    className="rounded-full border px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.16em]"
+                    style={{
+                      borderColor: "rgba(255, 217, 172, 0.3)",
+                      color: "rgba(255, 220, 188, 0.76)",
+                      background: "rgba(255, 206, 158, 0.08)",
+                    }}
                   >
-                    <div className="flex items-center justify-center gap-4 mb-2">
-                      <svg width="40" height="8" viewBox="0 0 40 8" fill="none" className="opacity-40">
-                        <path d="M0 4 C8 4, 8 1, 16 1 C24 1, 24 7, 32 7 C36 7, 38 5.5, 40 4" stroke="rgba(255, 214, 172, 0.6)" strokeWidth="0.8" fill="none" />
-                      </svg>
+                    Back to stories
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleShareBlogPost(activeBlogPost)}
+                    className="inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.16em]"
+                    style={{
+                      borderColor: "rgba(255, 217, 172, 0.3)",
+                      color: "rgba(255, 220, 188, 0.76)",
+                      background: "rgba(255, 206, 158, 0.08)",
+                    }}
+                  >
+                    <Share2 className="h-3.5 w-3.5" />
+                    Share
+                  </button>
+                </div>
+
+                {shareNotice && (
+                  <p
+                    className="mb-4 text-xs font-medium uppercase tracking-[0.2em]"
+                    style={{ color: "rgba(255, 214, 172, 0.62)" }}
+                  >
+                    {shareNotice}
+                  </p>
+                )}
+
+                <header className="mb-8 border-b pb-7" style={{ borderColor: "rgba(255, 220, 188, 0.12)" }}>
+                  <p
+                    className="mb-3 text-[11px] tracking-[0.28em] uppercase"
+                    style={{ color: "rgba(255, 214, 172, 0.44)" }}
+                  >
+                    {activeBlogPost.publishedAt} · {activeBlogPost.readTime}
+                  </p>
+                  <h2
+                    className="text-[2rem] md:text-[2.45rem] leading-[1.15] tracking-tight"
+                    style={{ color: "#FFEED8", fontFamily: "'Fraunces', serif" }}
+                  >
+                    {activeBlogPost.title}
+                  </h2>
+                  <p
+                    className="mt-4 text-[1.05rem] leading-relaxed"
+                    style={{ color: "rgba(255, 226, 198, 0.7)" }}
+                  >
+                    {activeBlogPost.subtitle}
+                  </p>
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    {activeBlogPost.tags.map((tag) => (
                       <span
-                        className="text-[13px] tracking-[0.3em] font-light"
-                        style={{ color: "rgba(255, 214, 172, 0.45)", fontFamily: "'Fraunces', serif" }}
+                        key={`${activeBlogPost.id}-${tag}`}
+                        className="rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em]"
+                        style={{
+                          borderColor: "rgba(255, 217, 172, 0.2)",
+                          color: "rgba(255, 214, 172, 0.66)",
+                          background: "rgba(255, 206, 158, 0.08)",
+                        }}
                       >
-                        {romanNumerals[idx]}
+                        {tag}
                       </span>
-                      <svg width="40" height="8" viewBox="0 0 40 8" fill="none" className="opacity-40" style={{ transform: "scaleX(-1)" }}>
-                        <path d="M0 4 C8 4, 8 1, 16 1 C24 1, 24 7, 32 7 C36 7, 38 5.5, 40 4" stroke="rgba(255, 214, 172, 0.6)" strokeWidth="0.8" fill="none" />
-                      </svg>
-                    </div>
+                    ))}
+                  </div>
+                </header>
 
-                    <div className="flex items-center justify-center gap-2 mb-5">
-                      <span className="text-[10px] tracking-[0.25em] uppercase" style={{ color: "rgba(255, 214, 172, 0.35)" }}>
-                        {content.updatedAt}
-                      </span>
-                    </div>
-
-                    <h3
-                      className="text-[1.6rem] md:text-[1.85rem] font-semibold mb-5 tracking-tight"
-                      style={{ color: "#FFEFD8", fontFamily: "'Fraunces', serif" }}
-                    >
-                      {section.heading}
-                    </h3>
-
-                    <div className="max-w-lg mx-auto space-y-4">
-                      {section.paragraphs.map((paragraph, pIdx) => (
-                        <motion.p
-                          key={paragraph.substring(0, 40)}
-                          initial={{ opacity: 0, y: 10 }}
-                          whileInView={{ opacity: 1, y: 0 }}
-                          viewport={{ once: true }}
-                          transition={{ duration: 0.4, delay: 0.12 + pIdx * 0.06, ease: [0.22, 1, 0.36, 1] }}
-                          className="text-[15px] leading-[1.9]"
-                          style={{ color: "rgba(255, 224, 196, 0.7)" }}
+                <div className="space-y-6">
+                  {activeBlogPost.blocks.map((block, idx) => {
+                    if (block.type === "heading") {
+                      return (
+                        <h3
+                          key={`${activeBlogPost.id}-heading-${idx}`}
+                          className="pt-2 text-[1.45rem] md:text-[1.6rem]"
+                          style={{ color: "#FFE9CF", fontFamily: "'Fraunces', serif" }}
                         >
-                          {paragraph}
-                        </motion.p>
+                          {block.text}
+                        </h3>
+                      );
+                    }
+                    if (block.type === "paragraph") {
+                      return (
+                        <p
+                          key={`${activeBlogPost.id}-paragraph-${idx}`}
+                          className="text-[15px] leading-[1.95]"
+                          style={{ color: "rgba(255, 224, 196, 0.76)" }}
+                        >
+                          {block.text}
+                        </p>
+                      );
+                    }
+                    if (block.type === "quote") {
+                      return (
+                        <blockquote
+                          key={`${activeBlogPost.id}-quote-${idx}`}
+                          className="rounded-xl border px-5 py-4 text-[15px] italic leading-[1.9]"
+                          style={{
+                            borderColor: "rgba(255, 217, 172, 0.2)",
+                            background: "rgba(255, 206, 158, 0.06)",
+                            color: "rgba(255, 230, 206, 0.78)",
+                            fontFamily: "'Fraunces', serif",
+                          }}
+                        >
+                          {block.text}
+                        </blockquote>
+                      );
+                    }
+                    if (block.type === "list") {
+                      return (
+                        <ul
+                          key={`${activeBlogPost.id}-list-${idx}`}
+                          className="space-y-2 pl-5 text-[15px] leading-[1.9] list-disc"
+                          style={{ color: "rgba(255, 224, 196, 0.76)" }}
+                        >
+                          {block.items.map((item) => (
+                            <li key={`${activeBlogPost.id}-list-${idx}-${item.slice(0, 28)}`}>{item}</li>
+                          ))}
+                        </ul>
+                      );
+                    }
+                    if (block.type === "ascii") {
+                      return (
+                        <pre
+                          key={`${activeBlogPost.id}-ascii-${idx}`}
+                          className="overflow-x-auto rounded-xl border px-4 py-4 text-xs leading-relaxed"
+                          style={{
+                            borderColor: "rgba(255, 217, 172, 0.2)",
+                            background: "rgba(15, 8, 8, 0.48)",
+                            color: "rgba(255, 224, 196, 0.76)",
+                            fontFamily:
+                              "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
+                          }}
+                        >
+                          {block.text}
+                        </pre>
+                      );
+                    }
+                    return (
+                      <figure
+                        key={`${activeBlogPost.id}-image-${idx}`}
+                        className="rounded-xl border p-3"
+                        style={{
+                          borderColor: "rgba(255, 217, 172, 0.2)",
+                          background: "rgba(255, 206, 158, 0.06)",
+                        }}
+                      >
+                        <img
+                          src={block.src}
+                          alt={block.alt}
+                          className="w-full rounded-lg border"
+                          style={{ borderColor: "rgba(255, 217, 172, 0.2)" }}
+                        />
+                        {block.caption && (
+                          <figcaption
+                            className="pt-2 text-xs italic"
+                            style={{ color: "rgba(255, 214, 172, 0.56)" }}
+                          >
+                            {block.caption}
+                          </figcaption>
+                        )}
+                      </figure>
+                    );
+                  })}
+                </div>
+              </motion.article>
+            ) : (
+              <div className="space-y-6">
+                {BLOG_POSTS.map((post, idx) => (
+                  <motion.article
+                    key={post.id}
+                    initial={{ opacity: 0, y: 18 }}
+                    whileInView={{ opacity: 1, y: 0 }}
+                    viewport={{ once: true, margin: "-20px" }}
+                    transition={{ duration: 0.48, delay: idx * 0.04, ease: [0.22, 1, 0.36, 1] }}
+                    className="rounded-2xl border p-5 md:p-6"
+                    style={{
+                      borderColor: "rgba(255, 217, 172, 0.15)",
+                      background:
+                        "linear-gradient(180deg, rgba(255, 206, 158, 0.08) 0%, rgba(255, 206, 158, 0.02) 100%)",
+                    }}
+                  >
+                    <p
+                      className="mb-2 text-[11px] tracking-[0.24em] uppercase"
+                      style={{ color: "rgba(255, 214, 172, 0.44)" }}
+                    >
+                      {post.publishedAt} · {post.readTime}
+                    </p>
+                    <h3
+                      className="text-[1.5rem] md:text-[1.75rem] leading-tight"
+                      style={{ color: "#FFEED8", fontFamily: "'Fraunces', serif" }}
+                    >
+                      {post.title}
+                    </h3>
+                    <p
+                      className="mt-3 text-[15px] leading-[1.85]"
+                      style={{ color: "rgba(255, 224, 196, 0.76)" }}
+                    >
+                      {post.excerpt}
+                    </p>
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      {post.tags.map((tag) => (
+                        <span
+                          key={`${post.id}-${tag}`}
+                          className="rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em]"
+                          style={{
+                            borderColor: "rgba(255, 217, 172, 0.2)",
+                            color: "rgba(255, 214, 172, 0.64)",
+                            background: "rgba(255, 206, 158, 0.08)",
+                          }}
+                        >
+                          {tag}
+                        </span>
                       ))}
                     </div>
-
-                    {idx < content.sections.length - 1 && (
-                      <motion.div
-                        initial={{ scaleX: 0, opacity: 0 }}
-                        whileInView={{ scaleX: 1, opacity: 1 }}
-                        viewport={{ once: true }}
-                        transition={{ duration: 0.6 }}
-                        className="mt-10 md:mt-14 flex items-center justify-center gap-3"
+                    <div className="mt-5">
+                      <button
+                        type="button"
+                        onClick={() => setActiveBlogPostId(post.id)}
+                        className="inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.14em]"
+                        style={{
+                          borderColor: "rgba(255, 217, 172, 0.3)",
+                          color: "rgba(255, 220, 188, 0.76)",
+                          background: "rgba(255, 206, 158, 0.08)",
+                        }}
+                        data-testid={`button-open-blog-post-${post.id}`}
                       >
-                        <div className="w-12 h-px" style={{ background: "linear-gradient(90deg, transparent, rgba(255, 214, 172, 0.2))" }} />
-                        <div className="w-1.5 h-1.5 rounded-full" style={{ background: "rgba(255, 214, 172, 0.2)" }} />
-                        <div className="w-12 h-px" style={{ background: "linear-gradient(90deg, rgba(255, 214, 172, 0.2), transparent)" }} />
-                      </motion.div>
-                    )}
+                        Read story
+                        <ArrowRight className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
                   </motion.article>
-                );
-              })}
-            </div>
+                ))}
+              </div>
+            )
           ) : (
             <div className="space-y-1">
               {content.sections.map((section, idx) => (
