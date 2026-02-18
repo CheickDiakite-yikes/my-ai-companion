@@ -1201,10 +1201,11 @@ export default function MarketingLandingPage({ onGetStarted, onSignIn }: Marketi
 
             <motion.div initial={{ opacity: 0, y: 30 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.35, duration: 0.85 }} className="text-center max-w-xl">
               <h1
-                className="text-[2.7rem] md:text-[4.1rem] font-semibold mb-5 tracking-tight leading-[1.03]"
+                className="text-[2.5rem] md:text-[3.8rem] font-semibold mb-5 tracking-tight leading-[1.03]"
                 style={{ color: "#FFEFD8", fontFamily: "'Fraunces', serif" }}
                 data-testid="text-hero-title"
               >
+                Zee and Me<br />
                 A softer kind of AI companionship
               </h1>
               <motion.div
