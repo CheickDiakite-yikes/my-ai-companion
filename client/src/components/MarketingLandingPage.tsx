@@ -661,14 +661,19 @@ function InfoPageOverlay({
         >
           <header className="text-center mb-14">
             <motion.div
-              initial={{ scale: 0.7, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              transition={{ duration: 0.5, type: "spring", stiffness: 120 }}
+              initial={{ scale: 0.4, opacity: 0, rotate: -15 }}
+              animate={{ scale: 1, opacity: 1, rotate: 0 }}
+              transition={{ duration: 0.6, type: "spring", stiffness: 120, damping: 12 }}
               className="text-5xl mb-5"
             >
               {content.heroIcon}
             </motion.div>
-            <div className="mb-3">
+            <motion.div
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.4, delay: 0.15 }}
+              className="mb-3"
+            >
               <span
                 className="inline-block px-3 py-1 rounded-full text-[11px] font-semibold tracking-widest uppercase"
                 style={{
@@ -679,25 +684,40 @@ function InfoPageOverlay({
               >
                 {content.accentWord}
               </span>
-            </div>
-            <h1
+            </motion.div>
+            <motion.h1
+              initial={{ opacity: 0, y: 18 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.5, delay: 0.22, ease: [0.22, 1, 0.36, 1] }}
               className="text-3xl md:text-[2.8rem] font-semibold tracking-tight leading-tight mb-3"
               style={{ color: "#FFEFD8", fontFamily: "'Fraunces', serif" }}
             >
               {content.title}
-            </h1>
-            <p
+            </motion.h1>
+            <motion.p
+              initial={{ opacity: 0, y: 14 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.45, delay: 0.32, ease: [0.22, 1, 0.36, 1] }}
               className="text-base md:text-lg max-w-lg mx-auto leading-relaxed"
               style={{ color: "rgba(255, 226, 198, 0.65)" }}
             >
               {content.subtitle}
-            </p>
-            <p className="text-xs mt-4" style={{ color: "rgba(255, 220, 188, 0.4)" }}>
+            </motion.p>
+            <motion.p
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ duration: 0.4, delay: 0.45 }}
+              className="text-xs mt-4"
+              style={{ color: "rgba(255, 220, 188, 0.4)" }}
+            >
               Last updated {content.updatedAt}
-            </p>
+            </motion.p>
           </header>
 
-          <div
+          <motion.div
+            initial={{ scaleX: 0, opacity: 0 }}
+            animate={{ scaleX: 1, opacity: 1 }}
+            transition={{ duration: 0.6, delay: 0.4, ease: [0.22, 1, 0.36, 1] }}
             className="h-px mb-10 mx-auto max-w-xs"
             style={{
               background: "linear-gradient(90deg, transparent, rgba(255, 214, 172, 0.25), transparent)",
@@ -708,25 +728,44 @@ function InfoPageOverlay({
             {content.sections.map((section, idx) => (
               <motion.section
                 key={section.heading}
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.45, delay: 0.1 + idx * 0.06 }}
-                className="rounded-2xl border p-6 md:p-7 relative overflow-hidden"
+                initial={{ opacity: 0, y: 36, x: idx % 2 === 0 ? -20 : 20, scale: 0.96 }}
+                whileInView={{ opacity: 1, y: 0, x: 0, scale: 1 }}
+                viewport={{ once: true, margin: "-40px" }}
+                transition={{
+                  duration: 0.55,
+                  delay: idx * 0.08,
+                  ease: [0.22, 1, 0.36, 1],
+                }}
+                className="rounded-2xl border p-6 md:p-7 relative overflow-hidden group"
                 style={{
                   background: "linear-gradient(160deg, rgba(255, 220, 190, 0.06), rgba(255, 185, 152, 0.03))",
                   borderColor: "rgba(255, 220, 188, 0.15)",
                 }}
               >
                 <div
-                  className="absolute -right-6 -top-6 w-24 h-24 rounded-full pointer-events-none"
+                  className="absolute -right-6 -top-6 w-28 h-28 rounded-full pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity duration-500"
                   style={{
-                    background: "radial-gradient(circle, rgba(255, 202, 154, 0.1) 0%, transparent 70%)",
+                    background: "radial-gradient(circle, rgba(255, 202, 154, 0.14) 0%, transparent 70%)",
+                  }}
+                />
+                <div
+                  className="absolute -left-4 -bottom-4 w-20 h-20 rounded-full pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity duration-500"
+                  style={{
+                    background: "radial-gradient(circle, rgba(255, 220, 180, 0.08) 0%, transparent 70%)",
                   }}
                 />
                 <div className="relative">
                   <div className="flex items-center gap-3 mb-3">
                     {section.icon && (
-                      <span className="text-xl">{section.icon}</span>
+                      <motion.span
+                        className="text-xl"
+                        initial={{ scale: 0.5, opacity: 0 }}
+                        whileInView={{ scale: 1, opacity: 1 }}
+                        viewport={{ once: true }}
+                        transition={{ duration: 0.4, delay: idx * 0.08 + 0.15, type: "spring", stiffness: 200 }}
+                      >
+                        {section.icon}
+                      </motion.span>
                     )}
                     <h3
                       className="text-lg md:text-xl font-semibold"
@@ -736,14 +775,22 @@ function InfoPageOverlay({
                     </h3>
                   </div>
                   <div className="space-y-3 pl-0 md:pl-9">
-                    {section.paragraphs.map((paragraph) => (
-                      <p
+                    {section.paragraphs.map((paragraph, pIdx) => (
+                      <motion.p
                         key={paragraph.substring(0, 40)}
+                        initial={{ opacity: 0, y: 12 }}
+                        whileInView={{ opacity: 1, y: 0 }}
+                        viewport={{ once: true }}
+                        transition={{
+                          duration: 0.4,
+                          delay: idx * 0.08 + 0.2 + pIdx * 0.06,
+                          ease: [0.22, 1, 0.36, 1],
+                        }}
                         className="text-[15px] leading-[1.7]"
                         style={{ color: "rgba(255, 224, 196, 0.72)" }}
                       >
                         {paragraph}
-                      </p>
+                      </motion.p>
                     ))}
                   </div>
                 </div>
@@ -751,8 +798,18 @@ function InfoPageOverlay({
             ))}
           </div>
 
-          <div className="mt-14 text-center">
-            <div
+          <motion.div
+            className="mt-14 text-center"
+            initial={{ opacity: 0, y: 20 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true }}
+            transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
+          >
+            <motion.div
+              initial={{ scaleX: 0 }}
+              whileInView={{ scaleX: 1 }}
+              viewport={{ once: true }}
+              transition={{ duration: 0.5 }}
               className="h-px mb-8 mx-auto max-w-xs"
               style={{
                 background: "linear-gradient(90deg, transparent, rgba(255, 214, 172, 0.2), transparent)",
@@ -761,15 +818,17 @@ function InfoPageOverlay({
             <p className="text-xs mb-4" style={{ color: "rgba(255, 220, 188, 0.35)" }}>
               &copy; {new Date().getFullYear()} ZeeMe. All rights reserved.
             </p>
-            <button
+            <motion.button
               type="button"
               onClick={onClose}
-              className="text-sm font-medium transition-all hover:scale-105"
+              whileHover={{ scale: 1.08, x: -4 }}
+              whileTap={{ scale: 0.95 }}
+              className="text-sm font-medium transition-colors"
               style={{ color: "rgba(255, 214, 172, 0.6)" }}
             >
               &larr; Back to home
-            </button>
-          </div>
+            </motion.button>
+          </motion.div>
         </motion.div>
       </div>
     </motion.div>
