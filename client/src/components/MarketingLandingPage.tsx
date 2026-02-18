@@ -619,7 +619,6 @@ function InfoPageOverlay({
         <div className="absolute inset-0" style={{ background: "radial-gradient(ellipse at 30% 10%, rgba(197, 131, 90, 0.2), transparent 60%)" }} />
         <div className="absolute inset-0" style={{ background: "radial-gradient(ellipse at 75% 80%, rgba(110, 69, 60, 0.18), transparent 55%)" }} />
       </div>
-
       <div className="relative min-h-screen">
         <nav className="sticky top-0 z-50 px-6 py-4">
           <div
@@ -793,9 +792,7 @@ function InfoPageOverlay({
                   <p
                     className="text-[17px] md:text-lg leading-[1.9] italic"
                     style={{ color: "rgba(255, 230, 205, 0.78)", fontFamily: "'Fraunces', serif" }}
-                  >
-                    "We believe AI companionship should feel emotionally intelligent, gentle, and genuinely useful in daily life."
-                  </p>
+                  >"We believe AI companionship should feel emotionally intelligent, gentle, and like a friend."</p>
                   <div className="flex items-center justify-center gap-3 mt-6">
                     <div className="w-8 h-px" style={{ background: "rgba(255, 214, 172, 0.25)" }} />
                     <span className="text-xs tracking-[0.25em] uppercase" style={{ color: "rgba(255, 214, 172, 0.4)" }}>
