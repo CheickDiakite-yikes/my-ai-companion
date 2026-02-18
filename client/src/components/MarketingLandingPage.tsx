@@ -297,28 +297,30 @@ function FeatureCard({
     >
       <motion.div
         whileHover={{ y: -6, scale: 1.02, transition: { duration: 0.25 } }}
-        className="rounded-3xl p-6 md:p-7 backdrop-blur-md border transition-all duration-300 relative overflow-hidden"
+        className="rounded-none p-7 md:p-8 backdrop-blur-md border transition-all duration-300 relative overflow-hidden"
         style={{
-          background: "linear-gradient(160deg, rgba(255, 220, 187, 0.1), rgba(255, 185, 152, 0.06))",
-          borderColor: "rgba(255, 223, 186, 0.2)",
+          background: "linear-gradient(160deg, rgba(255, 220, 187, 0.08), rgba(255, 185, 152, 0.04))",
+          borderColor: "rgba(255, 223, 186, 0.15)",
         }}
       >
+        <div className="absolute -top-px left-6 right-6 h-px" style={{ background: "linear-gradient(90deg, transparent, rgba(255, 214, 172, 0.25), transparent)" }} />
+        <div className="absolute -bottom-px left-6 right-6 h-px" style={{ background: "linear-gradient(90deg, transparent, rgba(255, 214, 172, 0.15), transparent)" }} />
         <div
           className="absolute -right-6 -top-6 w-28 h-28 rounded-full pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity duration-500"
           style={{
-            background: "radial-gradient(circle, rgba(255, 208, 164, 0.15) 0%, transparent 70%)",
+            background: "radial-gradient(circle, rgba(255, 208, 164, 0.12) 0%, transparent 70%)",
           }}
         />
         <StoryIcon>
           <Icon className="w-7 h-7" />
         </StoryIcon>
         <h3
-          className="text-xl font-semibold mt-5 mb-2 tracking-tight"
+          className="text-xl font-semibold mt-5 mb-3 tracking-tight"
           style={{ color: "#FFEFD8", fontFamily: "'Fraunces', serif" }}
         >
           {title}
         </h3>
-        <p className="text-[15px] leading-relaxed" style={{ color: "rgba(255, 228, 202, 0.78)", fontFamily: "'Manrope', sans-serif" }}>
+        <p className="text-[15px] leading-[1.85]" style={{ color: "rgba(255, 228, 202, 0.72)" }}>
           {description}
         </p>
       </motion.div>
@@ -400,7 +402,7 @@ function CompanionMomentCard({
         boxShadow: "0 18px 45px rgba(43, 25, 24, 0.38)",
       }}
       whileHover={{ y: -6, scale: 1.015, transition: { duration: 0.3 } }}
-      className="relative rounded-[1.85rem] p-6 md:p-7 border backdrop-blur-md overflow-hidden"
+      className="relative rounded-none p-7 md:p-8 border backdrop-blur-md overflow-hidden"
       data-testid={`card-moment-${index + 1}`}
       aria-label={title}
       role="article"
@@ -477,7 +479,7 @@ function CtaSection({ onGetStarted, orbConfig }: { onGetStarted: () => void; orb
   const glowSize = useTransform(scrollYProgress, [0, 1], [0.4, 1]);
 
   return (
-    <section className="px-6 py-24 relative">
+    <section className="px-6 py-28 relative">
       <div className="max-w-2xl mx-auto">
         <motion.div
           ref={ref}
@@ -485,45 +487,68 @@ function CtaSection({ onGetStarted, orbConfig }: { onGetStarted: () => void; orb
           className="text-center"
         >
           <div
-            className="rounded-3xl p-10 md:p-14 relative overflow-hidden"
+            className="rounded-none p-10 md:p-14 relative overflow-hidden"
             style={{
-              background: "linear-gradient(135deg, rgba(110, 67, 52, 0.47), rgba(59, 35, 35, 0.64))",
-              border: "1px solid rgba(255, 218, 182, 0.2)",
+              background: "linear-gradient(135deg, rgba(110, 67, 52, 0.35), rgba(59, 35, 35, 0.5))",
+              border: "1px solid rgba(255, 218, 182, 0.15)",
             }}
           >
+            <div className="absolute -top-px left-8 right-8 h-px" style={{ background: "linear-gradient(90deg, transparent, rgba(255, 214, 172, 0.35), transparent)" }} />
+            <div className="absolute -bottom-px left-8 right-8 h-px" style={{ background: "linear-gradient(90deg, transparent, rgba(255, 214, 172, 0.2), transparent)" }} />
+            <div className="absolute top-8 bottom-8 -left-px w-px" style={{ background: "linear-gradient(180deg, transparent, rgba(255, 214, 172, 0.2), transparent)" }} />
+            <div className="absolute top-8 bottom-8 -right-px w-px" style={{ background: "linear-gradient(180deg, transparent, rgba(255, 214, 172, 0.2), transparent)" }} />
+
             <motion.div
               className="absolute inset-0 pointer-events-none"
               style={{
                 scale: glowSize,
-                background: "radial-gradient(circle at 50% 0%, rgba(255, 195, 149, 0.2) 0%, transparent 55%)",
+                background: "radial-gradient(circle at 50% 0%, rgba(255, 195, 149, 0.15) 0%, transparent 55%)",
               }}
             />
             <div className="relative">
+              <div className="flex items-center justify-center gap-4 mb-6">
+                <svg width="40" height="8" viewBox="0 0 40 8" fill="none" className="opacity-25">
+                  <path d="M0 4 C8 4, 8 1, 16 1 C24 1, 24 7, 32 7 C36 7, 38 5.5, 40 4" stroke="rgba(255, 214, 172, 0.7)" strokeWidth="0.8" fill="none" />
+                </svg>
+                <span className="text-[11px] tracking-[0.35em] uppercase" style={{ color: "rgba(255, 214, 172, 0.4)" }}>
+                  III
+                </span>
+                <svg width="40" height="8" viewBox="0 0 40 8" fill="none" className="opacity-25" style={{ transform: "scaleX(-1)" }}>
+                  <path d="M0 4 C8 4, 8 1, 16 1 C24 1, 24 7, 32 7 C36 7, 38 5.5, 40 4" stroke="rgba(255, 214, 172, 0.7)" strokeWidth="0.8" fill="none" />
+                </svg>
+              </div>
+
               <motion.div
                 initial={{ scale: 0.7, opacity: 0 }}
                 whileInView={{ scale: 1, opacity: 1 }}
                 viewport={{ once: true }}
                 transition={{ duration: 0.7, type: "spring", bounce: 0.3 }}
-                className="mx-auto mb-6"
+                className="mx-auto mb-7"
                 style={{ width: 120 }}
               >
                 <CanvasOrb config={orbConfig} size={120} />
               </motion.div>
-              <h2 className="text-3xl md:text-4xl font-semibold mb-3 tracking-tight" style={{ color: "#FFEFD8", fontFamily: "'Fraunces', serif" }}>
+              <h2 className="text-3xl md:text-[2.6rem] font-semibold mb-3 tracking-tight leading-[1.1]" style={{ color: "#FFEFD8", fontFamily: "'Fraunces', serif" }}>
                 Step into your welcome page
               </h2>
-              <p className="text-base mb-8" style={{ color: "rgba(255, 226, 198, 0.68)" }}>
+              <div className="flex items-center justify-center gap-2 mb-4">
+                <div className="w-8 h-px" style={{ background: "linear-gradient(90deg, transparent, rgba(255, 214, 172, 0.25))" }} />
+                <div className="w-1.5 h-1.5 rotate-45 border" style={{ borderColor: "rgba(255, 214, 172, 0.2)" }} />
+                <div className="w-8 h-px" style={{ background: "linear-gradient(90deg, rgba(255, 214, 172, 0.25), transparent)" }} />
+              </div>
+              <p className="text-base italic mb-8" style={{ color: "rgba(255, 226, 198, 0.6)", fontFamily: "'Fraunces', serif" }}>
                 Sign up or sign in and continue into your full ZeeMe experience.
               </p>
               <motion.button
                 onClick={onGetStarted}
                 whileHover={{ y: -3, scale: 1.04, boxShadow: "0 14px 40px rgba(251, 185, 137, 0.5)" }}
                 whileTap={{ scale: 0.97 }}
-                className="px-10 py-4 rounded-2xl text-lg font-semibold shadow-lg"
+                className="px-10 py-4 rounded-none text-lg font-semibold shadow-lg"
                 style={{
                   background: "linear-gradient(135deg, #FFD3A8, #F3B884)",
                   color: "#2A1B17",
                   boxShadow: "0 8px 32px rgba(251, 185, 137, 0.35)",
+                  border: "1px solid rgba(255, 230, 200, 0.5)",
                 }}
               >
                 Continue to welcome
@@ -1117,9 +1142,10 @@ export default function MarketingLandingPage({ onGetStarted, onSignIn }: Marketi
 
         <div className="relative" style={{ zIndex: 1 }}>
           <nav className="fixed top-0 left-0 right-0 z-50 px-6 py-4">
-            <div className="max-w-6xl mx-auto flex items-center justify-between rounded-2xl px-4 py-2 backdrop-blur-md border" style={{ background: "rgba(40, 26, 24, 0.46)", borderColor: "rgba(255, 217, 183, 0.16)" }}>
+            <div className="max-w-6xl mx-auto flex items-center justify-between rounded-none px-5 py-2.5 backdrop-blur-md border" style={{ background: "rgba(40, 26, 24, 0.5)", borderColor: "rgba(255, 217, 183, 0.12)" }}>
+              <div className="absolute -top-px left-4 right-4 h-px" style={{ background: "linear-gradient(90deg, transparent, rgba(255, 214, 172, 0.2), transparent)" }} />
               <motion.div initial={{ opacity: 0, x: -18 }} animate={{ opacity: 1, x: 0 }} transition={{ duration: 0.6 }}>
-                <span className="text-xl font-bold tracking-tight" style={{ color: "#FFD7A8", fontFamily: "'Fraunces', serif" }} data-testid="text-logo">
+                <span className="text-xl font-bold tracking-tight" style={{ color: "#FFD7A8", fontFamily: "'Fraunces', serif", letterSpacing: "0.04em" }} data-testid="text-logo">
                   ZeeMe
                 </span>
               </motion.div>
@@ -1130,11 +1156,11 @@ export default function MarketingLandingPage({ onGetStarted, onSignIn }: Marketi
                 whileHover={{ y: -1.5, scale: 1.03 }}
                 whileTap={{ scale: 0.98 }}
                 onClick={onSignIn}
-                className="px-5 py-2 rounded-xl text-sm font-medium transition-all"
+                className="px-5 py-2 rounded-none text-sm font-medium transition-all tracking-wide"
                 style={{
                   color: "#FFE2BE",
-                  background: "rgba(255, 206, 158, 0.12)",
-                  border: "1px solid rgba(255, 217, 172, 0.35)",
+                  background: "rgba(255, 206, 158, 0.1)",
+                  border: "1px solid rgba(255, 217, 172, 0.25)",
                 }}
                 data-testid="button-sign-in"
               >
@@ -1144,6 +1170,23 @@ export default function MarketingLandingPage({ onGetStarted, onSignIn }: Marketi
           </nav>
 
           <motion.section style={{ opacity: heroOpacity, scale: heroScale }} className="min-h-screen flex flex-col items-center justify-center px-6 pt-24 pb-14 relative">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ duration: 0.8, delay: 0.1 }}
+              className="flex items-center justify-center gap-3 mb-8"
+            >
+              <svg width="60" height="10" viewBox="0 0 60 10" fill="none" className="opacity-25">
+                <path d="M0 5 C8 5, 10 2, 16 2 C22 2, 24 8, 32 8 C38 8, 42 3, 48 3 C52 3, 56 5, 60 5" stroke="rgba(255, 214, 172, 0.7)" strokeWidth="0.8" fill="none" />
+              </svg>
+              <span className="text-[11px] tracking-[0.4em] uppercase" style={{ color: "rgba(255, 214, 172, 0.4)" }}>
+                Companion
+              </span>
+              <svg width="60" height="10" viewBox="0 0 60 10" fill="none" className="opacity-25" style={{ transform: "scaleX(-1)" }}>
+                <path d="M0 5 C8 5, 10 2, 16 2 C22 2, 24 8, 32 8 C38 8, 42 3, 48 3 C52 3, 56 5, 60 5" stroke="rgba(255, 214, 172, 0.7)" strokeWidth="0.8" fill="none" />
+              </svg>
+            </motion.div>
+
             <motion.div
               initial={{ opacity: 0, scale: 0.65 }}
               animate={{ opacity: 1, scale: 1 }}
@@ -1155,30 +1198,41 @@ export default function MarketingLandingPage({ onGetStarted, onSignIn }: Marketi
 
             <motion.div initial={{ opacity: 0, y: 30 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.35, duration: 0.85 }} className="text-center max-w-xl">
               <h1
-                className="text-[2.7rem] md:text-[4.1rem] font-semibold mb-4 tracking-tight leading-[1.03]"
+                className="text-[2.7rem] md:text-[4.1rem] font-semibold mb-5 tracking-tight leading-[1.03]"
                 style={{ color: "#FFEFD8", fontFamily: "'Fraunces', serif" }}
                 data-testid="text-hero-title"
               >
                 A softer kind of AI companionship
               </h1>
-              <p className="text-lg md:text-xl leading-relaxed mb-2" style={{ color: "rgba(255, 228, 202, 0.86)" }} data-testid="text-hero-subtitle">
+              <motion.div
+                initial={{ scaleX: 0 }}
+                animate={{ scaleX: 1 }}
+                transition={{ duration: 0.8, delay: 0.5 }}
+                className="flex items-center justify-center gap-2 mb-5"
+              >
+                <div className="w-12 h-px" style={{ background: "linear-gradient(90deg, transparent, rgba(255, 214, 172, 0.35))" }} />
+                <div className="w-1.5 h-1.5 rotate-45 border" style={{ borderColor: "rgba(255, 214, 172, 0.3)" }} />
+                <div className="w-12 h-px" style={{ background: "linear-gradient(90deg, rgba(255, 214, 172, 0.35), transparent)" }} />
+              </motion.div>
+              <p className="text-lg md:text-xl leading-relaxed mb-2 italic" style={{ color: "rgba(255, 228, 202, 0.82)", fontFamily: "'Fraunces', serif" }} data-testid="text-hero-subtitle">
                 Thoughtful chat, expressive live voice, and memory that remembers what matters to you.
               </p>
-              <p className="text-[15px]" style={{ color: "rgba(255, 228, 202, 0.62)" }}>
+              <p className="text-[15px]" style={{ color: "rgba(255, 228, 202, 0.55)" }}>
                 Warm, welcoming, and designed to feel like friendship.
               </p>
             </motion.div>
 
-            <motion.div initial={{ opacity: 0, y: 24 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.75, duration: 0.6 }} className="mt-10 flex flex-col items-center gap-3">
+            <motion.div initial={{ opacity: 0, y: 24 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.75, duration: 0.6 }} className="mt-10 flex flex-col items-center gap-4">
               <motion.button
                 onClick={onGetStarted}
                 whileHover={{ y: -2, scale: 1.03 }}
                 whileTap={{ scale: 0.97 }}
-                className="px-11 py-4 rounded-2xl text-lg font-semibold shadow-lg flex items-center gap-2 relative overflow-hidden"
+                className="px-11 py-4 rounded-none text-lg font-semibold shadow-lg flex items-center gap-2 relative overflow-hidden"
                 style={{
                   background: "linear-gradient(135deg, #FFD3A8, #F3B884)",
                   color: "#2A1B17",
                   boxShadow: "0 10px 34px rgba(251, 185, 137, 0.37)",
+                  border: "1px solid rgba(255, 230, 200, 0.5)",
                 }}
                 data-testid="button-get-started"
               >
@@ -1191,27 +1245,51 @@ export default function MarketingLandingPage({ onGetStarted, onSignIn }: Marketi
                 />
                 Continue to welcome <ArrowRight className="w-5 h-5" />
               </motion.button>
-              <span className="text-xs" style={{ color: "rgba(255, 224, 193, 0.55)" }}>
-                Free to start. No credit card needed.
+              <span className="text-xs tracking-widest uppercase" style={{ color: "rgba(255, 224, 193, 0.4)" }}>
+                Free to start
               </span>
+            </motion.div>
+
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ delay: 1.2, duration: 0.8 }}
+              className="mt-16"
+            >
+              <svg width="100" height="16" viewBox="0 0 100 16" fill="none" className="mx-auto opacity-20">
+                <path d="M0 8 C12 8, 15 2, 24 2 C33 2, 33 14, 50 8 C67 2, 67 14, 76 14 C85 14, 88 8, 100 8" stroke="rgba(255, 214, 172, 0.6)" strokeWidth="0.8" fill="none" />
+              </svg>
             </motion.div>
           </motion.section>
 
-          <section className="px-6 py-24 relative">
+          <section className="px-6 py-28 relative">
             <div className="max-w-5xl mx-auto">
-              <RevealSection className="text-center mb-16">
-                <span className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full text-xs font-medium mb-4" style={{ background: "rgba(255, 197, 150, 0.14)", color: "#FFD2A6", border: "1px solid rgba(255, 217, 174, 0.22)" }}>
-                  <Stars className="w-3.5 h-3.5" /> Built for emotional presence
-                </span>
-                <h2 className="text-3xl md:text-5xl font-semibold mb-4 tracking-tight" style={{ color: "#FFEFD8", fontFamily: "'Fraunces', serif" }}>
+              <RevealSection className="text-center mb-18">
+                <div className="flex items-center justify-center gap-4 mb-6">
+                  <svg width="50" height="8" viewBox="0 0 50 8" fill="none" className="opacity-25">
+                    <path d="M0 4 C10 4, 12 1, 20 1 C28 1, 28 7, 38 7 C44 7, 47 5, 50 4" stroke="rgba(255, 214, 172, 0.7)" strokeWidth="0.8" fill="none" />
+                  </svg>
+                  <span className="text-[11px] tracking-[0.35em] uppercase" style={{ color: "rgba(255, 214, 172, 0.4)" }}>
+                    I
+                  </span>
+                  <svg width="50" height="8" viewBox="0 0 50 8" fill="none" className="opacity-25" style={{ transform: "scaleX(-1)" }}>
+                    <path d="M0 4 C10 4, 12 1, 20 1 C28 1, 28 7, 38 7 C44 7, 47 5, 50 4" stroke="rgba(255, 214, 172, 0.7)" strokeWidth="0.8" fill="none" />
+                  </svg>
+                </div>
+                <h2 className="text-3xl md:text-[3.2rem] font-semibold mb-4 tracking-tight leading-[1.08]" style={{ color: "#FFEFD8", fontFamily: "'Fraunces', serif" }}>
                   Beautifully calm, deeply personal
                 </h2>
-                <p className="text-base max-w-2xl mx-auto" style={{ color: "rgba(255, 226, 198, 0.68)" }}>
-                  ZeeMe balances delight and trust with careful pacing, warm language, and companion-first interaction design.
+                <div className="flex items-center justify-center gap-2 mb-5">
+                  <div className="w-10 h-px" style={{ background: "linear-gradient(90deg, transparent, rgba(255, 214, 172, 0.3))" }} />
+                  <div className="w-1.5 h-1.5 rotate-45 border" style={{ borderColor: "rgba(255, 214, 172, 0.2)" }} />
+                  <div className="w-10 h-px" style={{ background: "linear-gradient(90deg, rgba(255, 214, 172, 0.3), transparent)" }} />
+                </div>
+                <p className="text-base md:text-[17px] max-w-lg mx-auto italic leading-[1.8]" style={{ color: "rgba(255, 226, 198, 0.6)", fontFamily: "'Fraunces', serif" }}>
+                  Delight and trust, balanced with careful pacing and companion-first design.
                 </p>
               </RevealSection>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <FeatureCard
                   icon={MessageSquareHeart}
                   title="Conversations with emotional texture"
@@ -1240,15 +1318,31 @@ export default function MarketingLandingPage({ onGetStarted, onSignIn }: Marketi
             </div>
           </section>
 
-          <section className="px-6 py-24 relative overflow-hidden">
+          <section className="px-6 py-28 relative overflow-hidden">
             <motion.div className="absolute inset-0" style={{ y: storiesY, background: "radial-gradient(ellipse at 50% 45%, rgba(149, 88, 64, 0.22) 0%, transparent 70%)" }} />
             <div className="max-w-5xl mx-auto relative">
-              <RevealSection className="text-center mb-16">
-                <h2 className="text-3xl md:text-5xl font-semibold mb-4 tracking-tight" style={{ color: "#FFEFD8", fontFamily: "'Fraunces', serif" }}>
+              <RevealSection className="text-center mb-18">
+                <div className="flex items-center justify-center gap-4 mb-6">
+                  <svg width="50" height="8" viewBox="0 0 50 8" fill="none" className="opacity-25">
+                    <path d="M0 4 C10 4, 12 1, 20 1 C28 1, 28 7, 38 7 C44 7, 47 5, 50 4" stroke="rgba(255, 214, 172, 0.7)" strokeWidth="0.8" fill="none" />
+                  </svg>
+                  <span className="text-[11px] tracking-[0.35em] uppercase" style={{ color: "rgba(255, 214, 172, 0.4)" }}>
+                    II
+                  </span>
+                  <svg width="50" height="8" viewBox="0 0 50 8" fill="none" className="opacity-25" style={{ transform: "scaleX(-1)" }}>
+                    <path d="M0 4 C10 4, 12 1, 20 1 C28 1, 28 7, 38 7 C44 7, 47 5, 50 4" stroke="rgba(255, 214, 172, 0.7)" strokeWidth="0.8" fill="none" />
+                  </svg>
+                </div>
+                <h2 className="text-3xl md:text-[3.2rem] font-semibold mb-4 tracking-tight leading-[1.08]" style={{ color: "#FFEFD8", fontFamily: "'Fraunces', serif" }}>
                   Moments that feel like being understood
                 </h2>
-                <p className="text-base max-w-xl mx-auto" style={{ color: "rgba(255, 226, 198, 0.68)" }}>
-                  From daily check-ins to midnight thoughts, ZeeMe meets you with consistent warmth and continuity.
+                <div className="flex items-center justify-center gap-2 mb-5">
+                  <div className="w-10 h-px" style={{ background: "linear-gradient(90deg, transparent, rgba(255, 214, 172, 0.3))" }} />
+                  <div className="w-1.5 h-1.5 rotate-45 border" style={{ borderColor: "rgba(255, 214, 172, 0.2)" }} />
+                  <div className="w-10 h-px" style={{ background: "linear-gradient(90deg, rgba(255, 214, 172, 0.3), transparent)" }} />
+                </div>
+                <p className="text-base md:text-[17px] max-w-lg mx-auto italic leading-[1.8]" style={{ color: "rgba(255, 226, 198, 0.6)", fontFamily: "'Fraunces', serif" }}>
+                  From daily check-ins to midnight thoughts, consistent warmth and continuity.
                 </p>
               </RevealSection>
 
@@ -1259,70 +1353,53 @@ export default function MarketingLandingPage({ onGetStarted, onSignIn }: Marketi
           <CtaSection onGetStarted={onGetStarted} orbConfig={orbConfig} />
 
           <footer
-            className="relative mt-12"
+            className="relative mt-16"
             style={{
               background: "linear-gradient(180deg, transparent 0%, rgba(18, 10, 10, 0.6) 20%, rgba(14, 8, 8, 0.85) 100%)",
             }}
           >
-            <div
-              className="absolute top-0 left-0 right-0 h-px"
-              style={{
-                background: "linear-gradient(90deg, transparent, rgba(255, 214, 172, 0.25), transparent)",
-              }}
-            />
+            <div className="flex items-center justify-center gap-3 py-2">
+              <div className="flex-1 max-w-[200px] h-px" style={{ background: "linear-gradient(90deg, transparent, rgba(255, 214, 172, 0.2))" }} />
+              <svg width="20" height="20" viewBox="0 0 20 20" fill="none" className="opacity-20">
+                <path d="M10 0 L12 8 L20 10 L12 12 L10 20 L8 12 L0 10 L8 8 Z" fill="rgba(255, 214, 172, 0.6)" />
+              </svg>
+              <div className="flex-1 max-w-[200px] h-px" style={{ background: "linear-gradient(90deg, rgba(255, 214, 172, 0.2), transparent)" }} />
+            </div>
 
-            <div className="max-w-6xl mx-auto px-6 pt-16 pb-8">
+            <div className="max-w-6xl mx-auto px-6 pt-14 pb-8">
               <div className="flex flex-col md:flex-row md:justify-between gap-10 mb-12">
                 <div className="max-w-sm">
-                  <div className="flex items-center gap-3 mb-4">
-                    <div
-                      className="w-9 h-9 rounded-xl flex items-center justify-center"
-                      style={{
-                        background: "linear-gradient(135deg, rgba(255, 211, 168, 0.25), rgba(243, 184, 132, 0.15))",
-                        border: "1px solid rgba(255, 225, 192, 0.2)",
-                      }}
-                    >
-                      <div className="w-3 h-3 rounded-full" style={{ background: "linear-gradient(135deg, #FFD3A8, #EBBA62)" }} />
-                    </div>
-                    <span
-                      className="text-xl font-bold tracking-tight"
-                      style={{ color: "#FFE7CA", fontFamily: "'Fraunces', serif" }}
-                    >
-                      ZeeMe
-                    </span>
-                  </div>
-                  <p className="text-sm leading-relaxed mb-6" style={{ color: "rgba(255, 224, 198, 0.6)" }}>
+                  <span
+                    className="text-2xl font-bold tracking-tight inline-block mb-4"
+                    style={{ color: "#FFE7CA", fontFamily: "'Fraunces', serif", letterSpacing: "0.04em" }}
+                  >
+                    ZeeMe
+                  </span>
+                  <p className="text-sm leading-[1.85] mb-5" style={{ color: "rgba(255, 224, 198, 0.55)" }}>
                     A companion designed for friendship, emotional presence, and long-term continuity. Warm conversations that remember what matters to you.
                   </p>
-                  <div className="flex items-center gap-1">
-                    {[1, 2, 3, 4, 5].map((i) => (
-                      <div
-                        key={i}
-                        className="w-1.5 h-1.5 rounded-full"
-                        style={{
-                          background: i <= 3
-                            ? "linear-gradient(135deg, #FFD3A8, #EBBA62)"
-                            : "rgba(255, 214, 172, 0.15)",
-                        }}
-                      />
-                    ))}
-                  </div>
+                  <svg width="60" height="8" viewBox="0 0 60 8" fill="none" className="opacity-20">
+                    <path d="M0 4 C8 4, 10 1, 16 1 C24 1, 28 7, 36 7 C42 7, 48 3, 54 3 C57 3, 59 4, 60 4" stroke="rgba(255, 214, 172, 0.6)" strokeWidth="0.8" fill="none" />
+                  </svg>
                 </div>
 
-                <div className="flex flex-col sm:flex-row gap-10">
+                <div className="flex flex-col sm:flex-row gap-12">
                   <div>
-                    <h4
-                      className="text-xs font-semibold tracking-widest uppercase mb-4"
-                      style={{ color: "rgba(255, 214, 172, 0.45)" }}
-                    >
-                      Company
-                    </h4>
+                    <div className="flex items-center gap-2 mb-5">
+                      <div className="w-4 h-px" style={{ background: "rgba(255, 214, 172, 0.25)" }} />
+                      <h4
+                        className="text-[11px] font-medium tracking-[0.3em] uppercase"
+                        style={{ color: "rgba(255, 214, 172, 0.4)", fontFamily: "'Fraunces', serif" }}
+                      >
+                        Company
+                      </h4>
+                    </div>
                     <div className="flex flex-col gap-3">
                       <button
                         type="button"
                         onClick={() => setActiveInfoPage("about")}
                         className="text-left text-sm hover:translate-x-1 transition-transform duration-200"
-                        style={{ color: "rgba(255, 228, 202, 0.78)" }}
+                        style={{ color: "rgba(255, 228, 202, 0.7)" }}
                         data-testid="link-about"
                       >
                         About us
@@ -1331,7 +1408,7 @@ export default function MarketingLandingPage({ onGetStarted, onSignIn }: Marketi
                         type="button"
                         onClick={() => setActiveInfoPage("blog")}
                         className="text-left text-sm hover:translate-x-1 transition-transform duration-200"
-                        style={{ color: "rgba(255, 228, 202, 0.78)" }}
+                        style={{ color: "rgba(255, 228, 202, 0.7)" }}
                         data-testid="link-blog"
                       >
                         Blog
@@ -1340,18 +1417,21 @@ export default function MarketingLandingPage({ onGetStarted, onSignIn }: Marketi
                   </div>
 
                   <div>
-                    <h4
-                      className="text-xs font-semibold tracking-widest uppercase mb-4"
-                      style={{ color: "rgba(255, 214, 172, 0.45)" }}
-                    >
-                      Legal
-                    </h4>
+                    <div className="flex items-center gap-2 mb-5">
+                      <div className="w-4 h-px" style={{ background: "rgba(255, 214, 172, 0.25)" }} />
+                      <h4
+                        className="text-[11px] font-medium tracking-[0.3em] uppercase"
+                        style={{ color: "rgba(255, 214, 172, 0.4)", fontFamily: "'Fraunces', serif" }}
+                      >
+                        Legal
+                      </h4>
+                    </div>
                     <div className="flex flex-col gap-3">
                       <button
                         type="button"
                         onClick={() => setActiveInfoPage("terms")}
                         className="text-left text-sm hover:translate-x-1 transition-transform duration-200"
-                        style={{ color: "rgba(255, 228, 202, 0.78)" }}
+                        style={{ color: "rgba(255, 228, 202, 0.7)" }}
                         data-testid="link-terms"
                       >
                         Terms of Service
@@ -1360,7 +1440,7 @@ export default function MarketingLandingPage({ onGetStarted, onSignIn }: Marketi
                         type="button"
                         onClick={() => setActiveInfoPage("privacy")}
                         className="text-left text-sm hover:translate-x-1 transition-transform duration-200"
-                        style={{ color: "rgba(255, 228, 202, 0.78)" }}
+                        style={{ color: "rgba(255, 228, 202, 0.7)" }}
                         data-testid="link-privacy"
                       >
                         Privacy Policy
@@ -1370,17 +1450,18 @@ export default function MarketingLandingPage({ onGetStarted, onSignIn }: Marketi
                 </div>
               </div>
 
-              <div
-                className="pt-6 flex flex-col sm:flex-row items-center justify-between gap-4"
-                style={{
-                  borderTop: "1px solid rgba(255, 214, 172, 0.1)",
-                }}
-              >
-                <p className="text-xs" style={{ color: "rgba(255, 224, 198, 0.35)" }}>
+              <div className="flex items-center justify-center gap-2 mb-6">
+                <div className="flex-1 h-px" style={{ background: "linear-gradient(90deg, transparent, rgba(255, 214, 172, 0.1))" }} />
+                <div className="w-1 h-1 rotate-45" style={{ background: "rgba(255, 214, 172, 0.15)" }} />
+                <div className="flex-1 h-px" style={{ background: "linear-gradient(90deg, rgba(255, 214, 172, 0.1), transparent)" }} />
+              </div>
+
+              <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
+                <p className="text-xs" style={{ color: "rgba(255, 224, 198, 0.3)" }}>
                   &copy; {new Date().getFullYear()} ZeeMe. All rights reserved.
                 </p>
-                <p className="text-xs" style={{ color: "rgba(255, 224, 198, 0.25)" }}>
-                  Made with warmth
+                <p className="text-xs italic" style={{ color: "rgba(255, 224, 198, 0.22)", fontFamily: "'Fraunces', serif" }}>
+                  Crafted with warmth
                 </p>
               </div>
             </div>
