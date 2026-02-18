@@ -716,79 +716,204 @@ function InfoPageOverlay({
             }}
           />
 
-          <div className="space-y-6">
-            {content.sections.map((section, idx) => (
-              <motion.section
-                key={section.heading}
-                initial={{ opacity: 0, y: 36, x: idx % 2 === 0 ? -20 : 20, scale: 0.96 }}
-                whileInView={{ opacity: 1, y: 0, x: 0, scale: 1 }}
-                viewport={{ once: true, margin: "-40px" }}
-                transition={{
-                  duration: 0.55,
-                  delay: idx * 0.08,
-                  ease: [0.22, 1, 0.36, 1],
-                }}
-                className="rounded-2xl border p-6 md:p-7 relative overflow-hidden group"
-                style={{
-                  background: "linear-gradient(160deg, rgba(255, 220, 190, 0.06), rgba(255, 185, 152, 0.03))",
-                  borderColor: "rgba(255, 220, 188, 0.15)",
-                }}
-              >
-                <div
-                  className="absolute -right-6 -top-6 w-28 h-28 rounded-full pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity duration-500"
-                  style={{
-                    background: "radial-gradient(circle, rgba(255, 202, 154, 0.14) 0%, transparent 70%)",
-                  }}
-                />
-                <div
-                  className="absolute -left-4 -bottom-4 w-20 h-20 rounded-full pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity duration-500"
-                  style={{
-                    background: "radial-gradient(circle, rgba(255, 220, 180, 0.08) 0%, transparent 70%)",
-                  }}
-                />
-                <div className="relative">
-                  <div className="flex items-center gap-3 mb-3">
+          {page === "about" ? (
+            <div className="space-y-16">
+              {content.sections.map((section, idx) => (
+                <motion.section
+                  key={section.heading}
+                  initial={{ opacity: 0, y: 30 }}
+                  whileInView={{ opacity: 1, y: 0 }}
+                  viewport={{ once: true, margin: "-40px" }}
+                  transition={{ duration: 0.55, delay: idx * 0.06, ease: [0.22, 1, 0.36, 1] }}
+                  className="relative"
+                >
+                  {idx > 0 && (
+                    <motion.div
+                      initial={{ scaleX: 0 }}
+                      whileInView={{ scaleX: 1 }}
+                      viewport={{ once: true }}
+                      transition={{ duration: 0.5 }}
+                      className="h-px mb-16 mx-auto max-w-[120px]"
+                      style={{ background: "linear-gradient(90deg, transparent, rgba(255, 214, 172, 0.2), transparent)" }}
+                    />
+                  )}
+                  <div className="flex items-start gap-5">
                     {section.icon && (
-                      <motion.span
-                        className="text-xl"
+                      <motion.div
                         initial={{ scale: 0.5, opacity: 0 }}
                         whileInView={{ scale: 1, opacity: 1 }}
                         viewport={{ once: true }}
-                        transition={{ duration: 0.4, delay: idx * 0.08 + 0.15, type: "spring", stiffness: 200 }}
-                      >
-                        {section.icon}
-                      </motion.span>
-                    )}
-                    <h3
-                      className="text-lg md:text-xl font-semibold"
-                      style={{ color: "#FFE7CC", fontFamily: "'Fraunces', serif" }}
-                    >
-                      {section.heading}
-                    </h3>
-                  </div>
-                  <div className="space-y-3 pl-0 md:pl-9">
-                    {section.paragraphs.map((paragraph, pIdx) => (
-                      <motion.p
-                        key={paragraph.substring(0, 40)}
-                        initial={{ opacity: 0, y: 12 }}
-                        whileInView={{ opacity: 1, y: 0 }}
-                        viewport={{ once: true }}
-                        transition={{
-                          duration: 0.4,
-                          delay: idx * 0.08 + 0.2 + pIdx * 0.06,
-                          ease: [0.22, 1, 0.36, 1],
+                        transition={{ duration: 0.4, delay: 0.1, type: "spring", stiffness: 180 }}
+                        className="w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 mt-1"
+                        style={{
+                          background: "linear-gradient(145deg, rgba(255, 216, 174, 0.2), rgba(255, 186, 140, 0.1))",
+                          border: "1px solid rgba(255, 225, 197, 0.15)",
                         }}
-                        className="text-[15px] leading-[1.7]"
-                        style={{ color: "rgba(255, 224, 196, 0.72)" }}
                       >
-                        {paragraph}
-                      </motion.p>
-                    ))}
+                        <span className="text-lg">{section.icon}</span>
+                      </motion.div>
+                    )}
+                    <div className="flex-1">
+                      <h3
+                        className="text-2xl md:text-[1.7rem] font-semibold mb-4 tracking-tight"
+                        style={{ color: "#FFEFD8", fontFamily: "'Fraunces', serif" }}
+                      >
+                        {section.heading}
+                      </h3>
+                      <div className="space-y-4">
+                        {section.paragraphs.map((paragraph, pIdx) => (
+                          <motion.p
+                            key={paragraph.substring(0, 40)}
+                            initial={{ opacity: 0, y: 10 }}
+                            whileInView={{ opacity: 1, y: 0 }}
+                            viewport={{ once: true }}
+                            transition={{ duration: 0.4, delay: 0.15 + pIdx * 0.06, ease: [0.22, 1, 0.36, 1] }}
+                            className="text-[15px] leading-[1.85]"
+                            style={{ color: "rgba(255, 224, 196, 0.72)" }}
+                          >
+                            {paragraph}
+                          </motion.p>
+                        ))}
+                      </div>
+                    </div>
                   </div>
-                </div>
-              </motion.section>
-            ))}
-          </div>
+                </motion.section>
+              ))}
+            </div>
+          ) : page === "blog" ? (
+            <div className="space-y-8">
+              {content.sections.map((section, idx) => (
+                <motion.article
+                  key={section.heading}
+                  initial={{ opacity: 0, y: 28, scale: 0.97 }}
+                  whileInView={{ opacity: 1, y: 0, scale: 1 }}
+                  viewport={{ once: true, margin: "-30px" }}
+                  transition={{ duration: 0.5, delay: idx * 0.07, ease: [0.22, 1, 0.36, 1] }}
+                  className="group relative rounded-2xl overflow-hidden"
+                  style={{
+                    background: "linear-gradient(160deg, rgba(255, 220, 190, 0.05), rgba(255, 185, 152, 0.02))",
+                    border: "1px solid rgba(255, 220, 188, 0.1)",
+                  }}
+                >
+                  <div className="p-6 md:p-8">
+                    <div className="flex items-center gap-3 mb-1">
+                      <span
+                        className="text-[11px] font-semibold tracking-widest uppercase px-2.5 py-1 rounded-full"
+                        style={{
+                          background: "rgba(255, 197, 150, 0.1)",
+                          color: "rgba(255, 214, 172, 0.6)",
+                          border: "1px solid rgba(255, 217, 174, 0.12)",
+                        }}
+                      >
+                        Article
+                      </span>
+                      <span className="text-xs" style={{ color: "rgba(255, 220, 188, 0.35)" }}>
+                        {content.updatedAt}
+                      </span>
+                    </div>
+                    <div className="flex items-start gap-4 mt-4">
+                      {section.icon && (
+                        <motion.span
+                          className="text-2xl mt-0.5"
+                          initial={{ scale: 0.5, opacity: 0 }}
+                          whileInView={{ scale: 1, opacity: 1 }}
+                          viewport={{ once: true }}
+                          transition={{ duration: 0.3, delay: 0.15, type: "spring" }}
+                        >
+                          {section.icon}
+                        </motion.span>
+                      )}
+                      <div className="flex-1">
+                        <h3
+                          className="text-xl md:text-2xl font-semibold mb-3 tracking-tight"
+                          style={{ color: "#FFEFD8", fontFamily: "'Fraunces', serif" }}
+                        >
+                          {section.heading}
+                        </h3>
+                        <div className="space-y-3">
+                          {section.paragraphs.map((paragraph, pIdx) => (
+                            <motion.p
+                              key={paragraph.substring(0, 40)}
+                              initial={{ opacity: 0, y: 8 }}
+                              whileInView={{ opacity: 1, y: 0 }}
+                              viewport={{ once: true }}
+                              transition={{ duration: 0.35, delay: 0.2 + pIdx * 0.05, ease: [0.22, 1, 0.36, 1] }}
+                              className="text-[15px] leading-[1.8]"
+                              style={{ color: "rgba(255, 224, 196, 0.68)" }}
+                            >
+                              {paragraph}
+                            </motion.p>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  <div
+                    className="absolute bottom-0 left-0 right-0 h-px"
+                    style={{ background: "linear-gradient(90deg, transparent, rgba(255, 214, 172, 0.12), transparent)" }}
+                  />
+                </motion.article>
+              ))}
+            </div>
+          ) : (
+            <div className="space-y-1">
+              {content.sections.map((section, idx) => (
+                <motion.section
+                  key={section.heading}
+                  initial={{ opacity: 0, y: 24 }}
+                  whileInView={{ opacity: 1, y: 0 }}
+                  viewport={{ once: true, margin: "-30px" }}
+                  transition={{ duration: 0.5, delay: idx * 0.06, ease: [0.22, 1, 0.36, 1] }}
+                  className="py-6"
+                  style={idx > 0 ? { borderTop: "1px solid rgba(255, 220, 188, 0.08)" } : undefined}
+                >
+                  <div className="flex items-start gap-4">
+                    <div
+                      className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 mt-0.5"
+                      style={{
+                        background: "rgba(255, 214, 172, 0.08)",
+                        border: "1px solid rgba(255, 220, 188, 0.1)",
+                      }}
+                    >
+                      {section.icon ? (
+                        <span className="text-sm">{section.icon}</span>
+                      ) : (
+                        <span
+                          className="text-xs font-bold"
+                          style={{ color: "rgba(255, 214, 172, 0.5)" }}
+                        >
+                          {idx + 1}
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex-1 pl-1" style={{ borderLeft: "2px solid rgba(255, 214, 172, 0.12)" }}>
+                      <h3
+                        className="text-lg font-semibold mb-3 pl-4"
+                        style={{ color: "#FFE7CC", fontFamily: "'Fraunces', serif" }}
+                      >
+                        {section.heading}
+                      </h3>
+                      <div className="space-y-3 pl-4">
+                        {section.paragraphs.map((paragraph, pIdx) => (
+                          <motion.p
+                            key={paragraph.substring(0, 40)}
+                            initial={{ opacity: 0, y: 8 }}
+                            whileInView={{ opacity: 1, y: 0 }}
+                            viewport={{ once: true }}
+                            transition={{ duration: 0.35, delay: 0.1 + pIdx * 0.05, ease: [0.22, 1, 0.36, 1] }}
+                            className="text-[14.5px] leading-[1.8]"
+                            style={{ color: "rgba(255, 224, 196, 0.68)" }}
+                          >
+                            {paragraph}
+                          </motion.p>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </motion.section>
+              ))}
+            </div>
+          )}
 
           <motion.div
             className="mt-14 text-center"
