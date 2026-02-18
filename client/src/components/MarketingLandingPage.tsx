@@ -204,7 +204,7 @@ function StoryIcon({ children }: { children: ReactNode }) {
           background: "radial-gradient(circle at 30% 25%, rgba(255,255,255,0.38), transparent 55%)",
         }}
       />
-      <div className="relative" style={{ color: "#FCE4BF" }}>
+      <div className="relative flex items-center justify-center" style={{ color: "#FCE4BF", width: 28, height: 28 }}>
         {children}
       </div>
     </motion.div>
@@ -243,7 +243,7 @@ function FeatureCard({
         }}
       >
         <StoryIcon>
-          <Icon className="w-7 h-7" />
+          <Icon className="w-7 h-7 shrink-0" />
         </StoryIcon>
         <h3
           className="text-xl font-semibold mt-5 mb-2 tracking-tight"
@@ -506,16 +506,6 @@ export default function MarketingLandingPage({ onGetStarted, onSignIn }: Marketi
                       }}
                     >
                       <div
-                        className="absolute right-4 top-4 text-[11px] px-2.5 py-1 rounded-full border tracking-wide uppercase"
-                        style={{
-                          color: "rgba(255, 232, 208, 0.72)",
-                          borderColor: "rgba(255, 225, 197, 0.28)",
-                          background: "rgba(255, 211, 171, 0.08)",
-                        }}
-                      >
-                        Moment {index + 1}
-                      </div>
-                      <div
                         className="absolute -right-8 -bottom-8 w-32 h-32 rounded-full"
                         style={{
                           background:
@@ -524,7 +514,7 @@ export default function MarketingLandingPage({ onGetStarted, onSignIn }: Marketi
                       />
                       <div className="relative flex items-start gap-4">
                         <StoryIcon>
-                          <moment.icon className="w-7 h-7" />
+                          <moment.icon className="w-7 h-7 shrink-0" />
                         </StoryIcon>
                         <div className="pt-1">
                           <p
