@@ -918,79 +918,78 @@ function InfoPageOverlay({
               </motion.div>
             </div>
           ) : page === "blog" ? (
-            <div className="space-y-8">
-              {content.sections.map((section, idx) => (
-                <motion.article
-                  key={section.heading}
-                  initial={{ opacity: 0, y: 28, scale: 0.97 }}
-                  whileInView={{ opacity: 1, y: 0, scale: 1 }}
-                  viewport={{ once: true, margin: "-30px" }}
-                  transition={{ duration: 0.5, delay: idx * 0.07, ease: [0.22, 1, 0.36, 1] }}
-                  className="group relative rounded-2xl overflow-hidden"
-                  style={{
-                    background: "linear-gradient(160deg, rgba(255, 220, 190, 0.05), rgba(255, 185, 152, 0.02))",
-                    border: "1px solid rgba(255, 220, 188, 0.1)",
-                  }}
-                >
-                  <div className="p-6 md:p-8">
-                    <div className="flex items-center gap-3 mb-1">
+            <div className="space-y-0">
+              {content.sections.map((section, idx) => {
+                const romanNumerals = ["I", "II", "III", "IV", "V", "VI"];
+                return (
+                  <motion.article
+                    key={section.heading}
+                    initial={{ opacity: 0, y: 28 }}
+                    whileInView={{ opacity: 1, y: 0 }}
+                    viewport={{ once: true, margin: "-40px" }}
+                    transition={{ duration: 0.55, delay: idx * 0.05, ease: [0.22, 1, 0.36, 1] }}
+                    className="relative text-center py-10 md:py-14"
+                  >
+                    <div className="flex items-center justify-center gap-4 mb-2">
+                      <svg width="40" height="8" viewBox="0 0 40 8" fill="none" className="opacity-40">
+                        <path d="M0 4 C8 4, 8 1, 16 1 C24 1, 24 7, 32 7 C36 7, 38 5.5, 40 4" stroke="rgba(255, 214, 172, 0.6)" strokeWidth="0.8" fill="none" />
+                      </svg>
                       <span
-                        className="text-[11px] font-semibold tracking-widest uppercase px-2.5 py-1 rounded-full"
-                        style={{
-                          background: "rgba(255, 197, 150, 0.1)",
-                          color: "rgba(255, 214, 172, 0.6)",
-                          border: "1px solid rgba(255, 217, 174, 0.12)",
-                        }}
+                        className="text-[13px] tracking-[0.3em] font-light"
+                        style={{ color: "rgba(255, 214, 172, 0.45)", fontFamily: "'Fraunces', serif" }}
                       >
-                        Article
+                        {romanNumerals[idx]}
                       </span>
-                      <span className="text-xs" style={{ color: "rgba(255, 220, 188, 0.35)" }}>
+                      <svg width="40" height="8" viewBox="0 0 40 8" fill="none" className="opacity-40" style={{ transform: "scaleX(-1)" }}>
+                        <path d="M0 4 C8 4, 8 1, 16 1 C24 1, 24 7, 32 7 C36 7, 38 5.5, 40 4" stroke="rgba(255, 214, 172, 0.6)" strokeWidth="0.8" fill="none" />
+                      </svg>
+                    </div>
+
+                    <div className="flex items-center justify-center gap-2 mb-5">
+                      <span className="text-[10px] tracking-[0.25em] uppercase" style={{ color: "rgba(255, 214, 172, 0.35)" }}>
                         {content.updatedAt}
                       </span>
                     </div>
-                    <div className="flex items-start gap-4 mt-4">
-                      {section.icon && (
-                        <motion.span
-                          className="text-2xl mt-0.5"
-                          initial={{ scale: 0.5, opacity: 0 }}
-                          whileInView={{ scale: 1, opacity: 1 }}
+
+                    <h3
+                      className="text-[1.6rem] md:text-[1.85rem] font-semibold mb-5 tracking-tight"
+                      style={{ color: "#FFEFD8", fontFamily: "'Fraunces', serif" }}
+                    >
+                      {section.heading}
+                    </h3>
+
+                    <div className="max-w-lg mx-auto space-y-4">
+                      {section.paragraphs.map((paragraph, pIdx) => (
+                        <motion.p
+                          key={paragraph.substring(0, 40)}
+                          initial={{ opacity: 0, y: 10 }}
+                          whileInView={{ opacity: 1, y: 0 }}
                           viewport={{ once: true }}
-                          transition={{ duration: 0.3, delay: 0.15, type: "spring" }}
+                          transition={{ duration: 0.4, delay: 0.12 + pIdx * 0.06, ease: [0.22, 1, 0.36, 1] }}
+                          className="text-[15px] leading-[1.9]"
+                          style={{ color: "rgba(255, 224, 196, 0.7)" }}
                         >
-                          {section.icon}
-                        </motion.span>
-                      )}
-                      <div className="flex-1">
-                        <h3
-                          className="text-xl md:text-2xl font-semibold mb-3 tracking-tight"
-                          style={{ color: "#FFEFD8", fontFamily: "'Fraunces', serif" }}
-                        >
-                          {section.heading}
-                        </h3>
-                        <div className="space-y-3">
-                          {section.paragraphs.map((paragraph, pIdx) => (
-                            <motion.p
-                              key={paragraph.substring(0, 40)}
-                              initial={{ opacity: 0, y: 8 }}
-                              whileInView={{ opacity: 1, y: 0 }}
-                              viewport={{ once: true }}
-                              transition={{ duration: 0.35, delay: 0.2 + pIdx * 0.05, ease: [0.22, 1, 0.36, 1] }}
-                              className="text-[15px] leading-[1.8]"
-                              style={{ color: "rgba(255, 224, 196, 0.68)" }}
-                            >
-                              {paragraph}
-                            </motion.p>
-                          ))}
-                        </div>
-                      </div>
+                          {paragraph}
+                        </motion.p>
+                      ))}
                     </div>
-                  </div>
-                  <div
-                    className="absolute bottom-0 left-0 right-0 h-px"
-                    style={{ background: "linear-gradient(90deg, transparent, rgba(255, 214, 172, 0.12), transparent)" }}
-                  />
-                </motion.article>
-              ))}
+
+                    {idx < content.sections.length - 1 && (
+                      <motion.div
+                        initial={{ scaleX: 0, opacity: 0 }}
+                        whileInView={{ scaleX: 1, opacity: 1 }}
+                        viewport={{ once: true }}
+                        transition={{ duration: 0.6 }}
+                        className="mt-10 md:mt-14 flex items-center justify-center gap-3"
+                      >
+                        <div className="w-12 h-px" style={{ background: "linear-gradient(90deg, transparent, rgba(255, 214, 172, 0.2))" }} />
+                        <div className="w-1.5 h-1.5 rounded-full" style={{ background: "rgba(255, 214, 172, 0.2)" }} />
+                        <div className="w-12 h-px" style={{ background: "linear-gradient(90deg, rgba(255, 214, 172, 0.2), transparent)" }} />
+                      </motion.div>
+                    )}
+                  </motion.article>
+                );
+              })}
             </div>
           ) : (
             <div className="space-y-1">
