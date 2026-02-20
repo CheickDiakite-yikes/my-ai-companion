@@ -4711,6 +4711,16 @@ function stripTrailingSplitPrefix(buffer: string): string {
   return buffer;
 }
 
+function normalizeWordSpacing(text: string): string {
+  let result = text;
+  result = result.replace(/([a-z])([.!?])([A-Z])/g, "$1$2 $3");
+  result = result.replace(/([a-z])([.!?])(["'"])([A-Z])/g, "$1$2$3 $4");
+  result = result.replace(/([a-z])([a-z])([A-Z][a-z])/g, "$1$2 $3");
+  result = result.replace(/([,;:])([A-Z][a-z])/g, "$1 $2");
+  result = result.replace(/([a-z])(["'"])([A-Z])/g, "$1$2 $3");
+  return result;
+}
+
 function sanitizeMultipartArtifacts(input: string): string {
   if (!input) return "";
 
@@ -4721,12 +4731,16 @@ function sanitizeMultipartArtifacts(input: string): string {
     .replace(/\[\[ZE[E_]*[A-Z_]*\]?\]?/gi, " ")
     .replace(/\[\[[^\]]{0,10}SPLIT[^\]]*\]\]/gi, " ")
     .replace(/ZEE[_\s]*SPLIT/gi, " ")
-    .replace(/ZEE_SPLIT\]?\]?/gi, " ");
+    .replace(/ZEE_SPLIT\]?\]?/gi, " ")
+    .replace(/(\s|^)\]\](\s|$)/g, "$1$2")
+    .replace(/(\s|^)\[\[(\s|$)/g, "$1$2");
 
-  return withoutTokens
-    .replace(/[ \t]{2,}/g, " ")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
+  return normalizeWordSpacing(
+    withoutTokens
+      .replace(/[ \t]{2,}/g, " ")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim()
+  );
 }
 
 function hasEmojiLikeGlyph(input: string): boolean {
