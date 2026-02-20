@@ -139,8 +139,8 @@ function sanitizeSplitTokenArtifacts(text: string): string {
     .replace(/ZEE[_\s]*SPLIT/gi, " ")
     .replace(/\[\[ZEE[_\s]*SPLIT/gi, " ")
     .replace(/ZEE_SPLIT\]?\]?/gi, " ")
-    .replace(/(\s|^)\]\](\s|$)/g, "$1$2")
-    .replace(/(\s|^)\[\[(\s|$)/g, "$1$2")
+    .replace(/(^|[\s.!?,;:])\]\](?=\s|$)/g, "$1")
+    .replace(/(^|\s)\[\[(?=\s|$)/g, "$1")
     .replace(/[ \t]{2,}/g, " ");
   return normalizeWordSpacing(cleaned);
 }

@@ -4721,8 +4721,12 @@ function normalizeWordSpacing(text: string): string {
   return result;
 }
 
-function sanitizeMultipartArtifacts(input: string): string {
+function sanitizeMultipartArtifacts(
+  input: string,
+  options?: { trim?: boolean },
+): string {
   if (!input) return "";
+  const trim = options?.trim ?? true;
 
   const withoutTrailingPrefix = stripTrailingSplitPrefix(input);
   const withoutTokens = withoutTrailingPrefix
@@ -4732,15 +4736,16 @@ function sanitizeMultipartArtifacts(input: string): string {
     .replace(/\[\[[^\]]{0,10}SPLIT[^\]]*\]\]/gi, " ")
     .replace(/ZEE[_\s]*SPLIT/gi, " ")
     .replace(/ZEE_SPLIT\]?\]?/gi, " ")
-    .replace(/(\s|^)\]\](\s|$)/g, "$1$2")
-    .replace(/(\s|^)\[\[(\s|$)/g, "$1$2");
+    // Defensive cleanup for split-token chunk boundaries that may leak orphan brackets.
+    .replace(/(^|[\s.!?,;:])\]\](?=\s|$)/g, "$1")
+    .replace(/(^|\s)\[\[(?=\s|$)/g, "$1");
 
-  return normalizeWordSpacing(
-    withoutTokens
-      .replace(/[ \t]{2,}/g, " ")
-      .replace(/\n{3,}/g, "\n\n")
-      .trim()
-  );
+  const cleaned = withoutTokens
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/\n{3,}/g, "\n\n");
+
+  const normalizedSpacing = normalizeWordSpacing(cleaned);
+  return trim ? normalizedSpacing.trim() : normalizedSpacing;
 }
 
 function hasEmojiLikeGlyph(input: string): boolean {
@@ -9509,7 +9514,7 @@ export async function registerRoutes(
         desiredParts,
       });
 
-      const maxMultipartParts = Math.min(Math.max(desiredParts, 1), 3);
+      const maxMultipartParts = ENABLE_MULTIPART_TEXT ? 3 : 1;
       const streamTurnId = randomUUID();
       const streamedParts: string[] = [""];
       let currentPartIndex = 0;
@@ -9571,7 +9576,9 @@ export async function registerRoutes(
       const flushStreamBuffer = (flushAll: boolean) => {
         if (!ENABLE_MULTIPART_TEXT || maxMultipartParts <= 1) {
           if (replyBuffer.length > 0) {
-            appendDelta(sanitizeMultipartArtifacts(replyBuffer));
+            appendDelta(
+              sanitizeMultipartArtifacts(replyBuffer, { trim: false }),
+            );
             replyBuffer = "";
           }
           return;
@@ -9584,7 +9591,7 @@ export async function registerRoutes(
           }
 
           const segment = replyBuffer.slice(0, delimiterIndex);
-          appendDelta(segment);
+          appendDelta(sanitizeMultipartArtifacts(segment, { trim: false }));
           replyBuffer = replyBuffer.slice(delimiterIndex + ZEE_SPLIT_TOKEN.length);
 
           if (currentPartIndex < maxMultipartParts - 1) {
@@ -9600,7 +9607,9 @@ export async function registerRoutes(
 
         if (flushAll) {
           if (replyBuffer.length > 0) {
-            appendDelta(sanitizeMultipartArtifacts(replyBuffer));
+            appendDelta(
+              sanitizeMultipartArtifacts(replyBuffer, { trim: false }),
+            );
             replyBuffer = "";
           }
           return;
@@ -9609,7 +9618,7 @@ export async function registerRoutes(
         const holdSuffixLength = longestDelimiterPrefixSuffix(replyBuffer);
         const safeEmit = replyBuffer.slice(0, replyBuffer.length - holdSuffixLength);
         if (safeEmit.length > 0) {
-          appendDelta(safeEmit);
+          appendDelta(sanitizeMultipartArtifacts(safeEmit, { trim: false }));
         }
         replyBuffer = replyBuffer.slice(replyBuffer.length - holdSuffixLength);
       };
@@ -9694,7 +9703,15 @@ export async function registerRoutes(
         });
       }
 
-      splitParts = clampAssistantPartsToDesiredCount(splitParts, desiredParts);
+      const resolvedDesiredParts =
+        desiredParts === 1 && cleanStreamedParts.length > 1
+          ? Math.min(cleanStreamedParts.length, 3)
+          : desiredParts;
+
+      splitParts = clampAssistantPartsToDesiredCount(
+        splitParts,
+        resolvedDesiredParts,
+      );
 
       const groundedReplyText = sanitizeMultipartArtifacts(grounded.replyText);
       if (!groundedReplyText) {
@@ -9705,6 +9722,7 @@ export async function registerRoutes(
         conversationId: conversation.id,
         enabled: ENABLE_MULTIPART_TEXT,
         desiredParts,
+        resolvedDesiredParts,
         resolvedPartCount: splitParts.length,
         syntheticPartCount,
         streamedPartCount: cleanStreamedParts.length,
