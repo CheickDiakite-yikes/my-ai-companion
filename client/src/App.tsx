@@ -595,6 +595,7 @@ interface LiveTokenConfigSummary {
   topK: number | null;
   maxOutputTokens: number;
   deviceClass: "mobile" | "desktop" | "unknown";
+  googleSearchGroundingEnabled: boolean;
 }
 
 interface LiveTokenResponse extends TraceAwareResponse {
@@ -8265,6 +8266,8 @@ function App() {
         affectiveDialog: tokenPayload.configSummary?.affectiveDialog ?? null,
         proactiveAudio: tokenPayload.configSummary?.proactiveAudio ?? null,
         thinkingBudget: tokenPayload.configSummary?.thinkingBudget ?? null,
+        googleSearchGroundingEnabled:
+          tokenPayload.configSummary?.googleSearchGroundingEnabled ?? null,
       });
 
       const resolvedConversationId = conversationId;

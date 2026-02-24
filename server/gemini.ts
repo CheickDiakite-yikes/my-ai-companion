@@ -65,6 +65,8 @@ interface TokenUsageSnapshot {
   totalTokenCount?: number;
 }
 
+type GoogleSearchTool = { googleSearch: Record<string, never> };
+
 const DEFAULT_TEXT_MODEL = "gemini-3-flash-preview";
 const DEFAULT_LIVE_MODEL = "gemini-2.5-flash-native-audio-preview-12-2025";
 const DEFAULT_AGENT_GAME_MODEL = "gemini-3-flash-preview";
@@ -76,6 +78,23 @@ const DEFAULT_ZEE_PROMPT_FALLBACK = [
   "When unclear, ask a brief clarifying question before assuming details.",
   "Keep responses concise unless the user asks for depth.",
 ].join(" ");
+const GOOGLE_SEARCH_TOOLS: GoogleSearchTool[] = [{ googleSearch: {} }];
+const TEXT_GOOGLE_SEARCH_SIGNAL_PATTERN =
+  /\b(latest|new|current|currently|today|tonight|tomorrow|this\s+(week|month|year)|news|headline(?:s)?|breaking|recent|right now|as of|score|standings?|weather|forecast|stock|price|market|election|president|prime minister|ceo|release date|launched?|announced?)\b/i;
+const TEXT_GOOGLE_SEARCH_EXPLICIT_PATTERN =
+  /\b(search\s+(the\s+)?(web|internet|google)|look\s+(it|this|that|them)\s+up|websearch|fact\s*check|verify\s+(this|that|it)|check\s+latest)\b/i;
+const TEXT_GOOGLE_SEARCH_SPORTS_PATTERN =
+  /\b(when\s+(did|was)\s+the\s+last|who\s+won|match|game)\b.*\b(vs\.?|versus)\b/i;
+const TEXT_GOOGLE_SEARCH_DIRECT_ASK_PATTERN =
+  /\b(can you|could you|please|pls)\s+(look up|search|check|find)\b|\blook up\b|\bsearch\b.*\b(web|internet|google)\b/i;
+const TEXT_GOOGLE_SEARCH_WHAT_HAPPENED_PATTERN =
+  /\b(what happened|what's happening|whats happening|any updates?\s+on|heard about|what's new with|whats new with)\b/i;
+const TEXT_GOOGLE_SEARCH_DID_YOU_SEE_PATTERN =
+  /\b(did you see|have you seen)\b/i;
+const TEXT_GOOGLE_SEARCH_NEWS_TOPIC_PATTERN =
+  /\b(news|super\s*bowl|superbowl|world cup|olympics?|election|ipo|earnings?|ai|model|release|launch|announcement|update|policy|war|earthquake|hurricane|wildfire|ceo)\b/i;
+const TEXT_GOOGLE_SEARCH_OPINION_ON_NEW_PATTERN =
+  /\bwhat\s+do\s+you\s+think\s+about\b[\s\S]{0,80}\b(new|latest|just\s+(dropped|launched|announced)|announcement|release|update)\b/i;
 
 let geminiClient: GoogleGenAI | null = null;
 let geminiAlphaClient: GoogleGenAI | null = null;
@@ -261,6 +280,97 @@ function parseBooleanFlag(input: string | undefined, fallback: boolean): boolean
   if (["1", "true", "yes", "on"].includes(normalized)) return true;
   if (["0", "false", "no", "off"].includes(normalized)) return false;
   return fallback;
+}
+
+function extractErrorStatus(error: unknown): number | undefined {
+  if (!error || typeof error !== "object") return undefined;
+  const candidate = error as { status?: unknown; statusCode?: unknown };
+  if (typeof candidate.status === "number") return candidate.status;
+  if (typeof candidate.statusCode === "number") return candidate.statusCode;
+  return undefined;
+}
+
+function shouldRetryWithoutGrounding(error: unknown): boolean {
+  const status = extractErrorStatus(error);
+  const message = error instanceof Error ? error.message.toLowerCase() : "";
+  if (status === 400 || status === 404) return true;
+  return (
+    message.includes("google_search") ||
+    message.includes("grounding") ||
+    message.includes("tool") ||
+    message.includes("unsupported") ||
+    message.includes("invalid argument")
+  );
+}
+
+function latestUserText(messages: ConversationMessage[]): string {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.sender !== "user") continue;
+    const trimmed = message.text?.trim();
+    if (trimmed) return trimmed;
+  }
+  return "";
+}
+
+function shouldUseTextGoogleSearchGrounding(
+  messages: ConversationMessage[],
+): boolean {
+  const enabled = parseBooleanFlag(
+    process.env.ENABLE_GEMINI_TEXT_GOOGLE_SEARCH_GROUNDING,
+    false,
+  );
+  if (!enabled) return false;
+
+  const autoOnly = parseBooleanFlag(
+    process.env.GEMINI_TEXT_GOOGLE_SEARCH_AUTO_ONLY,
+    true,
+  );
+  if (!autoOnly) return true;
+
+  const latestText = latestUserText(messages);
+  if (!latestText) return false;
+
+  const hasDirectSearchAsk =
+    TEXT_GOOGLE_SEARCH_EXPLICIT_PATTERN.test(latestText) ||
+    TEXT_GOOGLE_SEARCH_DIRECT_ASK_PATTERN.test(latestText) ||
+    TEXT_GOOGLE_SEARCH_WHAT_HAPPENED_PATTERN.test(latestText);
+  if (hasDirectSearchAsk) {
+    return true;
+  }
+
+  if (TEXT_GOOGLE_SEARCH_OPINION_ON_NEW_PATTERN.test(latestText)) {
+    return true;
+  }
+
+  if (
+    TEXT_GOOGLE_SEARCH_DID_YOU_SEE_PATTERN.test(latestText) &&
+    TEXT_GOOGLE_SEARCH_NEWS_TOPIC_PATTERN.test(latestText)
+  ) {
+    return true;
+  }
+
+  if (TEXT_GOOGLE_SEARCH_SPORTS_PATTERN.test(latestText)) {
+    return true;
+  }
+
+  const hasFreshnessSignal = TEXT_GOOGLE_SEARCH_SIGNAL_PATTERN.test(latestText);
+  const hasNewsTopic = TEXT_GOOGLE_SEARCH_NEWS_TOPIC_PATTERN.test(latestText);
+  if (hasFreshnessSignal && hasNewsTopic) {
+    return true;
+  }
+
+  return (
+    TEXT_GOOGLE_SEARCH_SIGNAL_PATTERN.test(latestText) &&
+    /\b(news|headline(?:s)?|breaking|current events?)\b/i.test(latestText)
+  );
+}
+
+function shouldUseLiveGoogleSearchGrounding(): boolean {
+  return parseBooleanFlag(
+    process.env.ENABLE_GEMINI_LIVE_GOOGLE_SEARCH_GROUNDING,
+    false,
+  );
 }
 
 function normalizeTimeZone(timeZone: string | null | undefined): string | null {
@@ -961,6 +1071,7 @@ export interface LiveTokenConfigSummary {
   topK: number | null;
   maxOutputTokens: number;
   deviceClass: "mobile" | "desktop" | "unknown";
+  googleSearchGroundingEnabled: boolean;
 }
 
 export interface CreateLiveTokenResult {
@@ -1109,6 +1220,7 @@ export async function createLiveToken(
     process.env.GEMINI_LIVE_INCLUDE_THOUGHTS,
     false,
   );
+  const requestedGoogleSearchGrounding = shouldUseLiveGoogleSearchGrounding();
   const liveTemperature = parseBoundedNumber(
     process.env.GEMINI_LIVE_TEMPERATURE,
     lowLatencyMode ? 0.45 : 0.55,
@@ -1181,11 +1293,12 @@ export async function createLiveToken(
     topK: liveTopK ?? null,
     maxOutputTokens: liveMaxOutputTokens,
     deviceClass,
+    googleSearchGroundingEnabled: false,
   };
 
   const expireTime = new Date(now + expireInMs).toISOString();
   const newSessionExpireTime = new Date(now + newSessionExpireInMs).toISOString();
-  const lockAdditionalFields = [
+  const baseLockAdditionalFields = [
     "responseModalities",
     "systemInstruction",
     ...(responseModality === "AUDIO" ? ["speechConfig"] : []),
@@ -1196,6 +1309,7 @@ export async function createLiveToken(
 
   let lastError: unknown = null;
   let resolvedModel = modelCandidates[0];
+  let resolvedGoogleSearchGrounding = false;
   let token:
     | Awaited<ReturnType<GoogleGenAI["authTokens"]["create"]>>
     | null = null;
@@ -1203,81 +1317,93 @@ export async function createLiveToken(
   for (let index = 0; index < modelCandidates.length; index += 1) {
     const model = modelCandidates[index];
     resolvedModel = model;
-    try {
-      token = await ai.authTokens.create({
-        config: {
-          uses,
-          expireTime,
-          newSessionExpireTime,
-          liveConnectConstraints: {
-            model,
-            config: {
-              responseModalities: [
-                responseModality === "TEXT" ? Modality.TEXT : Modality.AUDIO,
-              ],
-              systemInstruction,
-              temperature: liveTemperature,
-              topP: liveTopP,
-              topK: liveTopK,
-              maxOutputTokens: liveMaxOutputTokens,
-              enableAffectiveDialog:
-                responseModality === "AUDIO" ? enableAffectiveDialog : undefined,
-              thinkingConfig,
-              speechConfig:
-                responseModality === "AUDIO"
-                  ? {
-                      voiceConfig: {
-                        prebuiltVoiceConfig: {
-                          voiceName,
-                        },
-                      },
-                    }
-                  : undefined,
-              // These defaults prioritize natural turn-taking and low interruption latency.
-              realtimeInputConfig: {
-                activityHandling,
-                turnCoverage,
-                automaticActivityDetection: {
-                  startOfSpeechSensitivity: vadStartSensitivity,
-                  endOfSpeechSensitivity: vadEndSensitivity,
-                  prefixPaddingMs: effectiveVadPrefixPaddingMs,
-                  silenceDurationMs: effectiveVadSilenceMs,
-                },
-              },
-              proactivity:
-                effectiveProactiveAudio
-                  ? { proactiveAudio: true }
-                  : undefined,
-              inputAudioTranscription: {},
-              outputAudioTranscription: {},
-            },
-          },
-          lockAdditionalFields,
-        },
-      });
-      break;
-    } catch (error) {
-      lastError = error;
-      const message = error instanceof Error ? error.message.toLowerCase() : "";
-      const status =
-        typeof (error as { status?: unknown } | null)?.status === "number"
-          ? (error as { status: number }).status
-          : typeof (error as { statusCode?: unknown } | null)?.statusCode === "number"
-            ? (error as { statusCode: number }).statusCode
-            : undefined;
-      const isModelSelectionFailure =
-        status === 400 ||
-        status === 404 ||
-        (status === 403 && message.includes("model")) ||
-        message.includes("model") ||
-        message.includes("unsupported") ||
-        message.includes("not found") ||
-        message.includes("invalid argument");
+    const groundingAttempts = requestedGoogleSearchGrounding
+      ? [true, false]
+      : [false];
 
-      if (!isModelSelectionFailure || index >= modelCandidates.length - 1) {
+    for (const useGoogleSearchGrounding of groundingAttempts) {
+      try {
+        const lockAdditionalFields = [
+          ...baseLockAdditionalFields,
+          ...(useGoogleSearchGrounding ? ["tools"] : []),
+        ];
+        token = await ai.authTokens.create({
+          config: {
+            uses,
+            expireTime,
+            newSessionExpireTime,
+            liveConnectConstraints: {
+              model,
+              config: {
+                responseModalities: [
+                  responseModality === "TEXT" ? Modality.TEXT : Modality.AUDIO,
+                ],
+                systemInstruction,
+                temperature: liveTemperature,
+                topP: liveTopP,
+                topK: liveTopK,
+                maxOutputTokens: liveMaxOutputTokens,
+                enableAffectiveDialog:
+                  responseModality === "AUDIO" ? enableAffectiveDialog : undefined,
+                thinkingConfig,
+                speechConfig:
+                  responseModality === "AUDIO"
+                    ? {
+                        voiceConfig: {
+                          prebuiltVoiceConfig: {
+                            voiceName,
+                          },
+                        },
+                      }
+                    : undefined,
+                // These defaults prioritize natural turn-taking and low interruption latency.
+                realtimeInputConfig: {
+                  activityHandling,
+                  turnCoverage,
+                  automaticActivityDetection: {
+                    startOfSpeechSensitivity: vadStartSensitivity,
+                    endOfSpeechSensitivity: vadEndSensitivity,
+                    prefixPaddingMs: effectiveVadPrefixPaddingMs,
+                    silenceDurationMs: effectiveVadSilenceMs,
+                  },
+                },
+                proactivity:
+                  effectiveProactiveAudio
+                    ? { proactiveAudio: true }
+                    : undefined,
+                inputAudioTranscription: {},
+                outputAudioTranscription: {},
+                tools: useGoogleSearchGrounding ? GOOGLE_SEARCH_TOOLS : undefined,
+              },
+            },
+            lockAdditionalFields,
+          },
+        });
+        resolvedGoogleSearchGrounding = useGoogleSearchGrounding;
         break;
+      } catch (error) {
+        lastError = error;
+        if (useGoogleSearchGrounding && shouldRetryWithoutGrounding(error)) {
+          continue;
+        }
+        const message = error instanceof Error ? error.message.toLowerCase() : "";
+        const status = extractErrorStatus(error);
+        const isModelSelectionFailure =
+          status === 400 ||
+          status === 404 ||
+          (status === 403 && message.includes("model")) ||
+          message.includes("model") ||
+          message.includes("unsupported") ||
+          message.includes("not found") ||
+          message.includes("invalid argument");
+
+        if (!isModelSelectionFailure || index >= modelCandidates.length - 1) {
+          break;
+        }
       }
     }
+
+    if (token) break;
   }
 
   if (!token) {
@@ -1300,7 +1426,10 @@ export async function createLiveToken(
     newSessionExpireTime,
     generatedAt: new Date(now).toISOString(),
     uses,
-    configSummary,
+    configSummary: {
+      ...configSummary,
+      googleSearchGroundingEnabled: resolvedGoogleSearchGrounding,
+    },
   };
 }
 
@@ -1320,6 +1449,7 @@ export interface GenerateTextReplyResult {
   replyText: string;
   responseId?: string;
   usage?: TokenUsageSnapshot;
+  googleSearchGroundingUsed: boolean;
 }
 
 export interface GenerateTextReplyStreamChunk {
@@ -1331,6 +1461,7 @@ export interface GenerateTextReplyStreamChunk {
 export interface GenerateTextReplyStreamResult {
   model: string;
   stream: AsyncGenerator<GenerateTextReplyStreamChunk>;
+  googleSearchGroundingUsed: boolean;
 }
 
 export interface ClassifyTurnIntentWithModelInput {
@@ -2479,7 +2610,11 @@ function extractLikelyJsonPayload(raw: string): string {
   return trimmed;
 }
 
-function buildTextGenerationConfig(personaPrompt: string, desiredParts = 1) {
+function buildTextGenerationConfig(
+  personaPrompt: string,
+  desiredParts = 1,
+  googleSearchGrounding = false,
+) {
   const baseMaxTokens = parsePositiveInt(
     process.env.GEMINI_TEXT_MAX_OUTPUT_TOKENS,
     1024,
@@ -2493,6 +2628,7 @@ function buildTextGenerationConfig(personaPrompt: string, desiredParts = 1) {
     temperature: parseBoundedNumber(process.env.GEMINI_TEXT_TEMPERATURE, 0.85, 0, 2),
     topP: parseBoundedNumber(process.env.GEMINI_TEXT_TOP_P, 0.95, 0, 1),
     maxOutputTokens,
+    tools: googleSearchGrounding ? GOOGLE_SEARCH_TOOLS : undefined,
   };
 }
 
@@ -2519,6 +2655,9 @@ export async function generateTextReply(
   const enableMultipart =
     input.enableMultipart ??
     parseBooleanFlag(process.env.ENABLE_MULTIPART_TEXT, true);
+  const requestedGoogleSearchGrounding = shouldUseTextGoogleSearchGrounding(
+    input.messages,
+  );
   const personaPrompt = await getTextPersonaPrompt({
     persona: input.persona,
     profileContext: input.profileContext,
@@ -2533,11 +2672,35 @@ export async function generateTextReply(
     throw new Error("Conversation is empty. No content to generate a reply from.");
   }
 
-  const response = await ai.models.generateContent({
-    model,
-    contents,
-    config: buildTextGenerationConfig(personaPrompt, input.desiredParts ?? 1),
-  });
+  let response: Awaited<
+    ReturnType<GoogleGenAI["models"]["generateContent"]>
+  >;
+  let googleSearchGroundingUsed = requestedGoogleSearchGrounding;
+  try {
+    response = await ai.models.generateContent({
+      model,
+      contents,
+      config: buildTextGenerationConfig(
+        personaPrompt,
+        input.desiredParts ?? 1,
+        requestedGoogleSearchGrounding,
+      ),
+    });
+  } catch (error) {
+    if (!requestedGoogleSearchGrounding || !shouldRetryWithoutGrounding(error)) {
+      throw error;
+    }
+    response = await ai.models.generateContent({
+      model,
+      contents,
+      config: buildTextGenerationConfig(
+        personaPrompt,
+        input.desiredParts ?? 1,
+        false,
+      ),
+    });
+    googleSearchGroundingUsed = false;
+  }
 
   const sanitized = sanitizeAssistantReplyText(response.text ?? "");
   const replyText = sanitized.text.trim();
@@ -2550,6 +2713,7 @@ export async function generateTextReply(
     replyText,
     responseId: response.responseId,
     usage: compactUsage(response.usageMetadata),
+    googleSearchGroundingUsed,
   };
 }
 
@@ -2850,6 +3014,9 @@ export async function generateTextReplyStream(
   const enableMultipart =
     input.enableMultipart ??
     parseBooleanFlag(process.env.ENABLE_MULTIPART_TEXT, true);
+  const requestedGoogleSearchGrounding = shouldUseTextGoogleSearchGrounding(
+    input.messages,
+  );
   const personaPrompt = await getTextPersonaPrompt({
     persona: input.persona,
     profileContext: input.profileContext,
@@ -2864,11 +3031,35 @@ export async function generateTextReplyStream(
     throw new Error("Conversation is empty. No content to generate a reply from.");
   }
 
-  const responseStream = await ai.models.generateContentStream({
-    model,
-    contents,
-    config: buildTextGenerationConfig(personaPrompt, input.desiredParts ?? 1),
-  });
+  let responseStream: Awaited<
+    ReturnType<GoogleGenAI["models"]["generateContentStream"]>
+  >;
+  let googleSearchGroundingUsed = requestedGoogleSearchGrounding;
+  try {
+    responseStream = await ai.models.generateContentStream({
+      model,
+      contents,
+      config: buildTextGenerationConfig(
+        personaPrompt,
+        input.desiredParts ?? 1,
+        requestedGoogleSearchGrounding,
+      ),
+    });
+  } catch (error) {
+    if (!requestedGoogleSearchGrounding || !shouldRetryWithoutGrounding(error)) {
+      throw error;
+    }
+    responseStream = await ai.models.generateContentStream({
+      model,
+      contents,
+      config: buildTextGenerationConfig(
+        personaPrompt,
+        input.desiredParts ?? 1,
+        false,
+      ),
+    });
+    googleSearchGroundingUsed = false;
+  }
 
   async function* streamChunks(): AsyncGenerator<GenerateTextReplyStreamChunk> {
     let rawText = "";
@@ -2899,6 +3090,7 @@ export async function generateTextReplyStream(
   return {
     model,
     stream: streamChunks(),
+    googleSearchGroundingUsed,
   };
 }
 

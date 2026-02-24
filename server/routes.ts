@@ -7356,6 +7356,8 @@ export async function registerRoutes(
         forceAlwaysRespond: token.configSummary.forceAlwaysRespond,
         vadSilenceMs: token.configSummary.vadSilenceMs,
         thinkingBudget: token.configSummary.thinkingBudget,
+        googleSearchGroundingEnabled:
+          token.configSummary.googleSearchGroundingEnabled,
         userAgent: req.headers?.["user-agent"] ?? null,
         elapsedMs: elapsedMs(startedAt),
       });
@@ -8399,6 +8401,7 @@ export async function registerRoutes(
         model: aiResponse.model,
         responseId: aiResponse.responseId,
         usage: aiResponse.usage,
+        googleSearchGroundingUsed: aiResponse.googleSearchGroundingUsed,
         rawReplyLength: aiResponse.replyText.length,
         modelLatencyMs: elapsedMs(aiStartedAt),
       });
@@ -8545,6 +8548,7 @@ export async function registerRoutes(
         assistantMessages: responseAssistantMessages,
         model: aiResponse.model,
         usage: aiResponse.usage,
+        googleSearchGroundingUsed: aiResponse.googleSearchGroundingUsed,
         decisionPath: responseDecisionPath,
         decisionPathReason: responseDecisionPathReason,
         routeReason: responseDecisionPathReason,
@@ -9503,7 +9507,8 @@ export async function registerRoutes(
         desiredParts,
       });
 
-      const { model, stream } = await generateTextReplyStream({
+      const { model, stream, googleSearchGroundingUsed } =
+        await generateTextReplyStream({
         persona,
         messages: modelMessages,
         profileContext,
@@ -9512,6 +9517,11 @@ export async function registerRoutes(
         enableMultipart: ENABLE_MULTIPART_TEXT,
         clientTimeZone: parsed.clientTimeZone ?? null,
         desiredParts,
+      });
+      trace(req, "chat.stream.model_started", {
+        conversationId: conversation.id,
+        model,
+        googleSearchGroundingUsed,
       });
 
       const maxMultipartParts = ENABLE_MULTIPART_TEXT ? 3 : 1;
@@ -9811,6 +9821,7 @@ export async function registerRoutes(
         model,
         responseId,
         usage,
+        googleSearchGroundingUsed,
         rawReplyLength: normalizedReply.length,
         partCount: responseAssistantMessages.length,
         syntheticPartCount,
@@ -9823,6 +9834,7 @@ export async function registerRoutes(
         assistantMessages: responseAssistantMessages,
         model,
         usage,
+        googleSearchGroundingUsed,
         decisionPath: responseDecisionPath,
         decisionPathReason: responseDecisionPathReason,
         routeReason: responseDecisionPathReason,
