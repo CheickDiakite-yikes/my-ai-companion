@@ -139,7 +139,10 @@ Client submits text/image
       -> bind pending attachments
       -> inject current time context into conversation contents
       -> build model context window (history + memory + profile)
+      -> evaluate web-search intent (explicit ask + freshness/topic heuristics)
       -> Gemini generateContentStream
+      -> optional tools: [{ googleSearch: {} }]
+      -> NDJSON event: web_search(searching/grounded) for UI status pills
       -> NDJSON events: ack -> delta* -> part_final* -> final
       -> persist assistant part messages (turnId + partIndex)
       -> sanitize split tokens from output
@@ -161,10 +164,12 @@ Client starts voice call
         - durable memory items
         - profile facts + style preferences
      -> compose system instruction with persona + memory
+     -> optionally include tools: [{ googleSearch: {} }]
      -> create ephemeral Gemini Live token with constrained config
   -> browser opens Gemini Live session (v1alpha)
   -> mic PCM stream -> sendRealtimeInput(audio)
   -> optional camera frames -> sendRealtimeInput(video) @ ~1 FPS
+  -> transcript-based search-intent detector can send grounding nudge
   -> model audio playback + transcript capture
   -> transcript segments persisted to shared messages table
   -> POST /api/voice-sessions on end
@@ -419,6 +424,16 @@ Both text and voice modes support real-time web search via Google Search groundi
 - **Fallback**: If token creation with grounding fails (API incompatibility), the system automatically falls back to a non-grounded session with a diagnostic warning logged
 
 **Important**: The Live API's `lockAdditionalFields` is incompatible with `tools` configuration. When grounding is enabled, field locking is omitted from the token to avoid 400 errors.
+
+### Web-search decision policy
+
+When `GEMINI_TEXT_GOOGLE_SEARCH_AUTO_ONLY=true`, text grounding is selective and trigger-based:
+
+- Direct asks such as "look up", "search", "google", "what happened", "did you see", "what do you think about X new release"
+- Time-sensitive domains (news/headlines, sports results, weather, stocks/markets, leadership or product changes)
+- Recency/freshness asks (`today`, `latest`, `current`, `this week`, `last` + event/topic)
+
+Voice grounding uses a similar trigger policy based on finalized live user transcript chunks. If a trigger is detected, Zee emits the searching indicator and nudges the active Live session to ground the next answer.
 
 ### Live voice behavior
 
@@ -709,6 +724,8 @@ Source of truth: `.env.example`
 
 | Variable | Default | Description |
 |---|---|---|
+| `ENABLE_GEMINI_TEXT_GOOGLE_SEARCH_GROUNDING` | `true` | Enable Google Search grounding support for text replies |
+| `GEMINI_TEXT_GOOGLE_SEARCH_AUTO_ONLY` | `true` | If `true`, use grounding only on search-intent/freshness queries; if `false`, ground all text replies |
 | `ENABLE_GEMINI_LIVE_GOOGLE_SEARCH_GROUNDING` | `true` | Enable Google Search tools in live voice sessions |
 
 ### Live voice / VAD configuration
@@ -878,6 +895,21 @@ START_SERVER=0 TEST_HOST=127.0.0.1 TEST_PORT=5599 npm run test:local:e2e
 - Verify `GEMINI_LIVE_ACTIVITY_HANDLING` is set to `NO_INTERRUPTION` for stability
 - Inspect live trace diagnostics in server logs for interruption vs completion classification
 - Check client noise gate settings (`VITE_LIVE_AUDIO_NOISE_GATE_*`)
+
+### Web search not triggering or stale current-events answers
+
+- Verify flags are enabled:
+  - `ENABLE_GEMINI_TEXT_GOOGLE_SEARCH_GROUNDING=true`
+  - `ENABLE_GEMINI_LIVE_GOOGLE_SEARCH_GROUNDING=true`
+- For text mode, confirm the query has search/freshness intent when `GEMINI_TEXT_GOOGLE_SEARCH_AUTO_ONLY=true`
+- For voice mode, confirm live token config includes grounding:
+  - `live.token.created` trace should show `configSummary.googleSearchGroundingEnabled=true`
+- Confirm request-time grounding usage:
+  - text: `chat.stream.model_started` / `chat.respond.completed` includes `googleSearchGroundingUsed=true`
+  - voice: `live.web_search.searching` followed by `live.web_search.grounded`
+- If live grounding silently falls back, check for warning:
+  - `[live.token] Google Search grounding failed ... falling back to no grounding`
+- After changing any `VITE_*` env values, rebuild/redeploy the client bundle (restart alone is not enough)
 
 ### Time/date reporting incorrect
 
