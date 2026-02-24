@@ -1346,10 +1346,9 @@ export async function createLiveToken(
 
     for (const useGoogleSearchGrounding of groundingAttempts) {
       try {
-        const lockAdditionalFields = [
-          ...baseLockAdditionalFields,
-          ...(useGoogleSearchGrounding ? ["tools"] : []),
-        ];
+        const lockAdditionalFields = useGoogleSearchGrounding
+          ? undefined
+          : baseLockAdditionalFields;
         token = await ai.authTokens.create({
           config: {
             uses,
@@ -1379,7 +1378,6 @@ export async function createLiveToken(
                         },
                       }
                     : undefined,
-                // These defaults prioritize natural turn-taking and low interruption latency.
                 realtimeInputConfig: {
                   activityHandling,
                   turnCoverage,
@@ -1399,7 +1397,7 @@ export async function createLiveToken(
                 tools: useGoogleSearchGrounding ? GOOGLE_SEARCH_TOOLS : undefined,
               },
             },
-            lockAdditionalFields,
+            ...(lockAdditionalFields ? { lockAdditionalFields } : {}),
           },
         });
         resolvedGoogleSearchGrounding = useGoogleSearchGrounding;
@@ -1407,6 +1405,10 @@ export async function createLiveToken(
       } catch (error) {
         lastError = error;
         if (useGoogleSearchGrounding && shouldRetryWithoutGrounding(error)) {
+          console.warn(
+            `[live.token] Google Search grounding failed for model ${model}, falling back to no grounding:`,
+            error instanceof Error ? error.message : String(error),
+          );
           continue;
         }
         const message = error instanceof Error ? error.message.toLowerCase() : "";
