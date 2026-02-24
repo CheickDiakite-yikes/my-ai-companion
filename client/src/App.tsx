@@ -1341,21 +1341,16 @@ const TRANSCRIPT_DEDUPE_WINDOW_MS = 2500;
 const TRANSCRIPT_DEDUPE_PRUNE_MS = 60000;
 const ASSISTANT_NAME: Persona = "Zee";
 const DEFAULT_LIVE_VOICE: LiveVoiceName = "Aoede";
-import voiceAvatarAoede from "./assets/images/voice-aoede.png";
-import voiceAvatarKore from "./assets/images/voice-kore.png";
-import voiceAvatarCharon from "./assets/images/voice-charon.png";
-import voiceAvatarFenrir from "./assets/images/voice-fenrir.png";
-
 const LIVE_VOICE_OPTIONS: Array<{
   id: LiveVoiceName;
   label: string;
   style: "feminine" | "masculine";
   avatar: string;
 }> = [
-  { id: "Aoede", label: "Aoede", style: "feminine", avatar: voiceAvatarAoede },
-  { id: "Kore", label: "Kore", style: "feminine", avatar: voiceAvatarKore },
-  { id: "Charon", label: "Charon", style: "masculine", avatar: voiceAvatarCharon },
-  { id: "Fenrir", label: "Fenrir", style: "masculine", avatar: voiceAvatarFenrir },
+  { id: "Aoede", label: "Aoede", style: "feminine", avatar: zeeAvatar },
+  { id: "Kore", label: "Kore", style: "feminine", avatar: zarraAvatar },
+  { id: "Charon", label: "Charon", style: "masculine", avatar: zeeAvatarMan1 },
+  { id: "Fenrir", label: "Fenrir", style: "masculine", avatar: zeeAvatarMan2 },
 ];
 
 function isLiveVoiceName(value: unknown): value is LiveVoiceName {
