@@ -4,6 +4,7 @@
 A production-grade multimodal AI companion app with persona Zee. Users interact via text chat and live voice calls with shared memory, camera support, image sharing, user personalization, and 4 customizable color themes. Dark, immersive, mobile-first UI. Agentic creation features are archived (code retained, disabled by default).
 
 ## Recent Changes
+- 2026-02-24: Enhanced web search indicator — animated Google-colored dots + "Searching the web…" pill with 1.4s minimum display, smooth transition to "Web-checked" with globe icon; applied to both voice and text mode banners
 - 2026-02-24: Fixed voice mode Google Search grounding — root cause: `lockAdditionalFields` incompatible with `tools: [{ googleSearch: {} }]` in Live API token creation (400 INVALID_ARGUMENT). Fix: omit `lockAdditionalFields` when grounding enabled; added diagnostic warning logging for grounding fallback
 - 2026-02-20: Fixed text mode merged-word bug — added `normalizeWordSpacing` post-processing (server + client) to insert spaces at sentence boundaries and camelCase-style merges from model output; fixed orphaned `]]`/`[[` bracket leaking through sanitization; retroactively cleaned affected DB messages
 - 2026-02-18: Added live voice client-to-server error reporting (POST /api/live/client-error), server-side model health check (GET /api/live/health), and comprehensive WebSocket connection diagnostics
@@ -60,6 +61,7 @@ A production-grade multimodal AI companion app with persona Zee. Users interact 
 - Any `VITE_*` secret change requires full rebuild/redeploy (restart only is insufficient)
 - Do not include private persona/system-prompt wording in public docs or logs
 - `ZEE_CALENDAR_TIMEZONE` env var defaults to `America/New_York` for time context
+- Live API `lockAdditionalFields` is incompatible with `tools: [{ googleSearch: {} }]` — when grounding is enabled, field locking must be omitted from token creation
 
 ## Session Continuity Workflow
 - Start any session with `npm run dev:context`

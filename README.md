@@ -409,6 +409,17 @@ Assistant responses can be split into multiple conversational bubbles for a natu
 - Assigns each part a unique `partIndex` under the same `turnId`
 - Includes defense-in-depth sanitization to prevent split markers from leaking into visible messages
 
+### Google Search grounding
+
+Both text and voice modes support real-time web search via Google Search grounding:
+
+- **Text mode**: Automatically detects search-intent queries (news, scores, weather, prices, etc.) and injects `tools: [{ googleSearch: {} }]` into the generation request
+- **Voice mode**: The ephemeral live token is created with Google Search tools baked into the session config. A client-side nudge mechanism detects search-intent in the user's live transcript and sends a `sendClientContent` instruction to activate grounding
+- **UI indicator**: An animated pill with Google-colored dots shows "Searching the web…" during active search, transitioning to "Web-checked" with a globe icon when grounding completes. A minimum 1.4s display ensures the searching animation is visible
+- **Fallback**: If token creation with grounding fails (API incompatibility), the system automatically falls back to a non-grounded session with a diagnostic warning logged
+
+**Important**: The Live API's `lockAdditionalFields` is incompatible with `tools` configuration. When grounding is enabled, field locking is omitted from the token to avoid 400 errors.
+
 ### Live voice behavior
 
 - Server issues **ephemeral live tokens** with constrained configuration baked in
@@ -693,6 +704,12 @@ Source of truth: `.env.example`
 | `GEMINI_TEXT_TOP_P` | `0.95` | Top-p sampling |
 | `GEMINI_TEXT_MAX_OUTPUT_TOKENS` | `2048` | Max output tokens per reply |
 | `GEMINI_TEXT_MEMORY_WINDOW_MESSAGES` | `40` | Messages included in context window |
+
+### Google Search grounding
+
+| Variable | Default | Description |
+|---|---|---|
+| `ENABLE_GEMINI_LIVE_GOOGLE_SEARCH_GROUNDING` | `true` | Enable Google Search tools in live voice sessions |
 
 ### Live voice / VAD configuration
 

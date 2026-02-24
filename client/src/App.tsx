@@ -3735,18 +3735,38 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onProfile, assistantName
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 exit={{ opacity: 0, y: -8, scale: 0.96 }}
                 transition={{ duration: 0.16, ease: "easeOut" }}
-                className="absolute left-1/2 top-3 z-20 -translate-x-1/2 rounded-full border px-3 py-1 text-[11px] font-medium tracking-wide backdrop-blur-md"
+                className="absolute left-1/2 top-3 z-20 -translate-x-1/2 rounded-full border px-3 py-1.5 text-[11px] font-medium tracking-wide backdrop-blur-md"
                 style={{
                   borderColor:
-                    "color-mix(in srgb, var(--app-soft-card-border) 76%, transparent)",
+                    webLookupStatus === "searching"
+                      ? "color-mix(in srgb, #4285F4 30%, transparent)"
+                      : "color-mix(in srgb, var(--app-soft-card-border) 76%, transparent)",
                   backgroundColor:
                     "color-mix(in srgb, var(--app-soft-card-bg) 88%, transparent)",
                   color: "var(--app-on-dark-muted)",
                 }}
               >
-                {webLookupStatus === "searching"
-                  ? "Zee is checking the web..."
-                  : "Web-checked"}
+                {webLookupStatus === "searching" ? (
+                  <span className="flex items-center gap-2">
+                    <span className="flex items-center gap-0.5">
+                      {["#4285F4", "#EA4335", "#FBBC05", "#34A853"].map((c, i) => (
+                        <motion.span
+                          key={c}
+                          className="inline-block h-1.5 w-1.5 rounded-full"
+                          style={{ backgroundColor: c }}
+                          animate={{ opacity: [0.4, 1, 0.4], scale: [0.8, 1.15, 0.8] }}
+                          transition={{ duration: 0.9, repeat: Infinity, delay: i * 0.12 }}
+                        />
+                      ))}
+                    </span>
+                    Searching the web…
+                  </span>
+                ) : (
+                  <span className="flex items-center gap-1.5">
+                    <Globe className="h-3 w-3" style={{ color: "var(--app-accent)" }} />
+                    Web-checked
+                  </span>
+                )}
               </motion.div>
             )}
           </AnimatePresence>
@@ -5269,17 +5289,38 @@ const TextView = ({
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: -6, scale: 0.96 }}
             transition={{ duration: 0.16, ease: "easeOut" }}
-            className="absolute left-1/2 z-20 -translate-x-1/2 rounded-full border px-3 py-1 text-[11px] font-medium tracking-wide backdrop-blur-md"
+            className="absolute left-1/2 z-20 -translate-x-1/2 rounded-full border px-3 py-1.5 text-[11px] font-medium tracking-wide backdrop-blur-md"
             style={{
               top: "clamp(5.3rem, 16vh, 7.4rem)",
-              borderColor: "color-mix(in srgb, var(--app-soft-card-border) 74%, transparent)",
+              borderColor:
+                webLookupStatus === "searching"
+                  ? "color-mix(in srgb, #4285F4 30%, transparent)"
+                  : "color-mix(in srgb, var(--app-soft-card-border) 74%, transparent)",
               backgroundColor: "color-mix(in srgb, var(--app-soft-card-bg) 88%, transparent)",
               color: "var(--app-on-dark-muted)",
             }}
           >
-            {webLookupStatus === "searching"
-              ? "Checking web for latest info..."
-              : "Web-checked"}
+            {webLookupStatus === "searching" ? (
+              <span className="flex items-center gap-2">
+                <span className="flex items-center gap-0.5">
+                  {["#4285F4", "#EA4335", "#FBBC05", "#34A853"].map((c, i) => (
+                    <motion.span
+                      key={c}
+                      className="inline-block h-1.5 w-1.5 rounded-full"
+                      style={{ backgroundColor: c }}
+                      animate={{ opacity: [0.4, 1, 0.4], scale: [0.8, 1.15, 0.8] }}
+                      transition={{ duration: 0.9, repeat: Infinity, delay: i * 0.12 }}
+                    />
+                  ))}
+                </span>
+                Searching the web…
+              </span>
+            ) : (
+              <span className="flex items-center gap-1.5">
+                <Globe className="h-3 w-3" style={{ color: "var(--app-accent)" }} />
+                Web-checked
+              </span>
+            )}
           </motion.div>
         )}
       </AnimatePresence>
@@ -6447,6 +6488,10 @@ function App() {
   );
   const textWebLookupClearTimerRef = useRef<number | null>(null);
   const voiceWebLookupClearTimerRef = useRef<number | null>(null);
+  const voiceSearchStartedAtRef = useRef<number | null>(null);
+  const textSearchStartedAtRef = useRef<number | null>(null);
+  const voiceSearchMinTimerRef = useRef<number | null>(null);
+  const textSearchMinTimerRef = useRef<number | null>(null);
 
   const logLiveTrace = (
     event: string,
@@ -6471,6 +6516,8 @@ function App() {
     setVoiceWebLookupStatus(null);
   }, []);
 
+  const SEARCH_MIN_DISPLAY_MS = 1400;
+
   const setWebLookupStatus = useCallback(
     (
       mode: "text" | "voice",
@@ -6478,34 +6525,55 @@ function App() {
     ) => {
       if (status === "idle") {
         clearWebLookupStatus(mode);
+        if (mode === "voice") voiceSearchStartedAtRef.current = null;
+        else textSearchStartedAtRef.current = null;
         return;
       }
 
-      if (mode === "text") {
-        if (textWebLookupClearTimerRef.current !== null) {
-          window.clearTimeout(textWebLookupClearTimerRef.current);
-          textWebLookupClearTimerRef.current = null;
-        }
-        setTextWebLookupStatus(status);
-        if (status === "grounded") {
-          textWebLookupClearTimerRef.current = window.setTimeout(() => {
-            setTextWebLookupStatus(null);
-            textWebLookupClearTimerRef.current = null;
-          }, 3600);
-        }
+      const startedAtRef = mode === "voice" ? voiceSearchStartedAtRef : textSearchStartedAtRef;
+      const minTimerRef = mode === "voice" ? voiceSearchMinTimerRef : textSearchMinTimerRef;
+      const clearTimerRef = mode === "voice" ? voiceWebLookupClearTimerRef : textWebLookupClearTimerRef;
+      const setStatus = mode === "voice" ? setVoiceWebLookupStatus : setTextWebLookupStatus;
+
+      if (clearTimerRef.current !== null) {
+        window.clearTimeout(clearTimerRef.current);
+        clearTimerRef.current = null;
+      }
+      if (minTimerRef.current !== null) {
+        window.clearTimeout(minTimerRef.current);
+        minTimerRef.current = null;
+      }
+
+      if (status === "searching") {
+        startedAtRef.current = Date.now();
+        setStatus("searching");
         return;
       }
 
-      if (voiceWebLookupClearTimerRef.current !== null) {
-        window.clearTimeout(voiceWebLookupClearTimerRef.current);
-        voiceWebLookupClearTimerRef.current = null;
+      if (startedAtRef.current === null) {
+        startedAtRef.current = Date.now();
+        setStatus("searching");
       }
-      setVoiceWebLookupStatus(status);
-      if (status === "grounded") {
-        voiceWebLookupClearTimerRef.current = window.setTimeout(() => {
-          setVoiceWebLookupStatus(null);
-          voiceWebLookupClearTimerRef.current = null;
+
+      const applyGrounded = () => {
+        startedAtRef.current = null;
+        setStatus("grounded");
+        clearTimerRef.current = window.setTimeout(() => {
+          setStatus(null);
+          clearTimerRef.current = null;
         }, 3600);
+      };
+
+      const elapsed = Date.now() - startedAtRef.current;
+      const remaining = SEARCH_MIN_DISPLAY_MS - elapsed;
+
+      if (remaining > 0) {
+        minTimerRef.current = window.setTimeout(() => {
+          minTimerRef.current = null;
+          applyGrounded();
+        }, remaining);
+      } else {
+        applyGrounded();
       }
     },
     [clearWebLookupStatus],
@@ -6518,6 +6586,12 @@ function App() {
       }
       if (voiceWebLookupClearTimerRef.current !== null) {
         window.clearTimeout(voiceWebLookupClearTimerRef.current);
+      }
+      if (voiceSearchMinTimerRef.current !== null) {
+        window.clearTimeout(voiceSearchMinTimerRef.current);
+      }
+      if (textSearchMinTimerRef.current !== null) {
+        window.clearTimeout(textSearchMinTimerRef.current);
       }
     };
   }, []);
