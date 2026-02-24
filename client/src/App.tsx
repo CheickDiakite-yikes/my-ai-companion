@@ -5643,7 +5643,7 @@ const TextView = ({
                 </div>
                 {msg.sender === "user" && (
                   <div
-                    className="w-8 h-8 rounded-full border flex items-center justify-center mb-1 text-xs font-bold overflow-hidden"
+                    className="w-8 h-8 rounded-full border flex items-center justify-center mb-1 text-xs font-bold overflow-hidden flex-shrink-0"
                     style={{
                       backgroundColor: "var(--app-soft-card-bg)",
                       borderColor: "var(--app-accent)",
