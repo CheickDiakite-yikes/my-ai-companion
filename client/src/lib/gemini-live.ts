@@ -392,6 +392,7 @@ export class GeminiLiveVoiceSession {
   private liveGoogleSearchEnabled = false;
   private pendingWebSearchTurn = false;
   private webSearchGroundedThisTurn = false;
+  private webSearchNudgeSentThisTurn = false;
   private pendingTranscriptBySender: Record<TranscriptSender, string> = {
     user: "",
     assistant: "",
@@ -470,6 +471,7 @@ export class GeminiLiveVoiceSession {
     this.liveGoogleSearchEnabled = googleSearchGroundingEnabled;
     this.pendingWebSearchTurn = false;
     this.webSearchGroundedThisTurn = false;
+    this.webSearchNudgeSentThisTurn = false;
 
     const CONNECTION_TIMEOUT_MS = 15_000;
     let connectionOpened = false;
@@ -594,6 +596,7 @@ export class GeminiLiveVoiceSession {
     this.assistantPlaybackTailUntilMs = 0;
     this.pendingWebSearchTurn = false;
     this.webSearchGroundedThisTurn = false;
+    this.webSearchNudgeSentThisTurn = false;
     this.clearPlaybackQueue();
     this.stopAudioContextKeepAlive();
     document.removeEventListener("visibilitychange", this.handleVisibilityChange);
@@ -1106,6 +1109,7 @@ export class GeminiLiveVoiceSession {
       }
       this.pendingWebSearchTurn = false;
       this.webSearchGroundedThisTurn = false;
+      this.webSearchNudgeSentThisTurn = false;
       this.assistantTurnActive = false;
       this.assistantPlaybackTailUntilMs = Math.max(
         this.assistantPlaybackTailUntilMs,
@@ -1196,6 +1200,17 @@ export class GeminiLiveVoiceSession {
 
     if (
       sender === "user" &&
+      this.liveGoogleSearchEnabled &&
+      isLikelyLiveWebSearchQuery(text) &&
+      transcript.finished &&
+      !this.webSearchNudgeSentThisTurn
+    ) {
+      this.webSearchNudgeSentThisTurn = true;
+      this.sendWebSearchNudge(text);
+    }
+
+    if (
+      sender === "user" &&
       SUPPRESS_USER_TRANSCRIPT_DURING_ASSISTANT_SPEECH &&
       this.isAssistantSpeechWindowActive()
     ) {
@@ -1278,6 +1293,32 @@ export class GeminiLiveVoiceSession {
 
   private emitWebSearchStatus(status: LiveWebSearchStatus): void {
     this.callbacks.onWebSearch?.({ status });
+  }
+
+  private sendWebSearchNudge(userTranscript: string): void {
+    if (!this.session) return;
+    const query = normalizeText(userTranscript);
+    if (!query) return;
+    try {
+      (
+        this.session as Session & {
+          sendClientContent?: (payload: {
+            turns: string;
+            turnComplete: boolean;
+          }) => void;
+        }
+      ).sendClientContent?.({
+        turns: `Use Google Search grounding for this latest user request and answer with current verified facts: ${query}`,
+        turnComplete: true,
+      });
+      this.debug("live.web_search.nudge_sent", {
+        textLength: query.length,
+      });
+    } catch (error) {
+      this.debug("live.web_search.nudge_failed", {
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   private debug(message: string, metadata?: Record<string, unknown>): void {

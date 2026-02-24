@@ -1102,6 +1102,7 @@ function composeLiveSystemInstruction(params: {
   profileContext?: TextPersonalizationProfile | null;
   memoryPolicy: LiveMemoryPolicy;
   clientTimeZone?: string | null;
+  preferWebGrounding?: boolean;
 }): string {
   const sections: string[] = [params.personaPrompt];
 
@@ -1129,6 +1130,17 @@ function composeLiveSystemInstruction(params: {
     sections.push(`LIVE MEMORY CONTEXT:\n${memoryBlock}`);
   }
 
+  if (params.preferWebGrounding) {
+    sections.push(
+      [
+        "FACTUAL FRESHNESS POLICY:",
+        "- For time-sensitive topics (news, stocks/markets, sports results, elections, leadership changes, launches/releases, weather), use Google Search grounding before answering.",
+        "- Do not rely on prior turn memory for current-events facts.",
+        "- If grounded lookup is unavailable, say you couldn't verify the latest facts instead of guessing.",
+      ].join("\n"),
+    );
+  }
+
   return sections.join("\n\n");
 }
 
@@ -1143,12 +1155,14 @@ export async function createLiveToken(
   const memoryPolicy = input.memoryPolicy ?? "safe_selective";
   const deviceClass = input.deviceClass ?? "unknown";
   const isMobileDevice = deviceClass === "mobile";
+  const requestedGoogleSearchGrounding = shouldUseLiveGoogleSearchGrounding();
   const systemInstruction = composeLiveSystemInstruction({
     personaPrompt,
     memoryContextBlock: input.memoryContextBlock,
     profileContext: input.profileContext ?? null,
     memoryPolicy,
     clientTimeZone: input.clientTimeZone ?? null,
+    preferWebGrounding: requestedGoogleSearchGrounding,
   });
   const timeMatch = systemInstruction.match(/RIGHT NOW it is:([^\n]+)/);
   console.log(`[LIVE_TOKEN_TZ] clientTimeZone=${JSON.stringify(input.clientTimeZone)}, envTZ=${process.env.ZEE_CALENDAR_TIMEZONE}, timeInPrompt=${timeMatch ? timeMatch[1].trim() : "NOT_FOUND"}`);
@@ -1230,7 +1244,6 @@ export async function createLiveToken(
     process.env.GEMINI_LIVE_INCLUDE_THOUGHTS,
     false,
   );
-  const requestedGoogleSearchGrounding = shouldUseLiveGoogleSearchGrounding();
   const liveTemperature = parseBoundedNumber(
     process.env.GEMINI_LIVE_TEMPERATURE,
     lowLatencyMode ? 0.45 : 0.55,
