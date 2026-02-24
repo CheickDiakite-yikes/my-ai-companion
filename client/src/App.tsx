@@ -3822,29 +3822,105 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onProfile, assistantName
                         : "absolute -bottom-12 left-1/2 -translate-x-1/2 rounded-full bg-white/5 px-4 py-2 backdrop-blur-sm",
                     )}
                   >
-                    {[...Array(8)].map((_, i) => (
-                      <motion.div
-                        key={i}
-                        className={cn(
-                          "rounded-full opacity-80",
-                          isVideoEnabled ? "w-3" : "w-2.5",
-                        )}
-                        animate={{
-                          height: ["20%", "80%", "20%"],
-                          backgroundColor: [
-                            "var(--app-accent)",
-                            "var(--app-assistant-bubble-bg)",
-                            "var(--app-accent)",
-                          ],
+                    {webLookupStatus === "searching" ? (
+                      <div
+                        className="flex min-w-[232px] flex-col gap-1.5"
+                        data-testid="voice-web-lookup-indicator"
+                      >
+                        <div className="flex items-center justify-center gap-2">
+                          <div className="flex items-center gap-1.5">
+                            <motion.span
+                              className="h-1.5 w-1.5 rounded-full"
+                              style={{ backgroundColor: "#4285F4" }}
+                              animate={{ opacity: [0.5, 1, 0.5], y: [0, -1, 0] }}
+                              transition={{ duration: 0.95, repeat: Infinity, delay: 0 }}
+                            />
+                            <motion.span
+                              className="h-1.5 w-1.5 rounded-full"
+                              style={{ backgroundColor: "#EA4335" }}
+                              animate={{ opacity: [0.5, 1, 0.5], y: [0, -1, 0] }}
+                              transition={{ duration: 0.95, repeat: Infinity, delay: 0.12 }}
+                            />
+                            <motion.span
+                              className="h-1.5 w-1.5 rounded-full"
+                              style={{ backgroundColor: "#FBBC05" }}
+                              animate={{ opacity: [0.5, 1, 0.5], y: [0, -1, 0] }}
+                              transition={{ duration: 0.95, repeat: Infinity, delay: 0.24 }}
+                            />
+                            <motion.span
+                              className="h-1.5 w-1.5 rounded-full"
+                              style={{ backgroundColor: "#34A853" }}
+                              animate={{ opacity: [0.5, 1, 0.5], y: [0, -1, 0] }}
+                              transition={{ duration: 0.95, repeat: Infinity, delay: 0.36 }}
+                            />
+                          </div>
+                          <span
+                            className="text-[11px] font-medium tracking-wide"
+                            style={{ color: "var(--app-on-dark-muted)" }}
+                          >
+                            Looking up latest info
+                          </span>
+                        </div>
+                        <div
+                          className="relative h-1.5 overflow-hidden rounded-full"
+                          style={{
+                            backgroundColor:
+                              "color-mix(in srgb, var(--app-soft-card-border) 50%, transparent)",
+                          }}
+                        >
+                          <motion.div
+                            className="absolute inset-y-0 left-0 rounded-full"
+                            style={{
+                              width: "42%",
+                              background:
+                                "linear-gradient(90deg, #4285F4 0%, #EA4335 33%, #FBBC05 66%, #34A853 100%)",
+                            }}
+                            animate={{ x: ["-35%", "140%"] }}
+                            transition={{ duration: 1.1, repeat: Infinity, ease: "easeInOut" }}
+                          />
+                        </div>
+                      </div>
+                    ) : webLookupStatus === "grounded" ? (
+                      <div
+                        className="flex min-w-[194px] items-center justify-center gap-2 rounded-full px-2 py-1"
+                        style={{
+                          backgroundColor:
+                            "color-mix(in srgb, var(--app-soft-card-bg) 65%, transparent)",
                         }}
-                        transition={{
-                          duration: 1 + Math.random() * 0.5,
-                          repeat: Infinity,
-                          delay: i * 0.1,
-                          ease: "easeInOut"
-                        }}
-                      />
-                    ))}
+                      >
+                        <Globe className="h-3.5 w-3.5" style={{ color: "var(--app-accent)" }} />
+                        <span
+                          className="text-[11px] font-medium tracking-wide"
+                          style={{ color: "var(--app-on-dark-muted)" }}
+                        >
+                          Web-checked
+                        </span>
+                      </div>
+                    ) : (
+                      [...Array(8)].map((_, i) => (
+                        <motion.div
+                          key={i}
+                          className={cn(
+                            "rounded-full opacity-80",
+                            isVideoEnabled ? "w-3" : "w-2.5",
+                          )}
+                          animate={{
+                            height: ["20%", "80%", "20%"],
+                            backgroundColor: [
+                              "var(--app-accent)",
+                              "var(--app-assistant-bubble-bg)",
+                              "var(--app-accent)",
+                            ],
+                          }}
+                          transition={{
+                            duration: 1 + Math.random() * 0.5,
+                            repeat: Infinity,
+                            delay: i * 0.1,
+                            ease: "easeInOut"
+                          }}
+                        />
+                      ))
+                    )}
                   </div>
                 </div>
               </div>
