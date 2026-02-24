@@ -12,8 +12,11 @@ export interface LiveTranscriptEvent {
   text: string;
 }
 
+export type LiveWebSearchStatus = "searching" | "grounded" | "idle";
+
 export interface GeminiLiveVoiceSessionCallbacks {
   onTranscript?: (event: LiveTranscriptEvent) => void;
+  onWebSearch?: (event: { status: LiveWebSearchStatus }) => void;
   onError?: (error: Error) => void;
   onClosed?: (reason?: string) => void;
   onDebug?: (message: string, metadata?: Record<string, unknown>) => void;
@@ -23,6 +26,7 @@ export interface GeminiLiveVoiceSessionStartParams {
   ephemeralToken: string;
   model: string;
   preAcquiredMicStream?: MediaStream;
+  googleSearchGroundingEnabled?: boolean;
 }
 
 const INPUT_SAMPLE_RATE = 16000;
@@ -123,9 +127,15 @@ const SUPPRESS_USER_TRANSCRIPT_DURING_ASSISTANT_SPEECH = parseClientBoolean(
   liveClientEnv.VITE_LIVE_AUDIO_SUPPRESS_USER_TRANSCRIPT_DURING_ASSISTANT_SPEECH,
   true,
 );
+const LIVE_WEB_SEARCH_SIGNAL_PATTERN =
+  /\b(search|look up|google|latest|current|today|news|headline|what happened|updates?|did you see|last super bowl|super\s*bowl|score|standings?|who won)\b/i;
 
 function normalizeText(input: string | undefined): string {
   return (input ?? "").replace(/\s+/g, " ").trim();
+}
+
+function isLikelyLiveWebSearchQuery(text: string): boolean {
+  return LIVE_WEB_SEARCH_SIGNAL_PATTERN.test(text);
 }
 
 function findTranscriptOverlap(prefix: string, suffix: string): number {
@@ -379,6 +389,9 @@ export class GeminiLiveVoiceSession {
   private audioNoiseGateFailOpenFramesRemaining = 0;
   private assistantTurnActive = false;
   private assistantPlaybackTailUntilMs = 0;
+  private liveGoogleSearchEnabled = false;
+  private pendingWebSearchTurn = false;
+  private webSearchGroundedThisTurn = false;
   private pendingTranscriptBySender: Record<TranscriptSender, string> = {
     user: "",
     assistant: "",
@@ -451,6 +464,9 @@ export class GeminiLiveVoiceSession {
     this.audioNoiseGateFailOpenFramesRemaining = 0;
     this.assistantTurnActive = false;
     this.assistantPlaybackTailUntilMs = 0;
+    this.liveGoogleSearchEnabled = Boolean(params.googleSearchGroundingEnabled);
+    this.pendingWebSearchTurn = false;
+    this.webSearchGroundedThisTurn = false;
 
     const CONNECTION_TIMEOUT_MS = 15_000;
     let connectionOpened = false;
@@ -569,6 +585,8 @@ export class GeminiLiveVoiceSession {
     this.audioNoiseGateFailOpenFramesRemaining = 0;
     this.assistantTurnActive = false;
     this.assistantPlaybackTailUntilMs = 0;
+    this.pendingWebSearchTurn = false;
+    this.webSearchGroundedThisTurn = false;
     this.clearPlaybackQueue();
     this.stopAudioContextKeepAlive();
     document.removeEventListener("visibilitychange", this.handleVisibilityChange);
@@ -964,6 +982,13 @@ export class GeminiLiveVoiceSession {
   private handleServerMessage(message: LiveServerMessage): void {
     const serverContent = message.serverContent;
     if (!serverContent) return;
+    const hasGroundingMetadata = Boolean(
+      (
+        serverContent as typeof serverContent & {
+          groundingMetadata?: unknown;
+        }
+      ).groundingMetadata,
+    );
 
     const modelParts = serverContent.modelTurn?.parts ?? [];
     const audioPartCount = modelParts.reduce((count, part) => {
@@ -984,7 +1009,19 @@ export class GeminiLiveVoiceSession {
         audioPartCount,
         hasInputTranscription: Boolean(serverContent.inputTranscription?.text),
         hasOutputTranscription: Boolean(serverContent.outputTranscription?.text),
+        hasGroundingMetadata,
       });
+    }
+
+    if (
+      this.liveGoogleSearchEnabled &&
+      hasGroundingMetadata &&
+      !this.webSearchGroundedThisTurn
+    ) {
+      this.webSearchGroundedThisTurn = true;
+      this.pendingWebSearchTurn = false;
+      this.emitWebSearchStatus("grounded");
+      this.debug("live.web_search.grounded");
     }
 
     if (audioPartCount > 0 || Boolean(serverContent.outputTranscription?.text)) {
@@ -1016,6 +1053,15 @@ export class GeminiLiveVoiceSession {
     this.captureTranscript("assistant", serverContent.outputTranscription);
 
     if (serverContent.turnComplete) {
+      if (
+        this.liveGoogleSearchEnabled &&
+        this.pendingWebSearchTurn &&
+        !this.webSearchGroundedThisTurn
+      ) {
+        this.emitWebSearchStatus("idle");
+      }
+      this.pendingWebSearchTurn = false;
+      this.webSearchGroundedThisTurn = false;
       this.assistantTurnActive = false;
       this.assistantPlaybackTailUntilMs = Math.max(
         this.assistantPlaybackTailUntilMs,
@@ -1089,6 +1135,20 @@ export class GeminiLiveVoiceSession {
 
     const text = normalizeText(transcript.text);
     if (!text) return;
+
+    if (
+      sender === "user" &&
+      this.liveGoogleSearchEnabled &&
+      isLikelyLiveWebSearchQuery(text) &&
+      !this.pendingWebSearchTurn
+    ) {
+      this.pendingWebSearchTurn = true;
+      this.webSearchGroundedThisTurn = false;
+      this.emitWebSearchStatus("searching");
+      this.debug("live.web_search.searching", {
+        textLength: text.length,
+      });
+    }
 
     if (
       sender === "user" &&
@@ -1170,6 +1230,10 @@ export class GeminiLiveVoiceSession {
 
   private emitError(error: Error): void {
     this.callbacks.onError?.(error);
+  }
+
+  private emitWebSearchStatus(status: LiveWebSearchStatus): void {
+    this.callbacks.onWebSearch?.({ status });
   }
 
   private debug(message: string, metadata?: Record<string, unknown>): void {

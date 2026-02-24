@@ -85,6 +85,8 @@ const TEXT_GOOGLE_SEARCH_EXPLICIT_PATTERN =
   /\b(search\s+(the\s+)?(web|internet|google)|look\s+(it|this|that|them)\s+up|websearch|fact\s*check|verify\s+(this|that|it)|check\s+latest)\b/i;
 const TEXT_GOOGLE_SEARCH_SPORTS_PATTERN =
   /\b(when\s+(did|was)\s+the\s+last|who\s+won|match|game)\b.*\b(vs\.?|versus)\b/i;
+const TEXT_GOOGLE_SEARCH_LAST_EVENT_PATTERN =
+  /\b(last|most recent)\b[\s-]*(super\s*bowl|superbowl|world cup|olympics?|final|championship|playoff(?:s)?)\b/i;
 const TEXT_GOOGLE_SEARCH_DIRECT_ASK_PATTERN =
   /\b(can you|could you|please|pls)\s+(look up|search|check|find)\b|\blook up\b|\bsearch\b.*\b(web|internet|google)\b/i;
 const TEXT_GOOGLE_SEARCH_WHAT_HAPPENED_PATTERN =
@@ -354,6 +356,10 @@ function shouldUseTextGoogleSearchGrounding(
     return true;
   }
 
+  if (TEXT_GOOGLE_SEARCH_LAST_EVENT_PATTERN.test(latestText)) {
+    return true;
+  }
+
   const hasFreshnessSignal = TEXT_GOOGLE_SEARCH_SIGNAL_PATTERN.test(latestText);
   const hasNewsTopic = TEXT_GOOGLE_SEARCH_NEWS_TOPIC_PATTERN.test(latestText);
   if (hasFreshnessSignal && hasNewsTopic) {
@@ -367,9 +373,13 @@ function shouldUseTextGoogleSearchGrounding(
 }
 
 function shouldUseLiveGoogleSearchGrounding(): boolean {
+  const liveFlag = process.env.ENABLE_GEMINI_LIVE_GOOGLE_SEARCH_GROUNDING;
+  if (typeof liveFlag === "string") {
+    return parseBooleanFlag(liveFlag, false);
+  }
   return parseBooleanFlag(
-    process.env.ENABLE_GEMINI_LIVE_GOOGLE_SEARCH_GROUNDING,
-    false,
+    process.env.ENABLE_GEMINI_TEXT_GOOGLE_SEARCH_GROUNDING,
+    true,
   );
 }
 

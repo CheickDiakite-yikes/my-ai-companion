@@ -1,4 +1,12 @@
-import React, { useState, useEffect, useRef, useId, useMemo, type ReactNode } from "react";
+import React, {
+  useState,
+  useEffect,
+  useRef,
+  useId,
+  useMemo,
+  useCallback,
+  type ReactNode,
+} from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Mic,
@@ -101,6 +109,7 @@ type Mode = "voice" | "text" | "profile";
 type Persona = "Maya" | "Zarra" | "Zee";
 type LiveVoiceName = "Aoede" | "Kore" | "Charon" | "Fenrir";
 type CameraFacingMode = "user" | "environment";
+type WebLookupStatus = "searching" | "grounded";
 
 const PERSONA_AVATARS: Record<Persona, string> = {
   Maya: mayaAvatar,
@@ -287,6 +296,7 @@ interface ChatStreamFinalEvent {
   assistantMessages?: MessageData[];
   model?: string;
   usage?: unknown;
+  googleSearchGroundingUsed?: boolean;
   decisionPath?: "companion_reply" | "offer_required" | "collecting_slots" | "agent_task";
   decisionPathReason?:
     | "explicit_build_offer"
@@ -333,12 +343,19 @@ interface ChatStreamTaskFailedEvent {
   failure?: TaskFailureSummary | null;
 }
 
+interface ChatStreamWebSearchEvent {
+  type: "web_search";
+  mode?: "text" | "voice";
+  status: "searching" | "grounded" | "idle";
+}
+
 type ChatStreamEvent =
   | ChatStreamAckEvent
   | ChatStreamDeltaEvent
   | ChatStreamPartFinalEvent
   | ChatStreamFinalEvent
   | ChatStreamErrorEvent
+  | ChatStreamWebSearchEvent
   | ChatStreamTaskCreatedEvent
   | ChatStreamTaskStepEvent
   | ChatStreamTaskApprovalRequiredEvent
@@ -3641,7 +3658,7 @@ const SharedHeader = ({
   );
 };
 
-const VoiceView = ({ isActive, isConnecting, onEndCall, onProfile, assistantName, assistantAvatar, selectedVoice, setSelectedVoice, mode, setMode, duration, userProfileImage, isVideoEnabled, onToggleVideo, onFlipCamera, videoStream, isVideoTransitioning, cameraFacingMode }: { 
+const VoiceView = ({ isActive, isConnecting, onEndCall, onProfile, assistantName, assistantAvatar, selectedVoice, setSelectedVoice, mode, setMode, duration, userProfileImage, isVideoEnabled, onToggleVideo, onFlipCamera, videoStream, isVideoTransitioning, cameraFacingMode, webLookupStatus }: { 
   isActive: boolean; 
   isConnecting: boolean;
   onEndCall: () => void;
@@ -3660,6 +3677,7 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onProfile, assistantName
   videoStream: MediaStream | null;
   isVideoTransitioning: boolean;
   cameraFacingMode: CameraFacingMode;
+  webLookupStatus: WebLookupStatus | null;
 }) => {
   const videoPreviewRef = useRef<HTMLVideoElement | null>(null);
 
@@ -3710,6 +3728,28 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onProfile, assistantName
           animate={{ opacity: mode === "voice" ? 1 : 0 }}
           transition={{ duration: 0.2 }}
         >
+          <AnimatePresence>
+            {isActive && webLookupStatus && (
+              <motion.div
+                initial={{ opacity: 0, y: -8, scale: 0.96 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: -8, scale: 0.96 }}
+                transition={{ duration: 0.16, ease: "easeOut" }}
+                className="absolute left-1/2 top-3 z-20 -translate-x-1/2 rounded-full border px-3 py-1 text-[11px] font-medium tracking-wide backdrop-blur-md"
+                style={{
+                  borderColor:
+                    "color-mix(in srgb, var(--app-soft-card-border) 76%, transparent)",
+                  backgroundColor:
+                    "color-mix(in srgb, var(--app-soft-card-bg) 88%, transparent)",
+                  color: "var(--app-on-dark-muted)",
+                }}
+              >
+                {webLookupStatus === "searching"
+                  ? "Zee is checking the web..."
+                  : "Web-checked"}
+              </motion.div>
+            )}
+          </AnimatePresence>
           <div className="flex-1 flex flex-col items-center justify-center relative">
             {isActive ? (
               <div className="w-full h-full flex items-center justify-center px-8">
@@ -5050,6 +5090,7 @@ const TextView = ({
   isStreamingReply,
   persona,
   assistantAvatarSrc,
+  webLookupStatus,
   mode,
   userProfileImage,
   onOpenArtifact,
@@ -5061,6 +5102,7 @@ const TextView = ({
   isStreamingReply: boolean;
   persona: Persona;
   assistantAvatarSrc: string;
+  webLookupStatus: WebLookupStatus | null;
   mode: Mode;
   userProfileImage?: string;
   onOpenArtifact: (artifactId: string) => void;
@@ -5144,6 +5186,27 @@ const TextView = ({
           ? `${persona} is typing`
           : latestAssistantText}
       </div>
+      <AnimatePresence>
+        {webLookupStatus && (
+          <motion.div
+            initial={{ opacity: 0, y: -6, scale: 0.96 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -6, scale: 0.96 }}
+            transition={{ duration: 0.16, ease: "easeOut" }}
+            className="absolute left-1/2 z-20 -translate-x-1/2 rounded-full border px-3 py-1 text-[11px] font-medium tracking-wide backdrop-blur-md"
+            style={{
+              top: "clamp(5.3rem, 16vh, 7.4rem)",
+              borderColor: "color-mix(in srgb, var(--app-soft-card-border) 74%, transparent)",
+              backgroundColor: "color-mix(in srgb, var(--app-soft-card-bg) 88%, transparent)",
+              color: "var(--app-on-dark-muted)",
+            }}
+          >
+            {webLookupStatus === "searching"
+              ? "Checking web for latest info..."
+              : "Web-checked"}
+          </motion.div>
+        )}
+      </AnimatePresence>
       <div
         ref={scrollRef}
         onScroll={handleScroll}
@@ -6263,6 +6326,10 @@ function App() {
   const [cameraFacingMode, setCameraFacingMode] =
     useState<CameraFacingMode>("user");
   const [videoStream, setVideoStream] = useState<MediaStream | null>(null);
+  const [textWebLookupStatus, setTextWebLookupStatus] =
+    useState<WebLookupStatus | null>(null);
+  const [voiceWebLookupStatus, setVoiceWebLookupStatus] =
+    useState<WebLookupStatus | null>(null);
 
   const [pendingAttachments, setPendingAttachments] = useState<
     PendingImageAttachment[]
@@ -6302,6 +6369,8 @@ function App() {
     typeof window !== "undefined" &&
       new URLSearchParams(window.location.search).get("onboarding") === "1",
   );
+  const textWebLookupClearTimerRef = useRef<number | null>(null);
+  const voiceWebLookupClearTimerRef = useRef<number | null>(null);
 
   const logLiveTrace = (
     event: string,
@@ -6309,6 +6378,73 @@ function App() {
   ) => {
     console.log("[LiveTrace]", event, metadata);
   };
+
+  const clearWebLookupStatus = useCallback((mode: "text" | "voice") => {
+    if (mode === "text") {
+      if (textWebLookupClearTimerRef.current !== null) {
+        window.clearTimeout(textWebLookupClearTimerRef.current);
+        textWebLookupClearTimerRef.current = null;
+      }
+      setTextWebLookupStatus(null);
+      return;
+    }
+    if (voiceWebLookupClearTimerRef.current !== null) {
+      window.clearTimeout(voiceWebLookupClearTimerRef.current);
+      voiceWebLookupClearTimerRef.current = null;
+    }
+    setVoiceWebLookupStatus(null);
+  }, []);
+
+  const setWebLookupStatus = useCallback(
+    (
+      mode: "text" | "voice",
+      status: WebLookupStatus | "idle",
+    ) => {
+      if (status === "idle") {
+        clearWebLookupStatus(mode);
+        return;
+      }
+
+      if (mode === "text") {
+        if (textWebLookupClearTimerRef.current !== null) {
+          window.clearTimeout(textWebLookupClearTimerRef.current);
+          textWebLookupClearTimerRef.current = null;
+        }
+        setTextWebLookupStatus(status);
+        if (status === "grounded") {
+          textWebLookupClearTimerRef.current = window.setTimeout(() => {
+            setTextWebLookupStatus(null);
+            textWebLookupClearTimerRef.current = null;
+          }, 3600);
+        }
+        return;
+      }
+
+      if (voiceWebLookupClearTimerRef.current !== null) {
+        window.clearTimeout(voiceWebLookupClearTimerRef.current);
+        voiceWebLookupClearTimerRef.current = null;
+      }
+      setVoiceWebLookupStatus(status);
+      if (status === "grounded") {
+        voiceWebLookupClearTimerRef.current = window.setTimeout(() => {
+          setVoiceWebLookupStatus(null);
+          voiceWebLookupClearTimerRef.current = null;
+        }, 3600);
+      }
+    },
+    [clearWebLookupStatus],
+  );
+
+  useEffect(() => {
+    return () => {
+      if (textWebLookupClearTimerRef.current !== null) {
+        window.clearTimeout(textWebLookupClearTimerRef.current);
+      }
+      if (voiceWebLookupClearTimerRef.current !== null) {
+        window.clearTimeout(voiceWebLookupClearTimerRef.current);
+      }
+    };
+  }, []);
 
   const getConversationMessagesKey = (conversationId: string) =>
     [`/api/conversations/${conversationId}/messages`];
@@ -7426,6 +7562,11 @@ function App() {
         return;
       }
 
+      if (event.type === "web_search") {
+        setWebLookupStatus(event.mode ?? "text", event.status);
+        return;
+      }
+
       if (event.type === "task_created") {
         activeTaskSummary = event.task;
         upsertLiveTaskSnapshot({
@@ -7667,6 +7808,10 @@ function App() {
         clearPendingPartDeltaFlush();
         flushPendingPartDeltas();
         finalized = true;
+        setWebLookupStatus(
+          "text",
+          event.googleSearchGroundingUsed ? "grounded" : "idle",
+        );
         const assistantMessagesRaw =
           event.assistantMessages && event.assistantMessages.length > 0
             ? event.assistantMessages
@@ -7820,6 +7965,7 @@ function App() {
       }
 
       if (event.type === "error") {
+        setWebLookupStatus("text", "idle");
         clearPendingPartDeltaFlush();
         flushPendingPartDeltas();
         const err = new Error(event.message);
@@ -7885,6 +8031,7 @@ function App() {
       userMessage: MessageData;
       assistantMessage: MessageData;
       assistantMessages?: MessageData[];
+      googleSearchGroundingUsed?: boolean;
     };
 
     const assistantMessagesRaw =
@@ -7901,6 +8048,10 @@ function App() {
         params.optimisticAssistantTurnId,
         assistantMessages,
       ),
+    );
+    setWebLookupStatus(
+      "text",
+      payload.googleSearchGroundingUsed ? "grounded" : "idle",
     );
   };
 
@@ -7932,6 +8083,7 @@ function App() {
     }
 
     setComposerError(null);
+    setWebLookupStatus("text", "idle");
     isSendingMessageRef.current = true;
     setIsSendingMessage(true);
 
@@ -8093,6 +8245,7 @@ function App() {
     liveStartNonceRef.current += 1;
     const runId = liveRunIdRef.current;
     pauseCameraUsageTracking();
+    setWebLookupStatus("voice", "idle");
 
     logLiveTrace("live.stop.requested", {
       runId,
@@ -8157,6 +8310,7 @@ function App() {
     const runId = createLocalId("live");
     liveRunIdRef.current = runId;
     setLiveError(null);
+    setWebLookupStatus("voice", "idle");
     setIsLiveConnecting(true);
 
     let preAcquiredMicStream: MediaStream | null = null;
@@ -8279,6 +8433,9 @@ function App() {
             text,
           });
         },
+        onWebSearch: ({ status }) => {
+          setWebLookupStatus("voice", status);
+        },
         onError: (error) => {
           console.error("Gemini Live session error:", {
             runId,
@@ -8288,6 +8445,7 @@ function App() {
         },
         onClosed: (reason) => {
           pauseCameraUsageTracking();
+          setWebLookupStatus("voice", "idle");
           logLiveTrace("live.video.session_closed", {
             runId,
             reason: reason ?? "unknown",
@@ -8333,6 +8491,8 @@ function App() {
         ephemeralToken: tokenPayload.ephemeralToken,
         model: tokenPayload.model,
         preAcquiredMicStream: preAcquiredMicStream ?? undefined,
+        googleSearchGroundingEnabled:
+          tokenPayload.configSummary?.googleSearchGroundingEnabled ?? false,
       });
 
       if (startNonce !== liveStartNonceRef.current) {
@@ -8729,6 +8889,7 @@ function App() {
               isStreamingReply={isSendingMessage}
               persona={persona}
               assistantAvatarSrc={resolvedAssistantAvatar}
+              webLookupStatus={textWebLookupStatus}
               mode={mode}
               userProfileImage={resolvedProfileImage}
               onOpenArtifact={handleOpenArtifact}
@@ -8761,6 +8922,7 @@ function App() {
             videoStream={videoStream}
             isVideoTransitioning={isVideoTransitioning}
             cameraFacingMode={cameraFacingMode}
+            webLookupStatus={voiceWebLookupStatus}
           />
 
           <AnimatePresence>

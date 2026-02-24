@@ -9523,6 +9523,13 @@ export async function registerRoutes(
         model,
         googleSearchGroundingUsed,
       });
+      if (googleSearchGroundingUsed) {
+        writeEvent({
+          type: "web_search",
+          mode: "text",
+          status: "searching",
+        });
+      }
 
       const maxMultipartParts = ENABLE_MULTIPART_TEXT ? 3 : 1;
       const streamTurnId = randomUUID();
@@ -9827,6 +9834,14 @@ export async function registerRoutes(
         syntheticPartCount,
         elapsedMs: elapsedMs(startedAt),
       });
+
+      if (googleSearchGroundingUsed) {
+        writeEvent({
+          type: "web_search",
+          mode: "text",
+          status: "grounded",
+        });
+      }
 
       writeEvent({
         type: "final",
