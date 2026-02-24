@@ -464,7 +464,10 @@ export class GeminiLiveVoiceSession {
     this.audioNoiseGateFailOpenFramesRemaining = 0;
     this.assistantTurnActive = false;
     this.assistantPlaybackTailUntilMs = 0;
-    this.liveGoogleSearchEnabled = Boolean(params.googleSearchGroundingEnabled);
+    const googleSearchGroundingEnabled = Boolean(
+      params.googleSearchGroundingEnabled,
+    );
+    this.liveGoogleSearchEnabled = googleSearchGroundingEnabled;
     this.pendingWebSearchTurn = false;
     this.webSearchGroundedThisTurn = false;
 
@@ -479,6 +482,7 @@ export class GeminiLiveVoiceSession {
         responseModalities: [Modality.AUDIO],
         inputAudioTranscription: {},
         outputAudioTranscription: {},
+        tools: googleSearchGroundingEnabled ? [{ googleSearch: {} }] : undefined,
       },
       callbacks: {
         onopen: () => {
@@ -487,7 +491,10 @@ export class GeminiLiveVoiceSession {
             clearTimeout(timeoutId);
             timeoutId = undefined;
           }
-          this.debug("live.session.open", { model: params.model });
+          this.debug("live.session.open", {
+            model: params.model,
+            googleSearchGroundingEnabled,
+          });
         },
         onmessage: (message) => {
           if (!timedOut) this.handleServerMessage(message);
@@ -981,13 +988,42 @@ export class GeminiLiveVoiceSession {
 
   private handleServerMessage(message: LiveServerMessage): void {
     const serverContent = message.serverContent;
-    if (!serverContent) return;
+    const hasToolCall = Boolean(
+      (
+        message as LiveServerMessage & {
+          toolCall?: unknown;
+        }
+      ).toolCall,
+    );
+    if (!serverContent) {
+      if (
+        this.liveGoogleSearchEnabled &&
+        hasToolCall &&
+        this.pendingWebSearchTurn &&
+        !this.webSearchGroundedThisTurn
+      ) {
+        this.webSearchGroundedThisTurn = true;
+        this.pendingWebSearchTurn = false;
+        this.emitWebSearchStatus("grounded");
+        this.debug("live.web_search.grounded", {
+          source: "tool_call",
+        });
+      }
+      return;
+    }
     const hasGroundingMetadata = Boolean(
       (
         serverContent as typeof serverContent & {
           groundingMetadata?: unknown;
         }
       ).groundingMetadata,
+    );
+    const hasUrlContextMetadata = Boolean(
+      (
+        serverContent as typeof serverContent & {
+          urlContextMetadata?: unknown;
+        }
+      ).urlContextMetadata,
     );
 
     const modelParts = serverContent.modelTurn?.parts ?? [];
@@ -1010,18 +1046,26 @@ export class GeminiLiveVoiceSession {
         hasInputTranscription: Boolean(serverContent.inputTranscription?.text),
         hasOutputTranscription: Boolean(serverContent.outputTranscription?.text),
         hasGroundingMetadata,
+        hasUrlContextMetadata,
+        hasToolCall,
       });
     }
 
     if (
       this.liveGoogleSearchEnabled &&
-      hasGroundingMetadata &&
+      (hasGroundingMetadata || hasUrlContextMetadata || hasToolCall) &&
       !this.webSearchGroundedThisTurn
     ) {
       this.webSearchGroundedThisTurn = true;
       this.pendingWebSearchTurn = false;
       this.emitWebSearchStatus("grounded");
-      this.debug("live.web_search.grounded");
+      this.debug("live.web_search.grounded", {
+        source: hasGroundingMetadata
+          ? "grounding_metadata"
+          : hasUrlContextMetadata
+            ? "url_context_metadata"
+            : "tool_call",
+      });
     }
 
     if (audioPartCount > 0 || Boolean(serverContent.outputTranscription?.text)) {
