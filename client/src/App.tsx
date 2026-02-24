@@ -1341,15 +1341,21 @@ const TRANSCRIPT_DEDUPE_WINDOW_MS = 2500;
 const TRANSCRIPT_DEDUPE_PRUNE_MS = 60000;
 const ASSISTANT_NAME: Persona = "Zee";
 const DEFAULT_LIVE_VOICE: LiveVoiceName = "Aoede";
+import voiceAvatarAoede from "./assets/images/voice-aoede.png";
+import voiceAvatarKore from "./assets/images/voice-kore.png";
+import voiceAvatarCharon from "./assets/images/voice-charon.png";
+import voiceAvatarFenrir from "./assets/images/voice-fenrir.png";
+
 const LIVE_VOICE_OPTIONS: Array<{
   id: LiveVoiceName;
   label: string;
   style: "feminine" | "masculine";
+  avatar: string;
 }> = [
-  { id: "Aoede", label: "Aoede", style: "feminine" },
-  { id: "Kore", label: "Kore", style: "feminine" },
-  { id: "Charon", label: "Charon", style: "masculine" },
-  { id: "Fenrir", label: "Fenrir", style: "masculine" },
+  { id: "Aoede", label: "Aoede", style: "feminine", avatar: voiceAvatarAoede },
+  { id: "Kore", label: "Kore", style: "feminine", avatar: voiceAvatarKore },
+  { id: "Charon", label: "Charon", style: "masculine", avatar: voiceAvatarCharon },
+  { id: "Fenrir", label: "Fenrir", style: "masculine", avatar: voiceAvatarFenrir },
 ];
 
 function isLiveVoiceName(value: unknown): value is LiveVoiceName {
@@ -3562,22 +3568,23 @@ const SharedHeader = ({
               <DropdownMenuItem
                 key={voice.id}
                 onClick={() => setSelectedVoice(voice.id)}
-                className="gap-2 p-3 font-medium cursor-pointer"
+                className="gap-2.5 p-3 font-medium cursor-pointer"
                 data-testid={`button-voice-${voice.id.toLowerCase()}`}
               >
                 <div
-                  className="w-7 h-7 rounded-full flex items-center justify-center text-[10px] font-bold border"
+                  className="w-8 h-8 rounded-full overflow-hidden flex-shrink-0 border-2"
                   style={{
-                    backgroundColor: "var(--app-soft-card-bg)",
-                    color: voice.style === "feminine" ? "var(--app-accent)" : "var(--app-muted)",
-                    borderColor: "var(--app-soft-card-border)",
-                    boxShadow:
+                    borderColor:
                       selectedVoice === voice.id
-                        ? "0 0 0 1px var(--app-soft-card-border)"
-                        : undefined,
+                        ? "var(--app-accent)"
+                        : "var(--app-soft-card-border)",
                   }}
                 >
-                  {voice.id.slice(0, 1)}
+                  <img
+                    src={voice.avatar}
+                    alt={voice.label}
+                    className="w-full h-full object-cover"
+                  />
                 </div>
                 <div className="flex items-center gap-2">
                   <span>{voice.label}</span>
