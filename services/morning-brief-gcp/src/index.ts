@@ -22,6 +22,8 @@ const defaultMaxThreads = Math.max(
       10,
   ),
 );
+const MARKET_SNAPSHOT_UNAVAILABLE = "Market snapshot unavailable right now.";
+const NEWS_RETRY_MIN_HEADLINES = 3;
 
 function getGeminiClient(): GoogleGenAI {
   const apiKey = process.env.GEMINI_API_KEY?.trim();
@@ -150,6 +152,174 @@ async function repairBriefJson(params: {
   });
 
   return parseJsonFromText(repaired.text ?? "");
+}
+
+interface HeadlineItem {
+  title: string;
+  summary: string;
+  sourceUrl: string | null;
+  publishedAt: string | null;
+}
+
+interface NewsCandidate {
+  headlineItems: HeadlineItem[];
+  marketSnapshot: string;
+  citations: string[];
+  usedJsonRepair: boolean;
+}
+
+function buildNewsPrompt(params: {
+  timezone: string;
+  maxItems: number;
+  minItems: number;
+  strictEvidence: boolean;
+}): string {
+  const lines = [
+    "Build a concise morning briefing using current web sources.",
+    `Timezone: ${params.timezone}`,
+    "Return strict JSON only with this shape:",
+    '{"headlineItems":[{"title":"...","summary":"...","sourceUrl":"https://...","publishedAt":"ISO-8601 or null"}],"marketSnapshot":"...","citations":["https://..."]}',
+    "Rules:",
+    `- Return between ${params.minItems} and ${params.maxItems} high-signal headlines.`,
+    "- Focus on global, business, and technology events relevant for a daily briefing.",
+    "- Keep marketSnapshot under 75 words and include major index direction.",
+    "- If uncertain, state uncertainty clearly and do not invent facts.",
+  ];
+
+  if (params.strictEvidence) {
+    lines.push(
+      "- Every headline MUST include sourceUrl.",
+      "- citations MUST contain at least 3 valid URLs.",
+      "- Prefer highly reputable sources (major publications, official releases).",
+    );
+  }
+
+  return lines.join("\n");
+}
+
+function dedupeStrings(values: string[]): string[] {
+  return [...new Set(values)];
+}
+
+function asNewsCandidate(params: {
+  payload: unknown;
+  response: unknown;
+  maxItems: number;
+}): NewsCandidate {
+  const record =
+    params.payload &&
+    typeof params.payload === "object" &&
+    !Array.isArray(params.payload)
+      ? (params.payload as Record<string, unknown>)
+      : {};
+
+  const headlineItems = asHeadlineItems(record.headlineItems).slice(0, params.maxItems);
+  const marketSnapshot =
+    typeof record.marketSnapshot === "string" && record.marketSnapshot.trim()
+      ? record.marketSnapshot.trim()
+      : MARKET_SNAPSHOT_UNAVAILABLE;
+
+  const citations = dedupeStrings([
+    ...asStringArray(record.citations),
+    ...headlineItems
+      .map((item) => item.sourceUrl)
+      .filter((value): value is string => Boolean(value)),
+    ...extractGroundingUrls(params.response),
+  ]);
+
+  return {
+    headlineItems,
+    marketSnapshot,
+    citations,
+    usedJsonRepair: false,
+  };
+}
+
+async function generateNewsCandidate(params: {
+  ai: GoogleGenAI;
+  model: string;
+  prompt: string;
+  maxItems: number;
+}): Promise<NewsCandidate> {
+  const response = await params.ai.models.generateContent({
+    model: params.model,
+    contents: [{ role: "user", parts: [{ text: params.prompt }] }],
+    config: {
+      temperature: 0.2,
+      maxOutputTokens: 1400,
+      tools: [{ googleSearch: {} }],
+    },
+  });
+
+  let parsedPayload = parseJsonFromText(response.text ?? "");
+  let usedJsonRepair = false;
+  if (!parsedPayload) {
+    parsedPayload = await repairBriefJson({
+      ai: params.ai,
+      model: params.model,
+      rawText: response.text ?? "",
+    });
+    usedJsonRepair = Boolean(parsedPayload);
+  }
+
+  const candidate = asNewsCandidate({
+    payload: parsedPayload,
+    response,
+    maxItems: params.maxItems,
+  });
+  candidate.usedJsonRepair = usedJsonRepair;
+  return candidate;
+}
+
+function scoreNewsCandidate(candidate: NewsCandidate): number {
+  const headlineScore = candidate.headlineItems.length * 10;
+  const citationScore = Math.min(candidate.citations.length, 6) * 3;
+  const marketScore =
+    candidate.marketSnapshot !== MARKET_SNAPSHOT_UNAVAILABLE ? 6 : 0;
+  return headlineScore + citationScore + marketScore;
+}
+
+function sanitizeTextOutput(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) return "";
+  const withoutFence = trimmed
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/```$/i, "")
+    .trim();
+  return withoutFence.replace(/\s+/g, " ").trim();
+}
+
+async function recoverMarketSnapshot(params: {
+  ai: GoogleGenAI;
+  model: string;
+  timezone: string;
+}): Promise<string | null> {
+  const prompt = [
+    "Create a morning market snapshot using current web sources.",
+    `Timezone: ${params.timezone}`,
+    "Requirements:",
+    "- 1-2 sentences, max 75 words.",
+    "- Mention direction of at least two major US indices (S&P 500, Nasdaq, Dow) if available.",
+    "- Mention one macro signal (bond yields, oil, or dollar) if available.",
+    "- Plain text only, no markdown.",
+    "- If data is unavailable, say that clearly without making up values.",
+  ].join("\n");
+
+  const response = await params.ai.models.generateContent({
+    model: params.model,
+    contents: [{ role: "user", parts: [{ text: prompt }] }],
+    config: {
+      temperature: 0.1,
+      maxOutputTokens: 220,
+      tools: [{ googleSearch: {} }],
+    },
+  });
+
+  const text = sanitizeTextOutput(response.text ?? "");
+  if (!text || /^market snapshot unavailable/i.test(text)) {
+    return null;
+  }
+  return text;
 }
 
 function asHeadlineItems(value: unknown): Array<{
@@ -303,77 +473,78 @@ app.post("/v1/brief/news", async (req, res) => {
 
   try {
     const maxItems = parsed.data.maxItems ?? defaultNewsItems;
+    const minRequiredHeadlines = Math.min(maxItems, NEWS_RETRY_MIN_HEADLINES);
     const ai = getGeminiClient();
     const model = getModel();
-
-    const prompt = [
-      "Build a concise morning briefing using current web sources.",
-      `Timezone: ${parsed.data.timezone}`,
-      "Return strict JSON only with this shape:",
-      '{"headlineItems":[{"title":"...","summary":"...","sourceUrl":"https://...","publishedAt":"ISO-8601 or null"}],"marketSnapshot":"...","citations":["https://..."]}',
-      "Rules:",
-      `- Include exactly up to ${maxItems} high-signal headlines.`,
-      "- Focus on global, business, and technology events relevant for a daily briefing.",
-      "- Keep marketSnapshot under 75 words and include major index direction.",
-      "- If uncertain, state uncertainty clearly and do not invent facts.",
-    ].join("\n");
-
-    const response = await ai.models.generateContent({
+    const partialFailures = new Set<string>();
+    let selectedCandidate = await generateNewsCandidate({
+      ai,
       model,
-      contents: [{ role: "user", parts: [{ text: prompt }] }],
-      config: {
-        temperature: 0.2,
-        maxOutputTokens: 1400,
-        tools: [{ googleSearch: {} }],
-      },
+      maxItems,
+      prompt: buildNewsPrompt({
+        timezone: parsed.data.timezone,
+        maxItems,
+        minItems: minRequiredHeadlines,
+        strictEvidence: false,
+      }),
     });
+    if (selectedCandidate.usedJsonRepair) {
+      partialFailures.add("brief_json_repair_used");
+    }
 
-    let parsedPayload = parseJsonFromText(response.text ?? "");
-    const partialFailures: string[] = [];
-    if (!parsedPayload) {
-      parsedPayload = await repairBriefJson({
+    const needsRetry =
+      selectedCandidate.headlineItems.length < minRequiredHeadlines ||
+      selectedCandidate.citations.length === 0;
+
+    if (needsRetry) {
+      const retryCandidate = await generateNewsCandidate({
         ai,
         model,
-        rawText: response.text ?? "",
+        maxItems,
+        prompt: buildNewsPrompt({
+          timezone: parsed.data.timezone,
+          maxItems,
+          minItems: minRequiredHeadlines,
+          strictEvidence: true,
+        }),
       });
-      if (!parsedPayload) {
-        partialFailures.push("brief_json_repair_failed");
+      if (retryCandidate.usedJsonRepair) {
+        partialFailures.add("brief_json_repair_used");
+      }
+      if (scoreNewsCandidate(retryCandidate) >= scoreNewsCandidate(selectedCandidate)) {
+        selectedCandidate = retryCandidate;
       }
     }
-    const record =
-      parsedPayload &&
-      typeof parsedPayload === "object" &&
-      !Array.isArray(parsedPayload)
-        ? (parsedPayload as Record<string, unknown>)
-        : {};
 
-    const headlineItems = asHeadlineItems(record.headlineItems).slice(0, maxItems);
-    const marketSnapshot =
-      typeof record.marketSnapshot === "string" && record.marketSnapshot.trim()
-        ? record.marketSnapshot.trim()
-        : "Market snapshot unavailable right now.";
+    if (selectedCandidate.marketSnapshot === MARKET_SNAPSHOT_UNAVAILABLE) {
+      const recoveredSnapshot = await recoverMarketSnapshot({
+        ai,
+        model,
+        timezone: parsed.data.timezone,
+      });
+      if (recoveredSnapshot) {
+        selectedCandidate.marketSnapshot = recoveredSnapshot;
+      } else {
+        partialFailures.add("brief_market_snapshot_unavailable");
+      }
+    }
 
-    const citations = Array.from(
-      new Set([
-        ...asStringArray(record.citations),
-        ...headlineItems
-          .map((item) => item.sourceUrl)
-          .filter((value): value is string => Boolean(value)),
-        ...extractGroundingUrls(response),
-      ]),
-    );
-
-    if (headlineItems.length === 0) {
-      partialFailures.push("brief_grounding_unavailable");
+    if (selectedCandidate.headlineItems.length === 0) {
+      partialFailures.add("brief_grounding_unavailable");
+    } else if (selectedCandidate.headlineItems.length < minRequiredHeadlines) {
+      partialFailures.add("brief_grounding_low_coverage");
+    }
+    if (selectedCandidate.citations.length === 0) {
+      partialFailures.add("brief_citation_unavailable");
     }
 
     return res.status(200).json({
-      headlineItems,
-      marketSnapshot,
-      citations,
+      headlineItems: selectedCandidate.headlineItems,
+      marketSnapshot: selectedCandidate.marketSnapshot,
+      citations: selectedCandidate.citations,
       generatedAt: new Date().toISOString(),
       dataFreshnessSeconds: 0,
-      partialFailures,
+      partialFailures: [...partialFailures],
       traceId: parsed.data.traceId ?? null,
       briefRunId: parsed.data.briefRunId ?? null,
     });
