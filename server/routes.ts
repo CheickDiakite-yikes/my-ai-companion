@@ -8031,6 +8031,72 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/debug/brief-test", async (req: any, res) => {
+    if (process.env.NODE_ENV !== "development") {
+      return res.status(403).json({ message: "Only available in development" });
+    }
+    const startedAt = Date.now();
+    try {
+      const timezone = resolveMorningBriefTimeZone(
+        typeof req.query.tz === "string" ? req.query.tz : null,
+      );
+      const localDate = resolveMorningBriefLocalDate(timezone);
+      const briefRunId = randomUUID();
+      const events: Array<{ ts: string; event: string; data?: unknown }> = [];
+
+      const debugLogger: (
+        event: string,
+        payload?: Record<string, unknown>,
+      ) => void = (event, payload) => {
+        events.push({
+          ts: new Date().toISOString(),
+          event,
+          data: payload,
+        });
+      };
+
+      const userId = req.session?.userId ?? "debug-test-user";
+      const execution = await executeMorningBrief({
+        userId,
+        traceId: getTraceId(req),
+        briefRunId,
+        timezone,
+        localDate,
+        includeInbox: false,
+        refresh: true,
+        logger: debugLogger,
+      });
+
+      return res.status(200).json({
+        traceId: getTraceId(req),
+        briefRunId,
+        timezone,
+        localDate,
+        elapsedMs: elapsedMs(startedAt),
+        mode: execution.mode,
+        cacheHit: execution.cacheHit,
+        partialFailureCodes: execution.partialFailureCodes,
+        headlineCount: execution.result.headlineItems.length,
+        headlineItems: execution.result.headlineItems,
+        marketSnapshot: execution.result.marketSnapshot,
+        citations: execution.result.citations,
+        inboxHighlights: execution.result.inboxHighlights,
+        events,
+      });
+    } catch (error) {
+      traceError(req, "brief.debug.test.failed", error, {
+        elapsedMs: elapsedMs(startedAt),
+      });
+      return res.status(500).json({
+        message: "Brief test failed",
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack?.slice(0, 500) : undefined,
+        traceId: getTraceId(req),
+        elapsedMs: elapsedMs(startedAt),
+      });
+    }
+  });
+
   app.post(
     "/api/live/tool-response",
     isAuthenticated,

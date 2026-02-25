@@ -11,6 +11,18 @@ type BriefEventLogger = (
   payload?: Record<string, unknown>,
 ) => void;
 
+function briefLog(
+  level: "INFO" | "WARN" | "ERROR",
+  event: string,
+  data?: Record<string, unknown>,
+) {
+  const prefix =
+    level === "ERROR" ? "❌" : level === "WARN" ? "⚠️" : "📰";
+  const ts = new Date().toISOString();
+  const payload = data ? ` ${JSON.stringify(data)}` : "";
+  console.log(`${prefix} [BRIEF ${level}] [${ts}] ${event}${payload}`);
+}
+
 export interface MorningBriefIntent {
   explicit: boolean;
   greetingHint: boolean;
@@ -60,8 +72,8 @@ const MAX_NEWS_ITEMS = Math.min(
 );
 const GCP_TIMEOUT_MS = Math.max(
   1_500,
-  Number.parseInt(process.env.MORNING_BRIEF_GCP_TIMEOUT_MS ?? "30000", 10) ||
-    30_000,
+  Number.parseInt(process.env.MORNING_BRIEF_GCP_TIMEOUT_MS ?? "12000", 10) ||
+    12_000,
 );
 const GCP_BASE_URL = (process.env.MORNING_BRIEF_GCP_BASE_URL ?? "").trim();
 
@@ -149,26 +161,102 @@ export function hasCachedMorningBrief(input: {
   return Boolean(cached && cached.expiresAt > Date.now());
 }
 
+function repairJson(raw: string): string {
+  let s = raw.trim();
+  s = s.replace(/,\s*([}\]])/g, "$1");
+  s = s.replace(/([}\]"0-9])\s*\n\s*"/g, '$1,"');
+  s = s.replace(/([}\]"0-9])\s*\n\s*\{/g, "$1,{");
+  const openBraces = (s.match(/\{/g) || []).length;
+  const closeBraces = (s.match(/\}/g) || []).length;
+  const openBrackets = (s.match(/\[/g) || []).length;
+  const closeBrackets = (s.match(/\]/g) || []).length;
+  for (let i = 0; i < openBrackets - closeBrackets; i++) s += "]";
+  for (let i = 0; i < openBraces - closeBraces; i++) s += "}";
+  return s;
+}
+
 function parseJsonFromText(raw: string): unknown {
   const trimmed = raw.trim();
   if (!trimmed) return null;
 
-  if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
-    return JSON.parse(trimmed);
-  }
+  let jsonCandidate = trimmed;
 
   const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
   if (fenced?.[1]) {
-    return JSON.parse(fenced[1].trim());
+    jsonCandidate = fenced[1].trim();
+  } else if (!trimmed.startsWith("{")) {
+    const firstBrace = trimmed.indexOf("{");
+    const lastBrace = trimmed.lastIndexOf("}");
+    if (firstBrace >= 0 && lastBrace > firstBrace) {
+      jsonCandidate = trimmed.slice(firstBrace, lastBrace + 1);
+    } else {
+      return null;
+    }
   }
 
-  const firstBrace = trimmed.indexOf("{");
-  const lastBrace = trimmed.lastIndexOf("}");
-  if (firstBrace >= 0 && lastBrace > firstBrace) {
-    return JSON.parse(trimmed.slice(firstBrace, lastBrace + 1));
+  try {
+    return JSON.parse(jsonCandidate);
+  } catch {
+    briefLog("WARN", "parseJsonFromText.strict_failed_trying_repair", {
+      length: jsonCandidate.length,
+    });
+  }
+
+  try {
+    return JSON.parse(repairJson(jsonCandidate));
+  } catch {
+    briefLog("WARN", "parseJsonFromText.repair_failed_trying_truncate");
+  }
+
+  const lastGoodBrace = findLastCompleteObject(jsonCandidate);
+  if (lastGoodBrace) {
+    try {
+      return JSON.parse(lastGoodBrace);
+    } catch {
+      briefLog("ERROR", "parseJsonFromText.all_strategies_failed");
+    }
   }
 
   return null;
+}
+
+function findLastCompleteObject(raw: string): string | null {
+  const headlineArrayMatch = raw.match(/"headlineItems"\s*:\s*\[/);
+  if (!headlineArrayMatch) return null;
+
+  const arrayStart = raw.indexOf("[", headlineArrayMatch.index);
+  if (arrayStart < 0) return null;
+
+  let depth = 0;
+  let lastCompleteItemEnd = -1;
+  for (let i = arrayStart; i < raw.length; i++) {
+    const ch = raw[i];
+    if (ch === "[" || ch === "{") depth++;
+    else if (ch === "]" || ch === "}") {
+      depth--;
+      if (depth === 1 && ch === "}") {
+        lastCompleteItemEnd = i;
+      }
+      if (depth === 0 && ch === "]") {
+        lastCompleteItemEnd = i;
+        break;
+      }
+    }
+  }
+
+  if (lastCompleteItemEnd < 0) return null;
+
+  const truncated = raw.slice(0, lastCompleteItemEnd + 1);
+  const openBrackets = (truncated.match(/\[/g) || []).length;
+  const closeBrackets = (truncated.match(/\]/g) || []).length;
+  const openBraces = (truncated.match(/\{/g) || []).length;
+  const closeBraces = (truncated.match(/\}/g) || []).length;
+
+  let suffix = "";
+  for (let i = 0; i < openBrackets - closeBrackets; i++) suffix += "]";
+  for (let i = 0; i < openBraces - closeBraces; i++) suffix += "}";
+
+  return truncated + suffix;
 }
 
 function toHeadlineItems(value: unknown): MorningBriefHeadlineItem[] {
@@ -322,6 +410,12 @@ async function fetchNewsAndMarkets(input: {
   citations: string[];
   partialFailures: MorningBriefFailureCode[];
 }> {
+  briefLog("INFO", "news.fetch.started", {
+    timezone: input.timezone,
+    gcpBaseUrl: GCP_BASE_URL ? `${GCP_BASE_URL.slice(0, 40)}...` : "(none)",
+    gcpTimeoutMs: GCP_TIMEOUT_MS,
+    briefRunId: input.briefRunId,
+  });
   input.logger?.("brief.news.fetch.started", {
     timezone: input.timezone,
   });
@@ -329,7 +423,12 @@ async function fetchNewsAndMarkets(input: {
   const gatewayFailureCodes: MorningBriefFailureCode[] = [];
 
   if (GCP_BASE_URL) {
+    const gcpStart = Date.now();
     try {
+      briefLog("INFO", "news.gcp.calling", {
+        url: `${GCP_BASE_URL}/v1/brief/news`,
+        timeoutMs: GCP_TIMEOUT_MS,
+      });
       const gatewayResponse = await callGateway<{
         headlineItems?: unknown;
         marketSnapshot?: unknown;
@@ -345,6 +444,16 @@ async function fetchNewsAndMarkets(input: {
         },
         GCP_TIMEOUT_MS,
       );
+
+      const gcpElapsed = Date.now() - gcpStart;
+      briefLog("INFO", "news.gcp.response_received", {
+        elapsedMs: gcpElapsed,
+        responseKeys: Object.keys(gatewayResponse),
+        headlineItemsType: typeof gatewayResponse.headlineItems,
+        headlineItemsLength: Array.isArray(gatewayResponse.headlineItems) ? gatewayResponse.headlineItems.length : "not_array",
+        marketSnapshotType: typeof gatewayResponse.marketSnapshot,
+        marketSnapshotPreview: typeof gatewayResponse.marketSnapshot === "string" ? gatewayResponse.marketSnapshot.slice(0, 100) : String(gatewayResponse.marketSnapshot),
+      });
 
       const headlineItems = toHeadlineItems(gatewayResponse.headlineItems);
       const marketSnapshot =
@@ -369,6 +478,12 @@ async function fetchNewsAndMarkets(input: {
         citations.length > 0 ||
         marketSnapshot.length > 0;
       if (hasUsableCoverage) {
+        briefLog("INFO", "news.gcp.success", {
+          headlineCount: headlineItems.length,
+          marketSnapshotLength: marketSnapshot.length,
+          citationCount: citations.length,
+          elapsedMs: gcpElapsed,
+        });
         return {
           headlineItems,
           marketSnapshot:
@@ -378,20 +493,43 @@ async function fetchNewsAndMarkets(input: {
         };
       }
 
+      briefLog("WARN", "news.gcp.empty_coverage", {
+        elapsedMs: gcpElapsed,
+        headlineCount: headlineItems.length,
+        marketSnapshotLength: marketSnapshot.length,
+        rawResponsePreview: JSON.stringify(gatewayResponse).slice(0, 300),
+      });
       input.logger?.("brief.news.fetch.failed", {
         via: "gcp_gateway",
         reason: "empty_coverage",
       });
       gatewayFailureCodes.push("brief_upstream_failed");
     } catch (error) {
+      const gcpElapsed = Date.now() - gcpStart;
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      const isAbort = error instanceof Error && error.name === "AbortError";
+      briefLog("ERROR", "news.gcp.failed", {
+        elapsedMs: gcpElapsed,
+        error: errorMsg,
+        errorName: error instanceof Error ? error.name : "unknown",
+        isTimeout: isAbort,
+        timeoutConfigMs: GCP_TIMEOUT_MS,
+      });
       input.logger?.("brief.news.fetch.failed", {
         via: "gcp_gateway",
-        message: error instanceof Error ? error.message : String(error),
+        message: errorMsg,
       });
       gatewayFailureCodes.push("brief_gcp_upstream_timeout");
     }
+  } else {
+    briefLog("INFO", "news.gcp.skipped", { reason: "no_GCP_BASE_URL" });
   }
 
+  briefLog("INFO", "news.gemini_fallback.starting", {
+    gatewayFailures: gatewayFailureCodes,
+  });
+
+  const fallbackStart = Date.now();
   try {
     const systemInstruction = [
       "You are a structured data extraction service.",
@@ -403,19 +541,31 @@ async function fetchNewsAndMarkets(input: {
     const userPrompt = [
       `Search the web for today's top news headlines and current stock market status.`,
       `Timezone: ${input.timezone}`,
-      `Return JSON with this exact structure:`,
-      `{"headlineItems":[{"title":"headline text","summary":"1-2 sentence summary","sourceUrl":"https://source-url-or-null","publishedAt":"ISO-date-or-null"}],"marketSnapshot":"brief market summary under 75 words with major index direction","citations":["https://source-urls"]}`,
+      `Return JSON with this exact structure (marketSnapshot MUST come before headlineItems):`,
+      `{"marketSnapshot":"brief market summary under 75 words with S&P 500 Dow Nasdaq direction","citations":["https://source-urls"],"headlineItems":[{"title":"headline text","summary":"1-2 sentence summary","sourceUrl":"url-or-null","publishedAt":"ISO-date-or-null"}]}`,
       `Rules:`,
-      `- Include up to ${MAX_NEWS_ITEMS} top current headlines from today.`,
+      `- marketSnapshot field FIRST with actual current index values/direction.`,
+      `- Then citations array with source URLs.`,
+      `- Then headlineItems with up to ${MAX_NEWS_ITEMS} top headlines from today.`,
       "- Prefer high-signal global + business + technology coverage.",
-      "- Keep marketSnapshot under 75 words and include major index direction (S&P 500, Dow, Nasdaq).",
+      "- Keep summaries concise (1-2 sentences max).",
       "- If a field is unknown, set sourceUrl/publishedAt to null.",
     ].join("\n");
+
+    briefLog("INFO", "news.gemini_fallback.calling_generateStructuredJson");
 
     const fallback = await generateStructuredJson({
       systemInstruction,
       userPrompt,
       enableGoogleSearchGrounding: true,
+    });
+
+    const fallbackElapsed = Date.now() - fallbackStart;
+    briefLog("INFO", "news.gemini_fallback.raw_response", {
+      elapsedMs: fallbackElapsed,
+      replyLength: fallback.text.length,
+      googleSearchGroundingUsed: fallback.googleSearchGroundingUsed,
+      replyFirst500: fallback.text.slice(0, 500),
     });
 
     input.logger?.("brief.news.fallback.raw_response", {
@@ -427,7 +577,16 @@ async function fetchNewsAndMarkets(input: {
     let parsed: unknown = null;
     try {
       parsed = parseJsonFromText(fallback.text);
+      briefLog("INFO", "news.gemini_fallback.json_parsed", {
+        parsedType: parsed === null ? "null" : typeof parsed,
+        isArray: Array.isArray(parsed),
+        keys: parsed && typeof parsed === "object" && !Array.isArray(parsed) ? Object.keys(parsed as Record<string, unknown>) : [],
+      });
     } catch (parseError) {
+      briefLog("ERROR", "news.gemini_fallback.json_parse_failed", {
+        error: parseError instanceof Error ? parseError.message : String(parseError),
+        replyFirst300: fallback.text.slice(0, 300),
+      });
       input.logger?.("brief.news.fallback.json_parse_failed", {
         error: parseError instanceof Error ? parseError.message : String(parseError),
         replyPreview: fallback.text.slice(0, 300),
@@ -443,6 +602,15 @@ async function fetchNewsAndMarkets(input: {
         ? record.marketSnapshot.trim()
         : "Market snapshot unavailable right now.";
     const citations = toStringArray(record.citations);
+
+    briefLog("INFO", "news.gemini_fallback.result", {
+      headlineCount: headlineItems.length,
+      marketSnapshotPreview: marketSnapshot.slice(0, 100),
+      citationCount: citations.length,
+      parsedKeys: Object.keys(record),
+      googleSearchGroundingUsed: fallback.googleSearchGroundingUsed,
+      totalElapsedMs: Date.now() - fallbackStart,
+    });
 
     input.logger?.("brief.news.fetch.completed", {
       via: "app_grounding_fallback",
@@ -466,9 +634,18 @@ async function fetchNewsAndMarkets(input: {
       ),
     };
   } catch (error) {
+    const fallbackElapsed = Date.now() - fallbackStart;
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    const errorStack = error instanceof Error ? error.stack?.slice(0, 500) : undefined;
+    briefLog("ERROR", "news.gemini_fallback.failed", {
+      elapsedMs: fallbackElapsed,
+      error: errorMsg,
+      errorName: error instanceof Error ? error.name : "unknown",
+      stack: errorStack,
+    });
     input.logger?.("brief.news.fetch.failed", {
       via: "app_grounding_fallback",
-      message: error instanceof Error ? error.message : String(error),
+      message: errorMsg,
     });
     return {
       headlineItems: [],
@@ -657,6 +834,7 @@ export function renderMorningBriefForChat(
 export async function executeMorningBrief(
   input: MorningBriefExecutionInput,
 ): Promise<MorningBriefExecutionResult> {
+  const overallStart = Date.now();
   const timezone = resolveMorningBriefTimeZone(input.timezone ?? null);
   const key = cacheKey({
     userId: input.userId,
@@ -665,9 +843,20 @@ export async function executeMorningBrief(
     includeInbox: input.includeInbox,
   });
 
+  briefLog("INFO", "execute.started", {
+    briefRunId: input.briefRunId,
+    userId: input.userId.slice(0, 8) + "...",
+    timezone,
+    localDate: input.localDate,
+    includeInbox: input.includeInbox,
+    refresh: input.refresh,
+    cacheKey: key,
+  });
+
   if (!input.refresh) {
     const cached = briefCache.get(key);
     if (cached && cached.expiresAt > Date.now()) {
+      briefLog("INFO", "execute.cache_hit", { key, expiresIn: cached.expiresAt - Date.now() });
       input.logger?.("brief.cache.hit", {
         key,
       });
@@ -680,6 +869,7 @@ export async function executeMorningBrief(
     }
   }
 
+  briefLog("INFO", "execute.cache_miss", { key });
   input.logger?.("brief.cache.miss", {
     key,
   });
@@ -750,9 +940,17 @@ export async function executeMorningBrief(
       partialFailures: composePayload.partialFailures,
     });
 
+  const composeVia = gatewayResult ? "gcp_gateway" : GCP_BASE_URL ? "local_fallback" : "local";
+  briefLog("INFO", "execute.compose.completed", {
+    via: composeVia,
+    headlineCount: result.headlineItems.length,
+    inboxCount: result.inboxHighlights.length,
+    partialFailures: result.partialFailures,
+  });
+
   input.logger?.("brief.compose.completed", {
     includeInbox: input.includeInbox,
-    via: gatewayResult ? "gcp_gateway" : GCP_BASE_URL ? "local_fallback" : "local",
+    via: composeVia,
     headlineCount: result.headlineItems.length,
     inboxCount: result.inboxHighlights.length,
     partialFailureCount: result.partialFailures.length,
@@ -762,10 +960,34 @@ export async function executeMorningBrief(
     ? "news_markets_inbox"
     : "news_markets_only";
 
-  briefCache.set(key, {
-    result,
+  const hasUsableContent =
+    result.headlineItems.length > 0 ||
+    (result.marketSnapshot.length > 30 &&
+      !result.marketSnapshot.includes("unavailable"));
+  if (hasUsableContent) {
+    briefCache.set(key, {
+      result,
+      mode,
+      expiresAt: Date.now() + CACHE_TTL_MS,
+    });
+    briefLog("INFO", "execute.cached", { key, ttlMs: CACHE_TTL_MS });
+  } else {
+    briefLog("WARN", "execute.not_cached", {
+      reason: "no_usable_content",
+      headlineCount: result.headlineItems.length,
+      marketSnapshotLength: result.marketSnapshot.length,
+    });
+  }
+
+  const totalElapsed = Date.now() - overallStart;
+  briefLog("INFO", "execute.completed", {
+    briefRunId: input.briefRunId,
+    totalElapsedMs: totalElapsed,
+    headlineCount: result.headlineItems.length,
+    marketSnapshotLength: result.marketSnapshot.length,
+    inboxCount: result.inboxHighlights.length,
+    partialFailures: result.partialFailures,
     mode,
-    expiresAt: Date.now() + CACHE_TTL_MS,
   });
 
   return {

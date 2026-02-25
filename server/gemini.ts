@@ -3248,6 +3248,8 @@ export async function generateStructuredJson(input: {
   const model = resolveTextModel();
   const useGrounding = input.enableGoogleSearchGrounding ?? true;
 
+  console.log(`🔧 [GEMINI STRUCTURED] model=${model} grounding=${useGrounding}`);
+
   const groundedConfig: Record<string, unknown> = {
     systemInstruction: input.systemInstruction,
     temperature: 0.3,
@@ -3264,37 +3266,49 @@ export async function generateStructuredJson(input: {
 
   let response: Awaited<ReturnType<GoogleGenAI["models"]["generateContent"]>>;
   let groundingUsed = false;
+  const callStart = Date.now();
 
   if (useGrounding) {
     try {
+      console.log(`🔧 [GEMINI STRUCTURED] calling with googleSearch grounding...`);
       response = await ai.models.generateContent({
         model,
         contents: [{ role: "user", parts: [{ text: input.userPrompt }] }],
         config: groundedConfig,
       });
       groundingUsed = true;
+      console.log(`🔧 [GEMINI STRUCTURED] grounded call succeeded in ${Date.now() - callStart}ms`);
     } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      console.log(`⚠️ [GEMINI STRUCTURED] grounded call failed: ${errorMsg}`);
       if (!shouldRetryWithoutGrounding(error)) {
+        console.log(`❌ [GEMINI STRUCTURED] not retryable, throwing`);
         throw error;
       }
+      console.log(`🔧 [GEMINI STRUCTURED] retrying with responseMimeType:json (no grounding)...`);
       response = await ai.models.generateContent({
         model,
         contents: [{ role: "user", parts: [{ text: input.userPrompt }] }],
         config: structuredConfig,
       });
+      console.log(`🔧 [GEMINI STRUCTURED] structured fallback succeeded in ${Date.now() - callStart}ms`);
     }
   } else {
+    console.log(`🔧 [GEMINI STRUCTURED] calling with responseMimeType:json (no grounding)...`);
     response = await ai.models.generateContent({
       model,
       contents: [{ role: "user", parts: [{ text: input.userPrompt }] }],
       config: structuredConfig,
     });
+    console.log(`🔧 [GEMINI STRUCTURED] structured call succeeded in ${Date.now() - callStart}ms`);
   }
 
   const text = response.text?.trim() ?? "";
   if (!text) {
+    console.log(`❌ [GEMINI STRUCTURED] empty response after ${Date.now() - callStart}ms`);
     throw new Error("Gemini returned an empty structured response");
   }
 
+  console.log(`🔧 [GEMINI STRUCTURED] response length=${text.length} grounding=${groundingUsed} first100=${text.slice(0, 100)}`);
   return { text, googleSearchGroundingUsed: groundingUsed };
 }
