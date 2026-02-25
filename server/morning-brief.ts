@@ -60,8 +60,8 @@ const MAX_NEWS_ITEMS = Math.min(
 );
 const GCP_TIMEOUT_MS = Math.max(
   1_500,
-  Number.parseInt(process.env.MORNING_BRIEF_GCP_TIMEOUT_MS ?? "12000", 10) ||
-    12_000,
+  Number.parseInt(process.env.MORNING_BRIEF_GCP_TIMEOUT_MS ?? "30000", 10) ||
+    30_000,
 );
 const GCP_BASE_URL = (process.env.MORNING_BRIEF_GCP_BASE_URL ?? "").trim();
 
@@ -394,15 +394,17 @@ async function fetchNewsAndMarkets(input: {
 
   try {
     const prompt = [
-      "Search the web and build a concise morning briefing.",
+      "IMPORTANT: You must respond with ONLY a JSON object, no conversational text before or after.",
+      "Search the web for today's top news headlines and current stock market status.",
       `Timezone: ${input.timezone}`,
-      `Return JSON only with this shape:`,
-      `{"headlineItems":[{"title":"...","summary":"...","sourceUrl":"https://...","publishedAt":"ISO or null"}],"marketSnapshot":"...","citations":["https://..."]}`,
+      `Respond with exactly this JSON structure:`,
+      `{"headlineItems":[{"title":"headline text","summary":"1-2 sentence summary","sourceUrl":"https://source-url-or-null","publishedAt":"ISO-date-or-null"}],"marketSnapshot":"brief market summary under 75 words with major index direction","citations":["https://source-urls"]}`,
       `Rules:`,
-      `- Include up to ${MAX_NEWS_ITEMS} top current headlines.`,
+      `- Include up to ${MAX_NEWS_ITEMS} top current headlines from today.`,
       "- Prefer high-signal global + business + technology coverage.",
-      "- Keep marketSnapshot under 75 words and include major index direction.",
-      "- If a field is unknown, set sourceUrl/publishedAt to null and say uncertainty clearly.",
+      "- Keep marketSnapshot under 75 words and include major index direction (S&P 500, Dow, Nasdaq).",
+      "- If a field is unknown, set sourceUrl/publishedAt to null.",
+      "- Output ONLY valid JSON. No markdown, no explanation, no greeting.",
     ].join("\n");
 
     const fallback = await generateTextReply({
@@ -412,7 +414,21 @@ async function fetchNewsAndMarkets(input: {
       clientTimeZone: input.timezone,
     });
 
-    const parsed = parseJsonFromText(fallback.replyText);
+    input.logger?.("brief.news.fallback.raw_response", {
+      replyLength: fallback.replyText.length,
+      replyPreview: fallback.replyText.slice(0, 500),
+      googleSearchGroundingUsed: fallback.googleSearchGroundingUsed,
+    });
+
+    let parsed: unknown = null;
+    try {
+      parsed = parseJsonFromText(fallback.replyText);
+    } catch (parseError) {
+      input.logger?.("brief.news.fallback.json_parse_failed", {
+        error: parseError instanceof Error ? parseError.message : String(parseError),
+        replyPreview: fallback.replyText.slice(0, 300),
+      });
+    }
     const record =
       parsed && typeof parsed === "object" && !Array.isArray(parsed)
         ? (parsed as Record<string, unknown>)
@@ -429,6 +445,7 @@ async function fetchNewsAndMarkets(input: {
       headlineCount: headlineItems.length,
       citations: citations.length,
       googleSearchGroundingUsed: fallback.googleSearchGroundingUsed,
+      parsedKeys: Object.keys(record),
     });
 
     return {
