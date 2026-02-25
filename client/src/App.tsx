@@ -256,6 +256,10 @@ interface MessageData {
   localOnly?: boolean;
 }
 
+interface SendMessageOptions {
+  ignoreAttachments?: boolean;
+}
+
 interface TraceAwareResponse {
   traceId?: string;
 }
@@ -1798,6 +1802,7 @@ const AuthPage = ({ onLogin, onRegister, loginError, registerError, isLoggingIn,
 
 const SharedFooter = ({ 
   persona, 
+  mode,
   onSendMessage,
   onSelectCameraFiles,
   onSelectGalleryFiles,
@@ -1809,7 +1814,8 @@ const SharedFooter = ({
   quotaLoading,
 }: { 
   persona: Persona, 
-  onSendMessage: (text: string) => void,
+  mode: Mode,
+  onSendMessage: (text: string, options?: SendMessageOptions) => void,
   onSelectCameraFiles: (files: FileList | null) => void;
   onSelectGalleryFiles: (files: FileList | null) => void;
   onRemoveAttachment: (localId: string) => void;
@@ -1828,6 +1834,12 @@ const SharedFooter = ({
   const hasUploadingAttachment = pendingAttachments.some(
     (item) => item.status === "uploading",
   );
+  const showMorningBriefQuickAction =
+    mode === "text" &&
+    !uploadError &&
+    pendingAttachments.length === 0 &&
+    !inputValue.trim() &&
+    !isMediaTrayOpen;
 
   const handleSend = () => {
     const trimmed = inputValue.trim();
@@ -1839,8 +1851,10 @@ const SharedFooter = ({
   };
 
   const handleQuickActionMorningBrief = () => {
-    if (hasUploadingAttachment || isSending) return;
-    onSendMessage(MORNING_BRIEF_QUICK_ACTION_TEXT);
+    if (isSending) return;
+    onSendMessage(MORNING_BRIEF_QUICK_ACTION_TEXT, {
+      ignoreAttachments: true,
+    });
     setInputValue("");
     setIsMediaTrayOpen(false);
   };
@@ -1871,24 +1885,26 @@ const SharedFooter = ({
             ? `Beta quota: ${quotaSummary.remaining.text} texts left · ${formatMinutesFromSeconds(quotaSummary.remaining.voiceSeconds)} voice min left · ${formatMinutesFromSeconds(quotaSummary.remaining.cameraSeconds)} camera min left`
             : "Beta quota unavailable right now."}
       </div>
-      <div className="mb-2 flex items-center justify-center">
-        <button
-          type="button"
-          onClick={handleQuickActionMorningBrief}
-          disabled={isSending || hasUploadingAttachment}
-          className="inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-[11px] font-medium transition-colors disabled:opacity-50"
-          style={{
-            borderColor: "var(--app-soft-card-border)",
-            backgroundColor:
-              "color-mix(in srgb, var(--app-soft-card-bg) 70%, transparent)",
-            color: "var(--app-on-dark-muted)",
-          }}
-          data-testid="button-morning-brief-quick-action"
-        >
-          <Globe className="h-3 w-3" style={{ color: "var(--app-accent)" }} />
-          Morning Brief
-        </button>
-      </div>
+      {showMorningBriefQuickAction && (
+        <div className="mb-2 flex items-center justify-center">
+          <button
+            type="button"
+            onClick={handleQuickActionMorningBrief}
+            disabled={isSending}
+            className="inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-[11px] font-medium transition-colors disabled:opacity-50"
+            style={{
+              borderColor: "var(--app-soft-card-border)",
+              backgroundColor:
+                "color-mix(in srgb, var(--app-soft-card-bg) 70%, transparent)",
+              color: "var(--app-on-dark-muted)",
+            }}
+            data-testid="button-morning-brief-quick-action"
+          >
+            <Globe className="h-3 w-3" style={{ color: "var(--app-accent)" }} />
+            Morning Brief
+          </button>
+        </div>
+      )}
       {pendingAttachments.length > 0 && (
         <div className="mb-2 flex items-center gap-2 overflow-x-auto pb-1">
           {pendingAttachments.map((attachment) => (
@@ -8263,7 +8279,7 @@ function App() {
     );
   };
 
-  const handleSendMessage = async (text: string) => {
+  const handleSendMessage = async (text: string, options?: SendMessageOptions) => {
     const trimmed = text.trim();
     if (isSendingMessageRef.current) return;
 
@@ -8274,12 +8290,15 @@ function App() {
       return;
     }
 
-    const readyAttachments = pendingAttachments.filter(
-      (item) => item.status === "ready" && item.attachmentId && item.attachment,
-    );
-    const uploadingAttachments = pendingAttachments.filter(
-      (item) => item.status === "uploading",
-    );
+    const includeAttachments = !options?.ignoreAttachments;
+    const readyAttachments = includeAttachments
+      ? pendingAttachments.filter(
+          (item) => item.status === "ready" && item.attachmentId && item.attachment,
+        )
+      : [];
+    const uploadingAttachments = includeAttachments
+      ? pendingAttachments.filter((item) => item.status === "uploading")
+      : [];
 
     if (uploadingAttachments.length > 0) {
       setComposerError("Wait for images to finish uploading before sending.");
@@ -9091,6 +9110,7 @@ function App() {
         <div className={cn("absolute inset-0", showOnboarding && "hidden")} aria-hidden={showOnboarding}>
           <SharedFooter 
             persona={persona}
+            mode={mode}
             onSendMessage={handleSendMessage}
             onSelectCameraFiles={handleIncomingFiles}
             onSelectGalleryFiles={handleIncomingFiles}
