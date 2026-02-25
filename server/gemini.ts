@@ -66,6 +66,14 @@ interface TokenUsageSnapshot {
 }
 
 type GoogleSearchTool = { googleSearch: Record<string, never> };
+type LiveFunctionDeclaration = {
+  name: string;
+  description: string;
+  parameters?: Record<string, unknown>;
+};
+type LiveFunctionDeclarationsTool = {
+  functionDeclarations: LiveFunctionDeclaration[];
+};
 
 const DEFAULT_TEXT_MODEL = "gemini-3-flash-preview";
 const DEFAULT_LIVE_MODEL = "gemini-2.5-flash-native-audio-preview-12-2025";
@@ -79,6 +87,38 @@ const DEFAULT_ZEE_PROMPT_FALLBACK = [
   "Keep responses concise unless the user asks for depth.",
 ].join(" ");
 const GOOGLE_SEARCH_TOOLS: GoogleSearchTool[] = [{ googleSearch: {} }];
+const LIVE_MORNING_BRIEF_FUNCTION_DECLARATIONS: LiveFunctionDeclaration[] = [
+  {
+    name: "get_morning_brief",
+    description:
+      "Retrieve a grounded morning briefing with top headlines and markets, optionally including inbox highlights.",
+    parameters: {
+      type: "object",
+      properties: {
+        includeInbox: { type: "boolean" },
+        refresh: { type: "boolean" },
+        timezone: { type: "string" },
+      },
+    },
+  },
+  {
+    name: "get_inbox_digest",
+    description:
+      "Retrieve a concise read-only inbox digest for the current user.",
+    parameters: {
+      type: "object",
+      properties: {
+        refresh: { type: "boolean" },
+        maxThreads: { type: "integer" },
+      },
+    },
+  },
+];
+const LIVE_MORNING_BRIEF_FUNCTION_TOOLS: LiveFunctionDeclarationsTool[] = [
+  {
+    functionDeclarations: LIVE_MORNING_BRIEF_FUNCTION_DECLARATIONS,
+  },
+];
 const TEXT_GOOGLE_SEARCH_SIGNAL_PATTERN =
   /\b(latest|new|current|currently|today|tonight|tomorrow|this\s+(week|month|year)|news|headline(?:s)?|breaking|recent|right now|as of|score|standings?|weather|forecast|stock|price|market|election|president|prime minister|ceo|release date|launched?|announced?)\b/i;
 const TEXT_GOOGLE_SEARCH_EXPLICIT_PATTERN =
@@ -1082,6 +1122,7 @@ export interface LiveTokenConfigSummary {
   maxOutputTokens: number;
   deviceClass: "mobile" | "desktop" | "unknown";
   googleSearchGroundingEnabled: boolean;
+  morningBriefFunctionCallingEnabled: boolean;
 }
 
 export interface CreateLiveTokenResult {
@@ -1103,6 +1144,7 @@ function composeLiveSystemInstruction(params: {
   memoryPolicy: LiveMemoryPolicy;
   clientTimeZone?: string | null;
   preferWebGrounding?: boolean;
+  enableMorningBriefTools?: boolean;
 }): string {
   const sections: string[] = [params.personaPrompt];
 
@@ -1141,6 +1183,17 @@ function composeLiveSystemInstruction(params: {
     );
   }
 
+  if (params.enableMorningBriefTools) {
+    sections.push(
+      [
+        "MORNING BRIEF TOOL POLICY:",
+        "- If the user asks for a morning briefing, call get_morning_brief before answering.",
+        "- If the user asks for inbox highlights only, call get_inbox_digest.",
+        "- Do not claim inbox data unless a tool response returns it.",
+      ].join("\n"),
+    );
+  }
+
   return sections.join("\n\n");
 }
 
@@ -1156,6 +1209,10 @@ export async function createLiveToken(
   const deviceClass = input.deviceClass ?? "unknown";
   const isMobileDevice = deviceClass === "mobile";
   const requestedGoogleSearchGrounding = shouldUseLiveGoogleSearchGrounding();
+  const enableMorningBriefFunctionCalling = parseBooleanFlag(
+    process.env.ENABLE_LIVE_FUNCTION_CALLING_BRIEF,
+    false,
+  );
   const systemInstruction = composeLiveSystemInstruction({
     personaPrompt,
     memoryContextBlock: input.memoryContextBlock,
@@ -1163,6 +1220,7 @@ export async function createLiveToken(
     memoryPolicy,
     clientTimeZone: input.clientTimeZone ?? null,
     preferWebGrounding: requestedGoogleSearchGrounding,
+    enableMorningBriefTools: enableMorningBriefFunctionCalling,
   });
   const timeMatch = systemInstruction.match(/RIGHT NOW it is:([^\n]+)/);
   console.log(`[LIVE_TOKEN_TZ] clientTimeZone=${JSON.stringify(input.clientTimeZone)}, envTZ=${process.env.ZEE_CALENDAR_TIMEZONE}, timeInPrompt=${timeMatch ? timeMatch[1].trim() : "NOT_FOUND"}`);
@@ -1317,6 +1375,7 @@ export async function createLiveToken(
     maxOutputTokens: liveMaxOutputTokens,
     deviceClass,
     googleSearchGroundingEnabled: false,
+    morningBriefFunctionCallingEnabled: enableMorningBriefFunctionCalling,
   };
 
   const expireTime = new Date(now + expireInMs).toISOString();
@@ -1394,7 +1453,18 @@ export async function createLiveToken(
                     : undefined,
                 inputAudioTranscription: {},
                 outputAudioTranscription: {},
-                tools: useGoogleSearchGrounding ? GOOGLE_SEARCH_TOOLS : undefined,
+                tools: (() => {
+                  const tools: Array<
+                    GoogleSearchTool | LiveFunctionDeclarationsTool
+                  > = [];
+                  if (useGoogleSearchGrounding) {
+                    tools.push(...GOOGLE_SEARCH_TOOLS);
+                  }
+                  if (enableMorningBriefFunctionCalling) {
+                    tools.push(...LIVE_MORNING_BRIEF_FUNCTION_TOOLS);
+                  }
+                  return tools.length > 0 ? tools : undefined;
+                })(),
               },
             },
             ...(lockAdditionalFields ? { lockAdditionalFields } : {}),
@@ -1454,6 +1524,7 @@ export async function createLiveToken(
     configSummary: {
       ...configSummary,
       googleSearchGroundingEnabled: resolvedGoogleSearchGrounding,
+      morningBriefFunctionCallingEnabled: enableMorningBriefFunctionCalling,
     },
   };
 }

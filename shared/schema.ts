@@ -150,6 +150,14 @@ export const usageEventMetricEnum = pgEnum("usage_event_metric", [
   "document_task",
   "presentation_task",
   "presentation_image",
+  "morning_brief_run",
+  "gmail_digest_run",
+]);
+
+export const googleIntegrationStatusEnum = pgEnum("google_integration_status", [
+  "connected",
+  "disconnected",
+  "error",
 ]);
 
 export const memoryItemKindEnum = pgEnum("memory_item_kind", [
@@ -422,6 +430,32 @@ export const usageEvents = pgTable(
   ],
 );
 
+export const googleIntegrations = pgTable(
+  "google_integrations",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    userId: varchar("user_id").notNull().unique(),
+    provider: varchar("provider").notNull().default("google"),
+    googleSub: varchar("google_sub").notNull(),
+    email: varchar("email").notNull(),
+    scopes: jsonb("scopes").notNull(),
+    refreshTokenEncrypted: text("refresh_token_encrypted").notNull(),
+    accessTokenEncrypted: text("access_token_encrypted"),
+    expiry: timestamp("expiry"),
+    status: googleIntegrationStatusEnum("status")
+      .notNull()
+      .default("connected"),
+    lastError: text("last_error"),
+    createdAt: timestamp("created_at").defaultNow(),
+    updatedAt: timestamp("updated_at").defaultNow(),
+  },
+  (table) => [
+    index("google_integrations_user_idx").on(table.userId),
+    index("google_integrations_email_idx").on(table.email),
+    index("google_integrations_status_idx").on(table.status),
+  ],
+);
+
 export const userMemoryItems = pgTable(
   "user_memory_items",
   {
@@ -501,6 +535,16 @@ export const userMemoryItemsRelations = relations(userMemoryItems, ({ one }) => 
     references: [users.id],
   }),
 }));
+
+export const googleIntegrationsRelations = relations(
+  googleIntegrations,
+  ({ one }) => ({
+    user: one(users, {
+      fields: [googleIntegrations.userId],
+      references: [users.id],
+    }),
+  }),
+);
 
 export const agentTasksRelations = relations(agentTasks, ({ many }) => ({
   steps: many(agentSteps),
@@ -612,6 +656,14 @@ export const insertUserMemoryItemSchema = createInsertSchema(userMemoryItems).om
   updatedAt: true,
 });
 
+export const insertGoogleIntegrationSchema = createInsertSchema(
+  googleIntegrations,
+).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
 export const insertAgentTaskSchema = createInsertSchema(agentTasks).omit({
   id: true,
   createdAt: true,
@@ -673,6 +725,8 @@ export type VoiceSession = typeof voiceSessions.$inferSelect;
 export type InsertUsageEvent = typeof usageEvents.$inferInsert;
 export type UsageEvent = typeof usageEvents.$inferSelect;
 export type UsageEventMetric = typeof usageEventMetricEnum.enumValues[number];
+export type InsertGoogleIntegration = typeof googleIntegrations.$inferInsert;
+export type GoogleIntegration = typeof googleIntegrations.$inferSelect;
 export type InsertUserMemoryItem = typeof userMemoryItems.$inferInsert;
 export type UserMemoryItem = typeof userMemoryItems.$inferSelect;
 export type InsertAgentTask = typeof agentTasks.$inferInsert;
@@ -703,3 +757,5 @@ export type MemoryMode = typeof memoryModeEnum.enumValues[number];
 export type MemoryItemKind = typeof memoryItemKindEnum.enumValues[number];
 export type MemorySensitivity = typeof memorySensitivityEnum.enumValues[number];
 export type MessagePurpose = typeof messagePurposeEnum.enumValues[number];
+export type GoogleIntegrationStatus =
+  typeof googleIntegrationStatusEnum.enumValues[number];

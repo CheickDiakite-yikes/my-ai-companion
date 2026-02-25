@@ -22,7 +22,7 @@ A production-grade, mobile-first AI companion application with unified text and 
 12. [Getting Started](#12-getting-started)
 13. [Environment Variables](#13-environment-variables)
 14. [Testing and QA](#14-testing-and-qa)
-15. [Deployment](#15-deployment-replit)
+15. [Deployment](#15-deployment-replit--cloud-run-gateway)
 16. [Troubleshooting](#16-troubleshooting)
 17. [Contributor Workflow](#17-contributor-workflow)
 18. [Design Principles](#18-design-principles)
@@ -190,6 +190,7 @@ Client starts voice call
 | Media Storage | `@replit/object-storage` with local disk fallback |
 | State Management | TanStack React Query (server state), React refs (local UI state) |
 | Observability | Request trace IDs (`x-trace-id`) + structured redacted logging |
+| Cloud Services | Google Cloud Run (Morning Brief gateway), Google Search grounding |
 | Security | bcrypt password hashing, HMAC signed media URLs, secret scanning (local + CI) |
 
 ---
@@ -242,11 +243,14 @@ Client starts voice call
 │   ├── SESSION_LOG.md                     # Chronological session handoff log
 │   ├── AI_COMPANION_DESIGN_SPEC.md        # Original design spec + mockup reference
 │   ├── GEMINI_INTEGRATION.md              # Gemini API integration details
+│   ├── MORNING_BRIEF_GCP_ROLLOUT.md       # Morning Brief Cloud Run + Gmail rollout runbook
 │   ├── AGENTIC_ENGINEERING_GUIDE.md       # Full agentic feature engineering reference
 │   ├── AGENTIC_ROADMAP_V1.md             # Agentic feature roadmap
 │   ├── AGENT_MESSAGE_PURPOSE_BACKFILL.md  # Message purpose migration guide
 │   ├── QUOTA_PRICING_REEVALUATION_2026-02-16.md  # Cost model worksheet
 │   └── SKILLS_INDEX.md                    # Local skill pack index
+├── services/
+│   └── morning-brief-gcp/                 # Optional Cloud Run Morning Brief gateway
 ├── script/
 │   ├── local-isolated-e2e.sh              # Isolated local integration tests
 │   ├── check-secrets.sh                   # Secret scanning script
@@ -280,12 +284,15 @@ All tables are defined in `shared/schema.ts` and `shared/models/auth.ts`. Schema
 | `user_profiles` | Personalization fields — display name, bio, location, age, profession, gender, response style preset/note, Zee avatar preset/custom image refs, user avatar |
 | `voice_sessions` | Voice call analytics — duration, camera duration, timestamps |
 | `usage_events` | Rolling 30-day quota accounting by metric type |
+| `google_integrations` | Encrypted Google OAuth token linkage for read-only Gmail digest |
 
 ### Quota metric types
 
 - `text_message` — +1 per successful chat respond request
 - `voice_second` — +duration at voice session save
 - `camera_second` — +cameraDuration at voice session save
+- `morning_brief_run` — +1 per uncached Morning Brief execution
+- `gmail_digest_run` — +1 when Morning Brief runs inbox digest successfully
 - `creation_run`, `coding_task`, `document_task`, `presentation_task`, `presentation_image` — agentic quotas (archived)
 
 ### Agentic tables (archived, schema retained)
@@ -354,8 +361,19 @@ All routes are same-origin under `/api/*`. Auth routes are public; all others re
 | Method | Endpoint | Description |
 |---|---|---|
 | `POST` | `/api/live/token` | Mint ephemeral Gemini Live session token |
+| `POST` | `/api/live/tool-response` | Resolve Live function calls (Morning Brief + inbox digest) |
 | `POST` | `/api/chat/respond` | Non-streaming text reply (legacy) |
 | `POST` | `/api/chat/respond/stream` | Streaming text reply (NDJSON) |
+
+### Integrations and Diagnostics
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/integrations/google/connect-url` | Start Google OAuth (Gmail read-only) |
+| `GET` | `/api/integrations/google/callback` | OAuth callback handler |
+| `GET` | `/api/integrations/google/status` | Read integration status for current user |
+| `POST` | `/api/integrations/google/disconnect` | Disconnect Google integration |
+| `GET` | `/api/debug/brief-runs?limit=50` | Admin-only Morning Brief forensic run history |
 
 ### Usage and Quotas
 
@@ -434,6 +452,40 @@ When `GEMINI_TEXT_GOOGLE_SEARCH_AUTO_ONLY=true`, text grounding is selective and
 - Recency/freshness asks (`today`, `latest`, `current`, `this week`, `last` + event/topic)
 
 Voice grounding uses a similar trigger policy based on finalized live user transcript chunks. If a trigger is detected, Zee emits the searching indicator and nudges the active Live session to ground the next answer.
+
+### Morning Brief (text + live voice)
+
+Morning Brief provides a single command-driven digest for:
+
+- Top current news
+- Market snapshot
+- Optional Gmail inbox highlights (read-only)
+
+Trigger policy:
+
+- Explicit command: `give me my morning briefing`, `morning briefing`, `brief me`
+- Greeting hint: `good morning` prompts a confirmation message instead of auto-running full brief
+
+Reliability controls:
+
+- Daily cap (`MORNING_BRIEF_DAILY_CAP`)
+- 15-minute cache (`MORNING_BRIEF_CACHE_TTL_MS`)
+- Explicit refresh policy (`MORNING_BRIEF_REQUIRE_EXPLICIT_REFRESH`)
+- Partial-failure transparency (`brief_*` failure codes)
+
+Live voice behavior:
+
+- Live tool declarations include `get_morning_brief` and `get_inbox_digest` when `ENABLE_LIVE_FUNCTION_CALLING_BRIEF=true`
+- Client handles tool calls manually and sends tool responses via `/api/live/tool-response`
+- Voice mode search status labels include:
+  - `Searching live sources…`
+  - `Checking inbox highlights…`
+  - `Brief ready`
+
+Cloud gateway behavior:
+
+- If `MORNING_BRIEF_GCP_BASE_URL` is configured, server uses the Cloud Run gateway for news fetch and compose.
+- If gateway is unavailable, server falls back to local grounded generation and records `brief_gcp_upstream_timeout`.
 
 ### Live voice behavior
 
@@ -728,6 +780,32 @@ Source of truth: `.env.example`
 | `GEMINI_TEXT_GOOGLE_SEARCH_AUTO_ONLY` | `true` | If `true`, use grounding only on search-intent/freshness queries; if `false`, ground all text replies |
 | `ENABLE_GEMINI_LIVE_GOOGLE_SEARCH_GROUNDING` | `true` | Enable Google Search tools in live voice sessions |
 
+### Morning Brief controls
+
+| Variable | Default | Description |
+|---|---|---|
+| `ENABLE_MORNING_BRIEF` | `true` | Master feature flag for Morning Brief orchestration |
+| `ENABLE_GMAIL_INBOX_DIGEST` | `false` | Enable read-only inbox digest section |
+| `ENABLE_LIVE_FUNCTION_CALLING_BRIEF` | `false` | Enable Live function-calling tools for Morning Brief |
+| `MORNING_BRIEF_DAILY_CAP` | `3` | Max brief runs per user per local day (cache hits excluded) |
+| `MORNING_BRIEF_CACHE_TTL_MS` | `900000` | Brief cache TTL (15 minutes) |
+| `MORNING_BRIEF_MAX_NEWS_ITEMS` | `5` | Max number of news headlines returned |
+| `MORNING_BRIEF_MAX_INBOX_THREADS` | `10` | Max Gmail threads summarized |
+| `MORNING_BRIEF_REQUIRE_EXPLICIT_REFRESH` | `true` | Require explicit `refresh morning brief` to bypass cache |
+| `MORNING_BRIEF_GCP_BASE_URL` | — | Cloud Run Morning Brief gateway base URL |
+| `MORNING_BRIEF_GCP_TIMEOUT_MS` | `5000` | Gateway request timeout |
+| `MORNING_BRIEF_DEBUG_HISTORY_LIMIT` | `200` | In-memory debug run history cap |
+
+### Google OAuth integration
+
+| Variable | Default | Description |
+|---|---|---|
+| `GOOGLE_OAUTH_CLIENT_ID` | — | OAuth client ID for Gmail connector |
+| `GOOGLE_OAUTH_CLIENT_SECRET` | — | OAuth client secret |
+| `GOOGLE_OAUTH_REDIRECT_URI` | — | OAuth callback URI |
+| `GOOGLE_OAUTH_SCOPES` | `openid,email,profile,https://www.googleapis.com/auth/gmail.readonly` | Scopes for read-only Gmail access |
+| `GOOGLE_INTEGRATION_ENCRYPTION_KEY` | — | AES-GCM key for encrypted token storage |
+
 ### Live voice / VAD configuration
 
 | Variable | Default | Description |
@@ -830,7 +908,7 @@ START_SERVER=0 TEST_HOST=127.0.0.1 TEST_PORT=5599 npm run test:local:e2e
 
 ---
 
-## 15) Deployment (Replit)
+## 15) Deployment (Replit + Cloud Run Gateway)
 
 ### Configuration
 
@@ -839,6 +917,16 @@ START_SERVER=0 TEST_HOST=127.0.0.1 TEST_PORT=5599 npm run test:local:e2e
 - Run command: `node ./dist/index.cjs`
 - Internal app port: `5000`
 - Object storage: Configured via Replit Object Storage integration
+
+### Optional Morning Brief gateway (Cloud Run)
+
+Gateway source: `/services/morning-brief-gcp`
+
+1. Deploy gateway to Cloud Run
+2. Set main app env:
+   - `MORNING_BRIEF_GCP_BASE_URL`
+   - `ENABLE_MORNING_BRIEF=true`
+3. Keep fallback enabled (default): if gateway fails, app still serves a local grounded brief path
 
 ### Pre-deployment checklist
 
@@ -911,6 +999,23 @@ START_SERVER=0 TEST_HOST=127.0.0.1 TEST_PORT=5599 npm run test:local:e2e
   - `[live.token] Google Search grounding failed ... falling back to no grounding`
 - After changing any `VITE_*` env values, rebuild/redeploy the client bundle (restart alone is not enough)
 
+### Morning Brief failures or missing inbox section
+
+- Verify feature flags:
+  - `ENABLE_MORNING_BRIEF=true`
+  - `ENABLE_GMAIL_INBOX_DIGEST=true` (if inbox expected)
+  - `ENABLE_LIVE_FUNCTION_CALLING_BRIEF=true` (if live tool-calling expected)
+- Verify Cloud Run gateway:
+  - `MORNING_BRIEF_GCP_BASE_URL` points to a healthy service
+  - `GET <gateway>/healthz` returns `{ \"ok\": true }`
+- Verify Google integration:
+  - `/api/integrations/google/status` returns `connected: true`
+  - `GOOGLE_INTEGRATION_ENCRYPTION_KEY` is set and stable between deploys
+- Inspect forensic run trail:
+  - `/api/debug/brief-runs?limit=50` (admin-only)
+  - Confirm sequence of `brief.*` lifecycle events with same `traceId` and `briefRunId`
+- If Gmail OAuth is not ready, expected behavior is `news/markets-only` with partial failure codes
+
 ### Time/date reporting incorrect
 
 - Verify `ZEE_CALENDAR_TIMEZONE` environment variable is set correctly
@@ -942,6 +1047,7 @@ npm run dev:handoff -- "brief summary of what was done"
 | `docs/SESSION_LOG.md` | Chronological handoff log |
 | `docs/AI_COMPANION_DESIGN_SPEC.md` | Original design spec and mockup reference |
 | `docs/GEMINI_INTEGRATION.md` | Gemini API integration details |
+| `docs/MORNING_BRIEF_GCP_ROLLOUT.md` | Morning Brief Cloud Run + Gmail rollout and forensic runbook |
 | `docs/AGENTIC_ENGINEERING_GUIDE.md` | Full agentic feature engineering reference |
 | `docs/AGENTIC_ROADMAP_V1.md` | Agentic feature roadmap (archived scope) |
 | `docs/QUOTA_PRICING_REEVALUATION_2026-02-16.md` | Cost model worksheet |

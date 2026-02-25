@@ -8,6 +8,7 @@ import {
   userMemoryItems,
   voiceSessions,
   usageEvents,
+  googleIntegrations,
   agentTasks,
   agentSteps,
   agentApprovals,
@@ -30,6 +31,9 @@ import {
   type UserMemoryItem,
   type InsertUserMemoryItem,
   type UsageEventMetric,
+  type GoogleIntegration,
+  type InsertGoogleIntegration,
+  type GoogleIntegrationStatus,
   type AgentTask,
   type InsertAgentTask,
   type AgentStep,
@@ -154,6 +158,18 @@ export interface AgentIntentSessionUpdate {
   resolvedAt?: Date | null;
 }
 
+export interface GoogleIntegrationUpdate {
+  provider?: string;
+  googleSub?: string;
+  email?: string;
+  scopes?: unknown;
+  refreshTokenEncrypted?: string;
+  accessTokenEncrypted?: string | null;
+  expiry?: Date | null;
+  status?: GoogleIntegrationStatus;
+  lastError?: string | null;
+}
+
 function inferMessagePurpose(data: InsertMessage): MessagePurpose {
   if (
     data.messagePurpose === "conversation" ||
@@ -274,6 +290,15 @@ export interface IStorage {
 
   getUserPreferences(userId: string): Promise<UserPreferences | undefined>;
   upsertUserPreferences(data: InsertUserPreferences): Promise<UserPreferences>;
+  getGoogleIntegrationForUser(userId: string): Promise<GoogleIntegration | undefined>;
+  upsertGoogleIntegration(
+    data: InsertGoogleIntegration,
+  ): Promise<GoogleIntegration>;
+  updateGoogleIntegrationForUser(params: {
+    userId: string;
+    updates: GoogleIntegrationUpdate;
+  }): Promise<GoogleIntegration | undefined>;
+  disconnectGoogleIntegrationForUser(userId: string): Promise<boolean>;
   getUserMemoryItems(params: {
     userId: string;
     limit?: number;
@@ -1077,6 +1102,73 @@ export class DatabaseStorage implements IStorage {
       })
       .returning();
     return prefs;
+  }
+
+  async getGoogleIntegrationForUser(
+    userId: string,
+  ): Promise<GoogleIntegration | undefined> {
+    const [integration] = await db
+      .select()
+      .from(googleIntegrations)
+      .where(eq(googleIntegrations.userId, userId))
+      .limit(1);
+    return integration;
+  }
+
+  async upsertGoogleIntegration(
+    data: InsertGoogleIntegration,
+  ): Promise<GoogleIntegration> {
+    const [integration] = await db
+      .insert(googleIntegrations)
+      .values(data)
+      .onConflictDoUpdate({
+        target: googleIntegrations.userId,
+        set: {
+          provider: data.provider ?? "google",
+          googleSub: data.googleSub,
+          email: data.email,
+          scopes: data.scopes,
+          refreshTokenEncrypted: data.refreshTokenEncrypted,
+          accessTokenEncrypted: data.accessTokenEncrypted ?? null,
+          expiry: data.expiry ?? null,
+          status: data.status ?? "connected",
+          lastError: data.lastError ?? null,
+          updatedAt: new Date(),
+        },
+      })
+      .returning();
+    return integration;
+  }
+
+  async updateGoogleIntegrationForUser(params: {
+    userId: string;
+    updates: GoogleIntegrationUpdate;
+  }): Promise<GoogleIntegration | undefined> {
+    const updates: Partial<typeof googleIntegrations.$inferInsert> = {
+      ...params.updates,
+      updatedAt: new Date(),
+    };
+    const [integration] = await db
+      .update(googleIntegrations)
+      .set(updates)
+      .where(eq(googleIntegrations.userId, params.userId))
+      .returning();
+    return integration;
+  }
+
+  async disconnectGoogleIntegrationForUser(userId: string): Promise<boolean> {
+    const rows = await db
+      .update(googleIntegrations)
+      .set({
+        status: "disconnected",
+        accessTokenEncrypted: null,
+        expiry: null,
+        lastError: null,
+        updatedAt: new Date(),
+      })
+      .where(eq(googleIntegrations.userId, userId))
+      .returning({ id: googleIntegrations.id });
+    return rows.length > 0;
   }
 
   async getUserMemoryItems(params: {

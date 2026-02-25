@@ -4,7 +4,7 @@ import type { Express } from "express";
 import multer, { MulterError } from "multer";
 import { type Server } from "http";
 import { z } from "zod";
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, desc, sql } from "drizzle-orm";
 import {
   storage,
   type AgentIntentSessionUpdate,
@@ -17,9 +17,11 @@ import { db } from "./db";
 import { users } from "@shared/models/auth";
 import {
   agentArtifacts,
+  googleIntegrations,
   insertConversationSchema,
   insertMessageSchema,
   insertUserPreferencesSchema,
+  usageEvents,
   type AgentArtifact,
   type AgentApproval,
   type AgentIntentSession,
@@ -31,6 +33,7 @@ import {
   type MessageAttachment,
   type UsageEventMetric,
   type UserProfile,
+  type GoogleIntegrationStatus,
 } from "@shared/schema";
 import type {
   AgentArtifactSummary,
@@ -52,6 +55,9 @@ import type {
   TaskStateVersion,
   TaskStateResolvedStatusSource,
   AgentToolCallSummary,
+  InboxDigestItem,
+  MorningBriefFailureCode,
+  MorningBriefResult,
 } from "@shared/agent";
 import {
   classifyTurnIntentWithModel,
@@ -83,6 +89,28 @@ import {
 import { elapsedMs, getTraceId, trace, traceError } from "./observability";
 import { getMediaStore, type StorageProvider } from "./media-store";
 import { createSignedMediaPath, verifyMediaSignature } from "./media-signing";
+import {
+  detectMorningBriefIntent,
+  executeMorningBrief,
+  fetchInboxDigestViaGateway,
+  hasCachedMorningBrief,
+  renderMorningBriefForChat,
+  resolveMorningBriefLocalDate,
+  resolveMorningBriefTimeZone,
+} from "./morning-brief";
+import {
+  buildGoogleOAuthConnectUrl,
+  exchangeGoogleOAuthCode,
+  fetchGmailInboxDigest,
+  fetchGoogleUserInfo,
+  getGoogleOAuthConfig,
+  refreshGoogleAccessToken,
+  resolveGoogleOAuthScopes,
+} from "./google-integration";
+import {
+  decryptGoogleToken,
+  encryptGoogleToken,
+} from "./google-integration-crypto";
 
 const personaInputSchema = z.string().trim().min(1).max(64);
 const liveVoiceSchema = z.enum(["Aoede", "Kore", "Charon", "Fenrir"]);
@@ -162,6 +190,34 @@ const voiceTranscriptSchema = z.object({
     .trim()
     .min(1, "Transcript text is required")
     .max(8000, "Transcript text is too long"),
+});
+
+const liveToolResponseSchema = z.object({
+  conversationId: z.string().min(1, "conversationId is required"),
+  functionCalls: z
+    .array(
+      z.object({
+        id: z.string().min(1),
+        name: z.string().min(1),
+        args: z.unknown().optional(),
+      }),
+    )
+    .min(1, "At least one function call is required"),
+  clientTimeZone: z.string().trim().min(1).max(80).optional(),
+});
+
+const googleConnectUrlQuerySchema = z.object({
+  returnTo: z.string().trim().max(400).optional(),
+});
+
+const googleCallbackQuerySchema = z.object({
+  state: z.string().trim().min(1),
+  code: z.string().trim().optional(),
+  error: z.string().trim().optional(),
+});
+
+const briefDebugRunsQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(200).optional().default(50),
 });
 
 const voiceSessionCreateSchema = z.object({
@@ -258,6 +314,176 @@ function parseEmailList(
   return parsed.length > 0 ? parsed : fallback;
 }
 
+type BriefRunDebugEvent = {
+  at: string;
+  event: string;
+  payload: Record<string, unknown>;
+};
+
+type BriefRunDebugRecord = {
+  briefRunId: string;
+  traceId: string;
+  userId: string;
+  conversationId: string;
+  mode: "news_markets_only" | "news_markets_inbox";
+  cacheHit: boolean;
+  partialFailureCodes: MorningBriefFailureCode[];
+  createdAt: string;
+  events: BriefRunDebugEvent[];
+};
+
+const googleOauthStateCache = new Map<
+  string,
+  {
+    userId: string;
+    returnTo: string;
+    createdAtMs: number;
+  }
+>();
+const GOOGLE_OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
+
+const briefRunDebugHistory: BriefRunDebugRecord[] = [];
+const briefRunDebugById = new Map<string, BriefRunDebugRecord>();
+
+function normalizeReturnToPath(value: string | undefined): string {
+  if (!value) return "/";
+  if (!value.startsWith("/") || value.startsWith("//")) return "/";
+  return value;
+}
+
+function pruneGoogleOAuthStateCache(nowMs = Date.now()): void {
+  googleOauthStateCache.forEach((record, state) => {
+    if (nowMs - record.createdAtMs > GOOGLE_OAUTH_STATE_TTL_MS) {
+      googleOauthStateCache.delete(state);
+    }
+  });
+}
+
+function createGoogleOAuthStateRecord(params: {
+  userId: string;
+  returnTo: string;
+}): string {
+  pruneGoogleOAuthStateCache();
+  const state = randomUUID();
+  googleOauthStateCache.set(state, {
+    userId: params.userId,
+    returnTo: params.returnTo,
+    createdAtMs: Date.now(),
+  });
+  return state;
+}
+
+function resolveGoogleOAuthStateRecord(params: {
+  state: string;
+  userId: string;
+}): { returnTo: string } | null {
+  pruneGoogleOAuthStateCache();
+  const record = googleOauthStateCache.get(params.state);
+  if (!record) return null;
+  googleOauthStateCache.delete(params.state);
+  if (record.userId !== params.userId) return null;
+  return { returnTo: record.returnTo };
+}
+
+function appendBriefDebugEvent(params: {
+  briefRunId: string;
+  traceId: string;
+  userId: string;
+  conversationId: string;
+  event: string;
+  payload?: Record<string, unknown>;
+}) {
+  const existing = briefRunDebugById.get(params.briefRunId);
+  const eventRecord: BriefRunDebugEvent = {
+    at: new Date().toISOString(),
+    event: params.event,
+    payload: params.payload ?? {},
+  };
+  if (existing) {
+    existing.events.push(eventRecord);
+    return;
+  }
+
+  const created: BriefRunDebugRecord = {
+    briefRunId: params.briefRunId,
+    traceId: params.traceId,
+    userId: params.userId,
+    conversationId: params.conversationId,
+    mode: "news_markets_only",
+    cacheHit: false,
+    partialFailureCodes: [],
+    createdAt: eventRecord.at,
+    events: [eventRecord],
+  };
+  briefRunDebugById.set(params.briefRunId, created);
+  briefRunDebugHistory.push(created);
+  if (briefRunDebugHistory.length > MORNING_BRIEF_DEBUG_HISTORY_LIMIT) {
+    const removed = briefRunDebugHistory.splice(
+      0,
+      briefRunDebugHistory.length - MORNING_BRIEF_DEBUG_HISTORY_LIMIT,
+    );
+    for (const item of removed) {
+      briefRunDebugById.delete(item.briefRunId);
+    }
+  }
+}
+
+function finalizeBriefDebugRun(params: {
+  briefRunId: string;
+  mode: "news_markets_only" | "news_markets_inbox";
+  cacheHit: boolean;
+  partialFailureCodes: MorningBriefFailureCode[];
+}) {
+  const existing = briefRunDebugById.get(params.briefRunId);
+  if (!existing) return;
+  existing.mode = params.mode;
+  existing.cacheHit = params.cacheHit;
+  existing.partialFailureCodes = params.partialFailureCodes;
+}
+
+function buildBriefLogger(params: {
+  req: any;
+  briefRunId: string;
+  userId: string;
+  conversationId: string;
+}) {
+  const traceId = getTraceId(params.req);
+  return (event: string, payload?: Record<string, unknown>) => {
+    appendBriefDebugEvent({
+      briefRunId: params.briefRunId,
+      traceId,
+      userId: params.userId,
+      conversationId: params.conversationId,
+      event,
+      payload,
+    });
+    trace(params.req, event, {
+      briefRunId: params.briefRunId,
+      conversationId: params.conversationId,
+      ...(payload ?? {}),
+    });
+  };
+}
+
+function parseFunctionCallArgs(input: unknown): Record<string, unknown> {
+  if (!input) return {};
+  if (typeof input === "string") {
+    try {
+      const parsed = JSON.parse(input) as unknown;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+      return {};
+    } catch {
+      return {};
+    }
+  }
+  if (typeof input === "object" && !Array.isArray(input)) {
+    return input as Record<string, unknown>;
+  }
+  return {};
+}
+
 const CHAT_IMAGE_MAX_COUNT = parsePositiveInt(process.env.CHAT_IMAGE_MAX_COUNT, 3);
 const CHAT_IMAGE_MAX_BYTES = parsePositiveInt(
   process.env.CHAT_IMAGE_MAX_BYTES,
@@ -337,6 +563,37 @@ const ENABLE_DOC_STRICT_PUBLISH = parseBooleanFlag(
 const ENABLE_PRESENTATION_IMAGE_STRICT = parseBooleanFlag(
   process.env.ENABLE_PRESENTATION_IMAGE_STRICT,
   true,
+);
+const ENABLE_MORNING_BRIEF = parseBooleanFlag(
+  process.env.ENABLE_MORNING_BRIEF,
+  true,
+);
+const ENABLE_GMAIL_INBOX_DIGEST = parseBooleanFlag(
+  process.env.ENABLE_GMAIL_INBOX_DIGEST,
+  false,
+);
+const ENABLE_LIVE_FUNCTION_CALLING_BRIEF = parseBooleanFlag(
+  process.env.ENABLE_LIVE_FUNCTION_CALLING_BRIEF,
+  false,
+);
+const MORNING_BRIEF_DAILY_CAP = Math.max(
+  1,
+  parsePositiveInt(process.env.MORNING_BRIEF_DAILY_CAP, 3),
+);
+const MORNING_BRIEF_MAX_INBOX_THREADS = Math.min(
+  20,
+  Math.max(
+    1,
+    parsePositiveInt(process.env.MORNING_BRIEF_MAX_INBOX_THREADS, 10),
+  ),
+);
+const MORNING_BRIEF_REQUIRE_EXPLICIT_REFRESH = parseBooleanFlag(
+  process.env.MORNING_BRIEF_REQUIRE_EXPLICIT_REFRESH,
+  true,
+);
+const MORNING_BRIEF_DEBUG_HISTORY_LIMIT = Math.max(
+  10,
+  parsePositiveInt(process.env.MORNING_BRIEF_DEBUG_HISTORY_LIMIT, 200),
 );
 const LIVE_MEMORY_BUILD_TIMEOUT_MS = parsePositiveInt(
   process.env.LIVE_MEMORY_BUILD_TIMEOUT_MS,
@@ -752,6 +1009,324 @@ async function getQuotaSummaryResponseForUser(
   const summary = await storage.getQuotaSummary(userId);
   const resolvedLimits = limits ?? (await resolveQuotaLimitsForUser(userId));
   return toQuotaSummaryResponse(summary, resolvedLimits);
+}
+
+async function getUserEmailForDiagnostics(
+  userId: string,
+): Promise<string | null> {
+  const [user] = await db
+    .select({ email: users.email })
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1);
+  return user?.email?.trim().toLowerCase() ?? null;
+}
+
+function isBriefDiagnosticsAllowedEmail(email: string | null): boolean {
+  if (!email) return false;
+  return (
+    BETA_PRIVILEGED_QUOTA_EMAILS.has(email) || BETA_POWER_QUOTA_EMAILS.has(email)
+  );
+}
+
+async function getMorningBriefUsageCountForLocalDate(params: {
+  userId: string;
+  localDate: string;
+}): Promise<number> {
+  const [{ total }] = await db
+    .select({
+      total: sql<number>`COUNT(*)::int`,
+    })
+    .from(usageEvents)
+    .where(
+      and(
+        eq(usageEvents.userId, params.userId),
+        eq(usageEvents.metric, "morning_brief_run"),
+        sql`${usageEvents.meta} ->> 'localDate' = ${params.localDate}`,
+      ),
+    );
+  return Math.max(0, total ?? 0);
+}
+
+async function recordMorningBriefUsage(params: {
+  userId: string;
+  conversationId: string;
+  traceId: string;
+  localDate: string;
+  timezone: string;
+  includeInbox: boolean;
+  ranInboxDigest: boolean;
+  briefRunId: string;
+}): Promise<void> {
+  await db.insert(usageEvents).values({
+    userId: params.userId,
+    metric: "morning_brief_run",
+    units: 1,
+    conversationId: params.conversationId,
+    meta: {
+      localDate: params.localDate,
+      timezone: params.timezone,
+      includeInbox: params.includeInbox,
+      briefRunId: params.briefRunId,
+      traceId: params.traceId,
+    },
+  });
+
+  if (params.ranInboxDigest) {
+    await db.insert(usageEvents).values({
+      userId: params.userId,
+      metric: "gmail_digest_run",
+      units: 1,
+      conversationId: params.conversationId,
+      meta: {
+        localDate: params.localDate,
+        timezone: params.timezone,
+        briefRunId: params.briefRunId,
+        traceId: params.traceId,
+      },
+    });
+  }
+}
+
+async function resolveFreshGoogleAccessTokenForUser(params: {
+  userId: string;
+  logger?: (event: string, payload?: Record<string, unknown>) => void;
+}): Promise<{ token: string; integration: Awaited<ReturnType<typeof storage.getGoogleIntegrationForUser>> } | null> {
+  const integration = await storage.getGoogleIntegrationForUser(params.userId);
+  if (!integration || integration.status !== "connected") {
+    return null;
+  }
+
+  const nowMs = Date.now();
+  const expiryMs = integration.expiry?.getTime() ?? 0;
+  const hasUsableAccessToken =
+    Boolean(integration.accessTokenEncrypted) &&
+    expiryMs - nowMs > 60_000;
+
+  if (hasUsableAccessToken && integration.accessTokenEncrypted) {
+    try {
+      const token = decryptGoogleToken(integration.accessTokenEncrypted);
+      return { token, integration };
+    } catch (error) {
+      params.logger?.("brief.gmail.fetch.failed", {
+        reason: "access_token_decrypt_failed",
+      });
+    }
+  }
+
+  try {
+    const refreshToken = decryptGoogleToken(integration.refreshTokenEncrypted);
+    const refreshed = await refreshGoogleAccessToken({ refreshToken });
+    const encryptedAccessToken = encryptGoogleToken(refreshed.accessToken);
+    await storage.updateGoogleIntegrationForUser({
+      userId: params.userId,
+      updates: {
+        accessTokenEncrypted: encryptedAccessToken,
+        expiry: refreshed.expiry,
+        scopes:
+          refreshed.scopes.length > 0
+            ? refreshed.scopes
+            : integration.scopes,
+        status: "connected",
+        lastError: null,
+      },
+    });
+    return {
+      token: refreshed.accessToken,
+      integration: {
+        ...integration,
+        accessTokenEncrypted: encryptedAccessToken,
+        expiry: refreshed.expiry,
+      },
+    };
+  } catch (error) {
+    await storage.updateGoogleIntegrationForUser({
+      userId: params.userId,
+      updates: {
+        status: "error" satisfies GoogleIntegrationStatus,
+        lastError: error instanceof Error ? error.message : String(error),
+      },
+    });
+    throw error;
+  }
+}
+
+async function executeMorningBriefForConversation(params: {
+  req: any;
+  userId: string;
+  conversationId: string;
+  includeInboxRequested: boolean;
+  refreshRequested: boolean;
+  clientTimeZone?: string | null;
+}): Promise<{
+  briefRunId: string;
+  brief: MorningBriefResult;
+  chatParts: string[];
+  mode: "news_markets_only" | "news_markets_inbox";
+  cacheHit: boolean;
+  partialFailureCodes: MorningBriefFailureCode[];
+  timezone: string;
+  localDate: string;
+  quotaBlocked: boolean;
+}> {
+  const timezone = resolveMorningBriefTimeZone(params.clientTimeZone ?? null);
+  const localDate = resolveMorningBriefLocalDate(timezone);
+  const briefRunId = randomUUID();
+  const logger = buildBriefLogger({
+    req: params.req,
+    briefRunId,
+    userId: params.userId,
+    conversationId: params.conversationId,
+  });
+
+  const includeInbox = ENABLE_GMAIL_INBOX_DIGEST && params.includeInboxRequested;
+  const refreshRequested = MORNING_BRIEF_REQUIRE_EXPLICIT_REFRESH
+    ? params.refreshRequested
+    : true;
+  const cacheHitEligible = hasCachedMorningBrief({
+    userId: params.userId,
+    localDate,
+    timezone,
+    includeInbox,
+  });
+
+  logger("brief.intent.detected", {
+    includeInboxRequested: params.includeInboxRequested,
+    includeInbox,
+    refreshRequested,
+    timezone,
+    localDate,
+    cacheHitEligible,
+  });
+
+  if (!cacheHitEligible) {
+    const usedToday = await getMorningBriefUsageCountForLocalDate({
+      userId: params.userId,
+      localDate,
+    });
+    if (usedToday >= MORNING_BRIEF_DAILY_CAP) {
+      logger("brief.quota.blocked", {
+        usedToday,
+        cap: MORNING_BRIEF_DAILY_CAP,
+      });
+      finalizeBriefDebugRun({
+        briefRunId,
+        mode: includeInbox ? "news_markets_inbox" : "news_markets_only",
+        cacheHit: false,
+        partialFailureCodes: ["brief_quota_blocked"],
+      });
+      return {
+        briefRunId,
+        brief: {
+          headlineItems: [],
+          marketSnapshot: "",
+          inboxHighlights: [],
+          citations: [],
+          generatedAt: new Date().toISOString(),
+          dataFreshnessSeconds: 0,
+          partialFailures: ["brief_quota_blocked"],
+        },
+        chatParts: [],
+        mode: includeInbox ? "news_markets_inbox" : "news_markets_only",
+        cacheHit: false,
+        partialFailureCodes: ["brief_quota_blocked"],
+        timezone,
+        localDate,
+        quotaBlocked: true,
+      };
+    }
+  }
+
+  const existingGoogleIntegration = includeInbox
+    ? await storage.getGoogleIntegrationForUser(params.userId)
+    : null;
+  const inboxProvider =
+    includeInbox &&
+    existingGoogleIntegration &&
+    existingGoogleIntegration.status === "connected"
+      ? async (): Promise<InboxDigestItem[]> => {
+          const resolved = await resolveFreshGoogleAccessTokenForUser({
+            userId: params.userId,
+            logger,
+          });
+          if (!resolved) {
+            throw new Error("brief_gmail_not_connected");
+          }
+          const gatewayInbox = await fetchInboxDigestViaGateway({
+            accessToken: resolved.token,
+            maxThreads: MORNING_BRIEF_MAX_INBOX_THREADS,
+            traceId: getTraceId(params.req),
+            briefRunId,
+            logger,
+          });
+          if (gatewayInbox && gatewayInbox.inboxHighlights.length > 0) {
+            return gatewayInbox.inboxHighlights;
+          }
+          return fetchGmailInboxDigest({
+            accessToken: resolved.token,
+            maxThreads: MORNING_BRIEF_MAX_INBOX_THREADS,
+          });
+        }
+      : undefined;
+
+  const execution = await executeMorningBrief({
+    userId: params.userId,
+    traceId: getTraceId(params.req),
+    briefRunId,
+    timezone,
+    localDate,
+    includeInbox,
+    refresh: refreshRequested,
+    inboxProvider,
+    logger,
+  });
+
+  finalizeBriefDebugRun({
+    briefRunId,
+    mode: execution.mode,
+    cacheHit: execution.cacheHit,
+    partialFailureCodes: execution.partialFailureCodes,
+  });
+
+  if (!execution.cacheHit) {
+    await recordMorningBriefUsage({
+      userId: params.userId,
+      conversationId: params.conversationId,
+      traceId: getTraceId(params.req),
+      localDate,
+      timezone,
+      includeInbox,
+      ranInboxDigest:
+        includeInbox &&
+        !execution.partialFailureCodes.includes("brief_gmail_not_connected") &&
+        !execution.partialFailureCodes.includes(
+          "brief_gmail_token_refresh_failed",
+        ),
+      briefRunId,
+    });
+  }
+
+  logger("brief.respond.completed", {
+    mode: execution.mode,
+    cacheHit: execution.cacheHit,
+    partialFailureCodes: execution.partialFailureCodes,
+    headlineCount: execution.result.headlineItems.length,
+    inboxCount: execution.result.inboxHighlights.length,
+  });
+
+  return {
+    briefRunId,
+    brief: execution.result,
+    chatParts: renderMorningBriefForChat(execution.result, {
+      includeInbox: execution.mode === "news_markets_inbox",
+    }),
+    mode: execution.mode,
+    cacheHit: execution.cacheHit,
+    partialFailureCodes: execution.partialFailureCodes,
+    timezone,
+    localDate,
+    quotaBlocked: false,
+  };
 }
 
 function quotaBlockedMessage(reason: string): string {
@@ -7174,6 +7749,456 @@ export async function registerRoutes(
     },
   );
 
+  app.get(
+    "/api/integrations/google/connect-url",
+    isAuthenticated,
+    async (req: any, res) => {
+      const startedAt = Date.now();
+      try {
+        const parsed = googleConnectUrlQuerySchema.parse(req.query ?? {});
+        const config = getGoogleOAuthConfig();
+        if (!config) {
+          return res.status(503).json({
+            message: "Google integration is not configured",
+            traceId: getTraceId(req),
+          });
+        }
+
+        const returnTo = normalizeReturnToPath(parsed.returnTo);
+        const state = createGoogleOAuthStateRecord({
+          userId: req.session.userId,
+          returnTo,
+        });
+        const scopes = resolveGoogleOAuthScopes();
+        const connectUrl = buildGoogleOAuthConnectUrl({
+          config,
+          state,
+          scopes,
+        });
+
+        trace(req, "google.integration.connect_url.created", {
+          userId: req.session.userId,
+          scopeCount: scopes.length,
+          elapsedMs: elapsedMs(startedAt),
+        });
+
+        return res.status(200).json({
+          traceId: getTraceId(req),
+          url: connectUrl,
+          scopes,
+        });
+      } catch (error) {
+        if (error instanceof z.ZodError) {
+          return res.status(400).json({
+            message: error.issues[0]?.message ?? "Invalid connect request",
+            traceId: getTraceId(req),
+          });
+        }
+        traceError(req, "google.integration.connect_url.failed", error, {
+          elapsedMs: elapsedMs(startedAt),
+        });
+        return res.status(500).json({
+          message: "Failed to create Google connect URL",
+          traceId: getTraceId(req),
+        });
+      }
+    },
+  );
+
+  app.get(
+    "/api/integrations/google/callback",
+    isAuthenticated,
+    async (req: any, res) => {
+      const startedAt = Date.now();
+      try {
+        const parsed = googleCallbackQuerySchema.parse(req.query ?? {});
+        if (parsed.error) {
+          trace(req, "google.integration.callback.error", {
+            userId: req.session.userId,
+            error: parsed.error,
+          });
+          return res.redirect("/?google_integration=denied");
+        }
+        if (!parsed.code) {
+          return res.status(400).json({
+            message: "Google callback is missing authorization code",
+            traceId: getTraceId(req),
+          });
+        }
+
+        const stateRecord = resolveGoogleOAuthStateRecord({
+          state: parsed.state,
+          userId: req.session.userId,
+        });
+        if (!stateRecord) {
+          return res.status(400).json({
+            message: "Invalid or expired OAuth state",
+            traceId: getTraceId(req),
+          });
+        }
+
+        const config = getGoogleOAuthConfig();
+        if (!config) {
+          return res.status(503).json({
+            message: "Google integration is not configured",
+            traceId: getTraceId(req),
+          });
+        }
+
+        const exchanged = await exchangeGoogleOAuthCode({
+          config,
+          code: parsed.code,
+        });
+        const profile = await fetchGoogleUserInfo({
+          accessToken: exchanged.accessToken,
+        });
+
+        const refreshTokenToStore = exchanged.refreshToken
+          ? exchanged.refreshToken
+          : (() => {
+              throw new Error("Google did not return refresh token");
+            })();
+
+        await storage.upsertGoogleIntegration({
+          userId: req.session.userId,
+          provider: "google",
+          googleSub: profile.googleSub,
+          email: profile.email,
+          scopes:
+            exchanged.scopes.length > 0
+              ? exchanged.scopes
+              : resolveGoogleOAuthScopes(),
+          refreshTokenEncrypted: encryptGoogleToken(refreshTokenToStore),
+          accessTokenEncrypted: encryptGoogleToken(exchanged.accessToken),
+          expiry: exchanged.expiry,
+          status: "connected",
+          lastError: null,
+        });
+
+        trace(req, "google.integration.callback.connected", {
+          userId: req.session.userId,
+          email: profile.email,
+          elapsedMs: elapsedMs(startedAt),
+        });
+
+        return res.redirect(`${stateRecord.returnTo}?google_integration=connected`);
+      } catch (error) {
+        traceError(req, "google.integration.callback.failed", error, {
+          elapsedMs: elapsedMs(startedAt),
+        });
+        return res.redirect("/?google_integration=failed");
+      }
+    },
+  );
+
+  app.get(
+    "/api/integrations/google/status",
+    isAuthenticated,
+    async (req: any, res) => {
+      const startedAt = Date.now();
+      try {
+        const integration = await storage.getGoogleIntegrationForUser(
+          req.session.userId,
+        );
+        trace(req, "google.integration.status.read", {
+          userId: req.session.userId,
+          status: integration?.status ?? "disconnected",
+          elapsedMs: elapsedMs(startedAt),
+        });
+        return res.status(200).json({
+          traceId: getTraceId(req),
+          connected: integration?.status === "connected",
+          status: integration?.status ?? "disconnected",
+          email: integration?.email ?? null,
+          scopes: Array.isArray(integration?.scopes) ? integration?.scopes : [],
+          lastError: integration?.lastError ?? null,
+          expiry: integration?.expiry?.toISOString() ?? null,
+          enabled: ENABLE_GMAIL_INBOX_DIGEST,
+        });
+      } catch (error) {
+        traceError(req, "google.integration.status.failed", error, {
+          elapsedMs: elapsedMs(startedAt),
+        });
+        return res.status(500).json({
+          message: "Failed to fetch Google integration status",
+          traceId: getTraceId(req),
+        });
+      }
+    },
+  );
+
+  app.post(
+    "/api/integrations/google/disconnect",
+    isAuthenticated,
+    async (req: any, res) => {
+      const startedAt = Date.now();
+      try {
+        const disconnected = await storage.disconnectGoogleIntegrationForUser(
+          req.session.userId,
+        );
+        trace(req, "google.integration.disconnected", {
+          userId: req.session.userId,
+          disconnected,
+          elapsedMs: elapsedMs(startedAt),
+        });
+        return res.status(200).json({
+          traceId: getTraceId(req),
+          disconnected,
+        });
+      } catch (error) {
+        traceError(req, "google.integration.disconnect.failed", error, {
+          elapsedMs: elapsedMs(startedAt),
+        });
+        return res.status(500).json({
+          message: "Failed to disconnect Google integration",
+          traceId: getTraceId(req),
+        });
+      }
+    },
+  );
+
+  app.get("/api/debug/brief-runs", isAuthenticated, async (req: any, res) => {
+    const startedAt = Date.now();
+    try {
+      const parsed = briefDebugRunsQuerySchema.parse(req.query ?? {});
+      const email = await getUserEmailForDiagnostics(req.session.userId);
+      if (!isBriefDiagnosticsAllowedEmail(email)) {
+        return res.status(403).json({
+          message: "Forbidden",
+          traceId: getTraceId(req),
+        });
+      }
+
+      const runs = briefRunDebugHistory
+        .slice(-parsed.limit)
+        .reverse();
+
+      return res.status(200).json({
+        traceId: getTraceId(req),
+        runs,
+      });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({
+          message: error.issues[0]?.message ?? "Invalid query",
+          traceId: getTraceId(req),
+        });
+      }
+      traceError(req, "brief.debug.read.failed", error, {
+        elapsedMs: elapsedMs(startedAt),
+      });
+      return res.status(500).json({
+        message: "Failed to load brief diagnostics",
+        traceId: getTraceId(req),
+      });
+    }
+  });
+
+  app.post(
+    "/api/live/tool-response",
+    isAuthenticated,
+    async (req: any, res) => {
+      const startedAt = Date.now();
+      try {
+        const parsed = liveToolResponseSchema.parse(req.body ?? {});
+        const conversation = await requireConversationOwnership(
+          req,
+          res,
+          parsed.conversationId,
+        );
+        if (!conversation) return;
+
+        const functionResponses: Array<{
+          id: string;
+          name: string;
+          response: Record<string, unknown>;
+        }> = [];
+        const chatDigests: Array<{
+          text: string;
+          sender: "assistant";
+        }> = [];
+        const webSearchEvents: Array<{
+          status: "searching" | "grounded" | "idle";
+          label?: string;
+        }> = [];
+
+        for (const functionCall of parsed.functionCalls) {
+          const args = parseFunctionCallArgs(functionCall.args);
+          if (functionCall.name === "get_morning_brief") {
+            webSearchEvents.push({
+              status: "searching",
+              label: "Searching live sources…",
+            });
+            const includeInbox =
+              typeof args.includeInbox === "boolean"
+                ? args.includeInbox
+                : ENABLE_GMAIL_INBOX_DIGEST;
+            const refresh =
+              typeof args.refresh === "boolean" ? args.refresh : false;
+            const requestedTimeZone =
+              typeof args.timezone === "string" ? args.timezone : undefined;
+
+            const execution = await executeMorningBriefForConversation({
+              req,
+              userId: req.session.userId,
+              conversationId: conversation.id,
+              includeInboxRequested: includeInbox,
+              refreshRequested: refresh,
+              clientTimeZone:
+                requestedTimeZone ?? parsed.clientTimeZone ?? null,
+            });
+
+            if (execution.quotaBlocked) {
+              functionResponses.push({
+                id: functionCall.id,
+                name: functionCall.name,
+                response: {
+                  error: {
+                    code: "brief_quota_blocked",
+                    message:
+                      "Morning brief daily cap reached. Ask for refresh tomorrow.",
+                  },
+                },
+              });
+              webSearchEvents.push({
+                status: "grounded",
+                label: "Brief cap reached",
+              });
+              continue;
+            }
+
+            functionResponses.push({
+              id: functionCall.id,
+              name: functionCall.name,
+              response: {
+                result: execution.brief,
+                briefRunId: execution.briefRunId,
+                briefMode: execution.mode,
+                briefCacheHit: execution.cacheHit,
+                briefPartialFailureCodes: execution.partialFailureCodes,
+              },
+            });
+            if (execution.chatParts[1]) {
+              chatDigests.push({
+                sender: "assistant",
+                text: execution.chatParts[1],
+              });
+            }
+            webSearchEvents.push({
+              status: "grounded",
+              label:
+                execution.mode === "news_markets_inbox"
+                  ? "Brief ready"
+                  : "Sources verified",
+            });
+            continue;
+          }
+
+          if (functionCall.name === "get_inbox_digest") {
+            webSearchEvents.push({
+              status: "searching",
+              label: "Checking inbox highlights…",
+            });
+            const resolved = await resolveFreshGoogleAccessTokenForUser({
+              userId: req.session.userId,
+            });
+            if (!resolved) {
+              functionResponses.push({
+                id: functionCall.id,
+                name: functionCall.name,
+                response: {
+                  error: {
+                    code: "brief_gmail_not_connected",
+                    message: "Gmail is not connected for this account.",
+                  },
+                },
+              });
+              webSearchEvents.push({
+                status: "grounded",
+                label: "Inbox unavailable",
+              });
+              continue;
+            }
+
+            const maxThreads =
+              typeof args.maxThreads === "number" &&
+              Number.isFinite(args.maxThreads)
+                ? Math.max(1, Math.min(20, Math.floor(args.maxThreads)))
+                : MORNING_BRIEF_MAX_INBOX_THREADS;
+            const gatewayInbox = await fetchInboxDigestViaGateway({
+              accessToken: resolved.token,
+              maxThreads,
+              traceId: getTraceId(req),
+              briefRunId: randomUUID(),
+            });
+            const inboxHighlights =
+              gatewayInbox?.inboxHighlights ??
+              (await fetchGmailInboxDigest({
+                accessToken: resolved.token,
+                maxThreads,
+              }));
+            functionResponses.push({
+              id: functionCall.id,
+              name: functionCall.name,
+              response: {
+                result: {
+                  inboxHighlights,
+                  partialFailures: gatewayInbox?.partialFailures ?? [],
+                },
+              },
+            });
+            webSearchEvents.push({
+              status: "grounded",
+              label: "Inbox checked",
+            });
+            continue;
+          }
+
+          functionResponses.push({
+            id: functionCall.id,
+            name: functionCall.name,
+            response: {
+              error: {
+                code: "unsupported_function",
+                message: `Unsupported function: ${functionCall.name}`,
+              },
+            },
+          });
+        }
+
+        trace(req, "live.tool_response.generated", {
+          conversationId: conversation.id,
+          functionCount: parsed.functionCalls.length,
+          responseCount: functionResponses.length,
+          digestCount: chatDigests.length,
+          elapsedMs: elapsedMs(startedAt),
+        });
+
+        return res.status(200).json({
+          traceId: getTraceId(req),
+          functionResponses,
+          chatDigests,
+          webSearchEvents,
+        });
+      } catch (error) {
+        if (error instanceof z.ZodError) {
+          return res.status(400).json({
+            message:
+              error.issues[0]?.message ?? "Invalid live tool-response request",
+            traceId: getTraceId(req),
+          });
+        }
+        traceError(req, "live.tool_response.failed", error, {
+          elapsedMs: elapsedMs(startedAt),
+        });
+        return res.status(500).json({
+          message: "Failed to process live tool response",
+          traceId: getTraceId(req),
+        });
+      }
+    },
+  );
+
   app.post("/api/live/token", isAuthenticated, async (req: any, res) => {
     const startedAt = Date.now();
     try {
@@ -7358,6 +8383,8 @@ export async function registerRoutes(
         thinkingBudget: token.configSummary.thinkingBudget,
         googleSearchGroundingEnabled:
           token.configSummary.googleSearchGroundingEnabled,
+        morningBriefFunctionCallingEnabled:
+          token.configSummary.morningBriefFunctionCallingEnabled,
         userAgent: req.headers?.["user-agent"] ?? null,
         elapsedMs: elapsedMs(startedAt),
       });
@@ -7553,6 +8580,129 @@ export async function registerRoutes(
           );
 
       const existingConversationMessages = await storage.getMessages(conversation.id);
+
+      const morningBriefIntent = ENABLE_MORNING_BRIEF
+        ? detectMorningBriefIntent(parsed.text)
+        : {
+            explicit: false,
+            greetingHint: false,
+            refresh: false,
+            includeInbox: false,
+          };
+
+      if (
+        ENABLE_MORNING_BRIEF &&
+        (morningBriefIntent.explicit ||
+          morningBriefIntent.refresh ||
+          morningBriefIntent.greetingHint)
+      ) {
+        if (
+          !morningBriefIntent.explicit &&
+          !morningBriefIntent.refresh &&
+          morningBriefIntent.greetingHint
+        ) {
+          const promptMessages = await storage.createAssistantTurnParts({
+            conversationId: conversation.id,
+            textParts: [
+              "Good morning. Want your morning briefing? Say “Give me my morning briefing” or tap the Morning Brief quick action.",
+            ],
+          });
+          return res.status(201).json({
+            traceId: getTraceId(req),
+            conversationId: conversation.id,
+            userMessage: {
+              ...userMessage,
+              attachments: boundAttachments.map((attachment) =>
+                toAttachmentResponse(attachment, req.session.userId),
+              ),
+            },
+            assistantMessage: makeLegacyAssistantMessage(promptMessages),
+            assistantMessages: promptMessages,
+            model: "morning_brief_prompt_v1",
+            usage: null,
+            decisionPath: "companion_reply" satisfies IntentDecisionPath,
+            decisionPathReason: "companion" satisfies IntentDecisionPathReason,
+            routeReason: "companion",
+            elapsedMs: elapsedMs(startedAt),
+          });
+        }
+
+        const connectedIntegration = ENABLE_GMAIL_INBOX_DIGEST
+          ? await storage.getGoogleIntegrationForUser(req.session.userId)
+          : null;
+        const includeInboxRequested =
+          morningBriefIntent.includeInbox ||
+          Boolean(connectedIntegration?.status === "connected");
+        const execution = await executeMorningBriefForConversation({
+          req,
+          userId: req.session.userId,
+          conversationId: conversation.id,
+          includeInboxRequested,
+          refreshRequested: morningBriefIntent.refresh,
+          clientTimeZone: parsed.clientTimeZone ?? null,
+        });
+
+        if (execution.quotaBlocked) {
+          const blockedMessages = await storage.createAssistantTurnParts({
+            conversationId: conversation.id,
+            textParts: [
+              "Morning brief cap reached for today. Ask again tomorrow, or say “refresh morning brief” later if you still need a fresh run.",
+            ],
+          });
+          return res.status(201).json({
+            traceId: getTraceId(req),
+            conversationId: conversation.id,
+            userMessage: {
+              ...userMessage,
+              attachments: boundAttachments.map((attachment) =>
+                toAttachmentResponse(attachment, req.session.userId),
+              ),
+            },
+            assistantMessage: makeLegacyAssistantMessage(blockedMessages),
+            assistantMessages: blockedMessages,
+            model: "morning_brief_guardrail_v1",
+            usage: null,
+            decisionPath: "companion_reply" satisfies IntentDecisionPath,
+            decisionPathReason: "companion" satisfies IntentDecisionPathReason,
+            routeReason: "companion",
+            briefRunId: execution.briefRunId,
+            briefMode: execution.mode,
+            briefCacheHit: execution.cacheHit,
+            briefPartialFailureCodes: execution.partialFailureCodes,
+            elapsedMs: elapsedMs(startedAt),
+          });
+        }
+
+        const briefAssistantMessages = await storage.createAssistantTurnParts({
+          conversationId: conversation.id,
+          textParts: execution.chatParts,
+        });
+
+        return res.status(201).json({
+          traceId: getTraceId(req),
+          conversationId: conversation.id,
+          userMessage: {
+            ...userMessage,
+            attachments: boundAttachments.map((attachment) =>
+              toAttachmentResponse(attachment, req.session.userId),
+            ),
+          },
+          assistantMessage: makeLegacyAssistantMessage(briefAssistantMessages),
+          assistantMessages: briefAssistantMessages,
+          model: "morning_brief_v1",
+          usage: null,
+          googleSearchGroundingUsed: true,
+          decisionPath: "companion_reply" satisfies IntentDecisionPath,
+          decisionPathReason: "companion" satisfies IntentDecisionPathReason,
+          routeReason: "companion",
+          briefRunId: execution.briefRunId,
+          briefMode: execution.mode,
+          briefCacheHit: execution.cacheHit,
+          briefPartialFailureCodes: execution.partialFailureCodes,
+          elapsedMs: elapsedMs(startedAt),
+        });
+      }
+
       let activeIntentSession = ENABLE_AGENT_INTENT_SESSIONS
         ? ((await storage.getActiveAgentIntentSessionForConversation({
             userId: req.session.userId,
@@ -8667,6 +9817,160 @@ export async function registerRoutes(
       );
 
       const existingConversationMessages = await storage.getMessages(conversation.id);
+      res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
+      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("Connection", "keep-alive");
+      const writeEvent = (payload: Record<string, unknown>) => {
+        if (disconnected) return;
+        res.write(`${JSON.stringify(payload)}\n`);
+      };
+      writeEvent({
+        type: "ack",
+        traceId: getTraceId(req),
+        conversationId: conversation.id,
+        userMessage: {
+          ...userMessage,
+          attachments: boundAttachments.map((attachment) =>
+            toAttachmentResponse(attachment, req.session.userId),
+          ),
+        },
+      });
+
+      const morningBriefIntent = ENABLE_MORNING_BRIEF
+        ? detectMorningBriefIntent(parsed.text)
+        : {
+            explicit: false,
+            greetingHint: false,
+            refresh: false,
+            includeInbox: false,
+          };
+
+      if (
+        ENABLE_MORNING_BRIEF &&
+        (morningBriefIntent.explicit ||
+          morningBriefIntent.refresh ||
+          morningBriefIntent.greetingHint)
+      ) {
+        if (
+          !morningBriefIntent.explicit &&
+          !morningBriefIntent.refresh &&
+          morningBriefIntent.greetingHint
+        ) {
+          const promptMessages = await storage.createAssistantTurnParts({
+            conversationId: conversation.id,
+            textParts: [
+              "Good morning. Want your morning briefing? Say “Give me my morning briefing” or tap the Morning Brief quick action.",
+            ],
+          });
+          writeEvent({
+            type: "final",
+            assistantMessage: makeLegacyAssistantMessage(promptMessages),
+            assistantMessages: promptMessages,
+            model: "morning_brief_prompt_v1",
+            usage: null,
+            decisionPath: "companion_reply" satisfies IntentDecisionPath,
+            decisionPathReason: "companion" satisfies IntentDecisionPathReason,
+            routeReason: "companion",
+            elapsedMs: elapsedMs(startedAt),
+          });
+          res.end();
+          return;
+        }
+
+        const connectedIntegration = ENABLE_GMAIL_INBOX_DIGEST
+          ? await storage.getGoogleIntegrationForUser(req.session.userId)
+          : null;
+        const includeInboxRequested =
+          morningBriefIntent.includeInbox ||
+          Boolean(connectedIntegration?.status === "connected");
+
+        writeEvent({
+          type: "web_search",
+          mode: "text",
+          status: "searching",
+          label: "Gathering morning headlines…",
+        });
+        if (includeInboxRequested) {
+          writeEvent({
+            type: "web_search",
+            mode: "text",
+            status: "searching",
+            label: "Checking inbox highlights…",
+          });
+        }
+
+        const execution = await executeMorningBriefForConversation({
+          req,
+          userId: req.session.userId,
+          conversationId: conversation.id,
+          includeInboxRequested,
+          refreshRequested: morningBriefIntent.refresh,
+          clientTimeZone: parsed.clientTimeZone ?? null,
+        });
+
+        if (execution.quotaBlocked) {
+          const blockedMessages = await storage.createAssistantTurnParts({
+            conversationId: conversation.id,
+            textParts: [
+              "Morning brief cap reached for today. Ask again tomorrow, or say “refresh morning brief” later if you still need a fresh run.",
+            ],
+          });
+          writeEvent({
+            type: "web_search",
+            mode: "text",
+            status: "grounded",
+            label: "Brief cap reached",
+          });
+          writeEvent({
+            type: "final",
+            assistantMessage: makeLegacyAssistantMessage(blockedMessages),
+            assistantMessages: blockedMessages,
+            model: "morning_brief_guardrail_v1",
+            usage: null,
+            decisionPath: "companion_reply" satisfies IntentDecisionPath,
+            decisionPathReason: "companion" satisfies IntentDecisionPathReason,
+            routeReason: "companion",
+            briefRunId: execution.briefRunId,
+            briefMode: execution.mode,
+            briefCacheHit: execution.cacheHit,
+            briefPartialFailureCodes: execution.partialFailureCodes,
+            elapsedMs: elapsedMs(startedAt),
+          });
+          res.end();
+          return;
+        }
+
+        const briefAssistantMessages = await storage.createAssistantTurnParts({
+          conversationId: conversation.id,
+          textParts: execution.chatParts,
+        });
+
+        writeEvent({
+          type: "web_search",
+          mode: "text",
+          status: "grounded",
+          label: "Brief ready",
+        });
+        writeEvent({
+          type: "final",
+          assistantMessage: makeLegacyAssistantMessage(briefAssistantMessages),
+          assistantMessages: briefAssistantMessages,
+          model: "morning_brief_v1",
+          usage: null,
+          googleSearchGroundingUsed: true,
+          decisionPath: "companion_reply" satisfies IntentDecisionPath,
+          decisionPathReason: "companion" satisfies IntentDecisionPathReason,
+          routeReason: "companion",
+          briefRunId: execution.briefRunId,
+          briefMode: execution.mode,
+          briefCacheHit: execution.cacheHit,
+          briefPartialFailureCodes: execution.partialFailureCodes,
+          elapsedMs: elapsedMs(startedAt),
+        });
+        res.end();
+        return;
+      }
+
       let activeIntentSession = ENABLE_AGENT_INTENT_SESSIONS
         ? ((await storage.getActiveAgentIntentSessionForConversation({
             userId: req.session.userId,
@@ -8816,27 +10120,6 @@ export async function registerRoutes(
         offerDeclinedByText,
         forcedOfferFlow: shouldForceOfferFlow,
         activeIntentSessionContinuationLock,
-      });
-
-      res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
-      res.setHeader("Cache-Control", "no-cache");
-      res.setHeader("Connection", "keep-alive");
-
-      const writeEvent = (payload: Record<string, unknown>) => {
-        if (disconnected) return;
-        res.write(`${JSON.stringify(payload)}\n`);
-      };
-
-      writeEvent({
-        type: "ack",
-        traceId: getTraceId(req),
-        conversationId: conversation.id,
-        userMessage: {
-          ...userMessage,
-          attachments: boundAttachments.map((attachment) =>
-            toAttachmentResponse(attachment, req.session.userId),
-          ),
-        },
       });
 
       if (offerDeclinedByText && pendingOfferResolved) {

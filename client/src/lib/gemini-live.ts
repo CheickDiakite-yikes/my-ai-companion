@@ -16,7 +16,8 @@ export type LiveWebSearchStatus = "searching" | "grounded" | "idle";
 
 export interface GeminiLiveVoiceSessionCallbacks {
   onTranscript?: (event: LiveTranscriptEvent) => void;
-  onWebSearch?: (event: { status: LiveWebSearchStatus }) => void;
+  onWebSearch?: (event: { status: LiveWebSearchStatus; label?: string }) => void;
+  onMorningBriefDigest?: (event: { text: string }) => void;
   onError?: (error: Error) => void;
   onClosed?: (reason?: string) => void;
   onDebug?: (message: string, metadata?: Record<string, unknown>) => void;
@@ -25,8 +26,10 @@ export interface GeminiLiveVoiceSessionCallbacks {
 export interface GeminiLiveVoiceSessionStartParams {
   ephemeralToken: string;
   model: string;
+  conversationId: string;
   preAcquiredMicStream?: MediaStream;
   googleSearchGroundingEnabled?: boolean;
+  morningBriefFunctionCallingEnabled?: boolean;
 }
 
 const INPUT_SAMPLE_RATE = 16000;
@@ -129,6 +132,33 @@ const SUPPRESS_USER_TRANSCRIPT_DURING_ASSISTANT_SPEECH = parseClientBoolean(
 );
 const LIVE_WEB_SEARCH_SIGNAL_PATTERN =
   /\b(search|look up|google|latest|current|today|news|headline|what happened|updates?|did you see|last super bowl|super\s*bowl|score|standings?|who won)\b/i;
+
+const LIVE_MORNING_BRIEF_FUNCTION_DECLARATIONS = [
+  {
+    name: "get_morning_brief",
+    description:
+      "Retrieve a grounded morning briefing with top headlines and markets, optionally including inbox highlights.",
+    parameters: {
+      type: "object",
+      properties: {
+        includeInbox: { type: "boolean" },
+        refresh: { type: "boolean" },
+        timezone: { type: "string" },
+      },
+    },
+  },
+  {
+    name: "get_inbox_digest",
+    description: "Retrieve a concise read-only inbox digest for the current user.",
+    parameters: {
+      type: "object",
+      properties: {
+        refresh: { type: "boolean" },
+        maxThreads: { type: "integer" },
+      },
+    },
+  },
+];
 
 function normalizeText(input: string | undefined): string {
   return (input ?? "").replace(/\s+/g, " ").trim();
@@ -389,7 +419,9 @@ export class GeminiLiveVoiceSession {
   private audioNoiseGateFailOpenFramesRemaining = 0;
   private assistantTurnActive = false;
   private assistantPlaybackTailUntilMs = 0;
+  private conversationId: string | null = null;
   private liveGoogleSearchEnabled = false;
+  private liveMorningBriefFunctionCallingEnabled = false;
   private pendingWebSearchTurn = false;
   private webSearchGroundedThisTurn = false;
   private webSearchNudgeSentThisTurn = false;
@@ -465,10 +497,16 @@ export class GeminiLiveVoiceSession {
     this.audioNoiseGateFailOpenFramesRemaining = 0;
     this.assistantTurnActive = false;
     this.assistantPlaybackTailUntilMs = 0;
+    this.conversationId = params.conversationId;
     const googleSearchGroundingEnabled = Boolean(
       params.googleSearchGroundingEnabled,
     );
+    const morningBriefFunctionCallingEnabled = Boolean(
+      params.morningBriefFunctionCallingEnabled,
+    );
     this.liveGoogleSearchEnabled = googleSearchGroundingEnabled;
+    this.liveMorningBriefFunctionCallingEnabled =
+      morningBriefFunctionCallingEnabled;
     this.pendingWebSearchTurn = false;
     this.webSearchGroundedThisTurn = false;
     this.webSearchNudgeSentThisTurn = false;
@@ -484,7 +522,18 @@ export class GeminiLiveVoiceSession {
         responseModalities: [Modality.AUDIO],
         inputAudioTranscription: {},
         outputAudioTranscription: {},
-        tools: googleSearchGroundingEnabled ? [{ googleSearch: {} }] : undefined,
+        tools: (() => {
+          const tools: Array<Record<string, unknown>> = [];
+          if (googleSearchGroundingEnabled) {
+            tools.push({ googleSearch: {} });
+          }
+          if (morningBriefFunctionCallingEnabled) {
+            tools.push({
+              functionDeclarations: LIVE_MORNING_BRIEF_FUNCTION_DECLARATIONS,
+            });
+          }
+          return tools.length > 0 ? tools : undefined;
+        })(),
       },
       callbacks: {
         onopen: () => {
@@ -496,6 +545,7 @@ export class GeminiLiveVoiceSession {
           this.debug("live.session.open", {
             model: params.model,
             googleSearchGroundingEnabled,
+            morningBriefFunctionCallingEnabled,
           });
         },
         onmessage: (message) => {
@@ -594,6 +644,8 @@ export class GeminiLiveVoiceSession {
     this.audioNoiseGateFailOpenFramesRemaining = 0;
     this.assistantTurnActive = false;
     this.assistantPlaybackTailUntilMs = 0;
+    this.conversationId = null;
+    this.liveMorningBriefFunctionCallingEnabled = false;
     this.pendingWebSearchTurn = false;
     this.webSearchGroundedThisTurn = false;
     this.webSearchNudgeSentThisTurn = false;
@@ -991,13 +1043,17 @@ export class GeminiLiveVoiceSession {
 
   private handleServerMessage(message: LiveServerMessage): void {
     const serverContent = message.serverContent;
-    const hasToolCall = Boolean(
-      (
-        message as LiveServerMessage & {
-          toolCall?: unknown;
-        }
-      ).toolCall,
-    );
+    const toolCallPayload = (
+      message as LiveServerMessage & {
+        toolCall?: unknown;
+      }
+    ).toolCall;
+    const hasToolCall = Boolean(toolCallPayload);
+
+    if (hasToolCall && this.liveMorningBriefFunctionCallingEnabled) {
+      void this.handleToolCall(toolCallPayload);
+    }
+
     if (!serverContent) {
       if (
         this.liveGoogleSearchEnabled &&
@@ -1287,12 +1343,145 @@ export class GeminiLiveVoiceSession {
     this.callbacks.onTranscript?.({ sender, text });
   }
 
+  private async handleToolCall(toolCallPayload: unknown): Promise<void> {
+    if (!this.session || !this.conversationId) return;
+
+    const functionCalls =
+      (
+        toolCallPayload as {
+          functionCalls?: Array<{ id?: unknown; name?: unknown; args?: unknown }>;
+        }
+      )?.functionCalls ?? [];
+    if (!Array.isArray(functionCalls) || functionCalls.length === 0) return;
+
+    const normalizedCalls = functionCalls
+      .map((call) => {
+        const id = typeof call.id === "string" ? call.id : "";
+        const name = typeof call.name === "string" ? call.name : "";
+        if (!id || !name) return null;
+        return {
+          id,
+          name,
+          args: call.args,
+        };
+      })
+      .filter((call): call is { id: string; name: string; args: unknown } =>
+        Boolean(call),
+      );
+
+    if (normalizedCalls.length === 0) return;
+
+    const hasInboxCall = normalizedCalls.some(
+      (call) => call.name === "get_inbox_digest",
+    );
+    this.emitWebSearchStatus(
+      "searching",
+      hasInboxCall ? "Checking inbox highlights…" : "Searching live sources…",
+    );
+
+    this.debug("live.tool_call.received", {
+      functionCount: normalizedCalls.length,
+      names: normalizedCalls.map((call) => call.name),
+    });
+
+    try {
+      const response = await fetch("/api/live/tool-response", {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          conversationId: this.conversationId,
+          functionCalls: normalizedCalls,
+          clientTimeZone:
+            Intl.DateTimeFormat().resolvedOptions().timeZone || undefined,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(
+          `Live tool-response request failed (${response.status})`,
+        );
+      }
+
+      const payload = (await response.json()) as {
+        functionResponses?: unknown;
+        chatDigests?: unknown;
+        webSearchEvents?: unknown;
+      };
+
+      const functionResponses = Array.isArray(payload.functionResponses)
+        ? payload.functionResponses
+        : [];
+      const sendToolResponse = (
+        this.session as Session & {
+          sendToolResponse?: (payload: {
+            functionResponses: Array<Record<string, unknown>>;
+          }) => void;
+        }
+      ).sendToolResponse;
+
+      if (functionResponses.length > 0 && sendToolResponse) {
+        sendToolResponse({
+          functionResponses: functionResponses as Array<Record<string, unknown>>,
+        });
+      }
+
+      if (Array.isArray(payload.chatDigests)) {
+        for (const digest of payload.chatDigests) {
+          const text =
+            digest &&
+            typeof digest === "object" &&
+            typeof (digest as { text?: unknown }).text === "string"
+              ? ((digest as { text: string }).text ?? "").trim()
+              : "";
+          if (!text) continue;
+          this.callbacks.onMorningBriefDigest?.({ text });
+        }
+      }
+
+      if (Array.isArray(payload.webSearchEvents)) {
+        for (const event of payload.webSearchEvents) {
+          const status =
+            event &&
+            typeof event === "object" &&
+            typeof (event as { status?: unknown }).status === "string"
+              ? ((event as { status: string }).status as
+                  | "searching"
+                  | "grounded"
+                  | "idle")
+              : null;
+          const label =
+            event &&
+            typeof event === "object" &&
+            typeof (event as { label?: unknown }).label === "string"
+              ? (event as { label: string }).label
+              : undefined;
+          if (!status) continue;
+          this.emitWebSearchStatus(status, label);
+        }
+      } else {
+        this.emitWebSearchStatus("grounded", "Brief ready");
+      }
+
+      this.debug("live.tool_call.responded", {
+        functionCount: normalizedCalls.length,
+      });
+    } catch (error) {
+      this.debug("live.tool_call.failed", {
+        message: error instanceof Error ? error.message : String(error),
+      });
+      this.emitWebSearchStatus("idle");
+    }
+  }
+
   private emitError(error: Error): void {
     this.callbacks.onError?.(error);
   }
 
-  private emitWebSearchStatus(status: LiveWebSearchStatus): void {
-    this.callbacks.onWebSearch?.({ status });
+  private emitWebSearchStatus(status: LiveWebSearchStatus, label?: string): void {
+    this.callbacks.onWebSearch?.({ status, label });
   }
 
   private sendWebSearchNudge(userTranscript: string): void {

@@ -110,6 +110,7 @@ type Persona = "Maya" | "Zarra" | "Zee";
 type LiveVoiceName = "Aoede" | "Kore" | "Charon" | "Fenrir";
 type CameraFacingMode = "user" | "environment";
 type WebLookupStatus = "searching" | "grounded";
+type WebLookupMode = "text" | "voice";
 
 const PERSONA_AVATARS: Record<Persona, string> = {
   Maya: mayaAvatar,
@@ -347,6 +348,7 @@ interface ChatStreamWebSearchEvent {
   type: "web_search";
   mode?: "text" | "voice";
   status: "searching" | "grounded" | "idle";
+  label?: string;
 }
 
 type ChatStreamEvent =
@@ -613,6 +615,7 @@ interface LiveTokenConfigSummary {
   maxOutputTokens: number;
   deviceClass: "mobile" | "desktop" | "unknown";
   googleSearchGroundingEnabled: boolean;
+  morningBriefFunctionCallingEnabled: boolean;
 }
 
 interface LiveTokenResponse extends TraceAwareResponse {
@@ -1339,6 +1342,7 @@ const ONBOARDING_RELATIONSHIP_WORDS = [
 const CHAT_IMAGE_MAX_COUNT = 3;
 const TRANSCRIPT_DEDUPE_WINDOW_MS = 2500;
 const TRANSCRIPT_DEDUPE_PRUNE_MS = 60000;
+const MORNING_BRIEF_QUICK_ACTION_TEXT = "Give me my morning briefing";
 const ASSISTANT_NAME: Persona = "Zee";
 const DEFAULT_LIVE_VOICE: LiveVoiceName = "Aoede";
 const LIVE_VOICE_OPTIONS: Array<{
@@ -1834,6 +1838,13 @@ const SharedFooter = ({
     setIsMediaTrayOpen(false);
   };
 
+  const handleQuickActionMorningBrief = () => {
+    if (hasUploadingAttachment || isSending) return;
+    onSendMessage(MORNING_BRIEF_QUICK_ACTION_TEXT);
+    setInputValue("");
+    setIsMediaTrayOpen(false);
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -1859,6 +1870,24 @@ const SharedFooter = ({
           : quotaSummary
             ? `Beta quota: ${quotaSummary.remaining.text} texts left · ${formatMinutesFromSeconds(quotaSummary.remaining.voiceSeconds)} voice min left · ${formatMinutesFromSeconds(quotaSummary.remaining.cameraSeconds)} camera min left`
             : "Beta quota unavailable right now."}
+      </div>
+      <div className="mb-2 flex items-center justify-center">
+        <button
+          type="button"
+          onClick={handleQuickActionMorningBrief}
+          disabled={isSending || hasUploadingAttachment}
+          className="inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-[11px] font-medium transition-colors disabled:opacity-50"
+          style={{
+            borderColor: "var(--app-soft-card-border)",
+            backgroundColor:
+              "color-mix(in srgb, var(--app-soft-card-bg) 70%, transparent)",
+            color: "var(--app-on-dark-muted)",
+          }}
+          data-testid="button-morning-brief-quick-action"
+        >
+          <Globe className="h-3 w-3" style={{ color: "var(--app-accent)" }} />
+          Morning Brief
+        </button>
       </div>
       {pendingAttachments.length > 0 && (
         <div className="mb-2 flex items-center gap-2 overflow-x-auto pb-1">
@@ -3660,7 +3689,7 @@ const SharedHeader = ({
   );
 };
 
-const VoiceView = ({ isActive, isConnecting, onEndCall, onProfile, assistantName, assistantAvatar, selectedVoice, setSelectedVoice, mode, setMode, duration, userProfileImage, isVideoEnabled, onToggleVideo, onFlipCamera, videoStream, isVideoTransitioning, cameraFacingMode, webLookupStatus }: { 
+const VoiceView = ({ isActive, isConnecting, onEndCall, onProfile, assistantName, assistantAvatar, selectedVoice, setSelectedVoice, mode, setMode, duration, userProfileImage, isVideoEnabled, onToggleVideo, onFlipCamera, videoStream, isVideoTransitioning, cameraFacingMode, webLookupStatus, webLookupLabel }: {
   isActive: boolean; 
   isConnecting: boolean;
   onEndCall: () => void;
@@ -3680,6 +3709,7 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onProfile, assistantName
   isVideoTransitioning: boolean;
   cameraFacingMode: CameraFacingMode;
   webLookupStatus: WebLookupStatus | null;
+  webLookupLabel?: string | null;
 }) => {
   const videoPreviewRef = useRef<HTMLVideoElement | null>(null);
 
@@ -3761,12 +3791,12 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onProfile, assistantName
                         />
                       ))}
                     </span>
-                    Searching the web…
+                    {webLookupLabel ?? "Searching the web…"}
                   </span>
                 ) : (
                   <span className="flex items-center gap-1.5">
                     <Globe className="h-3 w-3" style={{ color: "var(--app-accent)" }} />
-                    Web-checked
+                    {webLookupLabel ?? "Web-checked"}
                   </span>
                 )}
               </motion.div>
@@ -3880,7 +3910,7 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onProfile, assistantName
                             className="text-[11px] font-medium tracking-wide"
                             style={{ color: "var(--app-on-dark-muted)" }}
                           >
-                            Looking up latest info
+                            {webLookupLabel ?? "Looking up latest info"}
                           </span>
                         </div>
                         <div
@@ -3915,7 +3945,7 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onProfile, assistantName
                           className="text-[11px] font-medium tracking-wide"
                           style={{ color: "var(--app-on-dark-muted)" }}
                         >
-                          Web-checked
+                          {webLookupLabel ?? "Web-checked"}
                         </span>
                       </div>
                     ) : (
@@ -5189,6 +5219,7 @@ const TextView = ({
   persona,
   assistantAvatarSrc,
   webLookupStatus,
+  webLookupLabel,
   mode,
   userProfileImage,
   onOpenArtifact,
@@ -5201,6 +5232,7 @@ const TextView = ({
   persona: Persona;
   assistantAvatarSrc: string;
   webLookupStatus: WebLookupStatus | null;
+  webLookupLabel?: string | null;
   mode: Mode;
   userProfileImage?: string;
   onOpenArtifact: (artifactId: string) => void;
@@ -5315,12 +5347,12 @@ const TextView = ({
                     />
                   ))}
                 </span>
-                Searching the web…
+                {webLookupLabel ?? "Searching the web…"}
               </span>
             ) : (
               <span className="flex items-center gap-1.5">
                 <Globe className="h-3 w-3" style={{ color: "var(--app-accent)" }} />
-                Web-checked
+                {webLookupLabel ?? "Web-checked"}
               </span>
             )}
           </motion.div>
@@ -6449,6 +6481,12 @@ function App() {
     useState<WebLookupStatus | null>(null);
   const [voiceWebLookupStatus, setVoiceWebLookupStatus] =
     useState<WebLookupStatus | null>(null);
+  const [textWebLookupLabel, setTextWebLookupLabel] = useState<string | null>(
+    null,
+  );
+  const [voiceWebLookupLabel, setVoiceWebLookupLabel] = useState<string | null>(
+    null,
+  );
 
   const [pendingAttachments, setPendingAttachments] = useState<
     PendingImageAttachment[]
@@ -6502,13 +6540,14 @@ function App() {
     console.log("[LiveTrace]", event, metadata);
   };
 
-  const clearWebLookupStatus = useCallback((mode: "text" | "voice") => {
+  const clearWebLookupStatus = useCallback((mode: WebLookupMode) => {
     if (mode === "text") {
       if (textWebLookupClearTimerRef.current !== null) {
         window.clearTimeout(textWebLookupClearTimerRef.current);
         textWebLookupClearTimerRef.current = null;
       }
       setTextWebLookupStatus(null);
+      setTextWebLookupLabel(null);
       return;
     }
     if (voiceWebLookupClearTimerRef.current !== null) {
@@ -6516,14 +6555,26 @@ function App() {
       voiceWebLookupClearTimerRef.current = null;
     }
     setVoiceWebLookupStatus(null);
+    setVoiceWebLookupLabel(null);
   }, []);
+
+  const defaultWebLookupLabel = useCallback(
+    (mode: WebLookupMode, status: WebLookupStatus): string => {
+      if (status === "searching") {
+        return mode === "voice" ? "Looking up latest info" : "Searching the web…";
+      }
+      return "Web-checked";
+    },
+    [],
+  );
 
   const SEARCH_MIN_DISPLAY_MS = 1400;
 
   const setWebLookupStatus = useCallback(
     (
-      mode: "text" | "voice",
+      mode: WebLookupMode,
       status: WebLookupStatus | "idle",
+      label?: string,
     ) => {
       if (status === "idle") {
         clearWebLookupStatus(mode);
@@ -6536,6 +6587,7 @@ function App() {
       const minTimerRef = mode === "voice" ? voiceSearchMinTimerRef : textSearchMinTimerRef;
       const clearTimerRef = mode === "voice" ? voiceWebLookupClearTimerRef : textWebLookupClearTimerRef;
       const setStatus = mode === "voice" ? setVoiceWebLookupStatus : setTextWebLookupStatus;
+      const setLabel = mode === "voice" ? setVoiceWebLookupLabel : setTextWebLookupLabel;
 
       if (clearTimerRef.current !== null) {
         window.clearTimeout(clearTimerRef.current);
@@ -6549,19 +6601,23 @@ function App() {
       if (status === "searching") {
         startedAtRef.current = Date.now();
         setStatus("searching");
+        setLabel(label ?? defaultWebLookupLabel(mode, "searching"));
         return;
       }
 
       if (startedAtRef.current === null) {
         startedAtRef.current = Date.now();
         setStatus("searching");
+        setLabel(defaultWebLookupLabel(mode, "searching"));
       }
 
       const applyGrounded = () => {
         startedAtRef.current = null;
         setStatus("grounded");
+        setLabel(label ?? defaultWebLookupLabel(mode, "grounded"));
         clearTimerRef.current = window.setTimeout(() => {
           setStatus(null);
+          setLabel(null);
           clearTimerRef.current = null;
         }, 3600);
       };
@@ -6578,7 +6634,7 @@ function App() {
         applyGrounded();
       }
     },
-    [clearWebLookupStatus],
+    [clearWebLookupStatus, defaultWebLookupLabel],
   );
 
   useEffect(() => {
@@ -7715,7 +7771,7 @@ function App() {
       }
 
       if (event.type === "web_search") {
-        setWebLookupStatus(event.mode ?? "text", event.status);
+        setWebLookupStatus(event.mode ?? "text", event.status, event.label);
         return;
       }
 
@@ -8585,8 +8641,16 @@ function App() {
             text,
           });
         },
-        onWebSearch: ({ status }) => {
-          setWebLookupStatus("voice", status);
+        onWebSearch: ({ status, label }) => {
+          setWebLookupStatus("voice", status, label);
+        },
+        onMorningBriefDigest: ({ text }) => {
+          if (!resolvedConversationId || !text.trim()) return;
+          queueTranscriptPersist({
+            conversationId: resolvedConversationId,
+            sender: "assistant",
+            text,
+          });
         },
         onError: (error) => {
           console.error("Gemini Live session error:", {
@@ -8642,9 +8706,12 @@ function App() {
       await liveSessionRef.current.start({
         ephemeralToken: tokenPayload.ephemeralToken,
         model: tokenPayload.model,
+        conversationId,
         preAcquiredMicStream: preAcquiredMicStream ?? undefined,
         googleSearchGroundingEnabled:
           tokenPayload.configSummary?.googleSearchGroundingEnabled ?? false,
+        morningBriefFunctionCallingEnabled:
+          tokenPayload.configSummary?.morningBriefFunctionCallingEnabled ?? false,
       });
 
       if (startNonce !== liveStartNonceRef.current) {
@@ -9042,6 +9109,7 @@ function App() {
               persona={persona}
               assistantAvatarSrc={resolvedAssistantAvatar}
               webLookupStatus={textWebLookupStatus}
+              webLookupLabel={textWebLookupLabel}
               mode={mode}
               userProfileImage={resolvedProfileImage}
               onOpenArtifact={handleOpenArtifact}
@@ -9075,6 +9143,7 @@ function App() {
             isVideoTransitioning={isVideoTransitioning}
             cameraFacingMode={cameraFacingMode}
             webLookupStatus={voiceWebLookupStatus}
+            webLookupLabel={voiceWebLookupLabel}
           />
 
           <AnimatePresence>

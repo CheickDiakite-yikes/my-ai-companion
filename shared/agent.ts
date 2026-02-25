@@ -222,6 +222,52 @@ export interface ArtifactGenerationContract {
   imageOnlySlides?: boolean;
 }
 
+export type MorningBriefFailureCode =
+  | "brief_gmail_not_connected"
+  | "brief_gmail_token_refresh_failed"
+  | "brief_gcp_upstream_timeout"
+  | "brief_grounding_unavailable"
+  | "brief_quota_blocked"
+  | "brief_upstream_failed";
+
+export interface MorningBriefRequest {
+  userId: string;
+  includeInbox: boolean;
+  refresh: boolean;
+  timezone: string;
+  localDate: string;
+}
+
+export interface MorningBriefHeadlineItem {
+  title: string;
+  summary: string;
+  sourceUrl: string | null;
+  publishedAt: string | null;
+}
+
+export interface InboxDigestItem {
+  threadId: string;
+  from: string;
+  subject: string;
+  snippet: string;
+  urgency: "high" | "medium" | "low";
+}
+
+export interface MorningBriefResult {
+  headlineItems: MorningBriefHeadlineItem[];
+  marketSnapshot: string;
+  inboxHighlights: InboxDigestItem[];
+  citations: string[];
+  generatedAt: string;
+  dataFreshnessSeconds: number;
+  partialFailures: MorningBriefFailureCode[];
+}
+
+export interface InboxDigestResult {
+  inboxHighlights: InboxDigestItem[];
+  partialFailures: MorningBriefFailureCode[];
+}
+
 export type ArtifactRenderEngine = "json_render";
 
 export interface ArtifactRenderElementV1 {
