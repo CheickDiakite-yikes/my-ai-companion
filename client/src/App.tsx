@@ -199,8 +199,8 @@ function renderSimpleMarkdown(text: string): React.ReactNode {
       } else if (match[7] && match[8]) {
         parts.push(
           <a key={`link-${inlineKey++}`} href={match[8]} target="_blank" rel="noopener noreferrer"
-            className="underline decoration-1 underline-offset-2 opacity-80 hover:opacity-100 transition-opacity"
-            style={{ color: "var(--app-accent, #DAA112)" }}
+            className="underline decoration-2 underline-offset-4 font-bold hover:opacity-80 transition-opacity"
+            style={{ color: "var(--app-assistant-bubble-text)" }}
           >{match[7]}</a>
         );
       } else if (match[9]) {
@@ -208,8 +208,8 @@ function renderSimpleMarkdown(text: string): React.ReactNode {
         try { domain = new URL(match[9]).hostname.replace(/^www\./, ""); } catch { domain = match[9].slice(0, 30); }
         parts.push(
           <a key={`url-${inlineKey++}`} href={match[9]} target="_blank" rel="noopener noreferrer"
-            className="underline decoration-1 underline-offset-2 opacity-80 hover:opacity-100 transition-opacity"
-            style={{ color: "var(--app-accent, #DAA112)" }}
+            className="underline decoration-2 underline-offset-4 font-bold hover:opacity-80 transition-opacity"
+            style={{ color: "var(--app-assistant-bubble-text)" }}
           >{domain}</a>
         );
       }
@@ -230,14 +230,14 @@ function renderSimpleMarkdown(text: string): React.ReactNode {
     if (h3Match) {
       flushList();
       elements.push(
-        <div key={`h3-${keyCounter++}`} className="text-[13px] font-semibold uppercase tracking-wide mt-2 mb-0.5 opacity-75">
+        <div key={`h3-${keyCounter++}`} className="text-[12px] font-bold uppercase tracking-wider mt-4 mb-1.5 opacity-90 border-b border-current pb-0.5" style={{ color: "var(--app-assistant-bubble-text)", borderColor: "color-mix(in srgb, var(--app-assistant-bubble-text) 20%, transparent)" }}>
           {renderInline(h3Match[1])}
         </div>
       );
     } else if (h2Match) {
       flushList();
       elements.push(
-        <div key={`h2-${keyCounter++}`} className="text-[15px] font-bold mt-2 mb-1" style={{ color: "var(--app-accent, #DAA112)" }}>
+        <div key={`h2-${keyCounter++}`} className="text-[17px] font-black mt-5 mb-2 tracking-tight" style={{ color: "var(--app-assistant-bubble-text)" }}>
           {renderInline(h2Match[1])}
         </div>
       );
@@ -1862,12 +1862,16 @@ const SharedFooter = ({
   const cameraInputId = useId();
   const galleryInputId = useId();
 
+  const [briefRequested, setBriefRequested] = useState(false);
+
   const hasReadyAttachment = pendingAttachments.some((item) => item.status === "ready");
   const hasUploadingAttachment = pendingAttachments.some(
     (item) => item.status === "uploading",
   );
   const showMorningBriefQuickAction =
     mode === "text" &&
+    !isSending &&
+    !briefRequested &&
     !uploadError &&
     pendingAttachments.length === 0 &&
     !inputValue.trim() &&
@@ -1877,6 +1881,9 @@ const SharedFooter = ({
     const trimmed = inputValue.trim();
     if (!trimmed && !hasReadyAttachment) return;
     if (hasUploadingAttachment || isSending) return;
+    if (trimmed.toLowerCase().includes("morning brief")) {
+      setBriefRequested(true);
+    }
     onSendMessage(trimmed);
     setInputValue("");
     setIsMediaTrayOpen(false);
@@ -1884,6 +1891,7 @@ const SharedFooter = ({
 
   const handleQuickActionMorningBrief = () => {
     if (isSending) return;
+    setBriefRequested(true);
     onSendMessage(MORNING_BRIEF_QUICK_ACTION_TEXT, {
       ignoreAttachments: true,
     });

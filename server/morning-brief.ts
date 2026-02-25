@@ -784,9 +784,9 @@ export function renderMorningBriefForChat(
 
   const bulletLines: string[] = [];
   bulletLines.push("## Morning Brief");
-  bulletLines.push(`- Generated: ${new Date(brief.generatedAt).toLocaleString()}`);
+  bulletLines.push(`*Generated: ${new Date(brief.generatedAt).toLocaleString()}*`);
   bulletLines.push("");
-  bulletLines.push("### Top News");
+  bulletLines.push("### TOP NEWS");
   if (brief.headlineItems.length === 0) {
     bulletLines.push("- No verified headlines available right now.");
   } else {
@@ -796,12 +796,12 @@ export function renderMorningBriefForChat(
     }
   }
   bulletLines.push("");
-  bulletLines.push("### Markets");
+  bulletLines.push("### MARKETS");
   bulletLines.push(`- ${brief.marketSnapshot || "Market snapshot unavailable."}`);
 
   if (options.includeInbox) {
     bulletLines.push("");
-    bulletLines.push("### Inbox Highlights");
+    bulletLines.push("### INBOX HIGHLIGHTS");
     if (brief.inboxHighlights.length === 0) {
       bulletLines.push("- No inbox highlights available.");
     } else {
@@ -816,13 +816,13 @@ export function renderMorningBriefForChat(
   if (brief.partialFailures.length > 0) {
     bulletLines.push("");
     bulletLines.push(
-      `- _Partial issue_: ${brief.partialFailures.join(", ").replace(/_/g, " ")}`,
+      `*Partial issue*: ${brief.partialFailures.join(", ").replace(/_/g, " ")}`,
     );
   }
 
   if (brief.citations.length > 0) {
     bulletLines.push("");
-    bulletLines.push("### Sources");
+    bulletLines.push("### SOURCES");
     for (const source of brief.citations.slice(0, 10)) {
       bulletLines.push(`- ${source}`);
     }
