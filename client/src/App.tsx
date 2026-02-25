@@ -1844,6 +1844,7 @@ const SharedFooter = ({
   uploadError,
   quotaSummary,
   quotaLoading,
+  hasBriefInChat,
 }: { 
   persona: Persona, 
   mode: Mode,
