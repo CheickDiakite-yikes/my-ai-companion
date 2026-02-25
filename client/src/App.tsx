@@ -9170,8 +9170,8 @@ function App() {
   }
 
   const isBrief = (text?: string) => text?.includes("## Morning Brief") || text?.includes("### TOP NEWS");
-  const hasBriefInChat = renderItems.some(item => 
-    item.message.sender === "assistant" && isBrief(item.message.text)
+  const hasBriefInChat = messagesData.some(msg => 
+    msg.sender === "assistant" && isBrief(msg.text)
   );
 
   return (
