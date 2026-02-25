@@ -1856,6 +1856,7 @@ const SharedFooter = ({
   uploadError: string | null;
   quotaSummary?: QuotaSummaryData;
   quotaLoading?: boolean;
+  hasBriefInChat?: boolean;
 }) => {
   const [inputValue, setInputValue] = useState("");
   const [isMediaTrayOpen, setIsMediaTrayOpen] = useState(false);
@@ -1872,6 +1873,7 @@ const SharedFooter = ({
     mode === "text" &&
     !isSending &&
     !briefRequested &&
+    !hasBriefInChat &&
     !uploadError &&
     pendingAttachments.length === 0 &&
     !inputValue.trim() &&
@@ -9167,6 +9169,11 @@ function App() {
     );
   }
 
+  const isBrief = (text?: string) => text?.includes("## Morning Brief") || text?.includes("### TOP NEWS");
+  const hasBriefInChat = renderItems.some(item => 
+    item.message.sender === "assistant" && isBrief(item.message.text)
+  );
+
   return (
     <div
       className="w-full h-[100dvh] min-h-[100dvh] flex items-center justify-center overflow-hidden"
@@ -9196,6 +9203,7 @@ function App() {
             uploadError={composerError}
             quotaSummary={quotaSummary}
             quotaLoading={isQuotaLoading}
+            hasBriefInChat={hasBriefInChat}
           />
 
           <div className="absolute inset-0 z-0">
