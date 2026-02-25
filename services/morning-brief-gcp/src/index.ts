@@ -276,7 +276,6 @@ app.post("/v1/brief/news", async (req, res) => {
       config: {
         temperature: 0.2,
         maxOutputTokens: 1400,
-        responseMimeType: "application/json",
         tools: [{ googleSearch: {} }],
       },
     });
