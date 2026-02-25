@@ -60,8 +60,8 @@ const MAX_NEWS_ITEMS = Math.min(
 );
 const GCP_TIMEOUT_MS = Math.max(
   1_500,
-  Number.parseInt(process.env.MORNING_BRIEF_GCP_TIMEOUT_MS ?? "5000", 10) ||
-    5_000,
+  Number.parseInt(process.env.MORNING_BRIEF_GCP_TIMEOUT_MS ?? "12000", 10) ||
+    12_000,
 );
 const GCP_BASE_URL = (process.env.MORNING_BRIEF_GCP_BASE_URL ?? "").trim();
 
@@ -326,6 +326,8 @@ async function fetchNewsAndMarkets(input: {
     timezone: input.timezone,
   });
 
+  const gatewayFailureCodes: MorningBriefFailureCode[] = [];
+
   if (GCP_BASE_URL) {
     try {
       const gatewayResponse = await callGateway<{
@@ -362,24 +364,31 @@ async function fetchNewsAndMarkets(input: {
         citations: citations.length,
       });
 
-      return {
-        headlineItems,
-        marketSnapshot:
-          marketSnapshot || "Market snapshot unavailable in this run.",
-        citations,
-        partialFailures,
-      };
+      const hasUsableCoverage =
+        headlineItems.length > 0 ||
+        citations.length > 0 ||
+        marketSnapshot.length > 0;
+      if (hasUsableCoverage) {
+        return {
+          headlineItems,
+          marketSnapshot:
+            marketSnapshot || "Market snapshot unavailable in this run.",
+          citations,
+          partialFailures,
+        };
+      }
+
+      input.logger?.("brief.news.fetch.failed", {
+        via: "gcp_gateway",
+        reason: "empty_coverage",
+      });
+      gatewayFailureCodes.push("brief_upstream_failed");
     } catch (error) {
       input.logger?.("brief.news.fetch.failed", {
         via: "gcp_gateway",
         message: error instanceof Error ? error.message : String(error),
       });
-      return {
-        headlineItems: [],
-        marketSnapshot: "Market snapshot unavailable right now.",
-        citations: [],
-        partialFailures: ["brief_gcp_upstream_timeout"],
-      };
+      gatewayFailureCodes.push("brief_gcp_upstream_timeout");
     }
   }
 
@@ -426,9 +435,14 @@ async function fetchNewsAndMarkets(input: {
       headlineItems,
       marketSnapshot,
       citations,
-      partialFailures: fallback.googleSearchGroundingUsed
-        ? []
-        : ["brief_grounding_unavailable"],
+      partialFailures: Array.from(
+        new Set<MorningBriefFailureCode>([
+          ...gatewayFailureCodes,
+          ...(fallback.googleSearchGroundingUsed
+            ? []
+            : (["brief_grounding_unavailable"] as MorningBriefFailureCode[])),
+        ]),
+      ),
     };
   } catch (error) {
     input.logger?.("brief.news.fetch.failed", {
@@ -439,7 +453,12 @@ async function fetchNewsAndMarkets(input: {
       headlineItems: [],
       marketSnapshot: "Market snapshot unavailable right now.",
       citations: [],
-      partialFailures: ["brief_grounding_unavailable"],
+      partialFailures: Array.from(
+        new Set<MorningBriefFailureCode>([
+          ...gatewayFailureCodes,
+          "brief_grounding_unavailable",
+        ]),
+      ),
     };
   }
 }

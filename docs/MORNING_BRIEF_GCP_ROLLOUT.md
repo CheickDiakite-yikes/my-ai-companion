@@ -52,7 +52,7 @@ gcloud run deploy zeeme-morning-brief-gcp \
 In main app env:
 
 - `MORNING_BRIEF_GCP_BASE_URL=https://zeeme-morning-brief-gcp-<id>-uc.a.run.app`
-- `MORNING_BRIEF_GCP_TIMEOUT_MS=5000`
+- `MORNING_BRIEF_GCP_TIMEOUT_MS=12000`
 - `MORNING_BRIEF_CACHE_TTL_MS=900000`
 - `MORNING_BRIEF_DAILY_CAP=3`
 
