@@ -24,7 +24,7 @@ const defaultMaxThreads = Math.max(
 );
 const MARKET_SNAPSHOT_UNAVAILABLE = "Market snapshot unavailable right now.";
 const NEWS_RETRY_MIN_HEADLINES = 3;
-const DEFAULT_FETCH_TIMEOUT_MS = 3500;
+const DEFAULT_FETCH_TIMEOUT_MS = 7000;
 
 function getGeminiClient(): GoogleGenAI {
   const apiKey = process.env.GEMINI_API_KEY?.trim();
@@ -169,6 +169,17 @@ interface NewsCandidate {
   usedJsonRepair: boolean;
 }
 
+function isMissingMarketSnapshot(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return true;
+  return (
+    normalized === MARKET_SNAPSHOT_UNAVAILABLE.toLowerCase() ||
+    /(?:market snapshot unavailable|no market snapshot|not available|cannot provide|unable to provide)/i.test(
+      normalized,
+    )
+  );
+}
+
 function decodeXmlEntities(value: string): string {
   return value
     .replace(/&amp;/g, "&")
@@ -215,7 +226,13 @@ async function fetchTextWithTimeout(url: string, timeoutMs = DEFAULT_FETCH_TIMEO
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetch(url, { signal: controller.signal });
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        "User-Agent": "ZeeMeMorningBriefBot/1.0 (+https://zeeme.replit.app)",
+        Accept: "application/rss+xml, application/xml, text/xml;q=0.9, */*;q=0.1",
+      },
+    });
     if (!response.ok) {
       throw new Error(`RSS request failed with status ${response.status}`);
     }
@@ -266,13 +283,44 @@ async function fetchGoogleNewsRssFallback(params: {
   );
   const suffix = "&hl=en-US&gl=US&ceid=US:en";
 
-  const [generalXml, marketXml] = await Promise.all([
-    fetchTextWithTimeout(`${base}?q=${generalQuery}${suffix}`),
-    fetchTextWithTimeout(`${base}?q=${marketQuery}${suffix}`),
-  ]);
+  const feedRequests = [
+    {
+      kind: "general" as const,
+      url: `${base}?q=${generalQuery}${suffix}`,
+      limit: Math.max(params.maxItems, params.minItems),
+    },
+    {
+      kind: "market" as const,
+      url: `${base}?q=${marketQuery}${suffix}`,
+      limit: 4,
+    },
+    {
+      kind: "market" as const,
+      url: "https://feeds.bbci.co.uk/news/business/rss.xml",
+      limit: 4,
+    },
+  ];
 
-  const generalHeadlines = parseRssHeadlines(generalXml, Math.max(params.maxItems, params.minItems));
-  const marketHeadlines = parseRssHeadlines(marketXml, 4);
+  const settled = await Promise.allSettled(
+    feedRequests.map(async (feed) => {
+      const xml = await fetchTextWithTimeout(feed.url);
+      const items = parseRssHeadlines(xml, feed.limit);
+      return { kind: feed.kind, items };
+    }),
+  );
+
+  const generalHeadlines: HeadlineItem[] = [];
+  const marketHeadlines: HeadlineItem[] = [];
+  for (const result of settled) {
+    if (result.status !== "fulfilled") {
+      continue;
+    }
+    if (result.value.kind === "general") {
+      generalHeadlines.push(...result.value.items);
+    } else {
+      marketHeadlines.push(...result.value.items);
+    }
+  }
 
   const citations = dedupeStrings(
     [...generalHeadlines, ...marketHeadlines]
@@ -404,8 +452,7 @@ async function generateNewsCandidate(params: {
 function scoreNewsCandidate(candidate: NewsCandidate): number {
   const headlineScore = candidate.headlineItems.length * 10;
   const citationScore = Math.min(candidate.citations.length, 6) * 3;
-  const marketScore =
-    candidate.marketSnapshot !== MARKET_SNAPSHOT_UNAVAILABLE ? 6 : 0;
+  const marketScore = !isMissingMarketSnapshot(candidate.marketSnapshot) ? 6 : 0;
   return headlineScore + citationScore + marketScore;
 }
 
@@ -446,10 +493,9 @@ function mergeNewsCandidates(params: {
       .filter((value): value is string => Boolean(value)),
   ]);
 
-  const marketSnapshot =
-    params.primary.marketSnapshot !== MARKET_SNAPSHOT_UNAVAILABLE
-      ? params.primary.marketSnapshot
-      : params.fallback.marketSnapshot;
+  const marketSnapshot = !isMissingMarketSnapshot(params.primary.marketSnapshot)
+    ? params.primary.marketSnapshot
+    : params.fallback.marketSnapshot;
 
   return {
     headlineItems,
@@ -696,7 +742,7 @@ app.post("/v1/brief/news", async (req, res) => {
       }
     }
 
-    if (selectedCandidate.marketSnapshot === MARKET_SNAPSHOT_UNAVAILABLE) {
+    if (isMissingMarketSnapshot(selectedCandidate.marketSnapshot)) {
       const recoveredSnapshot = await recoverMarketSnapshot({
         ai,
         model,
