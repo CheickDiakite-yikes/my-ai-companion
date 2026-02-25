@@ -4,7 +4,7 @@ import type {
   MorningBriefHeadlineItem,
   MorningBriefResult,
 } from "@shared/agent";
-import { generateTextReply, resolveCompanionTimeZone } from "./gemini";
+import { generateStructuredJson, resolveCompanionTimeZone } from "./gemini";
 
 type BriefEventLogger = (
   event: string,
@@ -393,40 +393,44 @@ async function fetchNewsAndMarkets(input: {
   }
 
   try {
-    const prompt = [
-      "IMPORTANT: You must respond with ONLY a JSON object, no conversational text before or after.",
-      "Search the web for today's top news headlines and current stock market status.",
+    const systemInstruction = [
+      "You are a structured data extraction service.",
+      "Search the web for current news headlines and stock market data.",
+      "Return ONLY valid JSON matching the requested schema.",
+      "Do not include any conversational text, greetings, or markdown formatting.",
+    ].join(" ");
+
+    const userPrompt = [
+      `Search the web for today's top news headlines and current stock market status.`,
       `Timezone: ${input.timezone}`,
-      `Respond with exactly this JSON structure:`,
+      `Return JSON with this exact structure:`,
       `{"headlineItems":[{"title":"headline text","summary":"1-2 sentence summary","sourceUrl":"https://source-url-or-null","publishedAt":"ISO-date-or-null"}],"marketSnapshot":"brief market summary under 75 words with major index direction","citations":["https://source-urls"]}`,
       `Rules:`,
       `- Include up to ${MAX_NEWS_ITEMS} top current headlines from today.`,
       "- Prefer high-signal global + business + technology coverage.",
       "- Keep marketSnapshot under 75 words and include major index direction (S&P 500, Dow, Nasdaq).",
       "- If a field is unknown, set sourceUrl/publishedAt to null.",
-      "- Output ONLY valid JSON. No markdown, no explanation, no greeting.",
     ].join("\n");
 
-    const fallback = await generateTextReply({
-      persona: "Zee",
-      messages: [{ sender: "user", text: prompt }],
-      enableMultipart: false,
-      clientTimeZone: input.timezone,
+    const fallback = await generateStructuredJson({
+      systemInstruction,
+      userPrompt,
+      enableGoogleSearchGrounding: true,
     });
 
     input.logger?.("brief.news.fallback.raw_response", {
-      replyLength: fallback.replyText.length,
-      replyPreview: fallback.replyText.slice(0, 500),
+      replyLength: fallback.text.length,
+      replyPreview: fallback.text.slice(0, 500),
       googleSearchGroundingUsed: fallback.googleSearchGroundingUsed,
     });
 
     let parsed: unknown = null;
     try {
-      parsed = parseJsonFromText(fallback.replyText);
+      parsed = parseJsonFromText(fallback.text);
     } catch (parseError) {
       input.logger?.("brief.news.fallback.json_parse_failed", {
         error: parseError instanceof Error ? parseError.message : String(parseError),
-        replyPreview: fallback.replyText.slice(0, 300),
+        replyPreview: fallback.text.slice(0, 300),
       });
     }
     const record =

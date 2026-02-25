@@ -3238,3 +3238,63 @@ export async function summarizeImageForMemory(
 
   return summary.slice(0, 500);
 }
+
+export async function generateStructuredJson(input: {
+  systemInstruction: string;
+  userPrompt: string;
+  enableGoogleSearchGrounding?: boolean;
+}): Promise<{ text: string; googleSearchGroundingUsed: boolean }> {
+  const ai = getGeminiClient();
+  const model = resolveTextModel();
+  const useGrounding = input.enableGoogleSearchGrounding ?? true;
+
+  const groundedConfig: Record<string, unknown> = {
+    systemInstruction: input.systemInstruction,
+    temperature: 0.3,
+    maxOutputTokens: 2048,
+    tools: [{ googleSearch: {} }],
+  };
+
+  const structuredConfig: Record<string, unknown> = {
+    systemInstruction: input.systemInstruction,
+    temperature: 0.3,
+    maxOutputTokens: 2048,
+    responseMimeType: "application/json",
+  };
+
+  let response: Awaited<ReturnType<GoogleGenAI["models"]["generateContent"]>>;
+  let groundingUsed = false;
+
+  if (useGrounding) {
+    try {
+      response = await ai.models.generateContent({
+        model,
+        contents: [{ role: "user", parts: [{ text: input.userPrompt }] }],
+        config: groundedConfig,
+      });
+      groundingUsed = true;
+    } catch (error) {
+      if (!shouldRetryWithoutGrounding(error)) {
+        throw error;
+      }
+      response = await ai.models.generateContent({
+        model,
+        contents: [{ role: "user", parts: [{ text: input.userPrompt }] }],
+        config: structuredConfig,
+      });
+    }
+  } else {
+    response = await ai.models.generateContent({
+      model,
+      contents: [{ role: "user", parts: [{ text: input.userPrompt }] }],
+      config: structuredConfig,
+    });
+  }
+
+  const text = response.text?.trim() ?? "";
+  if (!text) {
+    throw new Error("Gemini returned an empty structured response");
+  }
+
+  return { text, googleSearchGroundingUsed: groundingUsed };
+}
