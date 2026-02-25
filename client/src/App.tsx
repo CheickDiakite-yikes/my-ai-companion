@@ -166,7 +166,7 @@ function renderSimpleMarkdown(text: string): React.ReactNode {
     if (listItems.length > 0 && listType) {
       const ListTag = listType;
       elements.push(
-        <ListTag key={`list-${keyCounter++}`} className={listType === "ul" ? "list-disc pl-5 my-1" : "list-decimal pl-5 my-1"}>
+        <ListTag key={`list-${keyCounter++}`} className={listType === "ul" ? "list-disc pl-5 my-1 space-y-1" : "list-decimal pl-5 my-1 space-y-1"}>
           {listItems}
         </ListTag>
       );
@@ -177,7 +177,7 @@ function renderSimpleMarkdown(text: string): React.ReactNode {
 
   const renderInline = (content: string): React.ReactNode[] => {
     const parts: React.ReactNode[] = [];
-    const regex = /(\*\*\*(.+?)\*\*\*|\*\*(.+?)\*\*|\*(.+?)\*|__(.+?)__|_(.+?)_)/g;
+    const regex = /(\*\*\*(.+?)\*\*\*|\*\*(.+?)\*\*|\*(.+?)\*|__(.+?)__|_(.+?)_|\[([^\]]+)\]\((https?:\/\/[^)]+)\)|(https?:\/\/[^\s<)]+))/g;
     let lastIndex = 0;
     let match;
     let inlineKey = 0;
@@ -196,6 +196,22 @@ function renderSimpleMarkdown(text: string): React.ReactNode {
         parts.push(<strong key={`bu-${inlineKey++}`}>{match[5]}</strong>);
       } else if (match[6]) {
         parts.push(<em key={`iu-${inlineKey++}`}>{match[6]}</em>);
+      } else if (match[7] && match[8]) {
+        parts.push(
+          <a key={`link-${inlineKey++}`} href={match[8]} target="_blank" rel="noopener noreferrer"
+            className="underline decoration-1 underline-offset-2 opacity-80 hover:opacity-100 transition-opacity"
+            style={{ color: "var(--app-accent, #DAA112)" }}
+          >{match[7]}</a>
+        );
+      } else if (match[9]) {
+        let domain = "";
+        try { domain = new URL(match[9]).hostname.replace(/^www\./, ""); } catch { domain = match[9].slice(0, 30); }
+        parts.push(
+          <a key={`url-${inlineKey++}`} href={match[9]} target="_blank" rel="noopener noreferrer"
+            className="underline decoration-1 underline-offset-2 opacity-80 hover:opacity-100 transition-opacity"
+            style={{ color: "var(--app-accent, #DAA112)" }}
+          >{domain}</a>
+        );
       }
       lastIndex = match.index + match[0].length;
     }
@@ -206,10 +222,26 @@ function renderSimpleMarkdown(text: string): React.ReactNode {
   };
 
   for (const line of lines) {
+    const h3Match = line.match(/^###\s+(.+)/);
+    const h2Match = !h3Match ? line.match(/^##\s+(.+)/) : null;
     const bulletMatch = line.match(/^\s*[-•]\s+(.+)/);
     const numberedMatch = line.match(/^\s*(\d+)[.)]\s+(.+)/);
 
-    if (bulletMatch) {
+    if (h3Match) {
+      flushList();
+      elements.push(
+        <div key={`h3-${keyCounter++}`} className="text-[13px] font-semibold uppercase tracking-wide mt-2 mb-0.5 opacity-75">
+          {renderInline(h3Match[1])}
+        </div>
+      );
+    } else if (h2Match) {
+      flushList();
+      elements.push(
+        <div key={`h2-${keyCounter++}`} className="text-[15px] font-bold mt-2 mb-1" style={{ color: "var(--app-accent, #DAA112)" }}>
+          {renderInline(h2Match[1])}
+        </div>
+      );
+    } else if (bulletMatch) {
       if (listType !== "ul") { flushList(); listType = "ul"; }
       listItems.push(<li key={`li-${keyCounter++}`}>{renderInline(bulletMatch[1])}</li>);
     } else if (numberedMatch) {
@@ -5460,7 +5492,40 @@ const TextView = ({
                     </div>
                   )}
                   <div className={isUnifiedTaskCard ? "" : `px-5 py-3 ${msg.sender === "user" ? "whitespace-pre-wrap" : ""}`}>
-                    {msg.isTyping ? (
+                    {msg.isTyping ? (() => {
+                      const prevUserMsg = renderItems.slice(0, idx).reverse().find(i => i.message.sender === "user");
+                      const isBriefLoading = prevUserMsg?.message.text?.toLowerCase().includes("morning brief");
+                      return isBriefLoading ? (
+                      <div className="flex items-center gap-2 py-1.5">
+                        <motion.div
+                          animate={{ rotate: 360 }}
+                          transition={{ duration: 3, repeat: Infinity, ease: "linear" }}
+                        >
+                          <Globe className="h-4 w-4" style={{ color: "var(--app-accent, #DAA112)" }} />
+                        </motion.div>
+                        <span className="text-[12px] font-medium" style={{ color: "var(--app-assistant-bubble-text)", opacity: 0.8 }}>
+                          Fetching your briefing
+                        </span>
+                        <motion.span
+                          className="h-1 w-1 rounded-full"
+                          style={{ backgroundColor: "var(--app-accent, #DAA112)" }}
+                          animate={{ opacity: [0.3, 1, 0.3] }}
+                          transition={{ duration: 1.2, repeat: Infinity, ease: "easeInOut" }}
+                        />
+                        <motion.span
+                          className="h-1 w-1 rounded-full"
+                          style={{ backgroundColor: "var(--app-accent, #DAA112)" }}
+                          animate={{ opacity: [0.3, 1, 0.3] }}
+                          transition={{ duration: 1.2, repeat: Infinity, ease: "easeInOut", delay: 0.3 }}
+                        />
+                        <motion.span
+                          className="h-1 w-1 rounded-full"
+                          style={{ backgroundColor: "var(--app-accent, #DAA112)" }}
+                          animate={{ opacity: [0.3, 1, 0.3] }}
+                          transition={{ duration: 1.2, repeat: Infinity, ease: "easeInOut", delay: 0.6 }}
+                        />
+                      </div>
+                      ) : (
                       <div className="flex items-center gap-1.5 py-1">
                         <motion.span
                           className="h-1.5 w-1.5 rounded-full"
@@ -5481,7 +5546,8 @@ const TextView = ({
                           transition={{ duration: 0.8, repeat: Infinity, ease: "easeInOut", delay: 0.3 }}
                         />
                       </div>
-                    ) : isUnifiedTaskCard ? (
+                      );
+                    })() : isUnifiedTaskCard ? (
                       <UnifiedAgentTaskCard
                         card={item.card}
                         onOpenArtifact={onOpenArtifact}
