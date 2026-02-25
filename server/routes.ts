@@ -9819,6 +9819,73 @@ export async function registerRoutes(
       traceError(req, "chat.respond.failed", error, {
         elapsedMs: elapsedMs(startedAt),
       });
+      const requestText =
+        typeof req.body?.text === "string" ? req.body.text : "";
+      const briefIntent = ENABLE_MORNING_BRIEF
+        ? detectMorningBriefIntent(requestText)
+        : {
+            explicit: false,
+            greetingHint: false,
+            refresh: false,
+            includeInbox: false,
+          };
+      if (
+        ENABLE_MORNING_BRIEF &&
+        (briefIntent.explicit || briefIntent.refresh || briefIntent.greetingHint)
+      ) {
+        const conversationId =
+          typeof req.body?.conversationId === "string"
+            ? req.body.conversationId
+            : "";
+        const nowIso = new Date().toISOString();
+        const syntheticUserMessageId =
+          typeof req.body?.existingUserMessageId === "string" &&
+          req.body.existingUserMessageId.trim().length > 0
+            ? req.body.existingUserMessageId.trim()
+            : `brief-failsafe-user-${randomUUID()}`;
+        const assistantTurnId = randomUUID();
+        const assistantText =
+          "I couldn’t complete your morning briefing right now. Try again in a moment, or say “refresh morning brief”.";
+        const assistantMessage = {
+          id: `brief-failsafe-assistant-${assistantTurnId}-0`,
+          conversationId,
+          sender: "assistant" as const,
+          turnId: assistantTurnId,
+          partIndex: 0,
+          text: assistantText,
+          createdAt: nowIso,
+          attachments: [],
+        };
+        trace(req, "chat.respond.brief.failsafe", {
+          conversationId,
+          elapsedMs: elapsedMs(startedAt),
+        });
+        return res.status(201).json({
+          traceId: getTraceId(req),
+          conversationId,
+          userMessage: {
+            id: syntheticUserMessageId,
+            conversationId,
+            sender: "user",
+            text: requestText,
+            createdAt: nowIso,
+            attachments: [],
+          },
+          assistantMessage,
+          assistantMessages: [assistantMessage],
+          model: "morning_brief_error_v1",
+          usage: null,
+          decisionPath: "companion_reply" satisfies IntentDecisionPath,
+          decisionPathReason: "companion" satisfies IntentDecisionPathReason,
+          routeReason: "companion",
+          briefMode: "news_markets_only" as const,
+          briefCacheHit: false,
+          briefPartialFailureCodes: [
+            "brief_gcp_upstream_timeout" satisfies MorningBriefFailureCode,
+          ],
+          elapsedMs: elapsedMs(startedAt),
+        });
+      }
       res.status(502).json({
         message: "Failed to generate AI response",
         traceId: getTraceId(req),
@@ -11282,8 +11349,65 @@ export async function registerRoutes(
       traceError(req, "chat.stream.failed", error, {
         elapsedMs: elapsedMs(startedAt),
       });
+      const requestText =
+        typeof req.body?.text === "string" ? req.body.text : "";
+      const briefIntent = ENABLE_MORNING_BRIEF
+        ? detectMorningBriefIntent(requestText)
+        : {
+            explicit: false,
+            greetingHint: false,
+            refresh: false,
+            includeInbox: false,
+          };
 
       if (res.headersSent) {
+        if (
+          ENABLE_MORNING_BRIEF &&
+          (briefIntent.explicit ||
+            briefIntent.refresh ||
+            briefIntent.greetingHint)
+        ) {
+          const conversationId =
+            typeof req.body?.conversationId === "string"
+              ? req.body.conversationId
+              : "";
+          const nowIso = new Date().toISOString();
+          const assistantTurnId = randomUUID();
+          const assistantText =
+            "I couldn’t complete your morning briefing right now. Try again in a moment, or say “refresh morning brief”.";
+          const assistantMessage = {
+            id: `brief-stream-failsafe-assistant-${assistantTurnId}-0`,
+            conversationId,
+            sender: "assistant" as const,
+            turnId: assistantTurnId,
+            partIndex: 0,
+            text: assistantText,
+            createdAt: nowIso,
+            attachments: [],
+          };
+          trace(req, "chat.stream.brief.failsafe", {
+            conversationId,
+            elapsedMs: elapsedMs(startedAt),
+          });
+          res.write(
+            `${JSON.stringify({
+              type: "final",
+              assistantMessage,
+              assistantMessages: [assistantMessage],
+              model: "morning_brief_error_v1",
+              usage: null,
+              decisionPath: "companion_reply",
+              decisionPathReason: "companion",
+              routeReason: "companion",
+              briefMode: "news_markets_only",
+              briefCacheHit: false,
+              briefPartialFailureCodes: ["brief_gcp_upstream_timeout"],
+              elapsedMs: elapsedMs(startedAt),
+            })}\n`,
+          );
+          res.end();
+          return;
+        }
         res.write(
           `${JSON.stringify({
             type: "error",
