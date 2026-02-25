@@ -86,22 +86,70 @@ function parseJsonFromText(raw: string): unknown {
   const trimmed = raw.trim();
   if (!trimmed) return null;
 
+  const tryParse = (value: string): unknown | null => {
+    try {
+      return JSON.parse(value);
+    } catch {
+      return null;
+    }
+  };
+
   if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
-    return JSON.parse(trimmed);
+    const parsed = tryParse(trimmed);
+    if (parsed !== null) {
+      return parsed;
+    }
   }
 
   const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
   if (fenced?.[1]) {
-    return JSON.parse(fenced[1].trim());
+    const parsed = tryParse(fenced[1].trim());
+    if (parsed !== null) {
+      return parsed;
+    }
   }
 
   const firstBrace = trimmed.indexOf("{");
   const lastBrace = trimmed.lastIndexOf("}");
   if (firstBrace >= 0 && lastBrace > firstBrace) {
-    return JSON.parse(trimmed.slice(firstBrace, lastBrace + 1));
+    const parsed = tryParse(trimmed.slice(firstBrace, lastBrace + 1));
+    if (parsed !== null) {
+      return parsed;
+    }
   }
 
   return null;
+}
+
+async function repairBriefJson(params: {
+  ai: GoogleGenAI;
+  model: string;
+  rawText: string;
+}): Promise<unknown> {
+  const repairPrompt = [
+    "Convert the following morning-brief draft into strict JSON only.",
+    "Required shape:",
+    '{"headlineItems":[{"title":"...","summary":"...","sourceUrl":"https://...","publishedAt":"ISO-8601 or null"}],"marketSnapshot":"...","citations":["https://..."]}',
+    "Rules:",
+    "- Return valid JSON only (no markdown, no code fences).",
+    "- If data is missing, keep strings concise and use null for unknown sourceUrl/publishedAt.",
+    "- Preserve factual content, do not invent new claims.",
+    "",
+    "Draft to normalize:",
+    params.rawText,
+  ].join("\n");
+
+  const repaired = await params.ai.models.generateContent({
+    model: params.model,
+    contents: [{ role: "user", parts: [{ text: repairPrompt }] }],
+    config: {
+      temperature: 0,
+      maxOutputTokens: 1400,
+      responseMimeType: "application/json",
+    },
+  });
+
+  return parseJsonFromText(repaired.text ?? "");
 }
 
 function asHeadlineItems(value: unknown): Array<{
@@ -280,7 +328,18 @@ app.post("/v1/brief/news", async (req, res) => {
       },
     });
 
-    const parsedPayload = parseJsonFromText(response.text ?? "");
+    let parsedPayload = parseJsonFromText(response.text ?? "");
+    const partialFailures: string[] = [];
+    if (!parsedPayload) {
+      parsedPayload = await repairBriefJson({
+        ai,
+        model,
+        rawText: response.text ?? "",
+      });
+      if (!parsedPayload) {
+        partialFailures.push("brief_json_repair_failed");
+      }
+    }
     const record =
       parsedPayload &&
       typeof parsedPayload === "object" &&
@@ -304,8 +363,9 @@ app.post("/v1/brief/news", async (req, res) => {
       ]),
     );
 
-    const partialFailures =
-      headlineItems.length === 0 ? ["brief_grounding_unavailable"] : [];
+    if (headlineItems.length === 0) {
+      partialFailures.push("brief_grounding_unavailable");
+    }
 
     return res.status(200).json({
       headlineItems,
