@@ -1092,7 +1092,16 @@ async function resolveFreshGoogleAccessTokenForUser(params: {
   userId: string;
   logger?: (event: string, payload?: Record<string, unknown>) => void;
 }): Promise<{ token: string; integration: Awaited<ReturnType<typeof storage.getGoogleIntegrationForUser>> } | null> {
-  const integration = await storage.getGoogleIntegrationForUser(params.userId);
+  let integration: Awaited<ReturnType<typeof storage.getGoogleIntegrationForUser>>;
+  try {
+    integration = await storage.getGoogleIntegrationForUser(params.userId);
+  } catch (error) {
+    params.logger?.("brief.gmail.fetch.failed", {
+      reason: "integration_lookup_failed",
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  }
   if (!integration || integration.status !== "connected") {
     return null;
   }
@@ -1179,7 +1188,23 @@ async function executeMorningBriefForConversation(params: {
     conversationId: params.conversationId,
   });
 
-  const includeInbox = ENABLE_GMAIL_INBOX_DIGEST && params.includeInboxRequested;
+  let existingGoogleIntegration: Awaited<
+    ReturnType<typeof storage.getGoogleIntegrationForUser>
+  > | null = null;
+  if (ENABLE_GMAIL_INBOX_DIGEST) {
+    try {
+      existingGoogleIntegration =
+        (await storage.getGoogleIntegrationForUser(params.userId)) ?? null;
+    } catch (error) {
+      logger("brief.gmail.integration.lookup_failed", {
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  const includeInbox =
+    ENABLE_GMAIL_INBOX_DIGEST &&
+    (params.includeInboxRequested ||
+      existingGoogleIntegration?.status === "connected");
   const refreshRequested = MORNING_BRIEF_REQUIRE_EXPLICIT_REFRESH
     ? params.refreshRequested
     : true;
@@ -1200,10 +1225,19 @@ async function executeMorningBriefForConversation(params: {
   });
 
   if (!cacheHitEligible) {
-    const usedToday = await getMorningBriefUsageCountForLocalDate({
-      userId: params.userId,
-      localDate,
-    });
+    let usedToday = 0;
+    try {
+      usedToday = await getMorningBriefUsageCountForLocalDate({
+        userId: params.userId,
+        localDate,
+      });
+    } catch (error) {
+      logger("brief.quota.lookup.failed", {
+        localDate,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      usedToday = 0;
+    }
     if (usedToday >= MORNING_BRIEF_DAILY_CAP) {
       logger("brief.quota.blocked", {
         usedToday,
@@ -1237,9 +1271,6 @@ async function executeMorningBriefForConversation(params: {
     }
   }
 
-  const existingGoogleIntegration = includeInbox
-    ? await storage.getGoogleIntegrationForUser(params.userId)
-    : null;
   const inboxProvider =
     includeInbox &&
     existingGoogleIntegration &&
@@ -1289,21 +1320,27 @@ async function executeMorningBriefForConversation(params: {
   });
 
   if (!execution.cacheHit) {
-    await recordMorningBriefUsage({
-      userId: params.userId,
-      conversationId: params.conversationId,
-      traceId: getTraceId(params.req),
-      localDate,
-      timezone,
-      includeInbox,
-      ranInboxDigest:
-        includeInbox &&
-        !execution.partialFailureCodes.includes("brief_gmail_not_connected") &&
-        !execution.partialFailureCodes.includes(
-          "brief_gmail_token_refresh_failed",
-        ),
-      briefRunId,
-    });
+    try {
+      await recordMorningBriefUsage({
+        userId: params.userId,
+        conversationId: params.conversationId,
+        traceId: getTraceId(params.req),
+        localDate,
+        timezone,
+        includeInbox,
+        ranInboxDigest:
+          includeInbox &&
+          !execution.partialFailureCodes.includes("brief_gmail_not_connected") &&
+          !execution.partialFailureCodes.includes(
+            "brief_gmail_token_refresh_failed",
+          ),
+        briefRunId,
+      });
+    } catch (error) {
+      logger("brief.usage.record.failed", {
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   logger("brief.respond.completed", {
@@ -8038,15 +8075,43 @@ export async function registerRoutes(
             const requestedTimeZone =
               typeof args.timezone === "string" ? args.timezone : undefined;
 
-            const execution = await executeMorningBriefForConversation({
-              req,
-              userId: req.session.userId,
-              conversationId: conversation.id,
-              includeInboxRequested: includeInbox,
-              refreshRequested: refresh,
-              clientTimeZone:
-                requestedTimeZone ?? parsed.clientTimeZone ?? null,
-            });
+            let execution: Awaited<
+              ReturnType<typeof executeMorningBriefForConversation>
+            >;
+            try {
+              execution = await executeMorningBriefForConversation({
+                req,
+                userId: req.session.userId,
+                conversationId: conversation.id,
+                includeInboxRequested: includeInbox,
+                refreshRequested: refresh,
+                clientTimeZone:
+                  requestedTimeZone ?? parsed.clientTimeZone ?? null,
+              });
+            } catch (error) {
+              traceError(req, "live.tool_response.morning_brief.failed", error, {
+                conversationId: conversation.id,
+                includeInbox,
+                refresh,
+                elapsedMs: elapsedMs(startedAt),
+              });
+              functionResponses.push({
+                id: functionCall.id,
+                name: functionCall.name,
+                response: {
+                  error: {
+                    code: "brief_gcp_upstream_timeout",
+                    message:
+                      "Morning brief is temporarily unavailable. Please retry shortly.",
+                  },
+                },
+              });
+              webSearchEvents.push({
+                status: "grounded",
+                label: "Brief unavailable",
+              });
+              continue;
+            }
 
             if (execution.quotaBlocked) {
               functionResponses.push({
@@ -8627,20 +8692,56 @@ export async function registerRoutes(
           });
         }
 
-        const connectedIntegration = ENABLE_GMAIL_INBOX_DIGEST
-          ? await storage.getGoogleIntegrationForUser(req.session.userId)
-          : null;
-        const includeInboxRequested =
-          morningBriefIntent.includeInbox ||
-          Boolean(connectedIntegration?.status === "connected");
-        const execution = await executeMorningBriefForConversation({
-          req,
-          userId: req.session.userId,
-          conversationId: conversation.id,
-          includeInboxRequested,
-          refreshRequested: morningBriefIntent.refresh,
-          clientTimeZone: parsed.clientTimeZone ?? null,
-        });
+        const includeInboxRequested = morningBriefIntent.includeInbox;
+        let execution: Awaited<
+          ReturnType<typeof executeMorningBriefForConversation>
+        >;
+        try {
+          execution = await executeMorningBriefForConversation({
+            req,
+            userId: req.session.userId,
+            conversationId: conversation.id,
+            includeInboxRequested,
+            refreshRequested: morningBriefIntent.refresh,
+            clientTimeZone: parsed.clientTimeZone ?? null,
+          });
+        } catch (error) {
+          traceError(req, "brief.execute.failed", error, {
+            conversationId: conversation.id,
+            includeInboxRequested,
+            refreshRequested: morningBriefIntent.refresh,
+            elapsedMs: elapsedMs(startedAt),
+          });
+          const errorMessages = await storage.createAssistantTurnParts({
+            conversationId: conversation.id,
+            textParts: [
+              "I couldn’t complete your morning briefing right now. Try again in a moment, or say “refresh morning brief”.",
+            ],
+          });
+          return res.status(201).json({
+            traceId: getTraceId(req),
+            conversationId: conversation.id,
+            userMessage: {
+              ...userMessage,
+              attachments: boundAttachments.map((attachment) =>
+                toAttachmentResponse(attachment, req.session.userId),
+              ),
+            },
+            assistantMessage: makeLegacyAssistantMessage(errorMessages),
+            assistantMessages: errorMessages,
+            model: "morning_brief_error_v1",
+            usage: null,
+            decisionPath: "companion_reply" satisfies IntentDecisionPath,
+            decisionPathReason: "companion" satisfies IntentDecisionPathReason,
+            routeReason: "companion",
+            briefMode: "news_markets_only" as const,
+            briefCacheHit: false,
+            briefPartialFailureCodes: [
+              "brief_gcp_upstream_timeout" satisfies MorningBriefFailureCode,
+            ],
+            elapsedMs: elapsedMs(startedAt),
+          });
+        }
 
         if (execution.quotaBlocked) {
           const blockedMessages = await storage.createAssistantTurnParts({
@@ -9877,12 +9978,7 @@ export async function registerRoutes(
           return;
         }
 
-        const connectedIntegration = ENABLE_GMAIL_INBOX_DIGEST
-          ? await storage.getGoogleIntegrationForUser(req.session.userId)
-          : null;
-        const includeInboxRequested =
-          morningBriefIntent.includeInbox ||
-          Boolean(connectedIntegration?.status === "connected");
+        const includeInboxRequested = morningBriefIntent.includeInbox;
 
         writeEvent({
           type: "web_search",
@@ -9899,14 +9995,56 @@ export async function registerRoutes(
           });
         }
 
-        const execution = await executeMorningBriefForConversation({
-          req,
-          userId: req.session.userId,
-          conversationId: conversation.id,
-          includeInboxRequested,
-          refreshRequested: morningBriefIntent.refresh,
-          clientTimeZone: parsed.clientTimeZone ?? null,
-        });
+        let execution: Awaited<
+          ReturnType<typeof executeMorningBriefForConversation>
+        >;
+        try {
+          execution = await executeMorningBriefForConversation({
+            req,
+            userId: req.session.userId,
+            conversationId: conversation.id,
+            includeInboxRequested,
+            refreshRequested: morningBriefIntent.refresh,
+            clientTimeZone: parsed.clientTimeZone ?? null,
+          });
+        } catch (error) {
+          traceError(req, "brief.execute.failed", error, {
+            conversationId: conversation.id,
+            includeInboxRequested,
+            refreshRequested: morningBriefIntent.refresh,
+            elapsedMs: elapsedMs(startedAt),
+          });
+          const errorMessages = await storage.createAssistantTurnParts({
+            conversationId: conversation.id,
+            textParts: [
+              "I couldn’t complete your morning briefing right now. Try again in a moment, or say “refresh morning brief”.",
+            ],
+          });
+          writeEvent({
+            type: "web_search",
+            mode: "text",
+            status: "grounded",
+            label: "Brief unavailable",
+          });
+          writeEvent({
+            type: "final",
+            assistantMessage: makeLegacyAssistantMessage(errorMessages),
+            assistantMessages: errorMessages,
+            model: "morning_brief_error_v1",
+            usage: null,
+            decisionPath: "companion_reply" satisfies IntentDecisionPath,
+            decisionPathReason: "companion" satisfies IntentDecisionPathReason,
+            routeReason: "companion",
+            briefMode: "news_markets_only" as const,
+            briefCacheHit: false,
+            briefPartialFailureCodes: [
+              "brief_gcp_upstream_timeout" satisfies MorningBriefFailureCode,
+            ],
+            elapsedMs: elapsedMs(startedAt),
+          });
+          res.end();
+          return;
+        }
 
         if (execution.quotaBlocked) {
           const blockedMessages = await storage.createAssistantTurnParts({

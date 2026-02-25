@@ -8436,7 +8436,9 @@ function App() {
             ),
           );
           setComposerError(
-            "Message failed to send. Your uploaded images are still attached for retry.",
+            attachmentIds.length > 0
+              ? "Message failed to send. Your uploaded images are still attached for retry."
+              : "Message failed to send. Please try again.",
           );
           console.error("chat.respond.fallback.failed", fallbackError);
         }
