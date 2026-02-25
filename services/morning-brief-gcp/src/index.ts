@@ -24,6 +24,7 @@ const defaultMaxThreads = Math.max(
 );
 const MARKET_SNAPSHOT_UNAVAILABLE = "Market snapshot unavailable right now.";
 const NEWS_RETRY_MIN_HEADLINES = 3;
+const DEFAULT_FETCH_TIMEOUT_MS = 3500;
 
 function getGeminiClient(): GoogleGenAI {
   const apiKey = process.env.GEMINI_API_KEY?.trim();
@@ -168,6 +169,135 @@ interface NewsCandidate {
   usedJsonRepair: boolean;
 }
 
+function decodeXmlEntities(value: string): string {
+  return value
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&nbsp;/g, " ")
+    .trim();
+}
+
+function stripHtml(value: string): string {
+  return value.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function extractTagValue(itemXml: string, tag: string): string {
+  const match = itemXml.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`, "i"));
+  if (!match?.[1]) return "";
+  return decodeXmlEntities(match[1]);
+}
+
+function extractSourceUrl(itemXml: string): string | null {
+  const sourceMatch = itemXml.match(/<source[^>]*url="([^"]+)"[^>]*>/i);
+  if (sourceMatch?.[1]) {
+    const url = decodeXmlEntities(sourceMatch[1]).trim();
+    return url || null;
+  }
+  return null;
+}
+
+function toIsoDateOrNull(raw: string): string | null {
+  if (!raw) return null;
+  const ms = Date.parse(raw);
+  if (!Number.isFinite(ms)) return null;
+  return new Date(ms).toISOString();
+}
+
+function headlineSummaryFromTitle(title: string): string {
+  const coreTitle = title.replace(/\s+-\s+[^-]+$/, "").trim();
+  return coreTitle || title;
+}
+
+async function fetchTextWithTimeout(url: string, timeoutMs = DEFAULT_FETCH_TIMEOUT_MS): Promise<string> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, { signal: controller.signal });
+    if (!response.ok) {
+      throw new Error(`RSS request failed with status ${response.status}`);
+    }
+    return await response.text();
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function parseRssHeadlines(xml: string, maxItems: number): HeadlineItem[] {
+  const items: HeadlineItem[] = [];
+  const matches = xml.matchAll(/<item>([\s\S]*?)<\/item>/gi);
+
+  for (const match of matches) {
+    const itemXml = match[1] ?? "";
+    const title = extractTagValue(itemXml, "title");
+    if (!title) continue;
+    const publishedAt = toIsoDateOrNull(extractTagValue(itemXml, "pubDate"));
+    const sourceUrl =
+      extractSourceUrl(itemXml) ?? (extractTagValue(itemXml, "link") || null);
+
+    items.push({
+      title,
+      summary: headlineSummaryFromTitle(title),
+      sourceUrl,
+      publishedAt,
+    });
+
+    if (items.length >= maxItems) {
+      break;
+    }
+  }
+
+  return items;
+}
+
+async function fetchGoogleNewsRssFallback(params: {
+  maxItems: number;
+  minItems: number;
+  timezone: string;
+}): Promise<NewsCandidate | null> {
+  const base = "https://news.google.com/rss/search";
+  const generalQuery = encodeURIComponent(
+    "global business technology economy markets when:1d",
+  );
+  const marketQuery = encodeURIComponent(
+    "(S&P 500 OR Nasdaq OR Dow Jones) market today when:1d",
+  );
+  const suffix = "&hl=en-US&gl=US&ceid=US:en";
+
+  const [generalXml, marketXml] = await Promise.all([
+    fetchTextWithTimeout(`${base}?q=${generalQuery}${suffix}`),
+    fetchTextWithTimeout(`${base}?q=${marketQuery}${suffix}`),
+  ]);
+
+  const generalHeadlines = parseRssHeadlines(generalXml, Math.max(params.maxItems, params.minItems));
+  const marketHeadlines = parseRssHeadlines(marketXml, 4);
+
+  const citations = dedupeStrings(
+    [...generalHeadlines, ...marketHeadlines]
+      .map((item) => item.sourceUrl)
+      .filter((value): value is string => Boolean(value)),
+  );
+
+  let marketSnapshot = MARKET_SNAPSHOT_UNAVAILABLE;
+  if (marketHeadlines.length > 0) {
+    const top = marketHeadlines.slice(0, 2).map((item) => item.title.replace(/\s+-\s+[^-]+$/, "").trim());
+    marketSnapshot = `Markets watch: ${top.join(" | ")}.`;
+  }
+
+  if (generalHeadlines.length === 0) {
+    return null;
+  }
+
+  return {
+    headlineItems: generalHeadlines.slice(0, params.maxItems),
+    marketSnapshot,
+    citations,
+    usedJsonRepair: false,
+  };
+}
+
 function buildNewsPrompt(params: {
   timezone: string;
   maxItems: number;
@@ -277,6 +407,56 @@ function scoreNewsCandidate(candidate: NewsCandidate): number {
   const marketScore =
     candidate.marketSnapshot !== MARKET_SNAPSHOT_UNAVAILABLE ? 6 : 0;
   return headlineScore + citationScore + marketScore;
+}
+
+function mergeNewsCandidates(params: {
+  primary: NewsCandidate;
+  fallback: NewsCandidate;
+  maxItems: number;
+}): NewsCandidate {
+  const mergedByTitle = new Map<string, HeadlineItem>();
+  const ordered: HeadlineItem[] = [];
+
+  const ingest = (item: HeadlineItem) => {
+    const key = item.title.toLowerCase().trim();
+    if (!key) return;
+    const existing = mergedByTitle.get(key);
+    if (!existing) {
+      mergedByTitle.set(key, item);
+      ordered.push(item);
+      return;
+    }
+    if (!existing.sourceUrl && item.sourceUrl) {
+      const upgraded = { ...existing, sourceUrl: item.sourceUrl };
+      mergedByTitle.set(key, upgraded);
+      const idx = ordered.findIndex((entry) => entry.title.toLowerCase().trim() === key);
+      if (idx >= 0) ordered[idx] = upgraded;
+    }
+  };
+
+  for (const item of params.primary.headlineItems) ingest(item);
+  for (const item of params.fallback.headlineItems) ingest(item);
+
+  const headlineItems = ordered.slice(0, params.maxItems);
+  const citations = dedupeStrings([
+    ...params.primary.citations,
+    ...params.fallback.citations,
+    ...headlineItems
+      .map((item) => item.sourceUrl)
+      .filter((value): value is string => Boolean(value)),
+  ]);
+
+  const marketSnapshot =
+    params.primary.marketSnapshot !== MARKET_SNAPSHOT_UNAVAILABLE
+      ? params.primary.marketSnapshot
+      : params.fallback.marketSnapshot;
+
+  return {
+    headlineItems,
+    citations,
+    marketSnapshot,
+    usedJsonRepair: params.primary.usedJsonRepair || params.fallback.usedJsonRepair,
+  };
 }
 
 function sanitizeTextOutput(raw: string): string {
@@ -526,6 +706,31 @@ app.post("/v1/brief/news", async (req, res) => {
         selectedCandidate.marketSnapshot = recoveredSnapshot;
       } else {
         partialFailures.add("brief_market_snapshot_unavailable");
+      }
+    }
+
+    if (
+      selectedCandidate.headlineItems.length < minRequiredHeadlines ||
+      selectedCandidate.citations.length === 0
+    ) {
+      try {
+        const rssFallback = await fetchGoogleNewsRssFallback({
+          maxItems,
+          minItems: minRequiredHeadlines,
+          timezone: parsed.data.timezone,
+        });
+        if (rssFallback) {
+          selectedCandidate = mergeNewsCandidates({
+            primary: selectedCandidate,
+            fallback: rssFallback,
+            maxItems,
+          });
+          partialFailures.add("brief_rss_fallback_used");
+        } else {
+          partialFailures.add("brief_rss_fallback_unavailable");
+        }
+      } catch {
+        partialFailures.add("brief_rss_fallback_failed");
       }
     }
 
