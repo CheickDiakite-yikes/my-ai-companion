@@ -687,6 +687,9 @@ const BETA_PRIVILEGED_QUOTA_EMAILS = new Set(
     "zorovt18@gmail.com",
   ]),
 );
+const MORNING_BRIEF_CAP_EXEMPT_EMAILS = new Set(
+  parseEmailList(process.env.MORNING_BRIEF_CAP_EXEMPT_EMAILS, []),
+);
 const BETA_PRIVILEGED_TEXT_QUOTA_30D = parsePositiveInt(
   process.env.BETA_PRIVILEGED_TEXT_QUOTA_30D,
   5000,
@@ -1033,6 +1036,15 @@ function isBriefDiagnosticsAllowedEmail(email: string | null): boolean {
   );
 }
 
+function isMorningBriefCapExemptEmail(email: string | null): boolean {
+  if (!email) return false;
+  return (
+    MORNING_BRIEF_CAP_EXEMPT_EMAILS.has(email) ||
+    BETA_PRIVILEGED_QUOTA_EMAILS.has(email) ||
+    BETA_POWER_QUOTA_EMAILS.has(email)
+  );
+}
+
 async function getMorningBriefUsageCountForLocalDate(params: {
   userId: string;
   localDate: string;
@@ -1228,6 +1240,13 @@ async function executeMorningBriefForConversation(params: {
     cacheHitEligible,
   });
 
+  const requestEmail = await getUserEmailForDiagnostics(params.userId);
+  const capExempt = isMorningBriefCapExemptEmail(requestEmail);
+  logger("brief.cap.policy", {
+    capExempt,
+    requestEmail,
+  });
+
   if (!cacheHitEligible) {
     let usedToday = 0;
     try {
@@ -1242,7 +1261,7 @@ async function executeMorningBriefForConversation(params: {
       });
       usedToday = 0;
     }
-    if (usedToday >= MORNING_BRIEF_DAILY_CAP) {
+    if (!capExempt && usedToday >= MORNING_BRIEF_DAILY_CAP) {
       logger("brief.quota.blocked", {
         usedToday,
         cap: MORNING_BRIEF_DAILY_CAP,
@@ -8862,7 +8881,7 @@ export async function registerRoutes(
           const blockedMessages = await storage.createAssistantTurnParts({
             conversationId: conversation.id,
             textParts: [
-              "Morning brief cap reached for today. Ask again tomorrow, or say “refresh morning brief” later if you still need a fresh run.",
+              "Morning brief cap reached for today. Ask again tomorrow.",
             ],
           });
           return res.status(201).json({
@@ -10233,7 +10252,7 @@ export async function registerRoutes(
           const blockedMessages = await storage.createAssistantTurnParts({
             conversationId: conversation.id,
             textParts: [
-              "Morning brief cap reached for today. Ask again tomorrow, or say “refresh morning brief” later if you still need a fresh run.",
+              "Morning brief cap reached for today. Ask again tomorrow.",
             ],
           });
           writeEvent({

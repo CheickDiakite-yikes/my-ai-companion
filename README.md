@@ -867,6 +867,7 @@ Source of truth: `.env.example`
 | `MORNING_BRIEF_GCP_BASE_URL` | — | Cloud Run Morning Brief gateway base URL |
 | `MORNING_BRIEF_GCP_TIMEOUT_MS` | `65000` | Gateway request timeout (covers Cloud Run cold-start + grounding latency) |
 | `MORNING_BRIEF_RSS_TIMEOUT_MS` | `8000` | RSS fallback fetch timeout used when grounding/gateway coverage is weak |
+| `MORNING_BRIEF_CAP_EXEMPT_EMAILS` | — | Comma-separated emails exempt from Morning Brief daily cap (admin/testing) |
 | `MORNING_BRIEF_DEBUG_HISTORY_LIMIT` | `200` | In-memory debug run history cap |
 
 ### Google OAuth integration

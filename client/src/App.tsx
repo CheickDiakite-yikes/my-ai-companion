@@ -8266,7 +8266,7 @@ function App() {
       }
 
       if (event.type === "error") {
-        setWebLookupStatus("text", "idle");
+        setWebLookupStatus("text", "searching", "Retrying request…");
         clearPendingPartDeltaFlush();
         flushPendingPartDeltas();
         const err = new Error(event.message);
