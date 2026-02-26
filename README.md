@@ -78,41 +78,55 @@ When the master gate is `false` (current default), all agentic routing — build
 ### High-level system map
 
 ```
-                                  +-----------------------------+
-                                  |       Gemini APIs           |
-                                  |-----------------------------|
-                                  | Text: gemini-3-flash-preview|
-                                  | Live: gemini-2.5-flash-     |
-                                  | native-audio-preview-12-2025|
-                                  +--------------+--------------+
-                                                 ^
-                                                 |
-                                    generate / realtime WS
-                                                 |
+                                  +------------------------------+
+                                  | Gemini APIs                  |
+                                  |------------------------------|
+                                  | Text: gemini-3-flash-preview |
+                                  | Live: gemini-2.5-flash-      |
+                                  | native-audio-preview-12-2025 |
+                                  +---------------+--------------+
+                                                  ^
+                                                  |
+                                     generate / realtime WS
+                                                  |
 +--------------------+        HTTP/JSON + NDJSON +-----------------------------+
 | React + Vite SPA   | <-----------------------> | Express API (single server) |
 | (mobile-first UI)  |                           | /api/* routes               |
 |                    |                           | auth + quota + media + AI   |
-+---------+----------+                           +---------------+--------------+
-          |                                                          |
-          | local mic/cam capture                                    | Drizzle ORM
-          v                                                          v
-+---------------------------+                             +-------------------------+
-| Browser Media APIs        |                             | PostgreSQL              |
-| getUserMedia, AudioContext |                             | users, sessions,        |
-| canvas video frame capture |                             | conversations, messages,|
-+---------------------------+                             | attachments, profiles,  |
-                                                          | preferences, voice_logs,|
-                                                          | usage_events, memory    |
-                                                          +-------------------------+
-                                                                    |
-                                                                    | binary object refs
-                                                                    v
-                                                          +-------------------------+
-                                                          | Media Store             |
-                                                          | Replit Object Storage   |
-                                                          | (or local /tmp fallback)|
-                                                          +-------------------------+
++---------+----------+                           +--------+----------+---------+
+          |                                               |          |
+          | local mic/cam capture                         |          | optional text-only brief path
+          v                                               |          v
++---------------------------+                             |  +------------------------------+
+| Browser Media APIs        |                             |  | Cloud Run Morning Brief      |
+| getUserMedia, AudioContext |                             |  | gateway (/v1/brief/*, /healthz)|
+| canvas video frame capture |                             |  +---------------+--------------+
++---------------------------+                             |                  |
+                                                          |                  | grounded fetch + compose
+                                                          |                  v
+                                                          |        +--------------------------+
+                                                          |        | Google Search grounding  |
+                                                          |        | (+ optional Gmail read)  |
+                                                          |        +--------------------------+
+                                                          |
+                                                          | Drizzle ORM
+                                                          v
+                                                +--------------------------+
+                                                | PostgreSQL               |
+                                                | users, sessions,         |
+                                                | conversations, messages, |
+                                                | attachments, profiles,   |
+                                                | preferences, voice_logs, |
+                                                | usage_events, memory     |
+                                                +--------------------------+
+                                                          |
+                                                          | binary object refs
+                                                          v
+                                                +--------------------------+
+                                                | Media Store              |
+                                                | Replit Object Storage    |
+                                                | (or local /tmp fallback) |
+                                                +--------------------------+
 ```
 
 ### Runtime topology
@@ -126,6 +140,7 @@ Production:
   - Client built to dist/public (static assets)
   - Express serves static files + API from same origin
   - Autoscale deployment on Replit
+  - Optional Cloud Run Morning Brief gateway behind `MORNING_BRIEF_GCP_BASE_URL`
 ```
 
 ### Text chat flow (streaming)
@@ -190,7 +205,7 @@ Client starts voice call
 | Media Storage | `@replit/object-storage` with local disk fallback |
 | State Management | TanStack React Query (server state), React refs (local UI state) |
 | Observability | Request trace IDs (`x-trace-id`) + structured redacted logging |
-| Cloud Services | Google Cloud Run (Morning Brief gateway), Google Search grounding |
+| Cloud Services | Google Cloud Run (Morning Brief gateway), Cloud Build, Secret Manager, Google Search grounding |
 | Security | bcrypt password hashing, HMAC signed media URLs, secret scanning (local + CI) |
 
 ---
@@ -616,17 +631,72 @@ ZeeMe uses server-authoritative rolling 30-day hard limits to manage API cost ex
 - Client proactively handles exhaustion states with clear messaging
 - Quota cache TTL is configurable via `BETA_QUOTA_CACHE_TTL_MS` (default 5 minutes)
 
-### Cost model (planning baseline — February 2026)
+### Detailed cost model (planning baseline — February 2026)
 
-| Tier | Approx. monthly cost per user |
+This section estimates monthly per-user spend from your current quota controls and Morning Brief behavior.
+
+Assumptions used in this README:
+- Text turn average: `2,500` input tokens + `350` output tokens
+- Live audio estimate: `~32 audio tokens/second`
+- Camera estimate: `~258 video tokens/second` + normal live audio in/out
+- Morning Brief gateway: typically `1-3` grounded model calls per uncached run
+- Morning Brief cap: `MORNING_BRIEF_DAILY_CAP=3`, cache TTL `15` minutes
+
+Pricing references (verify before launch pricing decisions):
+- Gemini API pricing: [ai.google.dev/gemini-api/docs/pricing](https://ai.google.dev/gemini-api/docs/pricing)
+- Token guidance: [ai.google.dev/gemini-api/docs/tokens](https://ai.google.dev/gemini-api/docs/tokens)
+- Cloud Run pricing: [cloud.google.com/run/pricing](https://cloud.google.com/run/pricing)
+
+#### Unit-cost formulas
+
+- `text_cost_per_msg = ((input_tokens * input_price_per_1M) + (output_tokens * output_price_per_1M)) / 1,000,000`
+- `voice_cost_per_min = 60 * ((audio_in_tps * audio_in_price_per_1M) + (audio_out_tps * audio_out_price_per_1M)) / 1,000,000`
+- `camera_cost_per_min = 60 * ((video_tps * text_or_video_input_price_per_1M) + (audio_in_tps * audio_in_price_per_1M) + (audio_out_tps * audio_out_price_per_1M)) / 1,000,000`
+
+#### Morning Brief run-cost formula
+
+Grounding dominates Morning Brief cost:
+- `grounding_cost_per_run ~= grounded_calls_per_run * ($35 / 1,000)`
+- `= grounded_calls_per_run * $0.035`
+
+With current gateway behavior:
+- low run: `1` grounded call => `~$0.035`
+- typical run: `2` grounded calls => `~$0.070`
+- heavy run: `3` grounded calls => `~$0.105`
+
+Token cost for brief generation is additive but usually much smaller than grounding call cost.
+
+#### Quota-envelope estimates (base chat usage, without Morning Brief)
+
+Using Gemini text/live assumptions from your current quota worksheet:
+
+| Tier | Approx. monthly cost per user (base chat only) |
 |---|---|
-| Default | ~$1.80 |
-| Power | ~$4.70 |
-| Privileged | ~$19.20 |
-
-Based on: Gemini Flash text at $0.50/$3.00 per 1M input/output tokens; native audio at $1.00/$2.00 per 1M input/output audio tokens (~32 audio tokens/second).
+| Default | `~$1.8` |
+| Power | `~$4.7` |
+| Privileged | `~$19.2` |
 
 Detailed worksheet: `docs/QUOTA_PRICING_REEVALUATION_2026-02-16.md`
+
+#### Morning Brief add-on estimates
+
+Per-user monthly Morning Brief add-on:
+- `1 brief/day` (`~30 runs/month`): `~$2.1` (typical grounding-only view)
+- at cap (`3 briefs/day`, `~90 runs/month`): `~$6.3`
+
+Projected monthly total (`base chat + Morning Brief add-on`):
+
+| Tier | With ~1 brief/day | With max 3 briefs/day |
+|---|---|---|
+| Default | `~$3.9` | `~$8.1` |
+| Power | `~$6.8` | `~$11.0` |
+| Privileged | `~$21.3` | `~$25.5` |
+
+Notes:
+- These are planning envelopes, not exact billing.
+- Real spend depends on retry rate, grounded-call count, prompt length, and response length.
+- If your project remains inside Google’s free grounded-request allowance, Morning Brief effective cost can be materially lower.
+- Cloud Run infra cost is typically secondary at this scale, and often absorbed by free tier during early-stage traffic.
 
 ---
 
