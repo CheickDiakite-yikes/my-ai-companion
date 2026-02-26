@@ -40,6 +40,7 @@ ZeeMe is a companion AI experience where users build a continuous relationship w
 - **Live voice calls** with duplex-safe interruption control, real-time audio streaming, and transcript persistence
 - **Share images** in text chat via camera capture or photo library upload
 - **Share live camera** frames during voice sessions for visual context
+- **Run Morning Brief (text mode)** for a concise, grounded digest of top headlines and market context
 - **Personalize Zee** through profile settings, response style presets, and avatar customization
 - **Switch between voice and text** while staying in one stitched conversation thread with shared memory
 - **Customize appearance** with 4 color themes applied across the entire UI
@@ -502,6 +503,28 @@ Cloud gateway behavior:
 
 - If `MORNING_BRIEF_GCP_BASE_URL` is configured, server uses the Cloud Run gateway for news fetch and compose.
 - If gateway is unavailable, server falls back to local grounded generation and records `brief_gcp_upstream_timeout`.
+
+Execution contract (text mode):
+
+1. Detect brief intent (`give me my morning briefing`, `brief me`, etc.).
+2. Check cache and cap policy (cache hit returns immediately; cap applies only to uncached runs).
+3. If uncached and configured, call gateway:
+   - `POST /v1/brief/news`
+   - optional `POST /v1/brief/inbox` (when Gmail is enabled + connected)
+   - `POST /v1/brief/compose`
+4. Normalize and render:
+   - short conversational summary
+   - structured "Morning Brief" card
+5. Persist forensic metadata:
+   - `traceId`
+   - `briefRunId`
+   - `partialFailures[]`
+
+Operational guardrails:
+
+- Admin/testing accounts can be exempted from the daily cap via `MORNING_BRIEF_CAP_EXEMPT_EMAILS`.
+- `refresh morning brief` can bypass cache policy (depending on `MORNING_BRIEF_REQUIRE_EXPLICIT_REFRESH`).
+- Brief runs never execute in live voice while `ENABLE_MORNING_BRIEF_TEXT_ONLY=true`.
 
 ### Live voice behavior
 
@@ -1003,6 +1026,58 @@ Gateway source: `/services/morning-brief-gcp`
    - `ENABLE_MORNING_BRIEF=true`
 3. Keep fallback enabled (default): if gateway fails, app still serves a local grounded brief path
 
+### Cloud Run deployment quickstart (validated path)
+
+Use this flow from Cloud Shell (inside repo root):
+
+```bash
+PROJECT_ID="didi-421517"
+REGION="us-central1"
+SERVICE="zeeme-morning-brief-gcp"
+
+cd ~/my-ai-companion
+git checkout main3
+git pull --ff-only
+
+gcloud run deploy "$SERVICE" \
+  --source ./services/morning-brief-gcp \
+  --region "$REGION" \
+  --project "$PROJECT_ID" \
+  --allow-unauthenticated \
+  --set-env-vars "MORNING_BRIEF_GCP_MODEL=gemini-2.5-flash" \
+  --set-secrets "GEMINI_API_KEY=GEMINI_API_KEY:latest" # secret-scan:allow
+```
+
+Functional probe (preferred over health-only checks):
+
+```bash
+SERVICE_URL="$(gcloud run services describe "$SERVICE" \
+  --region "$REGION" \
+  --project "$PROJECT_ID" \
+  --format='value(status.url)')"
+
+curl -si "$SERVICE_URL/v1/brief/news" \
+  -H "content-type: application/json" \
+  -d '{"timezone":"America/New_York"}'
+```
+
+Expected:
+- `HTTP 200` with `headlineItems` and/or `partialFailures` (degraded mode still returns structured JSON).
+- If `HTTP 502`, inspect response `message` and Cloud Run logs first (key/permissions/model mismatch are most common).
+
+Cloud Run failure fixes (most common):
+
+1. `API_KEY_INVALID`:
+   - Update secret value: `gcloud secrets versions add GEMINI_API_KEY ...`
+   - Redeploy service revision so it picks latest secret version.
+2. `Permission denied on secret ...`:
+   - Grant runtime service account `roles/secretmanager.secretAccessor`.
+3. Buildpack tries Python and fails entrypoint detection:
+   - Deploy from repo path that includes the gateway `Dockerfile`:
+     - `--source ./services/morning-brief-gcp`
+4. Tool + JSON mime incompatibility:
+   - Keep gateway model pinned to compatible setting from this repo (`gemini-2.5-flash`).
+
 ### Google Cloud services in current production path
 
 - **Cloud Run**: Hosts `services/morning-brief-gcp` as an isolated Morning Brief gateway.
@@ -1035,6 +1110,17 @@ Design note:
 ---
 
 ## 16) Troubleshooting
+
+### Quick triage matrix
+
+| Symptom | Likely cause | First check | Corrective action |
+|---|---|---|---|
+| `POST /api/chat/respond` returns 502 during brief | Upstream brief gateway timeout/error | API response `traceId`, server logs for `brief_gcp_upstream_timeout` | Verify `MORNING_BRIEF_GCP_BASE_URL`, gateway revision health, timeout budget |
+| Morning Brief returns 0 headlines repeatedly | Grounding low coverage or invalid key/model config | Gateway response `partialFailures[]` (`brief_grounding_*`) | Validate `GEMINI_API_KEY`, use supported model (`gemini-2.5-flash`), retry probe |
+| Morning Brief blocked with cap during admin testing | Admin/test account not exempted | Check effective user email and cap policy logs (`brief.cap.policy`) | Set `MORNING_BRIEF_CAP_EXEMPT_EMAILS=<admin_email>` and restart |
+| Fetching indicator disappears early | Stream failed and fallback path not fully visible or stale build | Browser console: `chat.stream.failed`, then fallback attempt | Deploy latest client bundle and verify fallback keeps loading state until completion |
+| Zee reports wrong local time/day | Missing/incorrect timezone anchor | `ZEE_CALENDAR_TIMEZONE`, live token build logs | Set timezone (e.g. `America/New_York`), restart server, verify new anchor injection |
+| Voice works but Morning Brief should stay text-only | Voice brief accidentally enabled | Flags in env and client build | Keep `ENABLE_MORNING_BRIEF_TEXT_ONLY=true`, `ENABLE_LIVE_FUNCTION_CALLING_BRIEF=false`, `VITE_ENABLE_MORNING_BRIEF_VOICE_MODE=false` |
 
 ### `Failed to generate Live API token` (502)
 
@@ -1093,10 +1179,13 @@ Design note:
   - `ENABLE_LIVE_FUNCTION_CALLING_BRIEF=false` (recommended default)
 - Verify Cloud Run gateway:
   - `MORNING_BRIEF_GCP_BASE_URL` points to a healthy service
-  - `GET <gateway>/healthz` returns `{ \"ok\": true }`
+  - `POST <gateway>/v1/brief/news` returns structured JSON (this is the functional health probe)
 - Verify Cloud Run secret wiring:
   - Runtime service account has `roles/secretmanager.secretAccessor`
   - `GEMINI_API_KEY` secret latest version contains a valid Gemini key
+- Verify gateway model compatibility:
+  - Prefer `MORNING_BRIEF_GCP_MODEL=gemini-2.5-flash` for JSON + grounding path
+  - If you see `Tool use with a response mime type: 'application/json' is unsupported`, update gateway code/model pairing and redeploy
 - Verify Google integration:
   - `/api/integrations/google/status` returns `connected: true`
   - `GOOGLE_INTEGRATION_ENCRYPTION_KEY` is set and stable between deploys
@@ -1104,6 +1193,25 @@ Design note:
   - `/api/debug/brief-runs?limit=50` (admin-only)
   - Confirm sequence of `brief.*` lifecycle events with same `traceId` and `briefRunId`
 - If Gmail OAuth is not ready, expected behavior is `news/markets-only` with partial failure codes
+
+Common Morning Brief partial failure codes:
+
+| Code | Meaning | Action |
+|---|---|---|
+| `brief_gcp_upstream_timeout` | Gateway call failed or timed out | Increase `MORNING_BRIEF_GCP_TIMEOUT_MS`, verify Cloud Run latency/logs |
+| `brief_grounding_unavailable` | Grounded fetch unavailable for that run | Validate key/model + retry; fallback may still return partial brief |
+| `brief_grounding_low_coverage` | Grounding returned weak coverage | Accept degraded response, retry later, keep RSS fallback enabled |
+| `brief_json_repair_used` | Model response required normalization | Informational; keep monitoring frequency |
+| `brief_market_snapshot_unavailable` | Market summary generation incomplete | Retry or lower output complexity; verify model capacity/timeout |
+| `brief_citation_unavailable` | No citations surfaced | Treat as degraded mode; do not claim fully verified sourcing |
+
+### Morning Brief cap and refresh behavior
+
+- Cap applies to **uncached** runs only.
+- Cache hits (within `MORNING_BRIEF_CACHE_TTL_MS`) do not consume cap.
+- `refresh morning brief` forces a new run when refresh policy permits.
+- Admin/testing bypass can be configured via `MORNING_BRIEF_CAP_EXEMPT_EMAILS`.
+- If user should be exempt but still blocked, check exact account email on session and restart app after env changes.
 
 ### Time/date reporting incorrect
 
