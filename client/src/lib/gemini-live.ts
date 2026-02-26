@@ -132,6 +132,10 @@ const SUPPRESS_USER_TRANSCRIPT_DURING_ASSISTANT_SPEECH = parseClientBoolean(
 );
 const LIVE_WEB_SEARCH_SIGNAL_PATTERN =
   /\b(search|look up|google|latest|current|today|news|headline|what happened|updates?|did you see|last super bowl|super\s*bowl|score|standings?|who won)\b/i;
+const ENABLE_MORNING_BRIEF_VOICE_MODE = parseClientBoolean(
+  liveClientEnv.VITE_ENABLE_MORNING_BRIEF_VOICE_MODE,
+  false,
+);
 
 const LIVE_MORNING_BRIEF_FUNCTION_DECLARATIONS = [
   {
@@ -503,7 +507,7 @@ export class GeminiLiveVoiceSession {
     );
     const morningBriefFunctionCallingEnabled = Boolean(
       params.morningBriefFunctionCallingEnabled,
-    );
+    ) && ENABLE_MORNING_BRIEF_VOICE_MODE;
     this.liveGoogleSearchEnabled = googleSearchGroundingEnabled;
     this.liveMorningBriefFunctionCallingEnabled =
       morningBriefFunctionCallingEnabled;

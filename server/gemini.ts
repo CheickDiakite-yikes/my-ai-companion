@@ -86,6 +86,10 @@ const DEFAULT_ZEE_PROMPT_FALLBACK = [
   "When unclear, ask a brief clarifying question before assuming details.",
   "Keep responses concise unless the user asks for depth.",
 ].join(" ");
+const ENABLE_MORNING_BRIEF_TEXT_ONLY = parseBooleanFlag(
+  process.env.ENABLE_MORNING_BRIEF_TEXT_ONLY,
+  true,
+);
 const GOOGLE_SEARCH_TOOLS: GoogleSearchTool[] = [{ googleSearch: {} }];
 const LIVE_MORNING_BRIEF_FUNCTION_DECLARATIONS: LiveFunctionDeclaration[] = [
   {
@@ -1209,10 +1213,13 @@ export async function createLiveToken(
   const deviceClass = input.deviceClass ?? "unknown";
   const isMobileDevice = deviceClass === "mobile";
   const requestedGoogleSearchGrounding = shouldUseLiveGoogleSearchGrounding();
-  const enableMorningBriefFunctionCalling = parseBooleanFlag(
+  const liveMorningBriefFunctionCallingRequested = parseBooleanFlag(
     process.env.ENABLE_LIVE_FUNCTION_CALLING_BRIEF,
     false,
   );
+  const enableMorningBriefFunctionCalling =
+    liveMorningBriefFunctionCallingRequested &&
+    !ENABLE_MORNING_BRIEF_TEXT_ONLY;
   const systemInstruction = composeLiveSystemInstruction({
     personaPrompt,
     memoryContextBlock: input.memoryContextBlock,

@@ -576,6 +576,10 @@ const ENABLE_LIVE_FUNCTION_CALLING_BRIEF = parseBooleanFlag(
   process.env.ENABLE_LIVE_FUNCTION_CALLING_BRIEF,
   false,
 );
+const ENABLE_MORNING_BRIEF_TEXT_ONLY = parseBooleanFlag(
+  process.env.ENABLE_MORNING_BRIEF_TEXT_ONLY,
+  true,
+);
 const MORNING_BRIEF_DAILY_CAP = Math.max(
   1,
   parsePositiveInt(process.env.MORNING_BRIEF_DAILY_CAP, 3),
@@ -8124,6 +8128,46 @@ export async function registerRoutes(
           status: "searching" | "grounded" | "idle";
           label?: string;
         }> = [];
+        const hasMorningBriefFunctionCalls = parsed.functionCalls.some(
+          (call) =>
+            call.name === "get_morning_brief" ||
+            call.name === "get_inbox_digest",
+        );
+
+        if (
+          hasMorningBriefFunctionCalls &&
+          (ENABLE_MORNING_BRIEF_TEXT_ONLY ||
+            !ENABLE_LIVE_FUNCTION_CALLING_BRIEF)
+        ) {
+          trace(req, "live.tool_response.disabled", {
+            conversationId: conversation.id,
+            reason: ENABLE_MORNING_BRIEF_TEXT_ONLY
+              ? "morning_brief_text_only"
+              : "live_function_calling_disabled",
+            elapsedMs: elapsedMs(startedAt),
+          });
+          const functionResponses = parsed.functionCalls.map((functionCall) => ({
+            id: functionCall.id,
+            name: functionCall.name,
+            response: {
+              error: {
+                code: "brief_live_disabled",
+                message:
+                  "Morning briefing is currently available in text mode only.",
+              },
+            },
+          }));
+          return res.status(200).json({
+            traceId: getTraceId(req),
+            functionResponses,
+            chatDigests: [],
+            webSearchEvents: [
+              {
+                status: "idle",
+              },
+            ],
+          });
+        }
 
         for (const functionCall of parsed.functionCalls) {
           const args = parseFunctionCallArgs(functionCall.args);
