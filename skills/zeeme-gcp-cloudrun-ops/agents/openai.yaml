@@ -1,0 +1,4 @@
+interface:
+  display_name: "ZeeMe GCP Cloud Run Ops"
+  short_description: "Deploy and debug Morning Brief gateway on Cloud Run"
+  default_prompt: "Use $zeeme-gcp-cloudrun-ops to preflight, deploy, smoke test, and generate a safe Replit env patch for Morning Brief."

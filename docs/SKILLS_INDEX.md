@@ -74,14 +74,37 @@ Key scripts:
 - `/Users/cheickdiakite/Codex/my-ai-companion/skills/zeeme-agentic-gamegen-eval/scripts/game_prompt_matrix.sh`
 - `/Users/cheickdiakite/Codex/my-ai-companion/skills/zeeme-agentic-gamegen-eval/scripts/compare_game_outputs.py`
 
+### 10) `zeeme-gcp-cloudrun-ops`
+Purpose:
+- Deploy and debug the Morning Brief Cloud Run gateway with deterministic preflight, smoke tests, and safe Replit env patch generation.
+
+Key scripts:
+- `/Users/cheickdiakite/Codex/my-ai-companion/skills/zeeme-gcp-cloudrun-ops/scripts/cloudrun_preflight.sh`
+- `/Users/cheickdiakite/Codex/my-ai-companion/skills/zeeme-gcp-cloudrun-ops/scripts/cloudrun_deploy_gateway.sh`
+- `/Users/cheickdiakite/Codex/my-ai-companion/skills/zeeme-gcp-cloudrun-ops/scripts/cloudrun_smoke.sh`
+- `/Users/cheickdiakite/Codex/my-ai-companion/skills/zeeme-gcp-cloudrun-ops/scripts/render_replit_env_patch.sh`
+
 ## Recommended Usage Sequence
 1. Start session with `zeeme-session-continuity`.
 2. Run implementation work.
-3. Run `zeeme-release-guardrails` before deploy.
-4. If DB changes are involved, use `zeeme-replit-schema-sync`.
+3. If DB changes are involved, use `zeeme-replit-schema-sync`.
+4. For Morning Brief cloud deploy, use `zeeme-gcp-cloudrun-ops`.
 5. If model calls fail, use `zeeme-gemini-forensics`.
-6. For iOS beta release packaging, use `zeeme-testflight-release`.
-7. For launch/promo video production, use `zeeme-remotion-campaign-pipeline`.
-8. For live voice reliability incidents, use `zeeme-live-voice-stability`.
-9. For planning new agentic slices, use `zeeme-agentic-roadmap-delivery`.
-10. For game generation QA and regression checks, use `zeeme-agentic-gamegen-eval`.
+6. Run `zeeme-release-guardrails` before deploy.
+7. For iOS beta release packaging, use `zeeme-testflight-release`.
+8. For launch/promo video production, use `zeeme-remotion-campaign-pipeline`.
+9. For live voice reliability incidents, use `zeeme-live-voice-stability`.
+10. For planning new agentic slices, use `zeeme-agentic-roadmap-delivery`.
+11. For game generation QA and regression checks, use `zeeme-agentic-gamegen-eval`.
+
+## Global Skill Sync (Codex Home)
+
+To sync updated local skills into your global Codex skill directory:
+
+```bash
+mkdir -p /Users/cheickdiakite/.codex/skills
+cp -R /Users/cheickdiakite/Codex/my-ai-companion/skills/zeeme-gemini-forensics /Users/cheickdiakite/.codex/skills/
+cp -R /Users/cheickdiakite/Codex/my-ai-companion/skills/zeeme-replit-schema-sync /Users/cheickdiakite/.codex/skills/
+cp -R /Users/cheickdiakite/Codex/my-ai-companion/skills/zeeme-release-guardrails /Users/cheickdiakite/.codex/skills/
+cp -R /Users/cheickdiakite/Codex/my-ai-companion/skills/zeeme-gcp-cloudrun-ops /Users/cheickdiakite/.codex/skills/
+```

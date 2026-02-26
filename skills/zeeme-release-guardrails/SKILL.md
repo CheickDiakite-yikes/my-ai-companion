@@ -19,6 +19,10 @@ description: Run ZeeMe release safety gates before merge, deploy, or publish. Us
 - Run TypeScript typecheck before deploy.
 - Run isolated local API E2E before high-risk releases.
 - Confirm no credentials or raw signatures appear in logs.
+- If Morning Brief is enabled, verify text-only lock for stable voice path:
+  - `ENABLE_MORNING_BRIEF_TEXT_ONLY=true`
+  - `ENABLE_LIVE_FUNCTION_CALLING_BRIEF=false`
+  - `VITE_ENABLE_MORNING_BRIEF_VOICE_MODE=false`
 
 ## Use References
 - Read `references/release-checklist.md` for pass/fail criteria and rollback-first rules.

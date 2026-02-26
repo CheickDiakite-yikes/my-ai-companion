@@ -361,7 +361,7 @@ All routes are same-origin under `/api/*`. Auth routes are public; all others re
 | Method | Endpoint | Description |
 |---|---|---|
 | `POST` | `/api/live/token` | Mint ephemeral Gemini Live session token |
-| `POST` | `/api/live/tool-response` | Resolve Live function calls (Morning Brief + inbox digest) |
+| `POST` | `/api/live/tool-response` | Resolve optional Live function calls (kept disabled for Morning Brief by default) |
 | `POST` | `/api/chat/respond` | Non-streaming text reply (legacy) |
 | `POST` | `/api/chat/respond/stream` | Streaming text reply (NDJSON) |
 
@@ -453,7 +453,7 @@ When `GEMINI_TEXT_GOOGLE_SEARCH_AUTO_ONLY=true`, text grounding is selective and
 
 Voice grounding uses a similar trigger policy based on finalized live user transcript chunks. If a trigger is detected, Zee emits the searching indicator and nudges the active Live session to ground the next answer.
 
-### Morning Brief (text + live voice)
+### Morning Brief (text mode first, voice-safe by default)
 
 Morning Brief provides a single command-driven digest for:
 
@@ -472,15 +472,16 @@ Reliability controls:
 - 15-minute cache (`MORNING_BRIEF_CACHE_TTL_MS`)
 - Explicit refresh policy (`MORNING_BRIEF_REQUIRE_EXPLICIT_REFRESH`)
 - Partial-failure transparency (`brief_*` failure codes)
+- Text-only safety lock (`ENABLE_MORNING_BRIEF_TEXT_ONLY=true` by default)
 
-Live voice behavior:
+Current mode and rationale:
 
-- Live tool declarations include `get_morning_brief` and `get_inbox_digest` when `ENABLE_LIVE_FUNCTION_CALLING_BRIEF=true`
-- Client handles tool calls manually and sends tool responses via `/api/live/tool-response`
-- Voice mode search status labels include:
-  - `Searching live sources…`
-  - `Checking inbox highlights…`
-  - `Brief ready`
+- Morning Brief execution is intentionally handled in text mode right now.
+- Voice mode still supports grounded web search for normal conversational freshness.
+- Live Morning Brief function calls are disabled by default to avoid coupling with voice session stability:
+  - `ENABLE_MORNING_BRIEF_TEXT_ONLY=true`
+  - `ENABLE_LIVE_FUNCTION_CALLING_BRIEF=false`
+  - `VITE_ENABLE_MORNING_BRIEF_VOICE_MODE=false`
 
 Cloud gateway behavior:
 
@@ -786,7 +787,8 @@ Source of truth: `.env.example`
 |---|---|---|
 | `ENABLE_MORNING_BRIEF` | `true` | Master feature flag for Morning Brief orchestration |
 | `ENABLE_GMAIL_INBOX_DIGEST` | `false` | Enable read-only inbox digest section |
-| `ENABLE_LIVE_FUNCTION_CALLING_BRIEF` | `false` | Enable Live function-calling tools for Morning Brief |
+| `ENABLE_MORNING_BRIEF_TEXT_ONLY` | `true` | Hard-lock Morning Brief execution to text mode |
+| `ENABLE_LIVE_FUNCTION_CALLING_BRIEF` | `false` | Optional Live function-calling path (keep `false` for voice stability) |
 | `MORNING_BRIEF_DAILY_CAP` | `3` | Max brief runs per user per local day (cache hits excluded) |
 | `MORNING_BRIEF_CACHE_TTL_MS` | `900000` | Brief cache TTL (15 minutes) |
 | `MORNING_BRIEF_MAX_NEWS_ITEMS` | `5` | Max number of news headlines returned |
@@ -826,6 +828,7 @@ Source of truth: `.env.example`
 
 | Variable | Default | Description |
 |---|---|---|
+| `VITE_ENABLE_MORNING_BRIEF_VOICE_MODE` | `false` | Client guardrail for optional Live Morning Brief function loop |
 | `VITE_LIVE_AUDIO_PROCESSOR_BUFFER_SIZE` | `512` | Audio processor buffer |
 | `VITE_LIVE_AUDIO_NOISE_GATE_ENABLED` | `false` | Client-side noise gate |
 | `VITE_LIVE_AUDIO_SUPPRESS_INPUT_WHILE_ASSISTANT_SPEAKING` | `true` | Duplex suppression |
@@ -928,6 +931,16 @@ Gateway source: `/services/morning-brief-gcp`
    - `ENABLE_MORNING_BRIEF=true`
 3. Keep fallback enabled (default): if gateway fails, app still serves a local grounded brief path
 
+### Google Cloud services in current production path
+
+- **Cloud Run**: Hosts `services/morning-brief-gcp` as an isolated Morning Brief gateway.
+- **Secret Manager**: Stores `GEMINI_API_KEY` for Cloud Run revisions.
+- **Cloud Build**: Builds the gateway image from source during deploy.
+- **Google Search grounding**: Used by both app-side and gateway-side Gemini generation for freshness.
+
+Design note:
+- Replit Postgres remains the system of record. No DB migration to GCP is required for the current Morning Brief architecture.
+
 ### Pre-deployment checklist
 
 1. Run `npm run db:push` against the production database
@@ -1004,10 +1017,14 @@ Gateway source: `/services/morning-brief-gcp`
 - Verify feature flags:
   - `ENABLE_MORNING_BRIEF=true`
   - `ENABLE_GMAIL_INBOX_DIGEST=true` (if inbox expected)
-  - `ENABLE_LIVE_FUNCTION_CALLING_BRIEF=true` (if live tool-calling expected)
+  - `ENABLE_MORNING_BRIEF_TEXT_ONLY=true` (recommended default)
+  - `ENABLE_LIVE_FUNCTION_CALLING_BRIEF=false` (recommended default)
 - Verify Cloud Run gateway:
   - `MORNING_BRIEF_GCP_BASE_URL` points to a healthy service
   - `GET <gateway>/healthz` returns `{ \"ok\": true }`
+- Verify Cloud Run secret wiring:
+  - Runtime service account has `roles/secretmanager.secretAccessor`
+  - `GEMINI_API_KEY` secret latest version contains a valid Gemini key
 - Verify Google integration:
   - `/api/integrations/google/status` returns `connected: true`
   - `GOOGLE_INTEGRATION_ENCRYPTION_KEY` is set and stable between deploys
