@@ -72,8 +72,8 @@ const MAX_NEWS_ITEMS = Math.min(
 );
 const GCP_TIMEOUT_MS = Math.max(
   1_500,
-  Number.parseInt(process.env.MORNING_BRIEF_GCP_TIMEOUT_MS ?? "12000", 10) ||
-    12_000,
+  Number.parseInt(process.env.MORNING_BRIEF_GCP_TIMEOUT_MS ?? "65000", 10) ||
+    65_000,
 );
 const GCP_BASE_URL = (process.env.MORNING_BRIEF_GCP_BASE_URL ?? "").trim();
 
@@ -84,6 +84,13 @@ type CachedBrief = {
 };
 
 const briefCache = new Map<string, CachedBrief>();
+const MARKET_SNAPSHOT_UNAVAILABLE_PATTERN =
+  /(?:market snapshot unavailable|no market snapshot|not available|cannot provide|unable to provide)/i;
+const RSS_FETCH_TIMEOUT_MS = Math.max(
+  2_000,
+  Number.parseInt(process.env.MORNING_BRIEF_RSS_TIMEOUT_MS ?? "8000", 10) ||
+    8_000,
+);
 
 export function resolveMorningBriefTimeZone(
   clientTimeZone?: string | null,
@@ -257,6 +264,173 @@ function findLastCompleteObject(raw: string): string | null {
   for (let i = 0; i < openBraces - closeBraces; i++) suffix += "}";
 
   return truncated + suffix;
+}
+
+function isUnavailableMarketSnapshot(value: string): boolean {
+  const normalized = value.trim();
+  if (!normalized) return true;
+  return MARKET_SNAPSHOT_UNAVAILABLE_PATTERN.test(normalized);
+}
+
+function dedupeStrings(values: string[]): string[] {
+  return Array.from(new Set(values.filter((value) => value.trim().length > 0)));
+}
+
+function decodeXmlEntities(value: string): string {
+  return value
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&nbsp;/g, " ")
+    .trim();
+}
+
+function stripHtmlTags(value: string): string {
+  return value.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function extractRssTagValue(itemXml: string, tag: string): string {
+  const match = itemXml.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`, "i"));
+  if (!match?.[1]) return "";
+  return stripHtmlTags(decodeXmlEntities(match[1]));
+}
+
+function extractRssSourceUrl(itemXml: string): string | null {
+  const sourceMatch = itemXml.match(/<source[^>]*url="([^"]+)"[^>]*>/i);
+  if (sourceMatch?.[1]) {
+    const url = decodeXmlEntities(sourceMatch[1]).trim();
+    return url || null;
+  }
+  const link = extractRssTagValue(itemXml, "link");
+  return link || null;
+}
+
+function toIsoOrNull(raw: string): string | null {
+  if (!raw) return null;
+  const ms = Date.parse(raw);
+  if (!Number.isFinite(ms)) return null;
+  return new Date(ms).toISOString();
+}
+
+function headlineSummaryFromTitle(title: string): string {
+  const summary = title.replace(/\s+-\s+[^-]+$/, "").trim();
+  return summary || title;
+}
+
+async function fetchTextWithTimeout(
+  url: string,
+  timeoutMs = RSS_FETCH_TIMEOUT_MS,
+): Promise<string> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        "User-Agent": "ZeeMeMorningBriefBot/1.0 (+https://zeeme.replit.app)",
+        Accept: "application/rss+xml, application/xml, text/xml;q=0.9, */*;q=0.1",
+      },
+    });
+    if (!response.ok) {
+      throw new Error(`RSS request failed (${response.status})`);
+    }
+    return await response.text();
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function parseRssHeadlines(xml: string, maxItems: number): MorningBriefHeadlineItem[] {
+  const items: MorningBriefHeadlineItem[] = [];
+  const itemPattern = /<item>([\s\S]*?)<\/item>/gi;
+  let match = itemPattern.exec(xml);
+
+  while (match) {
+    const itemXml = match[1] ?? "";
+    const title = extractRssTagValue(itemXml, "title");
+    if (title) {
+      const sourceUrl = extractRssSourceUrl(itemXml);
+      const publishedAt = toIsoOrNull(extractRssTagValue(itemXml, "pubDate"));
+      items.push({
+        title,
+        summary: headlineSummaryFromTitle(title),
+        sourceUrl,
+        publishedAt,
+      });
+      if (items.length >= maxItems) break;
+    }
+    match = itemPattern.exec(xml);
+  }
+
+  return items;
+}
+
+async function fetchRssFallbackNews(params: {
+  maxItems: number;
+  timezone: string;
+  logger?: BriefEventLogger;
+}): Promise<{
+  headlineItems: MorningBriefHeadlineItem[];
+  marketSnapshot: string;
+  citations: string[];
+} | null> {
+  const base = "https://news.google.com/rss/search";
+  const generalQuery = encodeURIComponent(
+    "global business technology economy markets when:1d",
+  );
+  const marketQuery = encodeURIComponent(
+    "(S&P 500 OR Nasdaq OR Dow Jones) market today when:1d",
+  );
+  const suffix = "&hl=en-US&gl=US&ceid=US:en";
+
+  const feeds = [
+    `${base}?q=${generalQuery}${suffix}`,
+    `${base}?q=${marketQuery}${suffix}`,
+    "https://feeds.bbci.co.uk/news/business/rss.xml",
+  ];
+
+  const settled = await Promise.allSettled(feeds.map((url) => fetchTextWithTimeout(url)));
+  const parsedSets = settled
+    .filter((result): result is PromiseFulfilledResult<string> => result.status === "fulfilled")
+    .map((result) => parseRssHeadlines(result.value, params.maxItems));
+
+  const allHeadlines = parsedSets.flat();
+  if (allHeadlines.length === 0) {
+    params.logger?.("brief.news.rss_fallback.failed", {
+      reason: "no_headlines",
+      timezone: params.timezone,
+    });
+    return null;
+  }
+
+  const headlineItems = allHeadlines.slice(0, params.maxItems);
+  const citations = dedupeStrings(
+    headlineItems
+      .map((item) => item.sourceUrl)
+      .filter((value): value is string => Boolean(value)),
+  );
+  const marketHeadlineTitles = allHeadlines
+    .map((item) => item.title.replace(/\s+-\s+[^-]+$/, "").trim())
+    .filter(Boolean)
+    .slice(0, 2);
+  const marketSnapshot =
+    marketHeadlineTitles.length > 0
+      ? `Markets watch: ${marketHeadlineTitles.join(" | ")}.`
+      : "Market snapshot unavailable right now.";
+
+  params.logger?.("brief.news.rss_fallback.used", {
+    timezone: params.timezone,
+    headlineCount: headlineItems.length,
+    citationCount: citations.length,
+  });
+
+  return {
+    headlineItems,
+    marketSnapshot,
+    citations,
+  };
 }
 
 function toHeadlineItems(value: unknown): MorningBriefHeadlineItem[] {
@@ -476,7 +650,7 @@ async function fetchNewsAndMarkets(input: {
       const hasUsableCoverage =
         headlineItems.length > 0 ||
         citations.length > 0 ||
-        marketSnapshot.length > 0;
+        !isUnavailableMarketSnapshot(marketSnapshot);
       if (hasUsableCoverage) {
         briefLog("INFO", "news.gcp.success", {
           headlineCount: headlineItems.length,
@@ -596,12 +770,39 @@ async function fetchNewsAndMarkets(input: {
       parsed && typeof parsed === "object" && !Array.isArray(parsed)
         ? (parsed as Record<string, unknown>)
         : {};
-    const headlineItems = toHeadlineItems(record.headlineItems);
-    const marketSnapshot =
+    let headlineItems = toHeadlineItems(record.headlineItems);
+    let marketSnapshot =
       typeof record.marketSnapshot === "string" && record.marketSnapshot.trim()
         ? record.marketSnapshot.trim()
         : "Market snapshot unavailable right now.";
-    const citations = toStringArray(record.citations);
+    let citations = toStringArray(record.citations);
+
+    if (
+      headlineItems.length === 0 ||
+      citations.length === 0 ||
+      isUnavailableMarketSnapshot(marketSnapshot)
+    ) {
+      try {
+        const rssFallback = await fetchRssFallbackNews({
+          maxItems: MAX_NEWS_ITEMS,
+          timezone: input.timezone,
+          logger: input.logger,
+        });
+        if (rssFallback) {
+          if (headlineItems.length === 0) {
+            headlineItems = rssFallback.headlineItems;
+          }
+          if (isUnavailableMarketSnapshot(marketSnapshot)) {
+            marketSnapshot = rssFallback.marketSnapshot;
+          }
+          citations = dedupeStrings([...citations, ...rssFallback.citations]);
+        }
+      } catch (rssError) {
+        briefLog("WARN", "news.rss_fallback.failed", {
+          error: rssError instanceof Error ? rssError.message : String(rssError),
+        });
+      }
+    }
 
     briefLog("INFO", "news.gemini_fallback.result", {
       headlineCount: headlineItems.length,
@@ -647,6 +848,31 @@ async function fetchNewsAndMarkets(input: {
       via: "app_grounding_fallback",
       message: errorMsg,
     });
+    try {
+      const rssFallback = await fetchRssFallbackNews({
+        maxItems: MAX_NEWS_ITEMS,
+        timezone: input.timezone,
+        logger: input.logger,
+      });
+      if (rssFallback) {
+        return {
+          headlineItems: rssFallback.headlineItems,
+          marketSnapshot: rssFallback.marketSnapshot,
+          citations: rssFallback.citations,
+          partialFailures: Array.from(
+            new Set<MorningBriefFailureCode>([
+              ...gatewayFailureCodes,
+              "brief_grounding_unavailable",
+            ]),
+          ),
+        };
+      }
+    } catch (rssError) {
+      briefLog("WARN", "news.rss_fallback.failed_after_grounding_failure", {
+        error: rssError instanceof Error ? rssError.message : String(rssError),
+      });
+    }
+
     return {
       headlineItems: [],
       marketSnapshot: "Market snapshot unavailable right now.",
@@ -770,8 +996,28 @@ async function composeMorningBriefViaGateway(input: {
 
 export function renderMorningBriefForChat(
   brief: MorningBriefResult,
-  options: { includeInbox: boolean },
+  options: { includeInbox: boolean; timeZone?: string | null },
 ): string[] {
+  const generatedAt = (() => {
+    const parsed = new Date(brief.generatedAt);
+    if (Number.isNaN(parsed.getTime())) {
+      return brief.generatedAt;
+    }
+    try {
+      return new Intl.DateTimeFormat("en-US", {
+        timeZone: resolveMorningBriefTimeZone(options.timeZone ?? null),
+        year: "numeric",
+        month: "numeric",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+        second: "2-digit",
+      }).format(parsed);
+    } catch {
+      return parsed.toLocaleString();
+    }
+  })();
+
   const spoken = [
     `Morning briefing ready. I pulled ${brief.headlineItems.length} top headlines${options.includeInbox ? " plus inbox highlights" : ""}.`,
     brief.marketSnapshot ? `Markets: ${brief.marketSnapshot}` : "",
@@ -784,7 +1030,7 @@ export function renderMorningBriefForChat(
 
   const bulletLines: string[] = [];
   bulletLines.push("## Morning Brief");
-  bulletLines.push(`*Generated: ${new Date(brief.generatedAt).toLocaleString()}*`);
+  bulletLines.push(`*Generated: ${generatedAt}*`);
   bulletLines.push("");
   bulletLines.push("### TOP NEWS");
   if (brief.headlineItems.length === 0) {

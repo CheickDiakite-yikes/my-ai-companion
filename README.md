@@ -865,7 +865,8 @@ Source of truth: `.env.example`
 | `MORNING_BRIEF_MAX_INBOX_THREADS` | `10` | Max Gmail threads summarized |
 | `MORNING_BRIEF_REQUIRE_EXPLICIT_REFRESH` | `true` | Require explicit `refresh morning brief` to bypass cache |
 | `MORNING_BRIEF_GCP_BASE_URL` | — | Cloud Run Morning Brief gateway base URL |
-| `MORNING_BRIEF_GCP_TIMEOUT_MS` | `12000` | Gateway request timeout |
+| `MORNING_BRIEF_GCP_TIMEOUT_MS` | `65000` | Gateway request timeout (covers Cloud Run cold-start + grounding latency) |
+| `MORNING_BRIEF_RSS_TIMEOUT_MS` | `8000` | RSS fallback fetch timeout used when grounding/gateway coverage is weak |
 | `MORNING_BRIEF_DEBUG_HISTORY_LIMIT` | `200` | In-memory debug run history cap |
 
 ### Google OAuth integration

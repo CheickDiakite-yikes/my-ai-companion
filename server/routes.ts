@@ -1360,6 +1360,7 @@ async function executeMorningBriefForConversation(params: {
     brief: execution.result,
     chatParts: renderMorningBriefForChat(execution.result, {
       includeInbox: execution.mode === "news_markets_inbox",
+      timeZone: timezone,
     }),
     mode: execution.mode,
     cacheHit: execution.cacheHit,
@@ -1962,6 +1963,7 @@ async function buildLiveMemoryContext(params: {
   memoryPolicy: LiveMemoryPolicy;
   activeThreadMaxMessages: number;
   crossChatMaxMessages: number;
+  clientTimeZone?: string | null;
 }): Promise<LiveMemoryBuildResult> {
   const activeMessages = await storage.getMessagesWithAttachments(params.conversationId);
   const activeHistory: MemorySourceMessage[] = activeMessages
@@ -2138,7 +2140,7 @@ async function buildLiveMemoryContext(params: {
   redactionCount += profileFacts.redactionCount;
 
   const sections: string[] = [];
-  const liveTZ = resolveCompanionTimeZone(null);
+  const liveTZ = resolveCompanionTimeZone(params.clientTimeZone ?? null);
   const liveSnap = formatCalendarSnapshot(new Date(), liveTZ);
   sections.push(
     `[LIVE TIME ANCHOR — current time is ${liveSnap.weekday}, ${liveSnap.date} at ${liveSnap.time} ${liveSnap.timeZone}. Any earlier timestamps in the conversation below are historical — always use THIS time for "now".]`,
@@ -2190,6 +2192,7 @@ async function buildChatTextMemoryContext(params: {
   req: any;
   userId: string;
   conversationId: string;
+  clientTimeZone?: string | null;
 }): Promise<ChatTextMemoryContext> {
   let accountMemoryMode = resolveLiveMemoryPolicy(undefined);
   let crossChatMemoryEnabled = true;
@@ -2253,6 +2256,7 @@ async function buildChatTextMemoryContext(params: {
           memoryPolicy: memoryMode,
           activeThreadMaxMessages: LIVE_MEMORY_ACTIVE_THREAD_MAX_MESSAGES,
           crossChatMaxMessages: LIVE_MEMORY_CROSS_CHAT_MAX_MESSAGES,
+          clientTimeZone: params.clientTimeZone ?? null,
         }),
         remainingMs,
         "live_memory_build_timeout",
@@ -8432,6 +8436,7 @@ export async function registerRoutes(
               memoryPolicy: memoryMode,
               activeThreadMaxMessages: LIVE_MEMORY_ACTIVE_THREAD_MAX_MESSAGES,
               crossChatMaxMessages: LIVE_MEMORY_CROSS_CHAT_MAX_MESSAGES,
+              clientTimeZone: parsed.clientTimeZone ?? null,
             }),
             remainingMs,
             "live_memory_build_timeout",
@@ -9713,6 +9718,7 @@ export async function registerRoutes(
         req,
         userId: req.session.userId,
         conversationId: conversation.id,
+        clientTimeZone: parsed.clientTimeZone ?? null,
       });
       const profileContext = chatMemory.profileContext;
 
@@ -11065,6 +11071,7 @@ export async function registerRoutes(
         req,
         userId: req.session.userId,
         conversationId: conversation.id,
+        clientTimeZone: parsed.clientTimeZone ?? null,
       });
       const profileContext = chatMemory.profileContext;
 
