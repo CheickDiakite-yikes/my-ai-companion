@@ -109,6 +109,7 @@ import {
   fetchGoogleUserInfo,
   GOOGLE_CALENDAR_EVENTS_READONLY_SCOPE,
   GOOGLE_GMAIL_READONLY_SCOPE,
+  getGoogleOAuthMissingEnvVars,
   inferGoogleEmailSinceDays,
   getGoogleOAuthConfig,
   resolveGoogleAccessTokenForUser,
@@ -8041,10 +8042,31 @@ export async function registerRoutes(
       const startedAt = Date.now();
       try {
         const parsed = googleConnectUrlQuerySchema.parse(req.query ?? {});
-        const config = getGoogleOAuthConfig();
-        if (!config) {
+        if (!ENABLE_GOOGLE_PERSONAL_CONTEXT) {
+          trace(req, "google.integration.connect_url.disabled", {
+            userId: req.session.userId,
+            elapsedMs: elapsedMs(startedAt),
+          });
           return res.status(503).json({
-            message: "Google integration is not configured",
+            code: "google_personal_context_disabled",
+            message: "Google personal context is disabled in this environment.",
+            traceId: getTraceId(req),
+          });
+        }
+
+        const missingEnv = getGoogleOAuthMissingEnvVars();
+        const config = getGoogleOAuthConfig();
+        if (!config || missingEnv.length > 0) {
+          trace(req, "google.integration.connect_url.not_configured", {
+            userId: req.session.userId,
+            missingEnv,
+            elapsedMs: elapsedMs(startedAt),
+          });
+          return res.status(503).json({
+            code: "google_oauth_not_configured",
+            message:
+              "Google OAuth is not configured on the server. Add the required Google OAuth environment variables and retry.",
+            missingEnv,
             traceId: getTraceId(req),
           });
         }
@@ -8069,12 +8091,19 @@ export async function registerRoutes(
 
         return res.status(200).json({
           traceId: getTraceId(req),
+          connectUrl,
           url: connectUrl,
           scopes,
         });
       } catch (error) {
         if (error instanceof z.ZodError) {
+          trace(req, "google.integration.connect_url.invalid_request", {
+            userId: req.session.userId,
+            issue: error.issues[0]?.message ?? "Invalid connect request",
+            elapsedMs: elapsedMs(startedAt),
+          });
           return res.status(400).json({
+            code: "google_connect_invalid_request",
             message: error.issues[0]?.message ?? "Invalid connect request",
             traceId: getTraceId(req),
           });
@@ -8083,6 +8112,7 @@ export async function registerRoutes(
           elapsedMs: elapsedMs(startedAt),
         });
         return res.status(500).json({
+          code: "google_connect_url_failed",
           message: "Failed to create Google connect URL",
           traceId: getTraceId(req),
         });

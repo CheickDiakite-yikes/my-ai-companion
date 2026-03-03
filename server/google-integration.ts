@@ -390,6 +390,18 @@ export function getGoogleOAuthConfig(): GoogleOAuthConfig | null {
   };
 }
 
+export function getGoogleOAuthMissingEnvVars(): string[] {
+  const requiredVars = [
+    "GOOGLE_OAUTH_CLIENT_ID",
+    "GOOGLE_OAUTH_CLIENT_SECRET",
+    "GOOGLE_OAUTH_REDIRECT_URI",
+  ] as const;
+  return requiredVars.filter((name) => {
+    const value = process.env[name];
+    return !value || value.trim().length === 0;
+  });
+}
+
 export function requireGoogleOAuthConfig(): GoogleOAuthConfig {
   return {
     clientId: requiredEnv("GOOGLE_OAUTH_CLIENT_ID"),

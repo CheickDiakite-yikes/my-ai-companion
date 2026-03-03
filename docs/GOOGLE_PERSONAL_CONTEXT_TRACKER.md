@@ -80,9 +80,16 @@
   - Target files: `/Users/cheickdiakite/Codex/my-ai-companion/script/google-personal-context-smoke.ts`, `/Users/cheickdiakite/Codex/my-ai-companion/script/google-personal-context-playwright-check.ts`, `/Users/cheickdiakite/Codex/my-ai-companion/script/google-personal-context-playwright-e2e.sh`, `/Users/cheickdiakite/Codex/my-ai-companion/package.json`
   - Acceptance: robust prompt-intent smoke + Playwright text-mode flow checks for calendar/email/combined prompts are repeatable and passing.
 
+- [x] `GPC-010`
+  - Status: `done`
+  - Owner: `codex`
+  - Dependencies: `GPC-007`
+  - Target files: `/Users/cheickdiakite/Codex/my-ai-companion/server/routes.ts`, `/Users/cheickdiakite/Codex/my-ai-companion/server/google-integration.ts`, `/Users/cheickdiakite/Codex/my-ai-companion/client/src/App.tsx`
+  - Acceptance: connect-url endpoint returns stable contract (`connectUrl` + `url`) and structured error codes; Profile UI maps connect failures to actionable guidance.
+
 ## Current State Snapshot
 - Branch: `main3`
-- Latest commit SHA (base before in-progress changes): `13cbb1e`
+- Latest commit SHA (base before in-progress changes): `a6b2142`
 - Expected env flags:
   - `ENABLE_GOOGLE_PERSONAL_CONTEXT=true`
   - `ENABLE_GOOGLE_PERSONAL_CONTEXT_TEXT=true`
@@ -105,6 +112,10 @@
 - `2026-03-03 09:38 EST` Added Playwright e2e harness (`/script/google-personal-context-playwright-check.ts` + `/script/google-personal-context-playwright-e2e.sh`) and validated profile + prompt flows.
 - `2026-03-03 09:44 EST` Validation complete: `npm run check`, `npm run test:google-context:smoke`, and `npm run test:google-context:ui` all pass locally.
 - `2026-03-03 09:46 EST` Regression guardrail run: `npm run test:agent:smoke` passed after Google Personal Context test additions.
+- `2026-03-03 10:15 EST` Fixed Google connect contract mismatch (`url` vs `connectUrl`) by returning both fields from `/api/integrations/google/connect-url`.
+- `2026-03-03 10:16 EST` Added structured connect-url failure responses (`google_personal_context_disabled`, `google_oauth_not_configured`, `google_connect_invalid_request`, `google_connect_url_failed`) with trace logging + missing env diagnostics.
+- `2026-03-03 10:18 EST` Profile Connected Accounts now parses API errors and renders actionable messages for disabled flag, missing OAuth env vars, invalid request, and trace-linked fallback errors.
+- `2026-03-03 10:20 EST` Validation rerun passed: `npm run check`, `npm run test:google-context:smoke`, `npm run test:google-context:ui`.
 
 ## Open Decisions / Blockers
 - Decision needed: whether to keep voice Google Personal Context default OFF in production rollout.

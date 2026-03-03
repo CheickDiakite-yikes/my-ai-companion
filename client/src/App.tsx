@@ -676,6 +676,15 @@ interface GoogleIntegrationStatusResponse extends TraceAwareResponse {
   enabled?: boolean;
 }
 
+interface GoogleConnectUrlResponse extends TraceAwareResponse {
+  connectUrl?: string;
+  url?: string;
+  scopes?: string[];
+  code?: string;
+  missingEnv?: string[];
+  message?: string;
+}
+
 interface LiveTaskSnapshot {
   task: AgentTaskSummary;
   latestStep: AgentStepSummary | null;
@@ -758,6 +767,77 @@ function safeParseJson<T>(value: string): T | null {
   } catch {
     return null;
   }
+}
+
+function parseHttpError(error: unknown): {
+  status: number;
+  payload: Record<string, unknown> | null;
+  bodyText: string;
+} | null {
+  const message = getErrorMessage(error).trim();
+  const match = message.match(/^(\d{3}):\s*([\s\S]*)$/);
+  if (!match) return null;
+  const status = Number.parseInt(match[1], 10);
+  if (!Number.isFinite(status)) return null;
+  const bodyText = match[2]?.trim() ?? "";
+  if (!bodyText) {
+    return {
+      status,
+      payload: null,
+      bodyText,
+    };
+  }
+  const payload = bodyText.startsWith("{")
+    ? safeParseJson<Record<string, unknown>>(bodyText)
+    : null;
+  return {
+    status,
+    payload,
+    bodyText,
+  };
+}
+
+function mapGoogleConnectActionError(error: unknown): string {
+  const parsed = parseHttpError(error);
+  if (!parsed) {
+    return "Could not start Google connection. Please try again.";
+  }
+
+  const payload = parsed.payload ?? {};
+  const code = typeof payload.code === "string" ? payload.code : "";
+  const message = typeof payload.message === "string" ? payload.message : "";
+  const traceId = typeof payload.traceId === "string" ? payload.traceId : null;
+  const traceSuffix = traceId ? ` (trace ${traceId})` : "";
+
+  if (code === "google_personal_context_disabled") {
+    return "Google personal context is disabled in this environment.";
+  }
+
+  if (code === "google_oauth_not_configured") {
+    const missingEnv = Array.isArray(payload.missingEnv)
+      ? payload.missingEnv
+          .map((value) => (typeof value === "string" ? value.trim() : ""))
+          .filter((value) => value.length > 0)
+      : [];
+    if (missingEnv.length > 0) {
+      return `Google OAuth is not configured on the server. Missing: ${missingEnv.join(", ")}.${traceSuffix}`;
+    }
+    return `Google OAuth is not configured on the server.${traceSuffix}`;
+  }
+
+  if (code === "google_connect_invalid_request") {
+    return `Invalid Google connect request. Refresh and try again.${traceSuffix}`;
+  }
+
+  if (message) {
+    return `${message}${traceSuffix}`;
+  }
+
+  if (parsed.status === 503) {
+    return `Google connection is temporarily unavailable.${traceSuffix}`;
+  }
+
+  return `Could not start Google connection. Please try again.${traceSuffix}`;
 }
 
 function parseQuotaError(error: unknown): QuotaErrorPayload | null {
@@ -2294,19 +2374,20 @@ const ProfileView = ({
         "GET",
         "/api/integrations/google/connect-url?returnTo=%2F",
       );
-      return (await response.json()) as { connectUrl: string };
+      return (await response.json()) as GoogleConnectUrlResponse;
     },
     onSuccess: (payload) => {
-      if (payload.connectUrl) {
-        window.location.href = payload.connectUrl;
+      const connectUrl = payload.connectUrl ?? payload.url;
+      if (connectUrl) {
+        window.location.href = connectUrl;
       } else {
         setGoogleIntegrationActionError(
-          "Could not start Google connection. Please try again.",
+          "Google connect URL was not returned by the server.",
         );
       }
     },
     onError: (error) => {
-      setGoogleIntegrationActionError(getErrorMessage(error));
+      setGoogleIntegrationActionError(mapGoogleConnectActionError(error));
     },
   });
 
