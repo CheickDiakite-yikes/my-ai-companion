@@ -22,6 +22,27 @@ interface MarketingLandingPageProps {
 
 type InfoPageId = "about" | "terms" | "privacy" | "blog";
 
+const INFO_PAGE_PATH: Record<InfoPageId, string> = {
+  about: "/about",
+  terms: "/terms",
+  privacy: "/privacy",
+  blog: "/blog",
+};
+
+function normalizePath(pathname: string): string {
+  const trimmed = pathname.replace(/\/+$/, "");
+  return trimmed.length > 0 ? trimmed : "/";
+}
+
+function infoPageFromPath(pathname: string): InfoPageId | null {
+  const normalized = normalizePath(pathname);
+  if (normalized === "/blog" || normalized.startsWith("/blog/")) return "blog";
+  if (normalized === "/terms") return "terms";
+  if (normalized === "/privacy") return "privacy";
+  if (normalized === "/about") return "about";
+  return null;
+}
+
 interface InfoPageSection {
   heading: string;
   icon?: string;
@@ -2276,20 +2297,34 @@ export default function MarketingLandingPage({ onGetStarted, onSignIn }: Marketi
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const pathname = window.location.pathname.replace(/\/+$/, "") || "/";
-    if (pathname === "/blog" || pathname.startsWith("/blog/")) {
-      setActiveInfoPage("blog");
-    }
+    const syncFromPath = () => {
+      setActiveInfoPage(infoPageFromPath(window.location.pathname));
+    };
+    syncFromPath();
+    window.addEventListener("popstate", syncFromPath);
+    return () => window.removeEventListener("popstate", syncFromPath);
   }, []);
 
   const handleCloseInfoPage = () => {
     setActiveInfoPage(null);
     if (typeof window === "undefined") return;
     const url = new URL(window.location.href);
-    if (url.pathname === "/blog" || url.pathname.startsWith("/blog/")) {
+    if (infoPageFromPath(url.pathname)) {
       url.pathname = "/";
       url.hash = "";
       window.history.replaceState({}, "", `${url.pathname}${url.search}`);
+    }
+  };
+
+  const openInfoPage = (page: InfoPageId) => {
+    setActiveInfoPage(page);
+    if (typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    const targetPath = INFO_PAGE_PATH[page];
+    if (targetPath && normalizePath(url.pathname) !== targetPath) {
+      url.pathname = targetPath;
+      url.hash = "";
+      window.history.pushState({}, "", `${url.pathname}${url.search}`);
     }
   };
 
@@ -2572,7 +2607,7 @@ export default function MarketingLandingPage({ onGetStarted, onSignIn }: Marketi
                     <div className="flex flex-col gap-3">
                       <button
                         type="button"
-                        onClick={() => setActiveInfoPage("about")}
+                        onClick={() => openInfoPage("about")}
                         className="text-left text-sm hover:translate-x-1 transition-transform duration-200"
                         style={{ color: "rgba(255, 228, 202, 0.7)" }}
                         data-testid="link-about"
@@ -2581,7 +2616,7 @@ export default function MarketingLandingPage({ onGetStarted, onSignIn }: Marketi
                       </button>
                       <button
                         type="button"
-                        onClick={() => setActiveInfoPage("blog")}
+                        onClick={() => openInfoPage("blog")}
                         className="text-left text-sm hover:translate-x-1 transition-transform duration-200"
                         style={{ color: "rgba(255, 228, 202, 0.7)" }}
                         data-testid="link-blog"
@@ -2604,7 +2639,7 @@ export default function MarketingLandingPage({ onGetStarted, onSignIn }: Marketi
                     <div className="flex flex-col gap-3">
                       <button
                         type="button"
-                        onClick={() => setActiveInfoPage("terms")}
+                        onClick={() => openInfoPage("terms")}
                         className="text-left text-sm hover:translate-x-1 transition-transform duration-200"
                         style={{ color: "rgba(255, 228, 202, 0.7)" }}
                         data-testid="link-terms"
@@ -2613,7 +2648,7 @@ export default function MarketingLandingPage({ onGetStarted, onSignIn }: Marketi
                       </button>
                       <button
                         type="button"
-                        onClick={() => setActiveInfoPage("privacy")}
+                        onClick={() => openInfoPage("privacy")}
                         className="text-left text-sm hover:translate-x-1 transition-transform duration-200"
                         style={{ color: "rgba(255, 228, 202, 0.7)" }}
                         data-testid="link-privacy"

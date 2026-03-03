@@ -33,6 +33,30 @@ const BLOG_ARCHIVE_SHARE: BlogShareEntry = {
   imageAlt: "ZeeMe Research Archive cover.",
 };
 
+const ABOUT_SHARE: BlogShareEntry = {
+  title: "About ZeeMe",
+  description:
+    "Learn what ZeeMe is building: a warm, reliable AI companion experience across voice and text.",
+  imagePath: DEFAULT_IMAGE_PATH,
+  imageAlt: "ZeeMe companion brand cover.",
+};
+
+const TERMS_SHARE: BlogShareEntry = {
+  title: "ZeeMe Terms of Service",
+  description:
+    "Terms covering account usage, platform boundaries, and optional Google integrations for Gmail and Calendar.",
+  imagePath: DEFAULT_IMAGE_PATH,
+  imageAlt: "ZeeMe Terms of Service page preview.",
+};
+
+const PRIVACY_SHARE: BlogShareEntry = {
+  title: "ZeeMe Privacy Policy",
+  description:
+    "How ZeeMe handles personal data, Google API data usage, retention, and user privacy controls.",
+  imagePath: DEFAULT_IMAGE_PATH,
+  imageAlt: "ZeeMe Privacy Policy page preview.",
+};
+
 const BLOG_POST_SHARE: Record<string, BlogShareEntry> = {
   "zeeme-platform-thesis-2026": {
     title: "Research Paper I: ZeeMe as a Companion Operating System",
@@ -115,6 +139,51 @@ export function resolveShareMetaForPath(
 ): ShareMeta {
   const normalizedPath = normalizePathname(pathname);
   const canonicalUrl = joinUrl(origin, normalizedPath);
+
+  if (normalizedPath === "/about") {
+    return {
+      title: `${ABOUT_SHARE.title} — Zeeme`,
+      description: ABOUT_SHARE.description,
+      canonicalUrl,
+      ogType: "website",
+      imageUrl: joinUrl(origin, ABOUT_SHARE.imagePath),
+      imageType: "image/png",
+      imageWidth: 1536,
+      imageHeight: 1024,
+      imageAlt: ABOUT_SHARE.imageAlt,
+      twitterCard: "summary_large_image",
+    };
+  }
+
+  if (normalizedPath === "/terms") {
+    return {
+      title: `${TERMS_SHARE.title} — Zeeme`,
+      description: TERMS_SHARE.description,
+      canonicalUrl,
+      ogType: "website",
+      imageUrl: joinUrl(origin, TERMS_SHARE.imagePath),
+      imageType: "image/png",
+      imageWidth: 1536,
+      imageHeight: 1024,
+      imageAlt: TERMS_SHARE.imageAlt,
+      twitterCard: "summary_large_image",
+    };
+  }
+
+  if (normalizedPath === "/privacy") {
+    return {
+      title: `${PRIVACY_SHARE.title} — Zeeme`,
+      description: PRIVACY_SHARE.description,
+      canonicalUrl,
+      ogType: "website",
+      imageUrl: joinUrl(origin, PRIVACY_SHARE.imagePath),
+      imageType: "image/png",
+      imageWidth: 1536,
+      imageHeight: 1024,
+      imageAlt: PRIVACY_SHARE.imageAlt,
+      twitterCard: "summary_large_image",
+    };
+  }
 
   if (normalizedPath === "/blog") {
     return {
