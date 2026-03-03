@@ -118,6 +118,9 @@
 - `2026-03-03 10:20 EST` Validation rerun passed: `npm run check`, `npm run test:google-context:smoke`, `npm run test:google-context:ui`.
 - `2026-03-03 11:18 EST` Unread-email reliability patch started for prompt: “can you summarize my unread emails from last day”; added `emailUnreadOnly` + `emailSinceDays` intent context, improved Gmail no-results assistant instructions, and wired live `get_user_emails.unreadOnly`.
 - `2026-03-03 11:22 EST` Validation passed for patch slice: `npm run check` and `npm run test:google-context:smoke`.
+- `2026-03-03 15:12 EST` Forensic review of production-like logs showed deterministic auth failure (`google.context.auth.failed` with `google_not_connected`) while model still produced conversational diagnostics; root cause confirmed as missing hard guardrail on auth-failure path.
+- `2026-03-03 15:18 EST` Added server-side guardrail for Google Personal Context in `/api/chat/respond` and `/api/chat/respond/stream`: auth/scope/token failures now short-circuit to deterministic user action message (connect/reconnect), bypassing model improvisation.
+- `2026-03-03 15:22 EST` Validation passed after guardrail patch: `npm run check`, `npm run test:google-context:smoke`, and `npm run test:agent:smoke`.
 
 ## Open Decisions / Blockers
 - Decision needed: whether to keep voice Google Personal Context default OFF in production rollout.

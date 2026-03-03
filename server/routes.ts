@@ -1158,6 +1158,7 @@ type GooglePersonalContextPreparation = {
   partialFailureCodes: GoogleDataFailureCode[];
   emailCount: number;
   calendarCount: number;
+  intent: ReturnType<typeof detectGooglePersonalContextIntent> | null;
 };
 
 function mapGoogleResolveFailureCode(
@@ -1173,6 +1174,38 @@ function mapGoogleResolveFailureCode(
     return "google_scope_missing";
   }
   return "google_not_connected";
+}
+
+function buildGooglePersonalContextGuardrailReply(
+  preparation: GooglePersonalContextPreparation,
+): string | null {
+  if (!preparation.applied) return null;
+
+  const codes = new Set(preparation.partialFailureCodes);
+  if (codes.has("google_not_connected")) {
+    return "I can’t access your Gmail or Calendar yet because your Google account is not connected in this environment. Open Profile > Connected Accounts, tap Connect Google, then ask again.";
+  }
+
+  if (codes.has("google_scope_missing")) {
+    return "Your Google account is connected, but required permissions are missing. Please disconnect and reconnect Google from Profile > Connected Accounts, then try again.";
+  }
+
+  if (
+    codes.has("google_token_refresh_failed") ||
+    codes.has("google_token_decrypt_failed")
+  ) {
+    return "Your Google session expired or became invalid. Please reconnect Google from Profile > Connected Accounts, then try again.";
+  }
+
+  if (
+    codes.has("google_fetch_failed") &&
+    preparation.emailCount === 0 &&
+    preparation.calendarCount === 0
+  ) {
+    return "I couldn’t reach Google data services right now. Please retry in a minute.";
+  }
+
+  return null;
 }
 
 function renderGooglePersonalContextBlock(params: {
@@ -1272,6 +1305,7 @@ async function prepareGooglePersonalContextForChat(params: {
       partialFailureCodes: [],
       emailCount: 0,
       calendarCount: 0,
+      intent: null,
     };
   }
 
@@ -1283,6 +1317,7 @@ async function prepareGooglePersonalContextForChat(params: {
       partialFailureCodes: [],
       emailCount: 0,
       calendarCount: 0,
+      intent: null,
     };
   }
 
@@ -1329,6 +1364,7 @@ async function prepareGooglePersonalContextForChat(params: {
       partialFailureCodes: [failureCode],
       emailCount: 0,
       calendarCount: 0,
+      intent,
     };
   }
 
@@ -1421,6 +1457,7 @@ async function prepareGooglePersonalContextForChat(params: {
     partialFailureCodes: partialFailures,
     emailCount: inboxHighlights.length,
     calendarCount: calendarEvents.length,
+    intent,
   };
 }
 
@@ -10349,6 +10386,46 @@ export async function registerRoutes(
         text: parsed.text,
         clientTimeZone: parsed.clientTimeZone ?? null,
       });
+      const googlePersonalContextGuardrailReply =
+        buildGooglePersonalContextGuardrailReply(googlePersonalContext);
+      if (googlePersonalContextGuardrailReply) {
+        const assistantMessages = await storage.createAssistantTurnParts({
+          conversationId: conversation.id,
+          textParts: [googlePersonalContextGuardrailReply],
+        });
+        const legacyAssistantMessage = makeLegacyAssistantMessage(assistantMessages);
+        trace(req, "google.context.respond.completed", {
+          calendarCount: googlePersonalContext.calendarCount,
+          emailCount: googlePersonalContext.emailCount,
+          partialFailureCodes: googlePersonalContext.partialFailureCodes,
+          guardrailUsed: true,
+        });
+        trace(req, "google.context.guardrail.reply_used", {
+          conversationId: conversation.id,
+          partialFailureCodes: googlePersonalContext.partialFailureCodes,
+          emailCount: googlePersonalContext.emailCount,
+          calendarCount: googlePersonalContext.calendarCount,
+        });
+        return res.status(201).json({
+          traceId: getTraceId(req),
+          conversationId: conversation.id,
+          userMessage: {
+            ...userMessage,
+            attachments: boundAttachments.map((attachment) =>
+              toAttachmentResponse(attachment, req.session.userId),
+            ),
+          },
+          assistantMessage: legacyAssistantMessage,
+          assistantMessages,
+          model: "google_personal_context_guardrail_v1",
+          usage: null,
+          googleSearchGroundingUsed: false,
+          decisionPath: "companion_reply" satisfies IntentDecisionPath,
+          decisionPathReason: "companion" satisfies IntentDecisionPathReason,
+          routeReason: "companion",
+          elapsedMs: elapsedMs(startedAt),
+        });
+      }
 
       const modelMessages = await buildModelMessages({
         conversationId: conversation.id,
@@ -11723,6 +11800,45 @@ export async function registerRoutes(
         text: parsed.text,
         clientTimeZone: parsed.clientTimeZone ?? null,
       });
+      const googlePersonalContextGuardrailReply =
+        buildGooglePersonalContextGuardrailReply(googlePersonalContext);
+      if (googlePersonalContextGuardrailReply) {
+        const responseAssistantMessages = await storage.createAssistantTurnParts({
+          conversationId: conversation.id,
+          textParts: [googlePersonalContextGuardrailReply],
+        });
+        const legacyAssistantMessage = makeLegacyAssistantMessage(
+          responseAssistantMessages,
+        );
+        trace(req, "google.context.respond.completed", {
+          calendarCount: googlePersonalContext.calendarCount,
+          emailCount: googlePersonalContext.emailCount,
+          partialFailureCodes: googlePersonalContext.partialFailureCodes,
+          guardrailUsed: true,
+          streaming: true,
+        });
+        trace(req, "google.context.guardrail.reply_used", {
+          conversationId: conversation.id,
+          partialFailureCodes: googlePersonalContext.partialFailureCodes,
+          emailCount: googlePersonalContext.emailCount,
+          calendarCount: googlePersonalContext.calendarCount,
+          streaming: true,
+        });
+        writeEvent({
+          type: "final",
+          assistantMessage: legacyAssistantMessage,
+          assistantMessages: responseAssistantMessages,
+          model: "google_personal_context_guardrail_v1",
+          usage: null,
+          googleSearchGroundingUsed: false,
+          decisionPath: "companion_reply",
+          decisionPathReason: "companion",
+          routeReason: "companion",
+          elapsedMs: elapsedMs(startedAt),
+        });
+        res.end();
+        return;
+      }
 
       const modelMessages = await buildModelMessages({
         conversationId: conversation.id,
