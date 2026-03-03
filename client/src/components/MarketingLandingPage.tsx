@@ -2196,9 +2196,9 @@ function InfoPageOverlay({
                         </span>
                       )}
                     </div>
-                    <div className="flex-1 pl-1" style={{ borderLeft: "2px solid rgba(255, 214, 172, 0.12)" }}>
+                    <div className="flex-1 pl-1 min-w-0" style={{ borderLeft: "2px solid rgba(255, 214, 172, 0.12)" }}>
                       <h3
-                        className="text-lg font-semibold mb-3 pl-4"
+                        className="text-lg font-semibold mb-3 pl-4 break-words"
                         style={{ color: "#FFE7CC", fontFamily: "'Fraunces', serif" }}
                       >
                         {section.heading}
@@ -2211,7 +2211,7 @@ function InfoPageOverlay({
                             whileInView={{ opacity: 1, y: 0 }}
                             viewport={{ once: true }}
                             transition={{ duration: 0.35, delay: 0.1 + pIdx * 0.05, ease: [0.22, 1, 0.36, 1] }}
-                            className="text-[14.5px] leading-[1.8]"
+                            className="text-[14.5px] leading-[1.8] break-words"
                             style={{ color: "rgba(255, 224, 196, 0.68)" }}
                           >
                             {paragraph}
