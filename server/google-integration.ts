@@ -53,6 +53,8 @@ export type GoogleDataTimeRange = GooglePersonalContextTimeRange;
 export interface GooglePersonalContextIntent {
   calendarIntent: boolean;
   emailIntent: boolean;
+  emailUnreadOnly: boolean;
+  emailSinceDays: number;
   timeRange: GoogleDataTimeRange;
 }
 
@@ -155,6 +157,24 @@ function googleAuthLog(
   data?: Record<string, unknown>,
 ): void {
   const prefix = `📧 [GOOGLE AUTH] ${event}`;
+  const payload = sanitizeGoogleLogData(data);
+  if (level === "ERROR") {
+    console.error(prefix, payload);
+    return;
+  }
+  if (level === "WARN") {
+    console.warn(prefix, payload);
+    return;
+  }
+  console.log(prefix, payload);
+}
+
+function gmailLog(
+  level: "INFO" | "WARN" | "ERROR",
+  event: string,
+  data?: Record<string, unknown>,
+): void {
+  const prefix = `📨 [GMAIL] ${event}`;
   const payload = sanitizeGoogleLogData(data);
   if (level === "ERROR") {
     console.error(prefix, payload);
@@ -736,84 +756,136 @@ export async function fetchGmailInboxDigest(params: {
   accessToken: string;
   maxThreads: number;
   sinceDays?: number;
+  unreadOnly?: boolean;
 }): Promise<InboxDigestItem[]> {
+  const startedAt = Date.now();
   const maxThreads = Math.max(1, Math.min(20, Math.floor(params.maxThreads)));
   const sinceDays = clamp(Math.floor(params.sinceDays ?? 3), 1, 14);
+  const unreadOnly = params.unreadOnly ?? false;
+  const queryText = unreadOnly
+    ? `in:inbox is:unread newer_than:${sinceDays}d -category:promotions -category:social`
+    : `in:inbox newer_than:${sinceDays}d -category:promotions -category:social`;
   const query = new URLSearchParams({
     maxResults: String(maxThreads),
-    q: `in:inbox newer_than:${sinceDays}d -category:promotions -category:social`,
+    q: queryText,
   });
 
-  const listResponse = await fetch(`${GMAIL_MESSAGES_ENDPOINT}?${query.toString()}`, {
-    headers: {
-      Authorization: `Bearer ${params.accessToken}`,
-    },
+  gmailLog("INFO", "fetch.start", {
+    maxThreads,
+    sinceDays,
+    unreadOnly,
   });
-  const listPayload = (await listResponse.json()) as {
-    messages?: Array<{ id?: string; threadId?: string }>;
-  };
 
-  if (!listResponse.ok) {
-    throw new Error("Failed to list Gmail inbox threads");
-  }
+  const abortController = new AbortController();
+  const timeout = setTimeout(() => abortController.abort(), GOOGLE_FETCH_TIMEOUT_MS);
 
-  const messageIds = (listPayload.messages ?? [])
-    .map((message) => message.id?.trim())
-    .filter((id): id is string => Boolean(id));
-
-  if (messageIds.length === 0) {
-    return [];
-  }
-
-  const detailPromises = messageIds.slice(0, maxThreads).map(async (messageId) => {
-    const detailQuery = new URLSearchParams({
-      format: "metadata",
-      metadataHeaders: "From",
-    });
-    detailQuery.append("metadataHeaders", "Subject");
-
-    const detailResponse = await fetch(
-      `${GMAIL_MESSAGES_ENDPOINT}/${encodeURIComponent(
-        messageId,
-      )}?${detailQuery.toString()}`,
+  try {
+    const listResponse = await fetch(
+      `${GMAIL_MESSAGES_ENDPOINT}?${query.toString()}`,
       {
         headers: {
           Authorization: `Bearer ${params.accessToken}`,
         },
+        signal: abortController.signal,
       },
     );
-
-    if (!detailResponse.ok) {
-      return null;
-    }
-
-    const detailPayload = (await detailResponse.json()) as {
-      id?: string;
-      threadId?: string;
-      snippet?: string;
-      payload?: {
-        headers?: Array<{ name?: string; value?: string }>;
-      };
+    const listPayload = (await listResponse.json()) as {
+      messages?: Array<{ id?: string; threadId?: string }>;
+      error?: { message?: string };
     };
 
-    const from =
-      pickHeader(detailPayload.payload?.headers, "From") || "Unknown sender";
-    const subject =
-      pickHeader(detailPayload.payload?.headers, "Subject") || "(No subject)";
-    const snippet = (detailPayload.snippet ?? "").trim();
+    if (!listResponse.ok) {
+      const apiMessage =
+        listPayload?.error?.message?.trim() || `status ${listResponse.status}`;
+      throw new Error(`Failed to list Gmail inbox threads (${apiMessage})`);
+    }
 
-    return {
-      threadId:
-        detailPayload.threadId?.trim() || detailPayload.id?.trim() || messageId,
-      from,
-      subject,
-      snippet,
-      urgency: classifyUrgency({ subject, snippet, from }),
-    } satisfies InboxDigestItem;
-  });
+    const messageIds = (listPayload.messages ?? [])
+      .map((message) => message.id?.trim())
+      .filter((id): id is string => Boolean(id));
 
-  const resolved = await Promise.all(detailPromises);
-  return resolved.filter((item): item is InboxDigestItem => Boolean(item));
+    if (messageIds.length === 0) {
+      gmailLog("INFO", "fetch.success_empty", {
+        unreadOnly,
+        elapsedMs: elapsedSince(startedAt),
+      });
+      return [];
+    }
+
+    const detailPromises = messageIds.slice(0, maxThreads).map(async (messageId) => {
+      const detailQuery = new URLSearchParams({
+        format: "metadata",
+        metadataHeaders: "From",
+      });
+      detailQuery.append("metadataHeaders", "Subject");
+
+      const detailResponse = await fetch(
+        `${GMAIL_MESSAGES_ENDPOINT}/${encodeURIComponent(
+          messageId,
+        )}?${detailQuery.toString()}`,
+        {
+          headers: {
+            Authorization: `Bearer ${params.accessToken}`,
+          },
+          signal: abortController.signal,
+        },
+      );
+
+      if (!detailResponse.ok) {
+        return null;
+      }
+
+      const detailPayload = (await detailResponse.json()) as {
+        id?: string;
+        threadId?: string;
+        snippet?: string;
+        payload?: {
+          headers?: Array<{ name?: string; value?: string }>;
+        };
+      };
+
+      const from =
+        pickHeader(detailPayload.payload?.headers, "From") || "Unknown sender";
+      const subject =
+        pickHeader(detailPayload.payload?.headers, "Subject") || "(No subject)";
+      const snippet = (detailPayload.snippet ?? "").trim();
+
+      return {
+        threadId:
+          detailPayload.threadId?.trim() || detailPayload.id?.trim() || messageId,
+        from,
+        subject,
+        snippet,
+        urgency: classifyUrgency({ subject, snippet, from }),
+      } satisfies InboxDigestItem;
+    });
+
+    const resolved = await Promise.all(detailPromises);
+    const items = resolved.filter((item): item is InboxDigestItem => Boolean(item));
+    gmailLog("INFO", "fetch.success", {
+      unreadOnly,
+      requested: Math.min(messageIds.length, maxThreads),
+      returned: items.length,
+      elapsedMs: elapsedSince(startedAt),
+    });
+    return items;
+  } catch (error) {
+    if ((error as { name?: string } | null)?.name === "AbortError") {
+      gmailLog("ERROR", "fetch.timeout", {
+        unreadOnly,
+        elapsedMs: elapsedSince(startedAt),
+      });
+      throw new Error(`Gmail fetch timed out after ${elapsedSince(startedAt)}ms`);
+    }
+    gmailLog("ERROR", "fetch.failed", {
+      unreadOnly,
+      elapsedMs: elapsedSince(startedAt),
+      message: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 export function resolveCalendarTimeRange(params: {
@@ -1012,6 +1084,8 @@ export function detectGooglePersonalContextIntent(
     return {
       calendarIntent: false,
       emailIntent: false,
+      emailUnreadOnly: false,
+      emailSinceDays: 3,
       timeRange: "today",
     };
   }
@@ -1019,10 +1093,17 @@ export function detectGooglePersonalContextIntent(
   const calendarIntent = GOOGLE_CALENDAR_INTENT_PATTERN.test(normalized);
   const emailIntent = GOOGLE_EMAIL_INTENT_PATTERN.test(normalized);
   const combinedHint = GOOGLE_COMBINED_HINT_PATTERN.test(normalized);
+  const emailSinceDays = inferGoogleEmailSinceDays(normalized);
+  const emailUnreadOnly =
+    /\bunread\b/i.test(normalized) ||
+    /\bnew\s+emails?\b/i.test(normalized) ||
+    /\binbox\s+zero\b/i.test(normalized);
 
   return {
     calendarIntent: combinedHint ? true : calendarIntent,
     emailIntent: combinedHint ? true : emailIntent,
+    emailUnreadOnly,
+    emailSinceDays,
     timeRange: inferTimeRangeFromText(normalized),
   };
 }

@@ -109,6 +109,7 @@ export const GOOGLE_DATA_FUNCTION_DECLARATIONS: LiveFunctionDeclaration[] = [
       properties: {
         maxThreads: { type: "integer" },
         sinceDays: { type: "integer" },
+        unreadOnly: { type: "boolean" },
         refresh: { type: "boolean" },
       },
     },
@@ -1251,6 +1252,8 @@ function composeLiveSystemInstruction(params: {
       [
         "GOOGLE PERSONAL DATA TOOL POLICY:",
         "- If the user asks about emails, inbox, unread messages, or mail, call get_user_emails before answering.",
+        "- If the user asks for unread emails, set get_user_emails.unreadOnly=true.",
+        "- If the user asks for last day/yesterday, set get_user_emails.sinceDays=1. If they ask for past week, set sinceDays=7.",
         "- If the user asks about calendar, meetings, events, schedule, or appointments, call get_calendar_events with an appropriate timeRange and timezone.",
         "- If the user asks for a combined daily/weekly overview, call both get_user_emails and get_calendar_events.",
         "- If tools report google_not_connected or google_scope_missing, tell the user to connect/reconnect Google from Profile settings.",

@@ -110,7 +110,6 @@ import {
   GOOGLE_CALENDAR_EVENTS_READONLY_SCOPE,
   GOOGLE_GMAIL_READONLY_SCOPE,
   getGoogleOAuthMissingEnvVars,
-  inferGoogleEmailSinceDays,
   getGoogleOAuthConfig,
   resolveGoogleAccessTokenForUser,
   resolveGoogleContextTimeZone,
@@ -239,8 +238,8 @@ const deleteAttachmentSchema = z.object({
 });
 
 const mediaQuerySchema = z.object({
-  exp: z.coerce.number().int().positive(),
-  sig: z.string().min(16),
+  exp: z.coerce.number().int().positive().optional(),
+  sig: z.string().min(16).optional(),
 });
 
 const responseStylePresetSchema = z.enum([
@@ -1216,7 +1215,9 @@ function renderGooglePersonalContextBlock(params: {
   }
 
   if (params.intent.emailIntent) {
-    lines.push("", "gmail.highlights:");
+    lines.push("", `gmail.unreadOnly: ${params.intent.emailUnreadOnly}`);
+    lines.push(`gmail.sinceDays: ${params.intent.emailSinceDays}`);
+    lines.push("gmail.highlights:");
     if (params.inboxHighlights.length === 0) {
       lines.push("- none");
     } else {
@@ -1230,6 +1231,24 @@ function renderGooglePersonalContextBlock(params: {
 
   if (params.partialFailures.length > 0) {
     lines.push("", `partialFailures: ${params.partialFailures.join(", ")}`);
+  }
+
+  if (
+    params.intent.emailIntent &&
+    params.inboxHighlights.length === 0 &&
+    params.partialFailures.includes("google_fetch_failed")
+  ) {
+    lines.push("gmail.fetchStatus: failed_temporary");
+    lines.push(
+      "assistantInstruction: Tell the user you could not access Gmail right now due a temporary API or network issue. Ask them to retry shortly.",
+    );
+  } else if (params.intent.emailIntent) {
+    lines.push("gmail.fetchStatus: success");
+    if (params.inboxHighlights.length === 0) {
+      lines.push(
+        "assistantInstruction: Tell the user no matching Gmail messages were found for their requested window. Do not suggest a permission issue unless connectionStatus is unavailable or partialFailures includes google_scope_missing/google_not_connected.",
+      );
+    }
   }
 
   lines.push(
@@ -1271,6 +1290,8 @@ async function prepareGooglePersonalContextForChat(params: {
   trace(params.req, "google.context.intent.detected", {
     calendarIntent: intent.calendarIntent,
     emailIntent: intent.emailIntent,
+    emailUnreadOnly: intent.emailUnreadOnly,
+    emailSinceDays: intent.emailSinceDays,
     timeRange: intent.timeRange,
   });
 
@@ -1323,29 +1344,34 @@ async function prepareGooglePersonalContextForChat(params: {
   const tasks: Array<Promise<void>> = [];
 
   if (intent.emailIntent) {
-    const sinceDays = inferGoogleEmailSinceDays(params.text);
     const maxThreads = 10;
     tasks.push(
       (async () => {
         const startedAt = Date.now();
         trace(params.req, "google.context.email.fetch.start", {
           maxThreads,
-          sinceDays,
+          sinceDays: intent.emailSinceDays,
+          unreadOnly: intent.emailUnreadOnly,
         });
         try {
           inboxHighlights = await fetchGmailInboxDigest({
             accessToken: auth.accessToken,
             maxThreads,
-            sinceDays,
+            sinceDays: intent.emailSinceDays,
+            unreadOnly: intent.emailUnreadOnly,
           });
           trace(params.req, "google.context.email.fetch.success", {
             count: inboxHighlights.length,
             elapsedMs: elapsedMs(startedAt),
+            sinceDays: intent.emailSinceDays,
+            unreadOnly: intent.emailUnreadOnly,
           });
         } catch (error) {
           partialFailures.push("google_fetch_failed");
           traceError(params.req, "google.context.email.fetch.failed", error, {
             elapsedMs: elapsedMs(startedAt),
+            sinceDays: intent.emailSinceDays,
+            unreadOnly: intent.emailUnreadOnly,
           });
         }
       })(),
@@ -2575,6 +2601,31 @@ async function buildChatTextMemoryContext(params: {
 
 function isStorageProvider(value: string): value is StorageProvider {
   return value === "local" || value === "replit";
+}
+
+function hasLegacyUnsignedMediaQuery(query: z.infer<typeof mediaQuerySchema>): boolean {
+  return typeof query.exp !== "number" && typeof query.sig !== "string";
+}
+
+function isInvalidPartialMediaSignature(
+  query: z.infer<typeof mediaQuerySchema>,
+): boolean {
+  return (
+    (typeof query.exp === "number" && typeof query.sig !== "string") ||
+    (typeof query.sig === "string" && typeof query.exp !== "number")
+  );
+}
+
+function isMediaObjectMissingError(error: unknown): boolean {
+  const message =
+    error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+  return (
+    message.includes("enoent") ||
+    message.includes("not found") ||
+    message.includes("no such file") ||
+    message.includes("no such key") ||
+    message.includes("object does not exist")
+  );
 }
 
 function toAttachmentResponse(attachment: MessageAttachment, userId: string) {
@@ -6337,10 +6388,9 @@ export async function registerRoutes(
     const startedAt = Date.now();
     try {
       const parsedQuery = mediaQuerySchema.parse(req.query ?? {});
-      const nowSeconds = Math.floor(Date.now() / 1000);
-      if (parsedQuery.exp < nowSeconds) {
-        return res.status(401).json({
-          message: "Media link has expired",
+      if (isInvalidPartialMediaSignature(parsedQuery)) {
+        return res.status(400).json({
+          message: "Invalid media signature query",
           traceId: getTraceId(req),
         });
       }
@@ -6357,17 +6407,34 @@ export async function registerRoutes(
         });
       }
 
-      const signatureValid = verifyMediaSignature({
-        attachmentId: attachment.id,
-        userId: req.session.userId,
-        exp: parsedQuery.exp,
-        sig: parsedQuery.sig,
-      });
+      const usingLegacyUnsignedQuery = hasLegacyUnsignedMediaQuery(parsedQuery);
+      if (!usingLegacyUnsignedQuery) {
+        const nowSeconds = Math.floor(Date.now() / 1000);
+        if ((parsedQuery.exp ?? 0) < nowSeconds) {
+          return res.status(401).json({
+            message: "Media link has expired",
+            traceId: getTraceId(req),
+          });
+        }
 
-      if (!signatureValid) {
-        return res.status(401).json({
-          message: "Invalid media signature",
-          traceId: getTraceId(req),
+        const signatureValid = verifyMediaSignature({
+          attachmentId: attachment.id,
+          userId: req.session.userId,
+          exp: parsedQuery.exp as number,
+          sig: parsedQuery.sig as string,
+        });
+
+        if (!signatureValid) {
+          return res.status(401).json({
+            message: "Invalid media signature",
+            traceId: getTraceId(req),
+          });
+        }
+      } else {
+        trace(req, "media.fetch.legacy_unsigned_url", {
+          attachmentId: attachment.id,
+          userId: req.session.userId,
+          elapsedMs: elapsedMs(startedAt),
         });
       }
 
@@ -6375,13 +6442,31 @@ export async function registerRoutes(
         throw new Error("Unsupported storage provider");
       }
 
-      const bytes = await mediaStore.downloadObject({
-        provider: attachment.storageProvider,
-        objectKey: attachment.objectKey,
-      });
+      let bytes: Buffer;
+      try {
+        bytes = await mediaStore.downloadObject({
+          provider: attachment.storageProvider,
+          objectKey: attachment.objectKey,
+        });
+      } catch (error) {
+        if (isMediaObjectMissingError(error)) {
+          trace(req, "media.fetch.object_missing", {
+            attachmentId: attachment.id,
+            storageProvider: attachment.storageProvider,
+            objectKey: attachment.objectKey,
+            elapsedMs: elapsedMs(startedAt),
+          });
+          return res.status(404).json({
+            message: "Media object not found",
+            traceId: getTraceId(req),
+          });
+        }
+        throw error;
+      }
 
-      trace(req, "media.signed_url.issued", {
+      trace(req, "media.fetch.success", {
         attachmentId: attachment.id,
+        storageProvider: attachment.storageProvider,
         mimeType: attachment.mimeType,
         byteSize: attachment.byteSize,
         elapsedMs: elapsedMs(startedAt),
@@ -8670,11 +8755,13 @@ export async function registerRoutes(
               typeof args.sinceDays === "number" && Number.isFinite(args.sinceDays)
                 ? Math.max(1, Math.min(14, Math.floor(args.sinceDays)))
                 : 3;
+            const unreadOnly = args.unreadOnly === true;
 
             trace(req, "live.tool.emails.start", {
               conversationId: conversation.id,
               maxThreads,
               sinceDays,
+              unreadOnly,
             });
 
             const auth = await resolveGoogleAccessTokenForUser({
@@ -8716,6 +8803,7 @@ export async function registerRoutes(
                 accessToken: auth.accessToken,
                 maxThreads,
                 sinceDays,
+                unreadOnly,
               });
 
               functionResponses.push({
@@ -8735,6 +8823,7 @@ export async function registerRoutes(
               trace(req, "live.tool.emails.success", {
                 conversationId: conversation.id,
                 emailCount: inboxHighlights.length,
+                unreadOnly,
               });
             } catch (error) {
               functionResponses.push({
@@ -8755,6 +8844,7 @@ export async function registerRoutes(
               traceError(req, "live.tool.emails.failed", error, {
                 conversationId: conversation.id,
                 stage: "fetch",
+                unreadOnly,
               });
             }
             continue;

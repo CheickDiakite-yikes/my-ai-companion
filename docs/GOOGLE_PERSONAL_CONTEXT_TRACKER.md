@@ -89,7 +89,7 @@
 
 ## Current State Snapshot
 - Branch: `main3`
-- Latest commit SHA (base before in-progress changes): `a6b2142`
+- Latest commit SHA (base before in-progress changes): `e9e8262`
 - Expected env flags:
   - `ENABLE_GOOGLE_PERSONAL_CONTEXT=true`
   - `ENABLE_GOOGLE_PERSONAL_CONTEXT_TEXT=true`
@@ -116,6 +116,8 @@
 - `2026-03-03 10:16 EST` Added structured connect-url failure responses (`google_personal_context_disabled`, `google_oauth_not_configured`, `google_connect_invalid_request`, `google_connect_url_failed`) with trace logging + missing env diagnostics.
 - `2026-03-03 10:18 EST` Profile Connected Accounts now parses API errors and renders actionable messages for disabled flag, missing OAuth env vars, invalid request, and trace-linked fallback errors.
 - `2026-03-03 10:20 EST` Validation rerun passed: `npm run check`, `npm run test:google-context:smoke`, `npm run test:google-context:ui`.
+- `2026-03-03 11:18 EST` Unread-email reliability patch started for prompt: “can you summarize my unread emails from last day”; added `emailUnreadOnly` + `emailSinceDays` intent context, improved Gmail no-results assistant instructions, and wired live `get_user_emails.unreadOnly`.
+- `2026-03-03 11:22 EST` Validation passed for patch slice: `npm run check` and `npm run test:google-context:smoke`.
 
 ## Open Decisions / Blockers
 - Decision needed: whether to keep voice Google Personal Context default OFF in production rollout.

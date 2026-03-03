@@ -21,11 +21,15 @@ async function run(): Promise<void> {
   const emailIntent = detectGooglePersonalContextIntent(emailPrompt);
   assert.equal(emailIntent.calendarIntent, false, "email prompt should not set calendarIntent");
   assert.equal(emailIntent.emailIntent, true, "email prompt should set emailIntent");
+  assert.equal(emailIntent.emailUnreadOnly, true, "unread email prompt should set unreadOnly");
+  assert.equal(emailIntent.emailSinceDays, 1, "last day email prompt should set sinceDays=1");
   assert.equal(emailIntent.timeRange, "today", "email prompt should default to today");
 
   const combinedIntent = detectGooglePersonalContextIntent(combinedPrompt);
   assert.equal(combinedIntent.calendarIntent, true, "combined prompt should set calendarIntent");
   assert.equal(combinedIntent.emailIntent, true, "combined prompt should set emailIntent");
+  assert.equal(combinedIntent.emailUnreadOnly, false, "combined prompt should not force unreadOnly");
+  assert.equal(combinedIntent.emailSinceDays, 3, "combined prompt should default email lookback");
   assert.equal(combinedIntent.timeRange, "this_week", "combined prompt should infer this_week");
 
   assert.equal(
