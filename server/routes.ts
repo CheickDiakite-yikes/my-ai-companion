@@ -1176,6 +1176,30 @@ function mapGoogleResolveFailureCode(
   return "google_not_connected";
 }
 
+function classifyGoogleCallbackFailureReason(error: unknown):
+  | "encryption_key_invalid"
+  | "oauth_exchange_failed"
+  | "missing_refresh_token"
+  | "unknown" {
+  const message =
+    error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+
+  if (message.includes("google_integration_encryption_key")) {
+    return "encryption_key_invalid";
+  }
+  if (message.includes("google did not return refresh token")) {
+    return "missing_refresh_token";
+  }
+  if (
+    message.includes("failed to exchange google authorization code") ||
+    message.includes("invalid_grant") ||
+    message.includes("oauth")
+  ) {
+    return "oauth_exchange_failed";
+  }
+  return "unknown";
+}
+
 function buildGooglePersonalContextGuardrailReply(
   preparation: GooglePersonalContextPreparation,
 ): string | null {
@@ -8323,7 +8347,14 @@ export async function registerRoutes(
         traceError(req, "google.integration.callback.failed", error, {
           elapsedMs: elapsedMs(startedAt),
         });
-        return res.redirect("/?google_integration=failed");
+        const reason = classifyGoogleCallbackFailureReason(error);
+        const redirectUrl = new URL("/", "http://localhost");
+        redirectUrl.searchParams.set("google_integration", "failed");
+        redirectUrl.searchParams.set("google_integration_reason", reason);
+        redirectUrl.searchParams.set("traceId", getTraceId(req));
+        return res.redirect(
+          `${redirectUrl.pathname}${redirectUrl.search}`,
+        );
       }
     },
   );

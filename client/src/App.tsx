@@ -840,6 +840,22 @@ function mapGoogleConnectActionError(error: unknown): string {
   return `Could not start Google connection. Please try again.${traceSuffix}`;
 }
 
+function mapGoogleIntegrationFailureReason(reason: string | null): string {
+  if (!reason) {
+    return "Google connection failed. Please try reconnecting.";
+  }
+  if (reason === "encryption_key_invalid") {
+    return "Google connection failed due to server encryption key configuration. Set GOOGLE_INTEGRATION_ENCRYPTION_KEY and try again.";
+  }
+  if (reason === "missing_refresh_token") {
+    return "Google did not return a refresh token. Disconnect and reconnect Google, then choose your account again.";
+  }
+  if (reason === "oauth_exchange_failed") {
+    return "Google authorization exchange failed. Please retry connecting Google.";
+  }
+  return "Google connection failed. Please try reconnecting.";
+}
+
 function parseQuotaError(error: unknown): QuotaErrorPayload | null {
   const message = getErrorMessage(error);
   const [statusText, ...rest] = message.split(": ");
@@ -2441,18 +2457,23 @@ const ProfileView = ({
     if (typeof window === "undefined") return;
     const url = new URL(window.location.href);
     const integrationStatus = url.searchParams.get("google_integration");
+    const integrationReason = url.searchParams.get("google_integration_reason");
+    const traceId = url.searchParams.get("traceId");
     if (!integrationStatus) return;
 
     if (integrationStatus === "connected") {
       setGoogleIntegrationNotice("Google account connected.");
       setGoogleIntegrationActionError(null);
     } else if (integrationStatus === "failed") {
+      const baseMessage = mapGoogleIntegrationFailureReason(integrationReason);
       setGoogleIntegrationActionError(
-        "Google connection failed. Please try reconnecting.",
+        traceId ? `${baseMessage} (trace ${traceId})` : baseMessage,
       );
     }
 
     url.searchParams.delete("google_integration");
+    url.searchParams.delete("google_integration_reason");
+    url.searchParams.delete("traceId");
     const nextPath = `${url.pathname}${url.search}${url.hash}`;
     window.history.replaceState({}, "", nextPath);
     void queryClient.invalidateQueries({

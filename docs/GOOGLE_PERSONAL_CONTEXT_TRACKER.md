@@ -121,6 +121,7 @@
 - `2026-03-03 15:12 EST` Forensic review of production-like logs showed deterministic auth failure (`google.context.auth.failed` with `google_not_connected`) while model still produced conversational diagnostics; root cause confirmed as missing hard guardrail on auth-failure path.
 - `2026-03-03 15:18 EST` Added server-side guardrail for Google Personal Context in `/api/chat/respond` and `/api/chat/respond/stream`: auth/scope/token failures now short-circuit to deterministic user action message (connect/reconnect), bypassing model improvisation.
 - `2026-03-03 15:22 EST` Validation passed after guardrail patch: `npm run check`, `npm run test:google-context:smoke`, and `npm run test:agent:smoke`.
+- `2026-03-03 15:32 EST` Added callback failure reason propagation (`google_integration_reason` + `traceId`) and client-side reason mapping so OAuth callback misconfigurations (including invalid `GOOGLE_INTEGRATION_ENCRYPTION_KEY`) display actionable messages.
 
 ## Open Decisions / Blockers
 - Decision needed: whether to keep voice Google Personal Context default OFF in production rollout.
