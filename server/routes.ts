@@ -8211,7 +8211,7 @@ export async function registerRoutes(
           return res.status(503).json({
             code: "google_oauth_not_configured",
             message:
-              "Google OAuth is not configured on the server. Add the required Google OAuth environment variables and retry.",
+              "Google OAuth is not fully configured on the server. Add the required OAuth and encryption-key environment variables and retry.",
             missingEnv,
             traceId: getTraceId(req),
           });

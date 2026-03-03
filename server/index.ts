@@ -4,6 +4,7 @@ import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
 import { attachTraceId, getTraceId, sanitizeForLog } from "./observability";
+import { getGoogleIntegrationEncryptionKeyHealth } from "./google-integration-crypto";
 
 const app = express();
 const httpServer = createServer(app);
@@ -36,6 +37,37 @@ export function log(message: string, source = "express") {
   console.log(`${formattedTime} [${source}] ${message}`);
 }
 
+function logGoogleIntegrationEncryptionKeyPreflight(): void {
+  const featureEnabled =
+    (process.env.ENABLE_GOOGLE_PERSONAL_CONTEXT ?? "false").toLowerCase() ===
+    "true";
+
+  if (!featureEnabled) {
+    log(
+      "google integration encryption key preflight skipped (ENABLE_GOOGLE_PERSONAL_CONTEXT=false)",
+      "google",
+    );
+    return;
+  }
+
+  const health = getGoogleIntegrationEncryptionKeyHealth();
+  const configured = health.configured ? "true" : "false";
+  const mode = health.mode ? ` mode=${health.mode}` : "";
+  const reason = health.reason ? ` reason=${health.reason}` : "";
+
+  if (health.valid) {
+    log(
+      `google integration encryption key preflight: status=ok configured=${configured}${mode}`,
+      "google",
+    );
+    return;
+  }
+
+  console.error(
+    `[google] google integration encryption key preflight: status=invalid configured=${configured}${mode}${reason}`,
+  );
+}
+
 app.use((req, res, next) => {
   const start = Date.now();
   const path = req.path;
@@ -63,6 +95,8 @@ app.use((req, res, next) => {
 });
 
 (async () => {
+  logGoogleIntegrationEncryptionKeyPreflight();
+
   await registerRoutes(httpServer, app);
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {

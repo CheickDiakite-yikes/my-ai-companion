@@ -5,7 +5,11 @@ import type {
 } from "@shared/agent";
 import type { GoogleIntegration } from "@shared/schema";
 import type { IStorage } from "./storage";
-import { decryptGoogleToken, encryptGoogleToken } from "./google-integration-crypto";
+import {
+  decryptGoogleToken,
+  encryptGoogleToken,
+  getGoogleIntegrationEncryptionKeyHealth,
+} from "./google-integration-crypto";
 
 export interface GoogleOAuthConfig {
   clientId: string;
@@ -411,15 +415,20 @@ export function getGoogleOAuthConfig(): GoogleOAuthConfig | null {
 }
 
 export function getGoogleOAuthMissingEnvVars(): string[] {
-  const requiredVars = [
+  const requiredVars: string[] = [
     "GOOGLE_OAUTH_CLIENT_ID",
     "GOOGLE_OAUTH_CLIENT_SECRET",
     "GOOGLE_OAUTH_REDIRECT_URI",
-  ] as const;
-  return requiredVars.filter((name) => {
+  ];
+  const missing = requiredVars.filter((name) => {
     const value = process.env[name];
     return !value || value.trim().length === 0;
   });
+  const encryptionKeyHealth = getGoogleIntegrationEncryptionKeyHealth();
+  if (!encryptionKeyHealth.valid) {
+    missing.push("GOOGLE_INTEGRATION_ENCRYPTION_KEY");
+  }
+  return Array.from(new Set(missing));
 }
 
 export function requireGoogleOAuthConfig(): GoogleOAuthConfig {

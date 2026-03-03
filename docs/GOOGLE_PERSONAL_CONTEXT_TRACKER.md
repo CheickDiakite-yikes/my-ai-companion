@@ -122,6 +122,13 @@
 - `2026-03-03 15:18 EST` Added server-side guardrail for Google Personal Context in `/api/chat/respond` and `/api/chat/respond/stream`: auth/scope/token failures now short-circuit to deterministic user action message (connect/reconnect), bypassing model improvisation.
 - `2026-03-03 15:22 EST` Validation passed after guardrail patch: `npm run check`, `npm run test:google-context:smoke`, and `npm run test:agent:smoke`.
 - `2026-03-03 15:32 EST` Added callback failure reason propagation (`google_integration_reason` + `traceId`) and client-side reason mapping so OAuth callback misconfigurations (including invalid `GOOGLE_INTEGRATION_ENCRYPTION_KEY`) display actionable messages.
+- `2026-03-03 15:40 EST` Started encryption-key preflight hardening task: add startup validation logging and fail-fast connect-url validation when `GOOGLE_INTEGRATION_ENCRYPTION_KEY` is missing/invalid.
+- `2026-03-03 15:48 EST` Completed encryption-key preflight hardening:
+  - added non-throwing key health probe in `/server/google-integration-crypto.ts`
+  - included `GOOGLE_INTEGRATION_ENCRYPTION_KEY` in connect-url config diagnostics via `/server/google-integration.ts`
+  - added startup preflight log in `/server/index.ts`
+  - updated connect-url + client config error wording for OAuth/encryption key misconfiguration.
+- `2026-03-03 15:49 EST` Validation passed after hardening patch: `npm run check` and `npm run test:google-context:smoke`.
 
 ## Open Decisions / Blockers
 - Decision needed: whether to keep voice Google Personal Context default OFF in production rollout.

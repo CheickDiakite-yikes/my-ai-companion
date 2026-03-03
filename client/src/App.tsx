@@ -820,9 +820,9 @@ function mapGoogleConnectActionError(error: unknown): string {
           .filter((value) => value.length > 0)
       : [];
     if (missingEnv.length > 0) {
-      return `Google OAuth is not configured on the server. Missing: ${missingEnv.join(", ")}.${traceSuffix}`;
+      return `Google integration is not fully configured on the server. Missing: ${missingEnv.join(", ")}.${traceSuffix}`;
     }
-    return `Google OAuth is not configured on the server.${traceSuffix}`;
+    return `Google integration is not fully configured on the server.${traceSuffix}`;
   }
 
   if (code === "google_connect_invalid_request") {
