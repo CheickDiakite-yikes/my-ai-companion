@@ -652,6 +652,7 @@ interface LiveTokenConfigSummary {
   deviceClass: "mobile" | "desktop" | "unknown";
   googleSearchGroundingEnabled: boolean;
   morningBriefFunctionCallingEnabled: boolean;
+  googlePersonalContextFunctionCallingEnabled: boolean;
 }
 
 interface LiveTokenResponse extends TraceAwareResponse {
@@ -660,6 +661,19 @@ interface LiveTokenResponse extends TraceAwareResponse {
   voice?: LiveVoiceName;
   memoryMeta?: LiveTokenMemoryMeta;
   configSummary?: LiveTokenConfigSummary;
+}
+
+interface GoogleIntegrationStatusResponse extends TraceAwareResponse {
+  connected: boolean;
+  status: "connected" | "disconnected" | "error";
+  email: string | null;
+  scopes: string[];
+  gmailConnected?: boolean;
+  calendarConnected?: boolean;
+  missingScopes?: string[];
+  lastError: string | null;
+  expiry: string | null;
+  enabled?: boolean;
 }
 
 interface LiveTaskSnapshot {
@@ -2182,6 +2196,8 @@ const GENDER_OPTIONS: Array<{ value: GenderOption; label: string }> = [
   { value: "prefer_not_to_say", label: "Prefer not to say" },
 ];
 
+const GOOGLE_INTEGRATION_STATUS_QUERY_KEY = ["/api/integrations/google/status"];
+
 const ProfileView = ({
   onClose,
   user,
@@ -2233,6 +2249,7 @@ const ProfileView = ({
   quotaTier?: QuotaTier;
   isQuotaLoading: boolean;
 }) => {
+  const queryClient = useQueryClient();
   const avatarInputId = useId();
   const zeeAvatarInputId = useId();
   const [displayName, setDisplayName] = useState("");
@@ -2253,8 +2270,61 @@ const ProfileView = ({
   const [themeOpen, setThemeOpen] = useState(false);
   const [quotaOpen, setQuotaOpen] = useState(false);
   const [accountOpen, setAccountOpen] = useState(false);
+  const [connectedAccountsOpen, setConnectedAccountsOpen] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveSuccess, setSaveSuccess] = useState<string | null>(null);
+  const [googleIntegrationNotice, setGoogleIntegrationNotice] = useState<string | null>(
+    null,
+  );
+  const [googleIntegrationActionError, setGoogleIntegrationActionError] = useState<
+    string | null
+  >(null);
+  const googleIntegrationQuery = useQuery<GoogleIntegrationStatusResponse>({
+    queryKey: GOOGLE_INTEGRATION_STATUS_QUERY_KEY,
+    queryFn: async () => {
+      const response = await apiRequest("GET", "/api/integrations/google/status");
+      return (await response.json()) as GoogleIntegrationStatusResponse;
+    },
+    staleTime: 0,
+  });
+
+  const connectGoogleMutation = useMutation({
+    mutationFn: async () => {
+      const response = await apiRequest(
+        "GET",
+        "/api/integrations/google/connect-url?returnTo=%2F",
+      );
+      return (await response.json()) as { connectUrl: string };
+    },
+    onSuccess: (payload) => {
+      if (payload.connectUrl) {
+        window.location.href = payload.connectUrl;
+      } else {
+        setGoogleIntegrationActionError(
+          "Could not start Google connection. Please try again.",
+        );
+      }
+    },
+    onError: (error) => {
+      setGoogleIntegrationActionError(getErrorMessage(error));
+    },
+  });
+
+  const disconnectGoogleMutation = useMutation({
+    mutationFn: async () => {
+      await apiRequest("POST", "/api/integrations/google/disconnect", {});
+    },
+    onSuccess: async () => {
+      setGoogleIntegrationActionError(null);
+      setGoogleIntegrationNotice("Google account disconnected.");
+      await queryClient.invalidateQueries({
+        queryKey: GOOGLE_INTEGRATION_STATUS_QUERY_KEY,
+      });
+    },
+    onError: (error) => {
+      setGoogleIntegrationActionError(getErrorMessage(error));
+    },
+  });
 
   useEffect(() => {
     setDisplayName(profile?.displayName ?? "");
@@ -2277,6 +2347,38 @@ const ProfileView = ({
     setSaveSuccess(null);
   }, [profile, user?.profession, selectedTheme]);
 
+  useEffect(() => {
+    const status = googleIntegrationQuery.data?.status;
+    if (status !== "error") return;
+    if (!googleIntegrationQuery.data?.lastError) return;
+    setGoogleIntegrationActionError(
+      "Google connection issue detected. Disconnect and reconnect to restore access.",
+    );
+  }, [googleIntegrationQuery.data?.status, googleIntegrationQuery.data?.lastError]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    const integrationStatus = url.searchParams.get("google_integration");
+    if (!integrationStatus) return;
+
+    if (integrationStatus === "connected") {
+      setGoogleIntegrationNotice("Google account connected.");
+      setGoogleIntegrationActionError(null);
+    } else if (integrationStatus === "failed") {
+      setGoogleIntegrationActionError(
+        "Google connection failed. Please try reconnecting.",
+      );
+    }
+
+    url.searchParams.delete("google_integration");
+    const nextPath = `${url.pathname}${url.search}${url.hash}`;
+    window.history.replaceState({}, "", nextPath);
+    void queryClient.invalidateQueries({
+      queryKey: GOOGLE_INTEGRATION_STATUS_QUERY_KEY,
+    });
+  }, [queryClient]);
+
   const bioWordCount = bio.trim().length === 0 ? 0 : bio.trim().split(/\s+/).length;
   const bioWordLimit = 1000;
   const approxBioCharLimit = 6000;
@@ -2286,6 +2388,11 @@ const ProfileView = ({
     backgroundColor: "var(--app-soft-card-bg)",
     borderColor: "var(--app-soft-card-border)",
   } as const;
+  const googleIntegration = googleIntegrationQuery.data;
+  const googleConnected = Boolean(googleIntegration?.connected);
+  const gmailConnected = Boolean(googleIntegration?.gmailConnected);
+  const calendarConnected = Boolean(googleIntegration?.calendarConnected);
+  const missingScopes = googleIntegration?.missingScopes ?? [];
 
   const hasCustomZeeAvatar = Boolean(profile?.zeeAvatarUrl) && !clearZeeAvatarAttachment;
   const zeeAvatarPreviewSrc = hasCustomZeeAvatar
@@ -2336,6 +2443,22 @@ const ProfileView = ({
     } catch (error) {
       setSaveError(getErrorMessage(error));
     }
+  };
+
+  const onConnectGoogle = () => {
+    setGoogleIntegrationNotice(null);
+    setGoogleIntegrationActionError(null);
+    connectGoogleMutation.mutate();
+  };
+
+  const onDisconnectGoogle = () => {
+    const confirmed = window.confirm(
+      "Disconnect Google account from Zee? Gmail and Calendar access will be removed until you reconnect.",
+    );
+    if (!confirmed) return;
+    setGoogleIntegrationNotice(null);
+    setGoogleIntegrationActionError(null);
+    disconnectGoogleMutation.mutate();
   };
 
   return (
@@ -2510,6 +2633,208 @@ const ProfileView = ({
                         >
                           Outputs history
                         </button>
+                      )}
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </section>
+
+            <section>
+              <button
+                type="button"
+                className="flex items-center justify-between w-full mb-3"
+                onClick={() => setConnectedAccountsOpen((v) => !v)}
+                data-testid="button-toggle-connected-accounts"
+              >
+                <h3
+                  className="text-sm font-semibold uppercase tracking-wider"
+                  style={{ color: "var(--app-on-dark-muted)" }}
+                >
+                  Connected Accounts
+                </h3>
+                <motion.span
+                  animate={{ rotate: connectedAccountsOpen ? 180 : 0 }}
+                  transition={{ duration: 0.2 }}
+                  style={{ color: "var(--app-on-dark-muted)" }}
+                >
+                  <ChevronDown size={16} />
+                </motion.span>
+              </button>
+              <AnimatePresence initial={false}>
+                {connectedAccountsOpen && (
+                  <motion.div
+                    initial={{ height: 0, opacity: 0 }}
+                    animate={{ height: "auto", opacity: 1 }}
+                    exit={{ height: 0, opacity: 0 }}
+                    transition={{ duration: 0.25, ease: "easeInOut" }}
+                    className="overflow-hidden"
+                  >
+                    <div className="rounded-xl p-4 shadow-sm border space-y-3" style={themedCardStyle}>
+                      {googleIntegrationQuery.isLoading && (
+                        <p className="text-xs" style={{ color: "var(--app-on-dark-muted)" }}>
+                          Checking Google connection...
+                        </p>
+                      )}
+
+                      {!googleIntegrationQuery.isLoading && googleIntegrationQuery.isError && (
+                        <div className="space-y-2">
+                          <p className="text-sm" style={{ color: "var(--app-on-dark)" }}>
+                            Unable to check connection status.
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setGoogleIntegrationActionError(null);
+                              void googleIntegrationQuery.refetch();
+                            }}
+                            className="rounded-xl border px-3 py-2 text-sm font-medium transition-colors hover:opacity-95"
+                            style={{
+                              borderColor: "var(--app-soft-card-border)",
+                              backgroundColor: "var(--app-input-bg)",
+                              color: "var(--app-on-dark)",
+                            }}
+                            data-testid="button-retry-google-status"
+                          >
+                            Retry
+                          </button>
+                        </div>
+                      )}
+
+                      {!googleIntegrationQuery.isLoading &&
+                        !googleIntegrationQuery.isError &&
+                        googleIntegration?.enabled === false && (
+                          <p className="text-xs" style={{ color: "var(--app-on-dark-muted)" }}>
+                            Google personal context is currently disabled in this environment.
+                          </p>
+                        )}
+
+                      {!googleIntegrationQuery.isLoading &&
+                        !googleIntegrationQuery.isError &&
+                        googleIntegration?.enabled !== false && (
+                          <>
+                            <div className="flex items-center justify-between gap-3">
+                              <div className="flex items-center gap-3">
+                                <span
+                                  className="flex h-9 w-9 items-center justify-center rounded-full text-sm font-semibold"
+                                  style={{
+                                    backgroundColor: "var(--app-input-bg)",
+                                    border: "1px solid var(--app-soft-card-border)",
+                                    color: "var(--app-on-dark)",
+                                  }}
+                                >
+                                  G
+                                </span>
+                                <div className="space-y-0.5">
+                                  <p className="text-sm font-medium" style={{ color: "var(--app-on-dark)" }}>
+                                    Google Account
+                                  </p>
+                                  <p className="text-xs" style={{ color: "var(--app-on-dark-muted)" }}>
+                                    {googleConnected
+                                      ? googleIntegration?.email ?? "Connected"
+                                      : "Connect Gmail and Calendar for personal context answers."}
+                                  </p>
+                                </div>
+                              </div>
+                              {googleConnected ? (
+                                <span
+                                  className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium"
+                                  style={{
+                                    backgroundColor: "rgba(46, 204, 113, 0.14)",
+                                    color: "#83f0b7",
+                                  }}
+                                >
+                                  Connected
+                                </span>
+                              ) : null}
+                            </div>
+
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span
+                                className="inline-flex items-center rounded-full px-2 py-0.5 text-xs"
+                                style={{
+                                  backgroundColor: gmailConnected
+                                    ? "rgba(46, 204, 113, 0.14)"
+                                    : "var(--app-input-bg)",
+                                  color: gmailConnected
+                                    ? "#83f0b7"
+                                    : "var(--app-on-dark-muted)",
+                                  border: "1px solid var(--app-soft-card-border)",
+                                }}
+                              >
+                                Gmail {gmailConnected ? "✓" : "—"}
+                              </span>
+                              <span
+                                className="inline-flex items-center rounded-full px-2 py-0.5 text-xs"
+                                style={{
+                                  backgroundColor: calendarConnected
+                                    ? "rgba(46, 204, 113, 0.14)"
+                                    : "var(--app-input-bg)",
+                                  color: calendarConnected
+                                    ? "#83f0b7"
+                                    : "var(--app-on-dark-muted)",
+                                  border: "1px solid var(--app-soft-card-border)",
+                                }}
+                              >
+                                Calendar {calendarConnected ? "✓" : "— reconnect to enable"}
+                              </span>
+                            </div>
+
+                            {missingScopes.length > 0 && (
+                              <p className="text-xs" style={{ color: "#f5c57a" }}>
+                                Missing permission detected. Disconnect and reconnect Google to grant
+                                required scope(s).
+                              </p>
+                            )}
+
+                            {googleConnected ? (
+                              <button
+                                type="button"
+                                onClick={onDisconnectGoogle}
+                                disabled={disconnectGoogleMutation.isPending}
+                                className="w-full rounded-xl border px-3 py-2 text-sm font-medium transition-colors hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-70"
+                                style={{
+                                  borderColor: "rgba(250, 131, 131, 0.5)",
+                                  backgroundColor: "rgba(250, 131, 131, 0.08)",
+                                  color: "#f7b6b6",
+                                }}
+                                data-testid="button-disconnect-google"
+                              >
+                                {disconnectGoogleMutation.isPending
+                                  ? "Disconnecting..."
+                                  : "Disconnect Google"}
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={onConnectGoogle}
+                                disabled={connectGoogleMutation.isPending}
+                                className="w-full rounded-xl border px-3 py-2 text-sm font-medium transition-colors hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-70"
+                                style={{
+                                  borderColor: "var(--app-accent)",
+                                  backgroundColor: "color-mix(in srgb, var(--app-accent) 18%, transparent)",
+                                  color: "var(--app-on-dark)",
+                                }}
+                                data-testid="button-connect-google"
+                              >
+                                {connectGoogleMutation.isPending
+                                  ? "Preparing connection..."
+                                  : "Connect Google"}
+                              </button>
+                            )}
+                          </>
+                        )}
+
+                      {googleIntegrationNotice && (
+                        <p className="text-xs" style={{ color: "#83f0b7" }}>
+                          {googleIntegrationNotice}
+                        </p>
+                      )}
+
+                      {googleIntegrationActionError && (
+                        <p className="text-xs" style={{ color: "#f7b6b6" }}>
+                          {googleIntegrationActionError}
+                        </p>
                       )}
                     </div>
                   </motion.div>
@@ -8728,6 +9053,9 @@ function App() {
         thinkingBudget: tokenPayload.configSummary?.thinkingBudget ?? null,
         googleSearchGroundingEnabled:
           tokenPayload.configSummary?.googleSearchGroundingEnabled ?? null,
+        googlePersonalContextFunctionCallingEnabled:
+          tokenPayload.configSummary?.googlePersonalContextFunctionCallingEnabled ??
+          null,
       });
 
       const resolvedConversationId = conversationId;
@@ -8810,6 +9138,9 @@ function App() {
           tokenPayload.configSummary?.googleSearchGroundingEnabled ?? false,
         morningBriefFunctionCallingEnabled:
           tokenPayload.configSummary?.morningBriefFunctionCallingEnabled ?? false,
+        googlePersonalContextFunctionCallingEnabled:
+          tokenPayload.configSummary?.googlePersonalContextFunctionCallingEnabled ??
+          false,
       });
 
       if (startNonce !== liveStartNonceRef.current) {

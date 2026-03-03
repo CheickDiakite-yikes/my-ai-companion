@@ -268,6 +268,43 @@ export interface InboxDigestResult {
   partialFailures: MorningBriefFailureCode[];
 }
 
+export type GooglePersonalContextTimeRange =
+  | "today"
+  | "tomorrow"
+  | "this_week"
+  | "next_7_days";
+
+export type GoogleDataFailureCode =
+  | "google_not_connected"
+  | "google_scope_missing"
+  | "google_token_refresh_failed"
+  | "google_token_decrypt_failed"
+  | "google_fetch_failed";
+
+export interface CalendarEventItem {
+  eventId: string;
+  title: string;
+  startTime: string;
+  endTime: string;
+  isAllDay: boolean;
+  location: string | null;
+  description: string | null;
+  attendeesCount: number;
+  status: string;
+}
+
+export interface GoogleEmailQueryResult {
+  inboxHighlights: InboxDigestItem[];
+  partialFailures: GoogleDataFailureCode[];
+}
+
+export interface GoogleCalendarQueryResult {
+  events: CalendarEventItem[];
+  timeRange: GooglePersonalContextTimeRange;
+  timezone: string;
+  partialFailures: GoogleDataFailureCode[];
+}
+
 export type ArtifactRenderEngine = "json_render";
 
 export interface ArtifactRenderElementV1 {

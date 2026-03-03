@@ -90,7 +90,53 @@ const ENABLE_MORNING_BRIEF_TEXT_ONLY = parseBooleanFlag(
   process.env.ENABLE_MORNING_BRIEF_TEXT_ONLY,
   true,
 );
+const ENABLE_GOOGLE_PERSONAL_CONTEXT = parseBooleanFlag(
+  process.env.ENABLE_GOOGLE_PERSONAL_CONTEXT,
+  true,
+);
+const ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE = parseBooleanFlag(
+  process.env.ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE,
+  false,
+);
 const GOOGLE_SEARCH_TOOLS: GoogleSearchTool[] = [{ googleSearch: {} }];
+export const GOOGLE_DATA_FUNCTION_DECLARATIONS: LiveFunctionDeclaration[] = [
+  {
+    name: "get_user_emails",
+    description:
+      "Retrieve the user's recent Gmail inbox messages. Only works if user has connected their Google account.",
+    parameters: {
+      type: "object",
+      properties: {
+        maxThreads: { type: "integer" },
+        sinceDays: { type: "integer" },
+        refresh: { type: "boolean" },
+      },
+    },
+  },
+  {
+    name: "get_calendar_events",
+    description:
+      "Retrieve the user's upcoming Google Calendar events for a specific time range. Only works if user has connected their Google account.",
+    parameters: {
+      type: "object",
+      properties: {
+        timeRange: {
+          type: "string",
+          enum: ["today", "tomorrow", "this_week", "next_7_days"],
+        },
+        timezone: { type: "string" },
+        maxEvents: { type: "integer" },
+        refresh: { type: "boolean" },
+      },
+      required: ["timeRange", "timezone"],
+    },
+  },
+];
+const LIVE_GOOGLE_DATA_FUNCTION_TOOLS: LiveFunctionDeclarationsTool[] = [
+  {
+    functionDeclarations: GOOGLE_DATA_FUNCTION_DECLARATIONS,
+  },
+];
 const LIVE_MORNING_BRIEF_FUNCTION_DECLARATIONS: LiveFunctionDeclaration[] = [
   {
     name: "get_morning_brief",
@@ -1127,6 +1173,7 @@ export interface LiveTokenConfigSummary {
   deviceClass: "mobile" | "desktop" | "unknown";
   googleSearchGroundingEnabled: boolean;
   morningBriefFunctionCallingEnabled: boolean;
+  googlePersonalContextFunctionCallingEnabled: boolean;
 }
 
 export interface CreateLiveTokenResult {
@@ -1149,6 +1196,7 @@ function composeLiveSystemInstruction(params: {
   clientTimeZone?: string | null;
   preferWebGrounding?: boolean;
   enableMorningBriefTools?: boolean;
+  enableGooglePersonalContextTools?: boolean;
 }): string {
   const sections: string[] = [params.personaPrompt];
 
@@ -1198,6 +1246,19 @@ function composeLiveSystemInstruction(params: {
     );
   }
 
+  if (params.enableGooglePersonalContextTools) {
+    sections.push(
+      [
+        "GOOGLE PERSONAL DATA TOOL POLICY:",
+        "- If the user asks about emails, inbox, unread messages, or mail, call get_user_emails before answering.",
+        "- If the user asks about calendar, meetings, events, schedule, or appointments, call get_calendar_events with an appropriate timeRange and timezone.",
+        "- If the user asks for a combined daily/weekly overview, call both get_user_emails and get_calendar_events.",
+        "- If tools report google_not_connected or google_scope_missing, tell the user to connect/reconnect Google from Profile settings.",
+        "- Never fabricate email or calendar information. Use only returned tool data.",
+      ].join("\n"),
+    );
+  }
+
   return sections.join("\n\n");
 }
 
@@ -1220,6 +1281,8 @@ export async function createLiveToken(
   const enableMorningBriefFunctionCalling =
     liveMorningBriefFunctionCallingRequested &&
     !ENABLE_MORNING_BRIEF_TEXT_ONLY;
+  const enableGooglePersonalContextFunctionCalling =
+    ENABLE_GOOGLE_PERSONAL_CONTEXT && ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE;
   const systemInstruction = composeLiveSystemInstruction({
     personaPrompt,
     memoryContextBlock: input.memoryContextBlock,
@@ -1228,6 +1291,7 @@ export async function createLiveToken(
     clientTimeZone: input.clientTimeZone ?? null,
     preferWebGrounding: requestedGoogleSearchGrounding,
     enableMorningBriefTools: enableMorningBriefFunctionCalling,
+    enableGooglePersonalContextTools: enableGooglePersonalContextFunctionCalling,
   });
   const timeMatch = systemInstruction.match(/RIGHT NOW it is:([^\n]+)/);
   console.log(`[LIVE_TOKEN_TZ] clientTimeZone=${JSON.stringify(input.clientTimeZone)}, envTZ=${process.env.ZEE_CALENDAR_TIMEZONE}, timeInPrompt=${timeMatch ? timeMatch[1].trim() : "NOT_FOUND"}`);
@@ -1383,6 +1447,8 @@ export async function createLiveToken(
     deviceClass,
     googleSearchGroundingEnabled: false,
     morningBriefFunctionCallingEnabled: enableMorningBriefFunctionCalling,
+    googlePersonalContextFunctionCallingEnabled:
+      enableGooglePersonalContextFunctionCalling,
   };
 
   const expireTime = new Date(now + expireInMs).toISOString();
@@ -1470,6 +1536,9 @@ export async function createLiveToken(
                   if (enableMorningBriefFunctionCalling) {
                     tools.push(...LIVE_MORNING_BRIEF_FUNCTION_TOOLS);
                   }
+                  if (enableGooglePersonalContextFunctionCalling) {
+                    tools.push(...LIVE_GOOGLE_DATA_FUNCTION_TOOLS);
+                  }
                   return tools.length > 0 ? tools : undefined;
                 })(),
               },
@@ -1532,6 +1601,8 @@ export async function createLiveToken(
       ...configSummary,
       googleSearchGroundingEnabled: resolvedGoogleSearchGrounding,
       morningBriefFunctionCallingEnabled: enableMorningBriefFunctionCalling,
+      googlePersonalContextFunctionCallingEnabled:
+        enableGooglePersonalContextFunctionCalling,
     },
   };
 }

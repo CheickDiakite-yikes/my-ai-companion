@@ -33,7 +33,6 @@ import {
   type MessageAttachment,
   type UsageEventMetric,
   type UserProfile,
-  type GoogleIntegrationStatus,
 } from "@shared/schema";
 import type {
   AgentArtifactSummary,
@@ -55,6 +54,9 @@ import type {
   TaskStateVersion,
   TaskStateResolvedStatusSource,
   AgentToolCallSummary,
+  CalendarEventItem,
+  GoogleDataFailureCode,
+  GooglePersonalContextTimeRange,
   InboxDigestItem,
   MorningBriefFailureCode,
   MorningBriefResult,
@@ -100,15 +102,20 @@ import {
 } from "./morning-brief";
 import {
   buildGoogleOAuthConnectUrl,
+  detectGooglePersonalContextIntent,
+  fetchGoogleCalendarEvents,
   exchangeGoogleOAuthCode,
   fetchGmailInboxDigest,
   fetchGoogleUserInfo,
+  GOOGLE_CALENDAR_EVENTS_READONLY_SCOPE,
+  GOOGLE_GMAIL_READONLY_SCOPE,
+  inferGoogleEmailSinceDays,
   getGoogleOAuthConfig,
-  refreshGoogleAccessToken,
+  resolveGoogleAccessTokenForUser,
+  resolveGoogleContextTimeZone,
   resolveGoogleOAuthScopes,
 } from "./google-integration";
 import {
-  decryptGoogleToken,
   encryptGoogleToken,
 } from "./google-integration-crypto";
 
@@ -579,6 +586,18 @@ const ENABLE_LIVE_FUNCTION_CALLING_BRIEF = parseBooleanFlag(
 const ENABLE_MORNING_BRIEF_TEXT_ONLY = parseBooleanFlag(
   process.env.ENABLE_MORNING_BRIEF_TEXT_ONLY,
   true,
+);
+const ENABLE_GOOGLE_PERSONAL_CONTEXT = parseBooleanFlag(
+  process.env.ENABLE_GOOGLE_PERSONAL_CONTEXT,
+  true,
+);
+const ENABLE_GOOGLE_PERSONAL_CONTEXT_TEXT = parseBooleanFlag(
+  process.env.ENABLE_GOOGLE_PERSONAL_CONTEXT_TEXT,
+  true,
+);
+const ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE = parseBooleanFlag(
+  process.env.ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE,
+  false,
 );
 const MORNING_BRIEF_DAILY_CAP = Math.max(
   1,
@@ -1108,72 +1127,274 @@ async function resolveFreshGoogleAccessTokenForUser(params: {
   userId: string;
   logger?: (event: string, payload?: Record<string, unknown>) => void;
 }): Promise<{ token: string; integration: Awaited<ReturnType<typeof storage.getGoogleIntegrationForUser>> } | null> {
-  let integration: Awaited<ReturnType<typeof storage.getGoogleIntegrationForUser>>;
-  try {
-    integration = await storage.getGoogleIntegrationForUser(params.userId);
-  } catch (error) {
-    params.logger?.("brief.gmail.fetch.failed", {
-      reason: "integration_lookup_failed",
-      message: error instanceof Error ? error.message : String(error),
-    });
-    return null;
-  }
-  if (!integration || integration.status !== "connected") {
-    return null;
+  const resolved = await resolveGoogleAccessTokenForUser({
+    userId: params.userId,
+    storage,
+    requiredScopes: [GOOGLE_GMAIL_READONLY_SCOPE],
+    logger: (event, payload) => {
+      params.logger?.(`brief.gmail.auth.${event}`, payload);
+    },
+  });
+
+  if (!resolved.ok) {
+    if (
+      resolved.code === "google_not_connected" ||
+      resolved.code === "google_scope_missing"
+    ) {
+      return null;
+    }
+    throw new Error(resolved.message);
   }
 
-  const nowMs = Date.now();
-  const expiryMs = integration.expiry?.getTime() ?? 0;
-  const hasUsableAccessToken =
-    Boolean(integration.accessTokenEncrypted) &&
-    expiryMs - nowMs > 60_000;
+  return {
+    token: resolved.accessToken,
+    integration: resolved.integration,
+  };
+}
 
-  if (hasUsableAccessToken && integration.accessTokenEncrypted) {
-    try {
-      const token = decryptGoogleToken(integration.accessTokenEncrypted);
-      return { token, integration };
-    } catch (error) {
-      params.logger?.("brief.gmail.fetch.failed", {
-        reason: "access_token_decrypt_failed",
-      });
+type GooglePersonalContextPreparation = {
+  applied: boolean;
+  contextBlock: string | null;
+  partialFailureCodes: GoogleDataFailureCode[];
+  emailCount: number;
+  calendarCount: number;
+};
+
+function mapGoogleResolveFailureCode(
+  code: "google_not_connected" | "google_scope_missing" | "google_token_refresh_failed" | "google_token_decrypt_failed",
+): GoogleDataFailureCode {
+  if (code === "google_token_refresh_failed") {
+    return "google_token_refresh_failed";
+  }
+  if (code === "google_token_decrypt_failed") {
+    return "google_token_decrypt_failed";
+  }
+  if (code === "google_scope_missing") {
+    return "google_scope_missing";
+  }
+  return "google_not_connected";
+}
+
+function renderGooglePersonalContextBlock(params: {
+  timeZone: string;
+  intent: ReturnType<typeof detectGooglePersonalContextIntent>;
+  inboxHighlights: InboxDigestItem[];
+  calendarEvents: CalendarEventItem[];
+  partialFailures: GoogleDataFailureCode[];
+  authFailureMessage?: string | null;
+}): string {
+  const lines: string[] = [
+    "[GOOGLE PERSONAL DATA CONTEXT — SOURCE OF TRUTH]",
+    `timezone: ${params.timeZone}`,
+    `requestTime: ${new Date().toISOString()}`,
+  ];
+
+  if (params.authFailureMessage) {
+    lines.push(
+      "",
+      "connectionStatus: unavailable",
+      `reason: ${params.authFailureMessage}`,
+      "assistantInstruction: Tell the user to connect or reconnect Google in Profile settings.",
+      "assistantInstruction: Do not fabricate email/calendar facts.",
+    );
+    return lines.join("\\n");
+  }
+
+  if (params.intent.calendarIntent) {
+    lines.push("", `calendar.timeRange: ${params.intent.timeRange}`);
+    if (params.calendarEvents.length === 0) {
+      lines.push("calendar.events: none");
+    } else {
+      lines.push("calendar.events:");
+      for (const event of params.calendarEvents.slice(0, 15)) {
+        lines.push(
+          `- ${event.startTime} -> ${event.endTime} | ${event.title} | allDay=${event.isAllDay} | location=${event.location ?? "n/a"}`,
+        );
+      }
     }
   }
 
-  try {
-    const refreshToken = decryptGoogleToken(integration.refreshTokenEncrypted);
-    const refreshed = await refreshGoogleAccessToken({ refreshToken });
-    const encryptedAccessToken = encryptGoogleToken(refreshed.accessToken);
-    await storage.updateGoogleIntegrationForUser({
-      userId: params.userId,
-      updates: {
-        accessTokenEncrypted: encryptedAccessToken,
-        expiry: refreshed.expiry,
-        scopes:
-          refreshed.scopes.length > 0
-            ? refreshed.scopes
-            : integration.scopes,
-        status: "connected",
-        lastError: null,
-      },
+  if (params.intent.emailIntent) {
+    lines.push("", "gmail.highlights:");
+    if (params.inboxHighlights.length === 0) {
+      lines.push("- none");
+    } else {
+      for (const item of params.inboxHighlights.slice(0, 10)) {
+        lines.push(
+          `- urgency=${item.urgency} | from=${item.from} | subject=${item.subject} | snippet=${item.snippet}`,
+        );
+      }
+    }
+  }
+
+  if (params.partialFailures.length > 0) {
+    lines.push("", `partialFailures: ${params.partialFailures.join(", ")}`);
+  }
+
+  lines.push(
+    "",
+    "assistantInstruction: Use only this Google context for account-specific facts.",
+    "assistantInstruction: If any section is unavailable, say so clearly and avoid guessing.",
+  );
+  return lines.join("\\n");
+}
+
+async function prepareGooglePersonalContextForChat(params: {
+  req: any;
+  userId: string;
+  text: string;
+  clientTimeZone?: string | null;
+}): Promise<GooglePersonalContextPreparation> {
+  if (!ENABLE_GOOGLE_PERSONAL_CONTEXT || !ENABLE_GOOGLE_PERSONAL_CONTEXT_TEXT) {
+    return {
+      applied: false,
+      contextBlock: null,
+      partialFailureCodes: [],
+      emailCount: 0,
+      calendarCount: 0,
+    };
+  }
+
+  const intent = detectGooglePersonalContextIntent(params.text);
+  if (!intent.calendarIntent && !intent.emailIntent) {
+    return {
+      applied: false,
+      contextBlock: null,
+      partialFailureCodes: [],
+      emailCount: 0,
+      calendarCount: 0,
+    };
+  }
+
+  const resolvedTimeZone = resolveGoogleContextTimeZone(params.clientTimeZone ?? null);
+  trace(params.req, "google.context.intent.detected", {
+    calendarIntent: intent.calendarIntent,
+    emailIntent: intent.emailIntent,
+    timeRange: intent.timeRange,
+  });
+
+  const requiredScopes: string[] = [];
+  if (intent.emailIntent) requiredScopes.push(GOOGLE_GMAIL_READONLY_SCOPE);
+  if (intent.calendarIntent) {
+    requiredScopes.push(GOOGLE_CALENDAR_EVENTS_READONLY_SCOPE);
+  }
+
+  const auth = await resolveGoogleAccessTokenForUser({
+    userId: params.userId,
+    storage,
+    requiredScopes,
+    logger: (event, payload) => {
+      trace(params.req, `google.context.auth.${event}`, payload ?? {});
+    },
+  });
+
+  if (!auth.ok) {
+    const failureCode = mapGoogleResolveFailureCode(auth.code);
+    trace(params.req, "google.context.auth.failed", {
+      code: auth.code,
+      missingScopes: auth.missingScopes ?? [],
     });
     return {
-      token: refreshed.accessToken,
-      integration: {
-        ...integration,
-        accessTokenEncrypted: encryptedAccessToken,
-        expiry: refreshed.expiry,
-      },
+      applied: true,
+      contextBlock: renderGooglePersonalContextBlock({
+        timeZone: resolvedTimeZone,
+        intent,
+        inboxHighlights: [],
+        calendarEvents: [],
+        partialFailures: [failureCode],
+        authFailureMessage: auth.message,
+      }),
+      partialFailureCodes: [failureCode],
+      emailCount: 0,
+      calendarCount: 0,
     };
-  } catch (error) {
-    await storage.updateGoogleIntegrationForUser({
-      userId: params.userId,
-      updates: {
-        status: "error" satisfies GoogleIntegrationStatus,
-        lastError: error instanceof Error ? error.message : String(error),
-      },
-    });
-    throw error;
   }
+
+  trace(params.req, "google.context.auth.resolved", {
+    wasRefreshed: auth.wasRefreshed,
+    scopesCount: auth.scopes.length,
+  });
+
+  let inboxHighlights: InboxDigestItem[] = [];
+  let calendarEvents: CalendarEventItem[] = [];
+  const partialFailures: GoogleDataFailureCode[] = [];
+
+  const tasks: Array<Promise<void>> = [];
+
+  if (intent.emailIntent) {
+    const sinceDays = inferGoogleEmailSinceDays(params.text);
+    const maxThreads = 10;
+    tasks.push(
+      (async () => {
+        const startedAt = Date.now();
+        trace(params.req, "google.context.email.fetch.start", {
+          maxThreads,
+          sinceDays,
+        });
+        try {
+          inboxHighlights = await fetchGmailInboxDigest({
+            accessToken: auth.accessToken,
+            maxThreads,
+            sinceDays,
+          });
+          trace(params.req, "google.context.email.fetch.success", {
+            count: inboxHighlights.length,
+            elapsedMs: elapsedMs(startedAt),
+          });
+        } catch (error) {
+          partialFailures.push("google_fetch_failed");
+          traceError(params.req, "google.context.email.fetch.failed", error, {
+            elapsedMs: elapsedMs(startedAt),
+          });
+        }
+      })(),
+    );
+  }
+
+  if (intent.calendarIntent) {
+    tasks.push(
+      (async () => {
+        const startedAt = Date.now();
+        trace(params.req, "google.context.calendar.fetch.start", {
+          timeRange: intent.timeRange,
+          timeZone: resolvedTimeZone,
+        });
+        try {
+          calendarEvents = await fetchGoogleCalendarEvents({
+            accessToken: auth.accessToken,
+            timeRange: intent.timeRange,
+            timezone: resolvedTimeZone,
+            maxEvents: 15,
+          });
+          trace(params.req, "google.context.calendar.fetch.success", {
+            count: calendarEvents.length,
+            elapsedMs: elapsedMs(startedAt),
+          });
+        } catch (error) {
+          partialFailures.push("google_fetch_failed");
+          traceError(params.req, "google.context.calendar.fetch.failed", error, {
+            elapsedMs: elapsedMs(startedAt),
+          });
+        }
+      })(),
+    );
+  }
+
+  await Promise.all(tasks);
+
+  return {
+    applied: true,
+    contextBlock: renderGooglePersonalContextBlock({
+      timeZone: resolvedTimeZone,
+      intent,
+      inboxHighlights,
+      calendarEvents,
+      partialFailures,
+    }),
+    partialFailureCodes: partialFailures,
+    emailCount: inboxHighlights.length,
+    calendarCount: calendarEvents.length,
+  };
 }
 
 async function executeMorningBriefForConversation(params: {
@@ -7969,15 +8190,35 @@ export async function registerRoutes(
           status: integration?.status ?? "disconnected",
           elapsedMs: elapsedMs(startedAt),
         });
+        const connected = integration?.status === "connected";
+        const scopes = Array.isArray(integration?.scopes)
+          ? integration.scopes.filter(
+              (scope): scope is string =>
+                typeof scope === "string" && scope.trim().length > 0,
+            )
+          : [];
+        const gmailConnected =
+          connected && scopes.includes(GOOGLE_GMAIL_READONLY_SCOPE);
+        const calendarConnected =
+          connected && scopes.includes(GOOGLE_CALENDAR_EVENTS_READONLY_SCOPE);
+        const missingScopes = connected
+          ? [
+              ...(gmailConnected ? [] : [GOOGLE_GMAIL_READONLY_SCOPE]),
+              ...(calendarConnected ? [] : [GOOGLE_CALENDAR_EVENTS_READONLY_SCOPE]),
+            ]
+          : [];
         return res.status(200).json({
           traceId: getTraceId(req),
-          connected: integration?.status === "connected",
+          connected,
           status: integration?.status ?? "disconnected",
           email: integration?.email ?? null,
-          scopes: Array.isArray(integration?.scopes) ? integration?.scopes : [],
+          scopes,
+          gmailConnected,
+          calendarConnected,
+          missingScopes,
           lastError: integration?.lastError ?? null,
           expiry: integration?.expiry?.toISOString() ?? null,
-          enabled: ENABLE_GMAIL_INBOX_DIGEST,
+          enabled: ENABLE_GOOGLE_PERSONAL_CONTEXT,
         });
       } catch (error) {
         traceError(req, "google.integration.status.failed", error, {
@@ -8156,6 +8397,11 @@ export async function registerRoutes(
             call.name === "get_morning_brief" ||
             call.name === "get_inbox_digest",
         );
+        const hasGooglePersonalContextFunctionCalls = parsed.functionCalls.some(
+          (call) =>
+            call.name === "get_user_emails" ||
+            call.name === "get_calendar_events",
+        );
 
         if (
           hasMorningBriefFunctionCalls &&
@@ -8189,6 +8435,35 @@ export async function registerRoutes(
                 status: "idle",
               },
             ],
+          });
+        }
+
+        if (
+          hasGooglePersonalContextFunctionCalls &&
+          (!ENABLE_GOOGLE_PERSONAL_CONTEXT ||
+            !ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE)
+        ) {
+          trace(req, "live.tool_response.disabled", {
+            conversationId: conversation.id,
+            reason: "google_personal_context_voice_disabled",
+            elapsedMs: elapsedMs(startedAt),
+          });
+          const functionResponses = parsed.functionCalls.map((functionCall) => ({
+            id: functionCall.id,
+            name: functionCall.name,
+            response: {
+              error: {
+                code: "google_personal_context_voice_disabled",
+                message:
+                  "Google personal context is currently available in text mode only.",
+              },
+            },
+          }));
+          return res.status(200).json({
+            traceId: getTraceId(req),
+            functionResponses,
+            chatDigests: [],
+            webSearchEvents: [{ status: "idle" }],
           });
         }
 
@@ -8349,6 +8624,225 @@ export async function registerRoutes(
               status: "grounded",
               label: "Inbox checked",
             });
+            continue;
+          }
+
+          if (functionCall.name === "get_user_emails") {
+            webSearchEvents.push({
+              status: "searching",
+              label: "Checking your inbox…",
+            });
+            const maxThreads =
+              typeof args.maxThreads === "number" && Number.isFinite(args.maxThreads)
+                ? Math.max(1, Math.min(20, Math.floor(args.maxThreads)))
+                : 10;
+            const sinceDays =
+              typeof args.sinceDays === "number" && Number.isFinite(args.sinceDays)
+                ? Math.max(1, Math.min(14, Math.floor(args.sinceDays)))
+                : 3;
+
+            trace(req, "live.tool.emails.start", {
+              conversationId: conversation.id,
+              maxThreads,
+              sinceDays,
+            });
+
+            const auth = await resolveGoogleAccessTokenForUser({
+              userId: req.session.userId,
+              storage,
+              requiredScopes: [GOOGLE_GMAIL_READONLY_SCOPE],
+            });
+
+            if (!auth.ok) {
+              functionResponses.push({
+                id: functionCall.id,
+                name: functionCall.name,
+                response: {
+                  error: {
+                    code: auth.code,
+                    message:
+                      auth.code === "google_scope_missing"
+                        ? "Google email permission is missing. Reconnect Google in Profile settings."
+                        : auth.code === "google_token_refresh_failed"
+                          ? "Google session expired. Reconnect in Profile settings."
+                          : "Google is not connected. Connect your account in Profile settings.",
+                  },
+                },
+              });
+              webSearchEvents.push({
+                status: "grounded",
+                label: "Inbox unavailable",
+              });
+              trace(req, "live.tool.emails.failed", {
+                conversationId: conversation.id,
+                stage: "auth",
+                code: auth.code,
+              });
+              continue;
+            }
+
+            try {
+              const inboxHighlights = await fetchGmailInboxDigest({
+                accessToken: auth.accessToken,
+                maxThreads,
+                sinceDays,
+              });
+
+              functionResponses.push({
+                id: functionCall.id,
+                name: functionCall.name,
+                response: {
+                  result: {
+                    inboxHighlights,
+                    partialFailures: [] as GoogleDataFailureCode[],
+                  },
+                },
+              });
+              webSearchEvents.push({
+                status: "grounded",
+                label: "Inbox checked",
+              });
+              trace(req, "live.tool.emails.success", {
+                conversationId: conversation.id,
+                emailCount: inboxHighlights.length,
+              });
+            } catch (error) {
+              functionResponses.push({
+                id: functionCall.id,
+                name: functionCall.name,
+                response: {
+                  error: {
+                    code: "google_fetch_failed",
+                    message:
+                      "Could not retrieve email data from Google right now. Please try again shortly.",
+                  },
+                },
+              });
+              webSearchEvents.push({
+                status: "grounded",
+                label: "Inbox unavailable",
+              });
+              traceError(req, "live.tool.emails.failed", error, {
+                conversationId: conversation.id,
+                stage: "fetch",
+              });
+            }
+            continue;
+          }
+
+          if (functionCall.name === "get_calendar_events") {
+            webSearchEvents.push({
+              status: "searching",
+              label: "Checking your calendar…",
+            });
+            const timeRangeRaw =
+              typeof args.timeRange === "string" ? args.timeRange : "today";
+            const timeRange: GooglePersonalContextTimeRange =
+              timeRangeRaw === "tomorrow" ||
+              timeRangeRaw === "this_week" ||
+              timeRangeRaw === "next_7_days"
+                ? timeRangeRaw
+                : "today";
+            const maxEvents =
+              typeof args.maxEvents === "number" && Number.isFinite(args.maxEvents)
+                ? Math.max(1, Math.min(30, Math.floor(args.maxEvents)))
+                : 15;
+            const timezone = resolveGoogleContextTimeZone(
+              typeof args.timezone === "string"
+                ? args.timezone
+                : parsed.clientTimeZone ?? null,
+            );
+
+            trace(req, "live.tool.calendar.start", {
+              conversationId: conversation.id,
+              timeRange,
+              timezone,
+              maxEvents,
+            });
+
+            const auth = await resolveGoogleAccessTokenForUser({
+              userId: req.session.userId,
+              storage,
+              requiredScopes: [GOOGLE_CALENDAR_EVENTS_READONLY_SCOPE],
+            });
+
+            if (!auth.ok) {
+              functionResponses.push({
+                id: functionCall.id,
+                name: functionCall.name,
+                response: {
+                  error: {
+                    code: auth.code,
+                    message:
+                      auth.code === "google_scope_missing"
+                        ? "Google Calendar permission is missing. Reconnect Google in Profile settings."
+                        : auth.code === "google_token_refresh_failed"
+                          ? "Google session expired. Reconnect in Profile settings."
+                          : "Google is not connected. Connect your account in Profile settings.",
+                  },
+                },
+              });
+              webSearchEvents.push({
+                status: "grounded",
+                label: "Calendar unavailable",
+              });
+              trace(req, "live.tool.calendar.failed", {
+                conversationId: conversation.id,
+                stage: "auth",
+                code: auth.code,
+              });
+              continue;
+            }
+
+            try {
+              const events = await fetchGoogleCalendarEvents({
+                accessToken: auth.accessToken,
+                timeRange,
+                timezone,
+                maxEvents,
+              });
+
+              functionResponses.push({
+                id: functionCall.id,
+                name: functionCall.name,
+                response: {
+                  result: {
+                    events,
+                    timeRange,
+                    timezone,
+                    partialFailures: [] as GoogleDataFailureCode[],
+                  },
+                },
+              });
+              webSearchEvents.push({
+                status: "grounded",
+                label: "Calendar checked",
+              });
+              trace(req, "live.tool.calendar.success", {
+                conversationId: conversation.id,
+                eventCount: events.length,
+              });
+            } catch (error) {
+              functionResponses.push({
+                id: functionCall.id,
+                name: functionCall.name,
+                response: {
+                  error: {
+                    code: "google_fetch_failed",
+                    message:
+                      "Could not retrieve calendar data from Google right now. Please try again shortly.",
+                  },
+                },
+              });
+              webSearchEvents.push({
+                status: "grounded",
+                label: "Calendar unavailable",
+              });
+              traceError(req, "live.tool.calendar.failed", error, {
+                conversationId: conversation.id,
+                stage: "fetch",
+              });
+            }
             continue;
           }
 
@@ -8584,6 +9078,8 @@ export async function registerRoutes(
           token.configSummary.googleSearchGroundingEnabled,
         morningBriefFunctionCallingEnabled:
           token.configSummary.morningBriefFunctionCallingEnabled,
+        googlePersonalContextFunctionCallingEnabled:
+          token.configSummary.googlePersonalContextFunctionCallingEnabled,
         userAgent: req.headers?.["user-agent"] ?? null,
         elapsedMs: elapsedMs(startedAt),
       });
@@ -9727,11 +10223,25 @@ export async function registerRoutes(
         });
       }
 
+      const googlePersonalContext = await prepareGooglePersonalContextForChat({
+        req,
+        userId: req.session.userId,
+        text: parsed.text,
+        clientTimeZone: parsed.clientTimeZone ?? null,
+      });
+
       const modelMessages = await buildModelMessages({
         conversationId: conversation.id,
         boundAttachments,
         mediaStore,
       });
+      if (googlePersonalContext.contextBlock) {
+        modelMessages.unshift({
+          sender: "assistant",
+          text: googlePersonalContext.contextBlock,
+          attachments: [],
+        });
+      }
 
       const chatMemory = await buildChatTextMemoryContext({
         req,
@@ -9791,6 +10301,13 @@ export async function registerRoutes(
         rawReplyLength: aiResponse.replyText.length,
         modelLatencyMs: elapsedMs(aiStartedAt),
       });
+      if (googlePersonalContext.applied) {
+        trace(req, "google.context.respond.completed", {
+          calendarCount: googlePersonalContext.calendarCount,
+          emailCount: googlePersonalContext.emailCount,
+          partialFailureCodes: googlePersonalContext.partialFailureCodes,
+        });
+      }
 
       const grounded = await enforceGroundedReply({
         persona,
@@ -11080,11 +11597,25 @@ export async function registerRoutes(
         return;
       }
 
+      const googlePersonalContext = await prepareGooglePersonalContextForChat({
+        req,
+        userId: req.session.userId,
+        text: parsed.text,
+        clientTimeZone: parsed.clientTimeZone ?? null,
+      });
+
       const modelMessages = await buildModelMessages({
         conversationId: conversation.id,
         boundAttachments,
         mediaStore,
       });
+      if (googlePersonalContext.contextBlock) {
+        modelMessages.unshift({
+          sender: "assistant",
+          text: googlePersonalContext.contextBlock,
+          attachments: [],
+        });
+      }
 
       const chatMemory = await buildChatTextMemoryContext({
         req,
@@ -11458,6 +11989,13 @@ export async function registerRoutes(
         syntheticPartCount,
         elapsedMs: elapsedMs(startedAt),
       });
+      if (googlePersonalContext.applied) {
+        trace(req, "google.context.respond.completed", {
+          calendarCount: googlePersonalContext.calendarCount,
+          emailCount: googlePersonalContext.emailCount,
+          partialFailureCodes: googlePersonalContext.partialFailureCodes,
+        });
+      }
 
       if (googleSearchGroundingUsed) {
         writeEvent({

@@ -30,6 +30,7 @@ export interface GeminiLiveVoiceSessionStartParams {
   preAcquiredMicStream?: MediaStream;
   googleSearchGroundingEnabled?: boolean;
   morningBriefFunctionCallingEnabled?: boolean;
+  googlePersonalContextFunctionCallingEnabled?: boolean;
 }
 
 const INPUT_SAMPLE_RATE = 16000;
@@ -136,6 +137,10 @@ const ENABLE_MORNING_BRIEF_VOICE_MODE = parseClientBoolean(
   liveClientEnv.VITE_ENABLE_MORNING_BRIEF_VOICE_MODE,
   false,
 );
+const ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE_MODE = parseClientBoolean(
+  liveClientEnv.VITE_ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE,
+  false,
+);
 
 const LIVE_MORNING_BRIEF_FUNCTION_DECLARATIONS = [
   {
@@ -160,6 +165,40 @@ const LIVE_MORNING_BRIEF_FUNCTION_DECLARATIONS = [
         refresh: { type: "boolean" },
         maxThreads: { type: "integer" },
       },
+    },
+  },
+];
+
+const LIVE_GOOGLE_PERSONAL_CONTEXT_FUNCTION_DECLARATIONS = [
+  {
+    name: "get_user_emails",
+    description:
+      "Retrieve the user's recent Gmail inbox messages. Only works if user has connected their Google account.",
+    parameters: {
+      type: "object",
+      properties: {
+        maxThreads: { type: "integer" },
+        sinceDays: { type: "integer" },
+        refresh: { type: "boolean" },
+      },
+    },
+  },
+  {
+    name: "get_calendar_events",
+    description:
+      "Retrieve the user's upcoming Google Calendar events for a specific time range. Only works if user has connected their Google account.",
+    parameters: {
+      type: "object",
+      properties: {
+        timeRange: {
+          type: "string",
+          enum: ["today", "tomorrow", "this_week", "next_7_days"],
+        },
+        timezone: { type: "string" },
+        maxEvents: { type: "integer" },
+        refresh: { type: "boolean" },
+      },
+      required: ["timeRange", "timezone"],
     },
   },
 ];
@@ -426,6 +465,8 @@ export class GeminiLiveVoiceSession {
   private conversationId: string | null = null;
   private liveGoogleSearchEnabled = false;
   private liveMorningBriefFunctionCallingEnabled = false;
+  private liveGooglePersonalContextFunctionCallingEnabled = false;
+  private liveFunctionCallingEnabled = false;
   private pendingWebSearchTurn = false;
   private webSearchGroundedThisTurn = false;
   private webSearchNudgeSentThisTurn = false;
@@ -508,9 +549,17 @@ export class GeminiLiveVoiceSession {
     const morningBriefFunctionCallingEnabled = Boolean(
       params.morningBriefFunctionCallingEnabled,
     ) && ENABLE_MORNING_BRIEF_VOICE_MODE;
+    const googlePersonalContextFunctionCallingEnabled = Boolean(
+      params.googlePersonalContextFunctionCallingEnabled,
+    ) && ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE_MODE;
     this.liveGoogleSearchEnabled = googleSearchGroundingEnabled;
     this.liveMorningBriefFunctionCallingEnabled =
       morningBriefFunctionCallingEnabled;
+    this.liveGooglePersonalContextFunctionCallingEnabled =
+      googlePersonalContextFunctionCallingEnabled;
+    this.liveFunctionCallingEnabled =
+      morningBriefFunctionCallingEnabled ||
+      googlePersonalContextFunctionCallingEnabled;
     this.pendingWebSearchTurn = false;
     this.webSearchGroundedThisTurn = false;
     this.webSearchNudgeSentThisTurn = false;
@@ -536,6 +585,12 @@ export class GeminiLiveVoiceSession {
               functionDeclarations: LIVE_MORNING_BRIEF_FUNCTION_DECLARATIONS,
             });
           }
+          if (googlePersonalContextFunctionCallingEnabled) {
+            tools.push({
+              functionDeclarations:
+                LIVE_GOOGLE_PERSONAL_CONTEXT_FUNCTION_DECLARATIONS,
+            });
+          }
           return tools.length > 0 ? tools : undefined;
         })(),
       },
@@ -550,6 +605,7 @@ export class GeminiLiveVoiceSession {
             model: params.model,
             googleSearchGroundingEnabled,
             morningBriefFunctionCallingEnabled,
+            googlePersonalContextFunctionCallingEnabled,
           });
         },
         onmessage: (message) => {
@@ -649,7 +705,10 @@ export class GeminiLiveVoiceSession {
     this.assistantTurnActive = false;
     this.assistantPlaybackTailUntilMs = 0;
     this.conversationId = null;
+    this.liveGoogleSearchEnabled = false;
     this.liveMorningBriefFunctionCallingEnabled = false;
+    this.liveGooglePersonalContextFunctionCallingEnabled = false;
+    this.liveFunctionCallingEnabled = false;
     this.pendingWebSearchTurn = false;
     this.webSearchGroundedThisTurn = false;
     this.webSearchNudgeSentThisTurn = false;
@@ -1054,7 +1113,7 @@ export class GeminiLiveVoiceSession {
     ).toolCall;
     const hasToolCall = Boolean(toolCallPayload);
 
-    if (hasToolCall && this.liveMorningBriefFunctionCallingEnabled) {
+    if (hasToolCall && this.liveFunctionCallingEnabled) {
       void this.handleToolCall(toolCallPayload);
     }
 
@@ -1376,11 +1435,18 @@ export class GeminiLiveVoiceSession {
     if (normalizedCalls.length === 0) return;
 
     const hasInboxCall = normalizedCalls.some(
-      (call) => call.name === "get_inbox_digest",
+      (call) => call.name === "get_inbox_digest" || call.name === "get_user_emails",
+    );
+    const hasCalendarCall = normalizedCalls.some(
+      (call) => call.name === "get_calendar_events",
     );
     this.emitWebSearchStatus(
       "searching",
-      hasInboxCall ? "Checking inbox highlights…" : "Searching live sources…",
+      hasCalendarCall
+        ? "Checking your calendar…"
+        : hasInboxCall
+          ? "Checking your inbox…"
+          : "Searching live sources…",
     );
 
     this.debug("live.tool_call.received", {
@@ -1466,7 +1532,7 @@ export class GeminiLiveVoiceSession {
           this.emitWebSearchStatus(status, label);
         }
       } else {
-        this.emitWebSearchStatus("grounded", "Brief ready");
+        this.emitWebSearchStatus("grounded", "Done.");
       }
 
       this.debug("live.tool_call.responded", {
