@@ -2605,24 +2605,30 @@ export default function MarketingLandingPage({ onGetStarted, onSignIn }: Marketi
                       </h4>
                     </div>
                     <div className="flex flex-col gap-3">
-                      <button
-                        type="button"
-                        onClick={() => openInfoPage("about")}
+                      <a
+                        href="/about"
+                        onClick={(event) => {
+                          event.preventDefault();
+                          openInfoPage("about");
+                        }}
                         className="text-left text-sm hover:translate-x-1 transition-transform duration-200"
                         style={{ color: "rgba(255, 228, 202, 0.7)" }}
                         data-testid="link-about"
                       >
                         About us
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => openInfoPage("blog")}
+                      </a>
+                      <a
+                        href="/blog"
+                        onClick={(event) => {
+                          event.preventDefault();
+                          openInfoPage("blog");
+                        }}
                         className="text-left text-sm hover:translate-x-1 transition-transform duration-200"
                         style={{ color: "rgba(255, 228, 202, 0.7)" }}
                         data-testid="link-blog"
                       >
                         Blog
-                      </button>
+                      </a>
                     </div>
                   </div>
 
@@ -2637,24 +2643,30 @@ export default function MarketingLandingPage({ onGetStarted, onSignIn }: Marketi
                       </h4>
                     </div>
                     <div className="flex flex-col gap-3">
-                      <button
-                        type="button"
-                        onClick={() => openInfoPage("terms")}
+                      <a
+                        href="/terms"
+                        onClick={(event) => {
+                          event.preventDefault();
+                          openInfoPage("terms");
+                        }}
                         className="text-left text-sm hover:translate-x-1 transition-transform duration-200"
                         style={{ color: "rgba(255, 228, 202, 0.7)" }}
                         data-testid="link-terms"
                       >
                         Terms of Service
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => openInfoPage("privacy")}
+                      </a>
+                      <a
+                        href="/privacy"
+                        onClick={(event) => {
+                          event.preventDefault();
+                          openInfoPage("privacy");
+                        }}
                         className="text-left text-sm hover:translate-x-1 transition-transform duration-200"
                         style={{ color: "rgba(255, 228, 202, 0.7)" }}
                         data-testid="link-privacy"
                       >
                         Privacy Policy
-                      </button>
+                      </a>
                     </div>
                   </div>
                 </div>
