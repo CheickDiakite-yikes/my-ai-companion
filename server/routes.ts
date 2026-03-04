@@ -353,6 +353,29 @@ const GOOGLE_OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 const briefRunDebugHistory: BriefRunDebugRecord[] = [];
 const briefRunDebugById = new Map<string, BriefRunDebugRecord>();
 
+function resolveGoogleRedirectUriFromRequest(req: any): string | null {
+  const configuredUri = process.env.GOOGLE_OAUTH_REDIRECT_URI?.trim();
+  if (!configuredUri) return null;
+
+  const host = req.get?.("host") ?? req.headers?.host;
+  if (!host) return null;
+
+  const configuredHost = (() => {
+    try {
+      return new URL(configuredUri).host;
+    } catch {
+      return null;
+    }
+  })();
+
+  if (!configuredHost) return null;
+  if (host === configuredHost) return null;
+
+  const protocol = req.get?.("x-forwarded-proto") ?? req.protocol ?? "https";
+  const dynamicUri = `${protocol}://${host}/api/integrations/google/callback`;
+  return dynamicUri;
+}
+
 function normalizeReturnToPath(value: string | undefined): string {
   if (!value) return "/";
   if (!value.startsWith("/") || value.startsWith("//")) return "/";
@@ -8314,6 +8337,11 @@ export async function registerRoutes(
           });
         }
 
+        const dynamicRedirectUri = resolveGoogleRedirectUriFromRequest(req);
+        const effectiveConfig = dynamicRedirectUri
+          ? { ...config, redirectUri: dynamicRedirectUri }
+          : config;
+
         const returnTo = normalizeReturnToPath(parsed.returnTo);
         const state = createGoogleOAuthStateRecord({
           userId: req.session.userId,
@@ -8321,7 +8349,7 @@ export async function registerRoutes(
         });
         const scopes = resolveGoogleOAuthScopes();
         const connectUrl = buildGoogleOAuthConnectUrl({
-          config,
+          config: effectiveConfig,
           state,
           scopes,
         });
@@ -8403,8 +8431,13 @@ export async function registerRoutes(
           });
         }
 
+        const dynamicRedirectUri = resolveGoogleRedirectUriFromRequest(req);
+        const effectiveConfig = dynamicRedirectUri
+          ? { ...config, redirectUri: dynamicRedirectUri }
+          : config;
+
         const exchanged = await exchangeGoogleOAuthCode({
-          config,
+          config: effectiveConfig,
           code: parsed.code,
         });
         const profile = await fetchGoogleUserInfo({
