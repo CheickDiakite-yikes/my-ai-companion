@@ -642,8 +642,7 @@ export class GeminiLiveVoiceSession {
     const morningBriefFunctionCallingEnabled =
       tokenMorningBriefFunctionCallingEnabled && ENABLE_MORNING_BRIEF_VOICE_MODE;
     const googlePersonalContextFunctionCallingEnabled =
-      tokenGooglePersonalContextFunctionCallingEnabled &&
-      ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE_MODE;
+      tokenGooglePersonalContextFunctionCallingEnabled;
     this.liveGoogleSearchEnabled = googleSearchGroundingEnabled;
     this.liveMorningBriefFunctionCallingEnabled =
       morningBriefFunctionCallingEnabled;
