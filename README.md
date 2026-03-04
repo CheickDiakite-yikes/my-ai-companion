@@ -41,6 +41,7 @@ ZeeMe is a companion AI experience where users build a continuous relationship w
 - **Share images** in text chat via camera capture or photo library upload
 - **Share live camera** frames during voice sessions for visual context
 - **Run Morning Brief (text mode)** for a concise, grounded digest of top headlines and market context
+- **Query personal Google context** (unread Gmail + upcoming Calendar events) in text mode, with optional voice tool-calling support behind feature gates
 - **Personalize Zee** through profile settings, response style presets, and avatar customization
 - **Switch between voice and text** while staying in one stitched conversation thread with shared memory
 - **Customize appearance** with 4 color themes applied across the entire UI
@@ -192,6 +193,27 @@ Client starts voice call
      -> consume voice + camera seconds quotas
 ```
 
+### Google personal context flow (text + optional voice)
+
+```
+Text query (e.g., "summarize my unread emails from last day")
+  -> POST /api/chat/respond/stream
+  -> detectGooglePersonalContextIntent
+  -> resolve Google OAuth token + required scopes
+  -> fetch Gmail digest and/or Calendar events
+  -> inject [GOOGLE PERSONAL DATA CONTEXT — SOURCE OF TRUTH] into model context
+  -> if fetch fails, classify issue:
+       - gmail_api_disabled / calendar_api_disabled
+       - google_access_denied
+       - google_timeout
+  -> return targeted guardrail reply instead of generic fallback
+
+Voice path (optional, feature-gated)
+  -> POST /api/live/tool-response
+  -> same token/scope resolution + fetch logic
+  -> tool response returned to active live session
+```
+
 ---
 
 ## 3) Tech Stack
@@ -300,7 +322,7 @@ All tables are defined in `shared/schema.ts` and `shared/models/auth.ts`. Schema
 | `user_profiles` | Personalization fields — display name, bio, location, age, profession, gender, response style preset/note, Zee avatar preset/custom image refs, user avatar |
 | `voice_sessions` | Voice call analytics — duration, camera duration, timestamps |
 | `usage_events` | Rolling 30-day quota accounting by metric type |
-| `google_integrations` | Encrypted Google OAuth token linkage for read-only Gmail digest |
+| `google_integrations` | Encrypted Google OAuth token linkage for read-only Gmail + Calendar access used by Morning Brief and direct personal-context queries |
 
 ### Quota metric types
 
@@ -377,7 +399,7 @@ All routes are same-origin under `/api/*`. Auth routes are public; all others re
 | Method | Endpoint | Description |
 |---|---|---|
 | `POST` | `/api/live/token` | Mint ephemeral Gemini Live session token |
-| `POST` | `/api/live/tool-response` | Resolve optional Live function calls (kept disabled for Morning Brief by default) |
+| `POST` | `/api/live/tool-response` | Resolve optional Live function calls (Morning Brief and Google personal context are independently feature-gated) |
 | `POST` | `/api/chat/respond` | Non-streaming text reply (legacy) |
 | `POST` | `/api/chat/respond/stream` | Streaming text reply (NDJSON) |
 
@@ -385,7 +407,7 @@ All routes are same-origin under `/api/*`. Auth routes are public; all others re
 
 | Method | Endpoint | Description |
 |---|---|---|
-| `GET` | `/api/integrations/google/connect-url` | Start Google OAuth (Gmail read-only) |
+| `GET` | `/api/integrations/google/connect-url` | Start Google OAuth (read-only Gmail + Calendar scopes) |
 | `GET` | `/api/integrations/google/callback` | OAuth callback handler |
 | `GET` | `/api/integrations/google/status` | Read integration status for current user |
 | `POST` | `/api/integrations/google/disconnect` | Disconnect Google integration |
@@ -468,6 +490,30 @@ When `GEMINI_TEXT_GOOGLE_SEARCH_AUTO_ONLY=true`, text grounding is selective and
 - Recency/freshness asks (`today`, `latest`, `current`, `this week`, `last` + event/topic)
 
 Voice grounding uses a similar trigger policy based on finalized live user transcript chunks. If a trigger is detected, Zee emits the searching indicator and nudges the active Live session to ground the next answer.
+
+### Google personal context (direct companion queries)
+
+Supported intent classes:
+- Unread/recency-filtered inbox asks (example: `can you summarize my unread emails from last day`)
+- Calendar scheduling asks (example: `what do i have on my calendar today?`)
+- Combined asks (example: `any key emails or events this week?`)
+
+Text-mode execution path:
+1. Detect intent from the latest user prompt.
+2. Resolve Google OAuth token with required scopes.
+3. Fetch Gmail digest and/or Calendar events.
+4. Inject a structured context block into model input.
+5. On failure, return targeted guardrail messaging from classified issue kinds.
+
+Failure classification currently used in logs and guardrails:
+- `gmail_api_disabled`
+- `calendar_api_disabled`
+- `google_access_denied`
+- `google_timeout`
+
+Voice-mode execution path:
+- Available through `POST /api/live/tool-response` only when voice personal-context flags are enabled.
+- Keep disabled by default for rollout safety, then enable per environment for staged validation.
 
 ### Morning Brief (text mode first, voice-safe by default)
 
@@ -900,8 +946,17 @@ Source of truth: `.env.example`
 | `GOOGLE_OAUTH_CLIENT_ID` | — | OAuth client ID for Gmail connector |
 | `GOOGLE_OAUTH_CLIENT_SECRET` | — | OAuth client secret |
 | `GOOGLE_OAUTH_REDIRECT_URI` | — | OAuth callback URI |
-| `GOOGLE_OAUTH_SCOPES` | `openid,email,profile,https://www.googleapis.com/auth/gmail.readonly` | Scopes for read-only Gmail access |
+| `GOOGLE_OAUTH_SCOPES` | `openid,email,profile,https://www.googleapis.com/auth/gmail.readonly,https://www.googleapis.com/auth/calendar.events.readonly` | Scopes for read-only Gmail + Calendar access |
 | `GOOGLE_INTEGRATION_ENCRYPTION_KEY` | — | AES-GCM key for encrypted token storage |
+
+### Google personal context controls
+
+| Variable | Default | Description |
+|---|---|---|
+| `ENABLE_GOOGLE_PERSONAL_CONTEXT` | `true` | Master flag for Google personal-context features |
+| `ENABLE_GOOGLE_PERSONAL_CONTEXT_TEXT` | `true` | Enable personal-context injection/guardrails in text mode |
+| `ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE` | `false` | Enable personal-context tool responses in live voice mode |
+| `VITE_ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE` | `false` | Client-side voice-path gate (requires rebuild when changed) |
 
 ### Live voice / VAD configuration
 
@@ -974,6 +1029,24 @@ See `.env.example` for the full list of quota variables covering default, power,
 
 ```bash
 npm run check
+```
+
+### Google personal context tests
+
+```bash
+npm run test:google-context:smoke
+npm run test:google-context:ui
+```
+
+- `test:google-context:smoke` validates intent detection, time-range resolution, and fetch-issue classification fixtures.
+- `test:google-context:ui` runs the Playwright flow for direct personal-context prompts.
+
+Voice rollout toggle for UI checks:
+
+```bash
+ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE=true \
+VITE_ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE=true \
+npm run test:google-context:ui
 ```
 
 ### Isolated local E2E tests
@@ -1154,6 +1227,24 @@ Design note:
 - Verify `GEMINI_LIVE_ACTIVITY_HANDLING` is set to `NO_INTERRUPTION` for stability
 - Inspect live trace diagnostics in server logs for interruption vs completion classification
 - Check client noise gate settings (`VITE_LIVE_AUDIO_NOISE_GATE_*`)
+
+### Google personal context returns fallback or wrong error
+
+- Verify feature flags:
+  - `ENABLE_GOOGLE_PERSONAL_CONTEXT=true`
+  - `ENABLE_GOOGLE_PERSONAL_CONTEXT_TEXT=true`
+  - For voice-path testing: `ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE=true` and `VITE_ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE=true`
+- Verify OAuth scope + token setup:
+  - `/api/integrations/google/status` returns `connected: true`
+  - `GOOGLE_OAUTH_SCOPES` includes both Gmail and Calendar read-only scopes
+  - `GOOGLE_INTEGRATION_ENCRYPTION_KEY` is set and stable between deploys
+- Inspect classified issue fields in traces:
+  - `emailFetchIssueKind`, `emailFetchIssueProjectNumber`
+  - `calendarFetchIssueKind`, `calendarFetchIssueProjectNumber`
+- Expected handling:
+  - `*_api_disabled` -> enable that API in the indicated Google Cloud project
+  - `google_access_denied` -> reconnect Google account/scopes
+  - `google_timeout` -> retry and inspect upstream/network latency
 
 ### Web search not triggering or stale current-events answers
 
