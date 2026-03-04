@@ -216,6 +216,7 @@ const liveToolResponseSchema = z.object({
 
 const googleConnectUrlQuerySchema = z.object({
   returnTo: z.string().trim().max(400).optional(),
+  redirectUri: z.string().trim().url().max(400).optional(),
 });
 
 const googleCallbackQuerySchema = z.object({
@@ -345,6 +346,8 @@ const googleOauthStateCache = new Map<
   {
     userId: string;
     returnTo: string;
+    redirectUri: string;
+    redirectSource: "configured_env" | "dynamic_host" | "query_override";
     createdAtMs: number;
   }
 >();
@@ -353,12 +356,47 @@ const GOOGLE_OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 const briefRunDebugHistory: BriefRunDebugRecord[] = [];
 const briefRunDebugById = new Map<string, BriefRunDebugRecord>();
 
-function resolveGoogleRedirectUriFromRequest(req: any): string | null {
-  const configuredUri = process.env.GOOGLE_OAUTH_REDIRECT_URI?.trim();
-  if (!configuredUri) return null;
+function isValidGoogleRedirectUriOverride(value: string): boolean {
+  try {
+    const parsed = new URL(value);
+    if (parsed.pathname !== "/api/integrations/google/callback") {
+      return false;
+    }
+    if (parsed.protocol === "https:") return true;
+    return parsed.protocol === "http:" && parsed.hostname === "localhost";
+  } catch {
+    return false;
+  }
+}
+
+function resolveGoogleRedirectUriFromRequest(
+  req: any,
+  configuredUri: string,
+  overrideUri?: string,
+): {
+  redirectUri: string;
+  source: "configured_env" | "dynamic_host" | "query_override";
+} {
+  const trimmedOverride = overrideUri?.trim();
+  if (trimmedOverride) {
+    if (!isValidGoogleRedirectUriOverride(trimmedOverride)) {
+      throw new Error(
+        "redirectUri must point to /api/integrations/google/callback with https (or http on localhost)",
+      );
+    }
+    return {
+      redirectUri: trimmedOverride,
+      source: "query_override",
+    };
+  }
 
   const host = req.get?.("host") ?? req.headers?.host;
-  if (!host) return null;
+  if (!host) {
+    return {
+      redirectUri: configuredUri,
+      source: "configured_env",
+    };
+  }
 
   const configuredHost = (() => {
     try {
@@ -368,12 +406,18 @@ function resolveGoogleRedirectUriFromRequest(req: any): string | null {
     }
   })();
 
-  if (!configuredHost) return null;
-  if (host === configuredHost) return null;
+  if (!configuredHost || host === configuredHost) {
+    return {
+      redirectUri: configuredUri,
+      source: "configured_env",
+    };
+  }
 
   const protocol = req.get?.("x-forwarded-proto") ?? req.protocol ?? "https";
-  const dynamicUri = `${protocol}://${host}/api/integrations/google/callback`;
-  return dynamicUri;
+  return {
+    redirectUri: `${protocol}://${host}/api/integrations/google/callback`,
+    source: "dynamic_host",
+  };
 }
 
 function normalizeReturnToPath(value: string | undefined): string {
@@ -393,12 +437,16 @@ function pruneGoogleOAuthStateCache(nowMs = Date.now()): void {
 function createGoogleOAuthStateRecord(params: {
   userId: string;
   returnTo: string;
+  redirectUri: string;
+  redirectSource: "configured_env" | "dynamic_host" | "query_override";
 }): string {
   pruneGoogleOAuthStateCache();
   const state = randomUUID();
   googleOauthStateCache.set(state, {
     userId: params.userId,
     returnTo: params.returnTo,
+    redirectUri: params.redirectUri,
+    redirectSource: params.redirectSource,
     createdAtMs: Date.now(),
   });
   return state;
@@ -407,13 +455,23 @@ function createGoogleOAuthStateRecord(params: {
 function resolveGoogleOAuthStateRecord(params: {
   state: string;
   userId: string;
-}): { returnTo: string } | null {
+}):
+  | {
+      returnTo: string;
+      redirectUri: string;
+      redirectSource: "configured_env" | "dynamic_host" | "query_override";
+    }
+  | null {
   pruneGoogleOAuthStateCache();
   const record = googleOauthStateCache.get(params.state);
   if (!record) return null;
   googleOauthStateCache.delete(params.state);
   if (record.userId !== params.userId) return null;
-  return { returnTo: record.returnTo };
+  return {
+    returnTo: record.returnTo,
+    redirectUri: record.redirectUri,
+    redirectSource: record.redirectSource,
+  };
 }
 
 function appendBriefDebugEvent(params: {
@@ -1206,6 +1264,7 @@ function mapGoogleResolveFailureCode(
 
 function classifyGoogleCallbackFailureReason(error: unknown):
   | "encryption_key_invalid"
+  | "redirect_uri_mismatch"
   | "oauth_exchange_failed"
   | "missing_refresh_token"
   | "unknown" {
@@ -1223,6 +1282,9 @@ function classifyGoogleCallbackFailureReason(error: unknown):
     message.includes("invalid_grant") ||
     message.includes("oauth")
   ) {
+    if (message.includes("redirect_uri_mismatch")) {
+      return "redirect_uri_mismatch";
+    }
     return "oauth_exchange_failed";
   }
   return "unknown";
@@ -8337,15 +8399,22 @@ export async function registerRoutes(
           });
         }
 
-        const dynamicRedirectUri = resolveGoogleRedirectUriFromRequest(req);
-        const effectiveConfig = dynamicRedirectUri
-          ? { ...config, redirectUri: dynamicRedirectUri }
-          : config;
+        const redirectResolution = resolveGoogleRedirectUriFromRequest(
+          req,
+          config.redirectUri,
+          parsed.redirectUri,
+        );
+        const effectiveConfig = {
+          ...config,
+          redirectUri: redirectResolution.redirectUri,
+        };
 
         const returnTo = normalizeReturnToPath(parsed.returnTo);
         const state = createGoogleOAuthStateRecord({
           userId: req.session.userId,
           returnTo,
+          redirectUri: effectiveConfig.redirectUri,
+          redirectSource: redirectResolution.source,
         });
         const scopes = resolveGoogleOAuthScopes();
         const connectUrl = buildGoogleOAuthConnectUrl({
@@ -8357,6 +8426,8 @@ export async function registerRoutes(
         trace(req, "google.integration.connect_url.created", {
           userId: req.session.userId,
           scopeCount: scopes.length,
+          redirectUri: effectiveConfig.redirectUri,
+          redirectSource: redirectResolution.source,
           elapsedMs: elapsedMs(startedAt),
         });
 
@@ -8365,6 +8436,8 @@ export async function registerRoutes(
           connectUrl,
           url: connectUrl,
           scopes,
+          redirectUri: effectiveConfig.redirectUri,
+          redirectSource: redirectResolution.source,
         });
       } catch (error) {
         if (error instanceof z.ZodError) {
@@ -8376,6 +8449,21 @@ export async function registerRoutes(
           return res.status(400).json({
             code: "google_connect_invalid_request",
             message: error.issues[0]?.message ?? "Invalid connect request",
+            traceId: getTraceId(req),
+          });
+        }
+        if (
+          error instanceof Error &&
+          error.message.includes("redirectUri must point to")
+        ) {
+          trace(req, "google.integration.connect_url.invalid_request", {
+            userId: req.session.userId,
+            issue: error.message,
+            elapsedMs: elapsedMs(startedAt),
+          });
+          return res.status(400).json({
+            code: "google_connect_invalid_request",
+            message: error.message,
             traceId: getTraceId(req),
           });
         }
@@ -8396,6 +8484,12 @@ export async function registerRoutes(
     isAuthenticated,
     async (req: any, res) => {
       const startedAt = Date.now();
+      let callbackRedirectUri: string | null = null;
+      let callbackRedirectSource:
+        | "configured_env"
+        | "dynamic_host"
+        | "query_override"
+        | null = null;
       try {
         const parsed = googleCallbackQuerySchema.parse(req.query ?? {});
         if (parsed.error) {
@@ -8422,6 +8516,8 @@ export async function registerRoutes(
             traceId: getTraceId(req),
           });
         }
+        callbackRedirectUri = stateRecord.redirectUri;
+        callbackRedirectSource = stateRecord.redirectSource;
 
         const config = getGoogleOAuthConfig();
         if (!config) {
@@ -8431,10 +8527,15 @@ export async function registerRoutes(
           });
         }
 
-        const dynamicRedirectUri = resolveGoogleRedirectUriFromRequest(req);
-        const effectiveConfig = dynamicRedirectUri
-          ? { ...config, redirectUri: dynamicRedirectUri }
-          : config;
+        const effectiveConfig = {
+          ...config,
+          redirectUri: stateRecord.redirectUri,
+        };
+        trace(req, "google.integration.callback.exchange_attempt", {
+          userId: req.session.userId,
+          redirectUri: effectiveConfig.redirectUri,
+          redirectSource: stateRecord.redirectSource,
+        });
 
         const exchanged = await exchangeGoogleOAuthCode({
           config: effectiveConfig,
@@ -8475,6 +8576,8 @@ export async function registerRoutes(
         return res.redirect(`${stateRecord.returnTo}?google_integration=connected`);
       } catch (error) {
         traceError(req, "google.integration.callback.failed", error, {
+          redirectUri: callbackRedirectUri,
+          redirectSource: callbackRedirectSource,
           elapsedMs: elapsedMs(startedAt),
         });
         const reason = classifyGoogleCallbackFailureReason(error);
@@ -9546,10 +9649,37 @@ export async function registerRoutes(
 
   app.post("/api/live/client-error", isAuthenticated, async (req: any, res) => {
     const clientEvent = typeof req.body?.event === "string" ? req.body.event : "unknown";
-    const clientData = typeof req.body?.data === "object" && req.body.data !== null ? req.body.data : {};
+    const rawClientData =
+      typeof req.body?.data === "object" && req.body.data !== null
+        ? (req.body.data as Record<string, unknown>)
+        : {};
+    const nestedError =
+      rawClientData.error && typeof rawClientData.error === "object"
+        ? (rawClientData.error as Record<string, unknown>)
+        : null;
+    const normalizedClientData = {
+      ...rawClientData,
+      errorMessage:
+        typeof rawClientData.error === "string"
+          ? rawClientData.error
+          : typeof nestedError?.message === "string"
+            ? nestedError.message
+            : null,
+      errorName:
+        typeof rawClientData.errorName === "string"
+          ? rawClientData.errorName
+          : typeof nestedError?.name === "string"
+            ? nestedError.name
+            : null,
+      hasStack:
+        typeof nestedError?.stack === "string"
+          ? true
+          : typeof rawClientData.stack === "string",
+    };
+
     traceError(req, "live.client.error", new Error(clientEvent), {
       clientEvent,
-      ...clientData,
+      ...normalizedClientData,
     });
     res.status(204).end();
   });

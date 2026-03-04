@@ -56,7 +56,11 @@ import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/use-auth";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, getResponseTraceId } from "@/lib/queryClient";
-import { GeminiLiveVoiceSession, getMicrophoneStreamWithFallback } from "@/lib/gemini-live";
+import {
+  GeminiLiveVoiceSession,
+  collectMediaCaptureDebugContext,
+  getMicrophoneStreamWithFallback,
+} from "@/lib/gemini-live";
 import {
   APP_THEME_OPTIONS,
   DEFAULT_APP_THEME_ID,
@@ -680,6 +684,8 @@ interface GoogleConnectUrlResponse extends TraceAwareResponse {
   connectUrl?: string;
   url?: string;
   scopes?: string[];
+  redirectUri?: string;
+  redirectSource?: "configured_env" | "dynamic_host" | "query_override";
   code?: string;
   missingEnv?: string[];
   message?: string;
@@ -853,6 +859,9 @@ function mapGoogleIntegrationFailureReason(reason: string | null): string {
   if (reason === "oauth_exchange_failed") {
     return "Google authorization exchange failed. Please retry connecting Google.";
   }
+  if (reason === "redirect_uri_mismatch") {
+    return "Google rejected the callback URL (redirect_uri_mismatch). Verify authorized redirect URIs in Google Cloud Console and retry.";
+  }
   return "Google connection failed. Please try reconnecting.";
 }
 
@@ -942,6 +951,14 @@ const ENABLE_JSON_RENDER_ARTIFACT_VIEWER = parseClientBooleanFlag(
     (import.meta.env as Record<string, unknown>).ENABLE_JSON_RENDER_ARTIFACT_VIEWER,
   true,
 );
+
+const GOOGLE_OAUTH_CONNECT_REDIRECT_URI_OVERRIDE = (() => {
+  const raw = (import.meta.env as Record<string, unknown>)
+    .VITE_GOOGLE_OAUTH_CONNECT_REDIRECT_URI;
+  if (typeof raw !== "string") return null;
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? trimmed : null;
+})();
 
 const TASK_STATUS_PRECEDENCE: Record<AgentTaskSummary["status"], number> = {
   queued: 1,
@@ -2386,13 +2403,24 @@ const ProfileView = ({
 
   const connectGoogleMutation = useMutation({
     mutationFn: async () => {
+      const query = new URLSearchParams({
+        returnTo: "/",
+      });
+      if (GOOGLE_OAUTH_CONNECT_REDIRECT_URI_OVERRIDE) {
+        query.set("redirectUri", GOOGLE_OAUTH_CONNECT_REDIRECT_URI_OVERRIDE);
+      }
       const response = await apiRequest(
         "GET",
-        "/api/integrations/google/connect-url?returnTo=%2F",
+        `/api/integrations/google/connect-url?${query.toString()}`,
       );
       return (await response.json()) as GoogleConnectUrlResponse;
     },
     onSuccess: (payload) => {
+      console.log("[GoogleOAuth]", "connect_url_ready", {
+        redirectUri: payload.redirectUri ?? null,
+        redirectSource: payload.redirectSource ?? null,
+        traceId: payload.traceId ?? null,
+      });
       const connectUrl = payload.connectUrl ?? payload.url;
       if (connectUrl) {
         window.location.href = connectUrl;
@@ -9053,6 +9081,15 @@ function App() {
       } catch (micError: any) {
         setIsLiveConnecting(false);
         const msg = micError?.message ?? "";
+        const captureContext = await collectMediaCaptureDebugContext().catch(
+          () => ({} as Record<string, unknown>),
+        );
+        logLiveTrace("live.mic.permission_failed", {
+          runId,
+          error: msg,
+          errorName: micError?.name ?? null,
+          ...(captureContext ?? {}),
+        });
         if (/denied|not allowed|permission/i.test(msg)) {
           setLiveError(
             "Microphone access was denied. To use voice calls, please allow microphone access in your browser settings and try again."
@@ -9081,6 +9118,7 @@ function App() {
                 error: msg,
                 errorName: micError?.name,
                 userAgent: navigator.userAgent,
+                ...(captureContext ?? {}),
               },
             }),
           });
@@ -9159,6 +9197,15 @@ function App() {
           tokenPayload.configSummary?.googlePersonalContextFunctionCallingEnabled ??
           null,
       });
+      if (!tokenPayload.configSummary?.googlePersonalContextFunctionCallingEnabled) {
+        logLiveTrace("live.google_context.gate_disabled", {
+          runId,
+          conversationId,
+          reason:
+            "googlePersonalContextFunctionCallingEnabled=false in live token config",
+          traceId: tokenPayload.traceId ?? null,
+        });
+      }
 
       const resolvedConversationId = conversationId;
       liveSession = new GeminiLiveVoiceSession({

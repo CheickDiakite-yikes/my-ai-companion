@@ -1002,9 +1002,16 @@ Source of truth: `.env.example`
 |---|---|---|
 | `GOOGLE_OAUTH_CLIENT_ID` | — | OAuth client ID for Gmail connector |
 | `GOOGLE_OAUTH_CLIENT_SECRET` | — | OAuth client secret |
-| `GOOGLE_OAUTH_REDIRECT_URI` | — | OAuth callback URI |
+| `GOOGLE_OAUTH_REDIRECT_URI` | — | Base OAuth callback URI. Runtime may dynamically switch callback host to match current request host |
 | `GOOGLE_OAUTH_SCOPES` | `openid,email,profile,https://www.googleapis.com/auth/gmail.readonly,https://www.googleapis.com/auth/calendar.events.readonly` | Scopes for read-only Gmail + Calendar access |
 | `GOOGLE_INTEGRATION_ENCRYPTION_KEY` | — | AES-GCM key for encrypted token storage |
+
+OAuth callback resolution order (`GET /api/integrations/google/connect-url`):
+1. `redirectUri` query param (if provided, valid callback path, and allowed format)
+2. Dynamic host callback (`https://<request-host>/api/integrations/google/callback`) when host differs from configured redirect URI host
+3. `GOOGLE_OAUTH_REDIRECT_URI` (configured default)
+
+The selected callback is returned in API response as `redirectUri` + `redirectSource`, and persisted in OAuth `state` so callback token exchange uses the exact same URI.
 
 ### Google personal context controls
 
@@ -1040,6 +1047,7 @@ Precedence notes:
 | Variable | Default | Description |
 |---|---|---|
 | `VITE_ENABLE_MORNING_BRIEF_VOICE_MODE` | `false` | Client guardrail for optional Live Morning Brief function loop |
+| `VITE_GOOGLE_OAUTH_CONNECT_REDIRECT_URI` | — | Optional dev-only callback override sent to `/api/integrations/google/connect-url` (must end with `/api/integrations/google/callback`) |
 | `VITE_LIVE_AUDIO_PROCESSOR_BUFFER_SIZE` | `512` | Audio processor buffer |
 | `VITE_LIVE_AUDIO_NOISE_GATE_ENABLED` | `false` | Client-side noise gate |
 | `VITE_LIVE_AUDIO_SUPPRESS_INPUT_WHILE_ASSISTANT_SPEAKING` | `true` | Duplex suppression |
@@ -1337,6 +1345,9 @@ Design note:
 - Verify `GEMINI_LIVE_ACTIVITY_HANDLING` is set to `NO_INTERRUPTION` for stability
 - Inspect live trace diagnostics in server logs for interruption vs completion classification
 - Check client noise gate settings (`VITE_LIVE_AUDIO_NOISE_GATE_*`)
+- For startup failures, inspect client + server diagnostics:
+  - browser console: `[LiveTrace] live.mic.permission_failed` and `live.start.catch`
+  - server logs: `live.client.error` with `microphonePermissionState`, `secureContext`, `audioInputDeviceCount`
 
 ### Google personal context returns fallback or wrong error
 
@@ -1371,6 +1382,11 @@ Design note:
 - Confirm session wiring:
   - Live model must emit `get_user_emails` or `get_calendar_events` function calls
   - client must forward those calls to `POST /api/live/tool-response`
+- Use voice-path trace signatures:
+  - `live.feature_gates` confirms token gate vs build-time gate effective state
+  - `live.google_context.searching` confirms user intent was detected
+  - `live.google_context.no_tool_call` means the model completed a turn without calling tools
+  - `live.tool_call.received` / `live.tool_call.responded` confirms end-to-end tool dispatch and API return
 
 ### Web search not triggering or stale current-events answers
 

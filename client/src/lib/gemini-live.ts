@@ -133,6 +133,9 @@ const SUPPRESS_USER_TRANSCRIPT_DURING_ASSISTANT_SPEECH = parseClientBoolean(
 );
 const LIVE_WEB_SEARCH_SIGNAL_PATTERN =
   /\b(search|look up|google|latest|current|today|news|headline|what happened|updates?|did you see|last super bowl|super\s*bowl|score|standings?|who won)\b/i;
+const LIVE_EMAIL_SIGNAL_PATTERN = /\b(email|emails|inbox|unread|mail|gmail)\b/i;
+const LIVE_CALENDAR_SIGNAL_PATTERN =
+  /\b(calendar|meeting|meetings|schedule|event|events|appointment|appointments)\b/i;
 const ENABLE_MORNING_BRIEF_VOICE_MODE = parseClientBoolean(
   liveClientEnv.VITE_ENABLE_MORNING_BRIEF_VOICE_MODE,
   false,
@@ -209,6 +212,34 @@ function normalizeText(input: string | undefined): string {
 
 function isLikelyLiveWebSearchQuery(text: string): boolean {
   return LIVE_WEB_SEARCH_SIGNAL_PATTERN.test(text);
+}
+
+type LivePersonalContextIntent = "email" | "calendar" | "both";
+
+function classifyLivePersonalContextIntent(
+  text: string,
+): LivePersonalContextIntent | null {
+  const hasEmailIntent = LIVE_EMAIL_SIGNAL_PATTERN.test(text);
+  const hasCalendarIntent = LIVE_CALENDAR_SIGNAL_PATTERN.test(text);
+  if (hasEmailIntent && hasCalendarIntent) return "both";
+  if (hasEmailIntent) return "email";
+  if (hasCalendarIntent) return "calendar";
+  return null;
+}
+
+function extractToolCallNames(toolCallPayload: unknown): string[] {
+  const functionCalls =
+    (
+      toolCallPayload as {
+        functionCalls?: Array<{ name?: unknown }>;
+      }
+    )?.functionCalls ?? [];
+  if (!Array.isArray(functionCalls) || functionCalls.length === 0) {
+    return [];
+  }
+  return functionCalls
+    .map((call) => (typeof call?.name === "string" ? call.name : null))
+    .filter((name): name is string => Boolean(name));
 }
 
 function findTranscriptOverlap(prefix: string, suffix: string): number {
@@ -398,6 +429,59 @@ async function getUserMediaWithTimeout(
   }
 }
 
+async function getMicrophonePermissionState():
+  Promise<"granted" | "denied" | "prompt" | "unsupported" | "error"> {
+  try {
+    if (!navigator.permissions?.query) {
+      return "unsupported";
+    }
+    const status = await navigator.permissions.query({
+      name: "microphone" as PermissionName,
+    });
+    if (
+      status.state === "granted" ||
+      status.state === "denied" ||
+      status.state === "prompt"
+    ) {
+      return status.state;
+    }
+    return "unsupported";
+  } catch {
+    return "error";
+  }
+}
+
+export async function collectMediaCaptureDebugContext(): Promise<Record<string, unknown>> {
+  const permissionState = await getMicrophonePermissionState();
+  let audioInputDeviceCount: number | null = null;
+  let mediaDeviceCount: number | null = null;
+  if (navigator.mediaDevices?.enumerateDevices) {
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      mediaDeviceCount = devices.length;
+      audioInputDeviceCount = devices.filter(
+        (device) => device.kind === "audioinput",
+      ).length;
+    } catch {
+      mediaDeviceCount = null;
+      audioInputDeviceCount = null;
+    }
+  }
+
+  return {
+    secureContext: window.isSecureContext,
+    pageVisibility: document.visibilityState ?? null,
+    locationProtocol: window.location?.protocol ?? null,
+    locationHost: window.location?.host ?? null,
+    mediaDevicesAvailable: Boolean(navigator.mediaDevices),
+    getUserMediaAvailable: Boolean(navigator.mediaDevices?.getUserMedia),
+    enumerateDevicesAvailable: Boolean(navigator.mediaDevices?.enumerateDevices),
+    microphonePermissionState: permissionState,
+    mediaDeviceCount,
+    audioInputDeviceCount,
+  };
+}
+
 export async function getMicrophoneStreamWithFallback(): Promise<MediaStream> {
   const attemptConstraints: MediaStreamConstraints[] = [
     {
@@ -468,6 +552,9 @@ export class GeminiLiveVoiceSession {
   private liveGooglePersonalContextFunctionCallingEnabled = false;
   private liveFunctionCallingEnabled = false;
   private pendingWebSearchTurn = false;
+  private pendingPersonalContextTurn = false;
+  private personalContextToolCalledThisTurn = false;
+  private personalContextNudgeSentThisTurn = false;
   private webSearchGroundedThisTurn = false;
   private webSearchNudgeSentThisTurn = false;
   private pendingTranscriptBySender: Record<TranscriptSender, string> = {
@@ -546,12 +633,17 @@ export class GeminiLiveVoiceSession {
     const googleSearchGroundingEnabled = Boolean(
       params.googleSearchGroundingEnabled,
     );
-    const morningBriefFunctionCallingEnabled = Boolean(
+    const tokenMorningBriefFunctionCallingEnabled = Boolean(
       params.morningBriefFunctionCallingEnabled,
-    ) && ENABLE_MORNING_BRIEF_VOICE_MODE;
-    const googlePersonalContextFunctionCallingEnabled = Boolean(
+    );
+    const tokenGooglePersonalContextFunctionCallingEnabled = Boolean(
       params.googlePersonalContextFunctionCallingEnabled,
-    ) && ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE_MODE;
+    );
+    const morningBriefFunctionCallingEnabled =
+      tokenMorningBriefFunctionCallingEnabled && ENABLE_MORNING_BRIEF_VOICE_MODE;
+    const googlePersonalContextFunctionCallingEnabled =
+      tokenGooglePersonalContextFunctionCallingEnabled &&
+      ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE_MODE;
     this.liveGoogleSearchEnabled = googleSearchGroundingEnabled;
     this.liveMorningBriefFunctionCallingEnabled =
       morningBriefFunctionCallingEnabled;
@@ -561,8 +653,43 @@ export class GeminiLiveVoiceSession {
       morningBriefFunctionCallingEnabled ||
       googlePersonalContextFunctionCallingEnabled;
     this.pendingWebSearchTurn = false;
+    this.pendingPersonalContextTurn = false;
+    this.personalContextToolCalledThisTurn = false;
+    this.personalContextNudgeSentThisTurn = false;
     this.webSearchGroundedThisTurn = false;
     this.webSearchNudgeSentThisTurn = false;
+    this.debug("live.feature_gates", {
+      tokenMorningBriefFunctionCallingEnabled,
+      tokenGooglePersonalContextFunctionCallingEnabled,
+      clientMorningBriefVoiceEnabled: ENABLE_MORNING_BRIEF_VOICE_MODE,
+      clientGooglePersonalContextVoiceEnabled:
+        ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE_MODE,
+      effectiveMorningBriefFunctionCallingEnabled:
+        morningBriefFunctionCallingEnabled,
+      effectiveGooglePersonalContextFunctionCallingEnabled:
+        googlePersonalContextFunctionCallingEnabled,
+      effectiveLiveFunctionCallingEnabled: this.liveFunctionCallingEnabled,
+    });
+    if (
+      tokenGooglePersonalContextFunctionCallingEnabled &&
+      !googlePersonalContextFunctionCallingEnabled
+    ) {
+      this.debug("live.feature_gate.blocked", {
+        feature: "google_personal_context_voice",
+        reason: "client_flag_disabled",
+        envVar: "VITE_ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE",
+      });
+    }
+    if (
+      tokenMorningBriefFunctionCallingEnabled &&
+      !morningBriefFunctionCallingEnabled
+    ) {
+      this.debug("live.feature_gate.blocked", {
+        feature: "morning_brief_voice",
+        reason: "client_flag_disabled",
+        envVar: "VITE_ENABLE_MORNING_BRIEF_VOICE_MODE",
+      });
+    }
 
     const CONNECTION_TIMEOUT_MS = 15_000;
     let connectionOpened = false;
@@ -710,6 +837,9 @@ export class GeminiLiveVoiceSession {
     this.liveGooglePersonalContextFunctionCallingEnabled = false;
     this.liveFunctionCallingEnabled = false;
     this.pendingWebSearchTurn = false;
+    this.pendingPersonalContextTurn = false;
+    this.personalContextToolCalledThisTurn = false;
+    this.personalContextNudgeSentThisTurn = false;
     this.webSearchGroundedThisTurn = false;
     this.webSearchNudgeSentThisTurn = false;
     this.clearPlaybackQueue();
@@ -1112,6 +1242,31 @@ export class GeminiLiveVoiceSession {
       }
     ).toolCall;
     const hasToolCall = Boolean(toolCallPayload);
+    const toolCallNames = hasToolCall
+      ? extractToolCallNames(toolCallPayload)
+      : [];
+    const hasPersonalContextToolCall = toolCallNames.some(
+      (name) => name === "get_user_emails" || name === "get_calendar_events",
+    );
+
+    if (hasPersonalContextToolCall) {
+      this.personalContextToolCalledThisTurn = true;
+      this.pendingPersonalContextTurn = false;
+      this.debug("live.google_context.tool_call_detected", {
+        toolCallNames,
+      });
+    }
+
+    if (hasToolCall && !this.liveFunctionCallingEnabled) {
+      this.debug("live.tool_call.ignored", {
+        reason: "live_function_calling_disabled",
+        toolCallNames,
+        liveMorningBriefFunctionCallingEnabled:
+          this.liveMorningBriefFunctionCallingEnabled,
+        liveGooglePersonalContextFunctionCallingEnabled:
+          this.liveGooglePersonalContextFunctionCallingEnabled,
+      });
+    }
 
     if (hasToolCall && this.liveFunctionCallingEnabled) {
       void this.handleToolCall(toolCallPayload);
@@ -1170,6 +1325,7 @@ export class GeminiLiveVoiceSession {
         hasGroundingMetadata,
         hasUrlContextMetadata,
         hasToolCall,
+        toolCallNames,
       });
     }
 
@@ -1219,6 +1375,14 @@ export class GeminiLiveVoiceSession {
     this.captureTranscript("assistant", serverContent.outputTranscription);
 
     if (serverContent.turnComplete) {
+      if (this.pendingPersonalContextTurn && !this.personalContextToolCalledThisTurn) {
+        this.debug("live.google_context.no_tool_call", {
+          liveGooglePersonalContextFunctionCallingEnabled:
+            this.liveGooglePersonalContextFunctionCallingEnabled,
+          liveFunctionCallingEnabled: this.liveFunctionCallingEnabled,
+        });
+        this.emitWebSearchStatus("idle");
+      }
       if (
         this.liveGoogleSearchEnabled &&
         this.pendingWebSearchTurn &&
@@ -1227,6 +1391,9 @@ export class GeminiLiveVoiceSession {
         this.emitWebSearchStatus("idle");
       }
       this.pendingWebSearchTurn = false;
+      this.pendingPersonalContextTurn = false;
+      this.personalContextToolCalledThisTurn = false;
+      this.personalContextNudgeSentThisTurn = false;
       this.webSearchGroundedThisTurn = false;
       this.webSearchNudgeSentThisTurn = false;
       this.assistantTurnActive = false;
@@ -1302,6 +1469,51 @@ export class GeminiLiveVoiceSession {
 
     const text = normalizeText(transcript.text);
     if (!text) return;
+    const personalContextIntent = classifyLivePersonalContextIntent(text);
+
+    if (
+      sender === "user" &&
+      this.liveGooglePersonalContextFunctionCallingEnabled &&
+      personalContextIntent &&
+      !this.pendingPersonalContextTurn
+    ) {
+      this.pendingPersonalContextTurn = true;
+      this.personalContextToolCalledThisTurn = false;
+      this.emitWebSearchStatus(
+        "searching",
+        personalContextIntent === "both"
+          ? "Retrieving your emails and calendar…"
+          : personalContextIntent === "calendar"
+            ? "Retrieving your calendar…"
+            : "Retrieving your emails…",
+      );
+      this.debug("live.google_context.searching", {
+        textLength: text.length,
+        intent: personalContextIntent,
+      });
+    }
+
+    if (
+      sender === "user" &&
+      this.liveGooglePersonalContextFunctionCallingEnabled &&
+      personalContextIntent &&
+      transcript.finished &&
+      !this.personalContextNudgeSentThisTurn
+    ) {
+      this.personalContextNudgeSentThisTurn = true;
+      this.sendPersonalContextToolNudge(text, personalContextIntent);
+    }
+    if (
+      sender === "user" &&
+      !this.liveGooglePersonalContextFunctionCallingEnabled &&
+      personalContextIntent &&
+      transcript.finished
+    ) {
+      this.debug("live.google_context.intent_blocked", {
+        intent: personalContextIntent,
+        reason: "google_personal_context_function_calling_disabled",
+      });
+    }
 
     if (
       sender === "user" &&
@@ -1665,6 +1877,45 @@ export class GeminiLiveVoiceSession {
     } catch (error) {
       this.debug("live.web_search.nudge_failed", {
         message: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private sendPersonalContextToolNudge(
+    userTranscript: string,
+    intent: LivePersonalContextIntent,
+  ): void {
+    if (!this.session) return;
+    const query = normalizeText(userTranscript);
+    if (!query) return;
+
+    const toolInstruction =
+      intent === "both"
+        ? "Call get_user_emails and get_calendar_events before answering."
+        : intent === "calendar"
+          ? "Call get_calendar_events before answering."
+          : "Call get_user_emails before answering.";
+
+    try {
+      (
+        this.session as Session & {
+          sendClientContent?: (payload: {
+            turns: string;
+            turnComplete: boolean;
+          }) => void;
+        }
+      ).sendClientContent?.({
+        turns: `For this latest user request, use the connected Google personal context tools. ${toolInstruction} Never invent email or calendar details. User request: ${query}`,
+        turnComplete: true,
+      });
+      this.debug("live.google_context.nudge_sent", {
+        textLength: query.length,
+        intent,
+      });
+    } catch (error) {
+      this.debug("live.google_context.nudge_failed", {
+        message: error instanceof Error ? error.message : String(error),
+        intent,
       });
     }
   }
