@@ -2482,6 +2482,7 @@ async function buildLiveMemoryContext(params: {
       (message) =>
         !(message.sender === "assistant" && isAgentMessageUiPayload(message.uiPayload)),
     )
+    .filter((message) => !isGoogleConnectionFailureMessage(message))
     .map((message) => ({
       sender: message.sender,
       text: toMemoryMessageText(message),
@@ -2545,6 +2546,7 @@ async function buildLiveMemoryContext(params: {
         (message) =>
           !(message.sender === "assistant" && isAgentMessageUiPayload(message.uiPayload)),
       )
+      .filter((message) => !isGoogleConnectionFailureMessage(message))
       .map((message) => ({
         sender: message.sender,
         text: normalizeMemoryText(message.text),
@@ -3493,6 +3495,33 @@ function isAgentMessageUiPayload(
   if (!value || typeof value !== "object") return false;
   const kind = (value as Record<string, unknown>).kind;
   return typeof kind === "string" && kind.startsWith("agent_");
+}
+
+const GOOGLE_CONNECTION_FAILURE_PATTERNS = [
+  /ca(?:n['\u2019]t|nnot|n not|ouldn['\u2019]t) access your (?:gmail|calendar|email)/i,
+  /unable to access your (?:gmail|calendar|email)/i,
+  /google (?:account )?is(?:n['\u2019]t| not) connected/i,
+  /not connected in this environment/i,
+  /ca(?:n['\u2019]t|nnot) actually access your email/i,
+  /tap connect google/i,
+  /profile\s*>\s*connected accounts.*connect google/i,
+  /(?:re)?connect (?:your )?google/i,
+  /google is not connected/i,
+];
+
+function normalizeApostrophes(text: string): string {
+  return text.replace(/[\u2018\u2019\u201A\u201B\u0060\u00B4]/g, "'");
+}
+
+function isGoogleConnectionFailureMessage(message: {
+  sender: string;
+  text?: string | null;
+}): boolean {
+  if (message.sender !== "assistant") return false;
+  const raw = (message.text ?? "").trim();
+  if (!raw) return false;
+  const text = normalizeApostrophes(raw);
+  return GOOGLE_CONNECTION_FAILURE_PATTERNS.some((pattern) => pattern.test(text));
 }
 
 function shouldIncludeMessageInConversationContext(message: {
@@ -6207,10 +6236,12 @@ async function buildModelMessages(params: {
   const filteredMemory = stitchedMemory.filter((message) =>
     shouldIncludeMessageInConversationContext(message),
   );
-  const safeConversationMemory = filteredMemory.filter(
-    (message) =>
-      !(message.sender === "assistant" && isAgentMessageUiPayload(message.uiPayload)),
-  );
+  const safeConversationMemory = filteredMemory
+    .filter(
+      (message) =>
+        !(message.sender === "assistant" && isAgentMessageUiPayload(message.uiPayload)),
+    )
+    .filter((message) => !isGoogleConnectionFailureMessage(message));
 
   const currentAttachmentById = new Map<string, string>();
   for (const attachment of params.boundAttachments) {
