@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 
 async function run(): Promise<void> {
   const {
+    classifyGoogleFetchIssue,
     detectGooglePersonalContextIntent,
     inferGoogleEmailSinceDays,
     resolveCalendarTimeRange,
@@ -106,6 +107,52 @@ async function run(): Promise<void> {
     Date.parse(tomorrowRange.timeMin) > Date.parse(todayRange.timeMin),
     "tomorrow range should start after today range",
   );
+
+  const gmailDisabled = classifyGoogleFetchIssue(
+    new Error(
+      "Failed to list Gmail inbox threads (Gmail API has not been used in project 52558666644 before or it is disabled. Enable it by visiting https://console.developers.google.com/apis/api/gmail.googleapis.com/overview?project=52558666644 then retry.)",
+    ),
+    "gmail",
+  );
+  assert.ok(gmailDisabled, "gmail disabled issue should be classified");
+  assert.equal(
+    gmailDisabled?.kind,
+    "gmail_api_disabled",
+    "gmail disabled issue kind should be gmail_api_disabled",
+  );
+  assert.equal(
+    gmailDisabled?.projectNumber,
+    "52558666644",
+    "gmail disabled issue should parse project number",
+  );
+
+  const googleTimeout = classifyGoogleFetchIssue(
+    new Error("Gmail fetch timed out after 10000ms"),
+    "gmail",
+  );
+  assert.ok(googleTimeout, "timeout issue should be classified");
+  assert.equal(
+    googleTimeout?.kind,
+    "google_timeout",
+    "timeout issue kind should be google_timeout",
+  );
+
+  const accessDenied = classifyGoogleFetchIssue(
+    new Error("Calendar access denied - token may be expired or scope not granted"),
+    "calendar",
+  );
+  assert.ok(accessDenied, "access denied issue should be classified");
+  assert.equal(
+    accessDenied?.kind,
+    "google_access_denied",
+    "access denied issue kind should be google_access_denied",
+  );
+
+  const unknownIssue = classifyGoogleFetchIssue(
+    new Error("unexpected parser failure"),
+    "gmail",
+  );
+  assert.equal(unknownIssue, null, "unknown issue should remain null");
 
   console.log("google-personal-context smoke checks passed");
 }

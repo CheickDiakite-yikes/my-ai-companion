@@ -52,6 +52,18 @@ interface GoogleCalendarEventsResponse {
   }>;
 }
 
+export type GoogleFetchIssueKind =
+  | "gmail_api_disabled"
+  | "calendar_api_disabled"
+  | "google_access_denied"
+  | "google_timeout";
+
+export interface GoogleFetchIssue {
+  kind: GoogleFetchIssueKind;
+  projectNumber: string | null;
+  httpStatus: number | null;
+}
+
 export type GoogleDataTimeRange = GooglePersonalContextTimeRange;
 
 export interface GooglePersonalContextIntent {
@@ -108,6 +120,77 @@ const GOOGLE_CALENDAR_INTENT_PATTERN =
   /\b(calendar|schedule|meeting|meetings|events?|agenda|appointments?|busy|free\s*(today|tomorrow)?|what do i have|what's on my schedule|whats on my schedule)\b/i;
 const GOOGLE_EMAIL_INTENT_PATTERN =
   /\b(emails?|inbox|unread|messages?\s+from|important\s+(emails?|messages?)|mail|gmail|check\s+my\s+(mail|email|inbox))\b/i;
+
+function parseHttpStatusFromMessage(message: string): number | null {
+  const match = message.match(/\bstatus\s+(\d{3})\b/i);
+  if (!match) return null;
+  const status = Number(match[1]);
+  if (!Number.isFinite(status)) return null;
+  return status;
+}
+
+function extractGoogleProjectNumber(message: string): string | null {
+  const directMatch = message.match(/\bproject(?:=|\s+)(\d{6,})\b/i);
+  if (directMatch?.[1]) {
+    return directMatch[1];
+  }
+  const fallbackMatch = message.match(/\b(\d{6,})\b/);
+  return fallbackMatch?.[1] ?? null;
+}
+
+export function classifyGoogleFetchIssue(
+  error: unknown,
+  target: "gmail" | "calendar",
+): GoogleFetchIssue | null {
+  const message = error instanceof Error ? error.message : String(error);
+  const lower = message.toLowerCase();
+  const httpStatus = parseHttpStatusFromMessage(message);
+  const projectNumber = extractGoogleProjectNumber(message);
+
+  const apiDisabledSignal =
+    lower.includes("api has not been used in project") ||
+    lower.includes("accessnotconfigured") ||
+    lower.includes("service_disabled") ||
+    (lower.includes("disabled") &&
+      (lower.includes("gmail.googleapis.com") ||
+        lower.includes("calendar") ||
+        lower.includes("google api")));
+
+  if (apiDisabledSignal) {
+    return {
+      kind: target === "gmail" ? "gmail_api_disabled" : "calendar_api_disabled",
+      projectNumber,
+      httpStatus,
+    };
+  }
+
+  const timeoutSignal = lower.includes("timed out") || lower.includes("timeout");
+  if (timeoutSignal) {
+    return {
+      kind: "google_timeout",
+      projectNumber,
+      httpStatus,
+    };
+  }
+
+  const accessDeniedSignal =
+    lower.includes("access denied") ||
+    lower.includes("permission denied") ||
+    lower.includes("insufficient authentication scopes") ||
+    lower.includes("insufficient permissions") ||
+    lower.includes("forbidden") ||
+    httpStatus === 401 ||
+    httpStatus === 403;
+  if (accessDeniedSignal) {
+    return {
+      kind: "google_access_denied",
+      projectNumber,
+      httpStatus,
+    };
+  }
+
+  return null;
+}
 
 function requiredEnv(name: string): string {
   const value = process.env[name]?.trim();
@@ -806,7 +889,9 @@ export async function fetchGmailInboxDigest(params: {
     if (!listResponse.ok) {
       const apiMessage =
         listPayload?.error?.message?.trim() || `status ${listResponse.status}`;
-      throw new Error(`Failed to list Gmail inbox threads (${apiMessage})`);
+      throw new Error(
+        `Failed to list Gmail inbox threads (status ${listResponse.status}; ${apiMessage})`,
+      );
     }
 
     const messageIds = (listPayload.messages ?? [])
@@ -978,7 +1063,7 @@ export async function fetchGoogleCalendarEvents(params: {
 
     if (response.status === 401 || response.status === 403) {
       throw new Error(
-        "Calendar access denied - token may be expired or scope not granted",
+        `Calendar access denied (status ${response.status}) - token may be expired or scope not granted`,
       );
     }
 

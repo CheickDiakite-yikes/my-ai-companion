@@ -102,6 +102,7 @@ import {
 } from "./morning-brief";
 import {
   buildGoogleOAuthConnectUrl,
+  classifyGoogleFetchIssue,
   detectGooglePersonalContextIntent,
   fetchGoogleCalendarEvents,
   exchangeGoogleOAuthCode,
@@ -1158,8 +1159,12 @@ type GooglePersonalContextPreparation = {
   partialFailureCodes: GoogleDataFailureCode[];
   emailCount: number;
   calendarCount: number;
+  emailFetchIssue: GoogleFetchIssue | null;
+  calendarFetchIssue: GoogleFetchIssue | null;
   intent: ReturnType<typeof detectGooglePersonalContextIntent> | null;
 };
+
+type GoogleFetchIssue = NonNullable<ReturnType<typeof classifyGoogleFetchIssue>>;
 
 function mapGoogleResolveFailureCode(
   code: "google_not_connected" | "google_scope_missing" | "google_token_refresh_failed" | "google_token_decrypt_failed",
@@ -1222,6 +1227,44 @@ function buildGooglePersonalContextGuardrailReply(
   }
 
   if (
+    preparation.emailFetchIssue?.kind === "gmail_api_disabled" &&
+    preparation.emailCount === 0
+  ) {
+    const projectHint = preparation.emailFetchIssue.projectNumber
+      ? ` in Google Cloud project ${preparation.emailFetchIssue.projectNumber}`
+      : "";
+    return `I can't access Gmail yet because the Gmail API is disabled${projectHint}. Enable Gmail API in Google Cloud Console for that project, wait about a minute, then retry.`;
+  }
+
+  if (
+    preparation.calendarFetchIssue?.kind === "calendar_api_disabled" &&
+    preparation.calendarCount === 0
+  ) {
+    const projectHint = preparation.calendarFetchIssue.projectNumber
+      ? ` in Google Cloud project ${preparation.calendarFetchIssue.projectNumber}`
+      : "";
+    return `I can't access Calendar yet because the Calendar API is disabled${projectHint}. Enable Google Calendar API for that project, wait about a minute, then retry.`;
+  }
+
+  if (
+    (preparation.emailFetchIssue?.kind === "google_access_denied" &&
+      preparation.emailCount === 0) ||
+    (preparation.calendarFetchIssue?.kind === "google_access_denied" &&
+      preparation.calendarCount === 0)
+  ) {
+    return "Google access was denied for this request. Please reconnect Google in Profile > Connected Accounts, then try again.";
+  }
+
+  if (
+    (preparation.emailFetchIssue?.kind === "google_timeout" &&
+      preparation.emailCount === 0) ||
+    (preparation.calendarFetchIssue?.kind === "google_timeout" &&
+      preparation.calendarCount === 0)
+  ) {
+    return "Google services timed out during fetch. Please retry in about a minute.";
+  }
+
+  if (
     codes.has("google_fetch_failed") &&
     preparation.emailCount === 0 &&
     preparation.calendarCount === 0
@@ -1238,6 +1281,8 @@ function renderGooglePersonalContextBlock(params: {
   inboxHighlights: InboxDigestItem[];
   calendarEvents: CalendarEventItem[];
   partialFailures: GoogleDataFailureCode[];
+  emailFetchIssue?: GoogleFetchIssue | null;
+  calendarFetchIssue?: GoogleFetchIssue | null;
   authFailureMessage?: string | null;
 }): string {
   const lines: string[] = [
@@ -1289,8 +1334,36 @@ function renderGooglePersonalContextBlock(params: {
   if (params.partialFailures.length > 0) {
     lines.push("", `partialFailures: ${params.partialFailures.join(", ")}`);
   }
+  if (params.emailFetchIssue) {
+    lines.push(
+      `gmail.fetchIssue: ${params.emailFetchIssue.kind}${params.emailFetchIssue.projectNumber ? ` (project ${params.emailFetchIssue.projectNumber})` : ""}`,
+    );
+  }
+  if (params.calendarFetchIssue) {
+    lines.push(
+      `calendar.fetchIssue: ${params.calendarFetchIssue.kind}${params.calendarFetchIssue.projectNumber ? ` (project ${params.calendarFetchIssue.projectNumber})` : ""}`,
+    );
+  }
 
   if (
+    params.intent.emailIntent &&
+    params.inboxHighlights.length === 0 &&
+    params.emailFetchIssue?.kind === "gmail_api_disabled"
+  ) {
+    lines.push("gmail.fetchStatus: failed_api_disabled");
+    lines.push(
+      "assistantInstruction: Tell the user Gmail API is disabled for the configured project and they must enable it in Google Cloud Console before retrying.",
+    );
+  } else if (
+    params.intent.emailIntent &&
+    params.inboxHighlights.length === 0 &&
+    params.emailFetchIssue?.kind === "google_access_denied"
+  ) {
+    lines.push("gmail.fetchStatus: failed_access_denied");
+    lines.push(
+      "assistantInstruction: Tell the user Google access was denied and they should reconnect Google permissions in Profile > Connected Accounts.",
+    );
+  } else if (
     params.intent.emailIntent &&
     params.inboxHighlights.length === 0 &&
     params.partialFailures.includes("google_fetch_failed")
@@ -1329,6 +1402,8 @@ async function prepareGooglePersonalContextForChat(params: {
       partialFailureCodes: [],
       emailCount: 0,
       calendarCount: 0,
+      emailFetchIssue: null,
+      calendarFetchIssue: null,
       intent: null,
     };
   }
@@ -1341,6 +1416,8 @@ async function prepareGooglePersonalContextForChat(params: {
       partialFailureCodes: [],
       emailCount: 0,
       calendarCount: 0,
+      emailFetchIssue: null,
+      calendarFetchIssue: null,
       intent: null,
     };
   }
@@ -1383,11 +1460,15 @@ async function prepareGooglePersonalContextForChat(params: {
         inboxHighlights: [],
         calendarEvents: [],
         partialFailures: [failureCode],
+        emailFetchIssue: null,
+        calendarFetchIssue: null,
         authFailureMessage: auth.message,
       }),
       partialFailureCodes: [failureCode],
       emailCount: 0,
       calendarCount: 0,
+      emailFetchIssue: null,
+      calendarFetchIssue: null,
       intent,
     };
   }
@@ -1400,6 +1481,8 @@ async function prepareGooglePersonalContextForChat(params: {
   let inboxHighlights: InboxDigestItem[] = [];
   let calendarEvents: CalendarEventItem[] = [];
   const partialFailures: GoogleDataFailureCode[] = [];
+  let emailFetchIssue: GoogleFetchIssue | null = null;
+  let calendarFetchIssue: GoogleFetchIssue | null = null;
 
   const tasks: Array<Promise<void>> = [];
 
@@ -1427,11 +1510,14 @@ async function prepareGooglePersonalContextForChat(params: {
             unreadOnly: intent.emailUnreadOnly,
           });
         } catch (error) {
+          emailFetchIssue = classifyGoogleFetchIssue(error, "gmail");
           partialFailures.push("google_fetch_failed");
           traceError(params.req, "google.context.email.fetch.failed", error, {
             elapsedMs: elapsedMs(startedAt),
             sinceDays: intent.emailSinceDays,
             unreadOnly: intent.emailUnreadOnly,
+            emailFetchIssueKind: emailFetchIssue?.kind ?? null,
+            emailFetchIssueProjectNumber: emailFetchIssue?.projectNumber ?? null,
           });
         }
       })(),
@@ -1458,9 +1544,13 @@ async function prepareGooglePersonalContextForChat(params: {
             elapsedMs: elapsedMs(startedAt),
           });
         } catch (error) {
+          calendarFetchIssue = classifyGoogleFetchIssue(error, "calendar");
           partialFailures.push("google_fetch_failed");
           traceError(params.req, "google.context.calendar.fetch.failed", error, {
             elapsedMs: elapsedMs(startedAt),
+            calendarFetchIssueKind: calendarFetchIssue?.kind ?? null,
+            calendarFetchIssueProjectNumber:
+              calendarFetchIssue?.projectNumber ?? null,
           });
         }
       })(),
@@ -1477,10 +1567,14 @@ async function prepareGooglePersonalContextForChat(params: {
       inboxHighlights,
       calendarEvents,
       partialFailures,
+      emailFetchIssue,
+      calendarFetchIssue,
     }),
     partialFailureCodes: partialFailures,
     emailCount: inboxHighlights.length,
     calendarCount: calendarEvents.length,
+    emailFetchIssue,
+    calendarFetchIssue,
     intent,
   };
 }
@@ -10429,6 +10523,13 @@ export async function registerRoutes(
           calendarCount: googlePersonalContext.calendarCount,
           emailCount: googlePersonalContext.emailCount,
           partialFailureCodes: googlePersonalContext.partialFailureCodes,
+          emailFetchIssueKind: googlePersonalContext.emailFetchIssue?.kind ?? null,
+          emailFetchIssueProjectNumber:
+            googlePersonalContext.emailFetchIssue?.projectNumber ?? null,
+          calendarFetchIssueKind:
+            googlePersonalContext.calendarFetchIssue?.kind ?? null,
+          calendarFetchIssueProjectNumber:
+            googlePersonalContext.calendarFetchIssue?.projectNumber ?? null,
           guardrailUsed: true,
         });
         trace(req, "google.context.guardrail.reply_used", {
@@ -10436,6 +10537,13 @@ export async function registerRoutes(
           partialFailureCodes: googlePersonalContext.partialFailureCodes,
           emailCount: googlePersonalContext.emailCount,
           calendarCount: googlePersonalContext.calendarCount,
+          emailFetchIssueKind: googlePersonalContext.emailFetchIssue?.kind ?? null,
+          emailFetchIssueProjectNumber:
+            googlePersonalContext.emailFetchIssue?.projectNumber ?? null,
+          calendarFetchIssueKind:
+            googlePersonalContext.calendarFetchIssue?.kind ?? null,
+          calendarFetchIssueProjectNumber:
+            googlePersonalContext.calendarFetchIssue?.projectNumber ?? null,
         });
         return res.status(201).json({
           traceId: getTraceId(req),
@@ -10534,6 +10642,13 @@ export async function registerRoutes(
           calendarCount: googlePersonalContext.calendarCount,
           emailCount: googlePersonalContext.emailCount,
           partialFailureCodes: googlePersonalContext.partialFailureCodes,
+          emailFetchIssueKind: googlePersonalContext.emailFetchIssue?.kind ?? null,
+          emailFetchIssueProjectNumber:
+            googlePersonalContext.emailFetchIssue?.projectNumber ?? null,
+          calendarFetchIssueKind:
+            googlePersonalContext.calendarFetchIssue?.kind ?? null,
+          calendarFetchIssueProjectNumber:
+            googlePersonalContext.calendarFetchIssue?.projectNumber ?? null,
         });
       }
 
@@ -11845,6 +11960,13 @@ export async function registerRoutes(
           calendarCount: googlePersonalContext.calendarCount,
           emailCount: googlePersonalContext.emailCount,
           partialFailureCodes: googlePersonalContext.partialFailureCodes,
+          emailFetchIssueKind: googlePersonalContext.emailFetchIssue?.kind ?? null,
+          emailFetchIssueProjectNumber:
+            googlePersonalContext.emailFetchIssue?.projectNumber ?? null,
+          calendarFetchIssueKind:
+            googlePersonalContext.calendarFetchIssue?.kind ?? null,
+          calendarFetchIssueProjectNumber:
+            googlePersonalContext.calendarFetchIssue?.projectNumber ?? null,
           guardrailUsed: true,
           streaming: true,
         });
@@ -11853,6 +11975,13 @@ export async function registerRoutes(
           partialFailureCodes: googlePersonalContext.partialFailureCodes,
           emailCount: googlePersonalContext.emailCount,
           calendarCount: googlePersonalContext.calendarCount,
+          emailFetchIssueKind: googlePersonalContext.emailFetchIssue?.kind ?? null,
+          emailFetchIssueProjectNumber:
+            googlePersonalContext.emailFetchIssue?.projectNumber ?? null,
+          calendarFetchIssueKind:
+            googlePersonalContext.calendarFetchIssue?.kind ?? null,
+          calendarFetchIssueProjectNumber:
+            googlePersonalContext.calendarFetchIssue?.projectNumber ?? null,
           streaming: true,
         });
         writeEvent({
@@ -12261,6 +12390,13 @@ export async function registerRoutes(
           calendarCount: googlePersonalContext.calendarCount,
           emailCount: googlePersonalContext.emailCount,
           partialFailureCodes: googlePersonalContext.partialFailureCodes,
+          emailFetchIssueKind: googlePersonalContext.emailFetchIssue?.kind ?? null,
+          emailFetchIssueProjectNumber:
+            googlePersonalContext.emailFetchIssue?.projectNumber ?? null,
+          calendarFetchIssueKind:
+            googlePersonalContext.calendarFetchIssue?.kind ?? null,
+          calendarFetchIssueProjectNumber:
+            googlePersonalContext.calendarFetchIssue?.projectNumber ?? null,
         });
       }
 
