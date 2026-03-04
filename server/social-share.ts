@@ -58,6 +58,15 @@ const PRIVACY_SHARE: BlogShareEntry = {
 };
 
 const BLOG_POST_SHARE: Record<string, BlogShareEntry> = {
+  "zeeme-google-context-gcp-field-report-2026": {
+    title:
+      "Field Report IV: Google Personal Context + GCP Reliability Expansion",
+    description:
+      "A detailed engineering report on voice email/calendar retrieval, dynamic OAuth callback routing, diagnostics, and Cloud Run reliability hardening.",
+    imagePath: "/blog/og/zeeme-google-context-gcp-field-report-og.png",
+    imageAlt:
+      "Cover image for ZeeMe Field Report IV on Google personal context and GCP reliability.",
+  },
   "zeeme-platform-thesis-2026": {
     title: "Research Paper I: ZeeMe as a Companion Operating System",
     description:

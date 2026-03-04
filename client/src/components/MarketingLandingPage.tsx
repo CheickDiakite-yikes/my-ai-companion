@@ -256,7 +256,7 @@ const INFO_PAGE_CONTENT: Record<InfoPageId, InfoPageContent> = {
     title: "ZeeMe Research Archive",
     subtitle:
       "Peer-style technical monographs and engineering case studies on companion AI architecture, continuity, memory integrity, and reliability operations.",
-    updatedAt: "February 2026",
+    updatedAt: "March 2026",
     heroIcon: "📝",
     accentWord: "Papers",
     sections: [
@@ -305,6 +305,215 @@ const INFO_PAGE_CONTENT: Record<InfoPageId, InfoPageContent> = {
 };
 
 const BLOG_POSTS: BlogPost[] = [
+  {
+    id: "zeeme-google-context-gcp-field-report-2026",
+    title: "Field Report IV: Google Personal Context + GCP Reliability Expansion",
+    subtitle:
+      "A detailed engineering report on the March 2026 expansion: live voice email/calendar retrieval, dynamic OAuth callback resolution, richer diagnostics, and Cloud Run brief hardening.",
+    excerpt:
+      "This report documents what was added, what broke, how it was fixed, and the controls now used to keep voice + personal-context behavior reliable in production.",
+    publishedAt: "March 4, 2026",
+    readTime: "31 min read",
+    tags: [
+      "Field Report",
+      "Google Context",
+      "Voice Reliability",
+      "GCP",
+      "Incident Forensics",
+    ],
+    blocks: [
+      {
+        type: "image",
+        src: "/blog/zeeme-reliability-cover.svg",
+        alt: "Cover plate for ZeeMe reliability field report.",
+        caption: "Plate IV. Reliability expansion report (Google context + GCP).",
+      },
+      {
+        type: "meta",
+        items: [
+          { label: "Report type", value: "Post-expansion engineering field report" },
+          { label: "Release window", value: "March 2026 (main3 branch progression)" },
+          { label: "Primary additions", value: "Voice email/calendar tools + dynamic OAuth callback + GCP brief hardening" },
+          { label: "Reliability objective", value: "Make personal context retrieval observable, deterministic, and safe across text and voice" },
+          { label: "Evidence", value: "Runtime traces, endpoint contracts, incident replay, and production fixes" },
+        ],
+      },
+      { type: "heading", text: "Executive Abstract" },
+      {
+        type: "paragraph",
+        text: "ZeeMe expanded from text-only personal-context stability into a full text + live voice retrieval model for Gmail and Calendar. The product-level ask was simple: users should be able to ask for unread emails or upcoming events in voice mode and get dependable answers with visible progress. The engineering reality was harder. The team had to close gaps across OAuth callback resolution in dynamic preview hosts, server/client gate alignment, tool-response bridging in live sessions, and memory contamination from stale failure phrasing. The resulting architecture is now trace-first: every stage from intent detection to tool response and spoken follow-up is instrumented, classifiable, and testable.",
+      },
+      { type: "heading", text: "1. Scope of What Shipped" },
+      {
+        type: "table",
+        caption: "Table 1. Expansion scope and runtime impact.",
+        columns: ["Capability", "Implementation surface", "Runtime impact"],
+        rows: [
+          ["Voice email retrieval", "Live tool call -> /api/live/tool-response -> Gmail API", "Users can request unread/recency inbox summaries in live voice"],
+          ["Voice calendar retrieval", "Live tool call -> /api/live/tool-response -> Calendar API", "Users can query today/tomorrow/week schedules during live sessions"],
+          ["Dynamic OAuth callback handling", "/api/integrations/google/connect-url + callback state binding", "Reliable Google connect flow across localhost + preview hosts"],
+          ["Failure-class diagnostics", "classifyGoogleFetchIssue + live.tool.* traces", "Actionable errors (api disabled, access denied, timeout) instead of generic failure"],
+          ["Memory contamination filter", "context builder exclusion for known stale Google-failure phrasing", "Reduced recurrence of false \"Google not connected\" responses"],
+          ["GCP Morning Brief hardening", "Cloud Run gateway + local fallback contracts", "More predictable brief behavior under upstream partial failures"],
+        ],
+      },
+      {
+        type: "list",
+        items: [
+          "Text and voice now share one operational model: tool-verified personal context, never fabricated context.",
+          "Live status UX now uses explicit process labels (searching/grounded/idle) with domain-specific copy like \"Retrieving your emails…\".",
+          "Trace IDs are carried through failure responses so incident triage starts from concrete evidence, not guesswork.",
+        ],
+      },
+      { type: "heading", text: "2. Architecture Delta (Before vs After)" },
+      {
+        type: "ascii",
+        text:
+          "BEFORE (unstable voice context path)\nvoice ask -> model answer (sometimes no tool call)\n        -> weak/no visibility on whether Google fetch executed\n\nAFTER (trace-first deterministic path)\nvoice ask -> intent signal -> model tool call\n        -> /api/live/tool-response\n        -> auth + scope + fetch + classify issue\n        -> functionResponses + webSearchEvents + traceId\n        -> sendToolResponse back to live session\n        -> grounded spoken answer",
+      },
+      {
+        type: "table",
+        caption: "Table 2. Key architectural changes.",
+        columns: ["Surface", "Pre-change risk", "Current contract"],
+        rows: [
+          ["OAuth callback URI", "Host mismatch caused intermittent token exchange failures", "Redirect URI selected deterministically and persisted in OAuth state"],
+          ["Voice tool gating", "Client/server gate drift created confusing behavior", "Server/runtime + token summary are source of truth for voice Google context"],
+          ["Live bridge response dispatch", "Tool results not always returned to model correctly", "Validated `sendToolResponse` path with explicit client diagnostics"],
+          ["Error semantics", "Generic \"couldn't reach Google\" text offered low triage value", "Classified codes + trace anchors (`live.tool.*`)"],
+          ["Memory safety", "Stale assistant failure phrasing could leak into future context", "Known poison patterns filtered out during context assembly"],
+        ],
+      },
+      { type: "heading", text: "3. Incident Classes Encountered and Fixes Applied" },
+      {
+        type: "table",
+        caption: "Table 3. Failures observed in production-style testing and remediation strategy.",
+        columns: ["Observed symptom", "Root cause class", "Fix pattern", "Verification signal"],
+        rows: [
+          ["Voice asked for unread emails but returned generic failure", "Tool execution path was opaque or incomplete", "Added end-to-end live tool traces and explicit webSearchEvents labels", "`live.tool_response.requested` -> `live.tool.emails.success|failed` -> `live.tool_response.generated`"],
+          ["Google connect worked in one env but failed in preview env", "Redirect URI host mismatch during OAuth exchange", "Dynamic callback resolution + state-bound redirect URI", "`google.integration.connect_url.created` + `google.integration.callback.connected`"],
+          ["Session produced stale \"Google not connected\" wording after reconnect", "Prior failure phrasing contaminated memory context", "Message-level contamination filter for known Google failure patterns", "No recurrence of stale failure phrase in context-backed turns"],
+          ["Live function call resolved server-side but not reflected in conversation", "Tool response dispatch bug in live bridge", "Fixed `sendToolResponse` invocation handling and response summary diagnostics", "`live.tool_call.responded` with response summary and traceId"],
+          ["No clear reason for fetch failure", "Undifferentiated error surface", "Failure classification (`*_api_disabled`, `google_access_denied`, `google_timeout`)", "Error code + details in function response and logs"],
+        ],
+      },
+      {
+        type: "callout",
+        title: "Operational lesson",
+        text: "Voice reliability issues felt like model quality issues at first. Most were actually transport, auth, or context-hygiene failures. Trace-first ownership made that distinction explicit and dramatically reduced iteration waste.",
+      },
+      { type: "heading", text: "4. Debuggability Design: What You Should See at Runtime" },
+      {
+        type: "code",
+        language: "text",
+        caption: "Listing 1. Golden trace sequence for voice email retrieval.",
+        code:
+          "client: live.google_context.searching\\nclient: live.tool_call.received\\nclient: live.tool_call.forwarding\\nserver: live.tool_response.requested\\nserver: live.tool.emails.start\\nserver: live.tool.emails.auth_ok\\nserver: live.tool.emails.success\\nserver: live.tool_response.generated\\nclient: live.tool_call.responded\\nclient: web status -> grounded",
+      },
+      {
+        type: "paragraph",
+        text: "This sequence is now the baseline contract for on-call debugging. If a step is missing, the missing boundary is immediately known. For example, seeing intent logs but no tool-call logs points to model tool-call behavior. Seeing client forwarding but no server requested trace points to transport/session issues. Seeing server success but no client responded trace points to live bridge handling.",
+      },
+      {
+        type: "metrics",
+        items: [
+          { label: "Primary reliability gain", value: "Trace completeness", detail: "Each boundary now emits enough signal to isolate failure class quickly." },
+          { label: "Primary UX gain", value: "Visible retrieval progress", detail: "Users now see what Zee is doing while data is being fetched." },
+          { label: "Primary safety gain", value: "Context contamination control", detail: "Known stale Google-failure phrases are excluded from future model context." },
+          { label: "Primary integration gain", value: "Redirect determinism", detail: "OAuth callback host drift is handled explicitly and reproducibly." },
+        ],
+      },
+      { type: "heading", text: "5. GCP Morning Brief Expansion and Interaction with Personal Context" },
+      {
+        type: "paragraph",
+        text: "The Google-context expansion happened alongside Morning Brief gateway hardening in Cloud Run. The architecture intentionally keeps these concerns separable: voice personal-context retrieval and Morning Brief orchestration share observability standards but remain independently gated. This prevents one path from destabilizing the other during rollout.",
+      },
+      {
+        type: "table",
+        caption: "Table 4. GCP expansion controls used during rollout.",
+        columns: ["Control", "Purpose", "Failure containment behavior"],
+        rows: [
+          ["`MORNING_BRIEF_GCP_BASE_URL` gateway path", "Use Cloud Run for news/inbox/compose orchestration", "Falls back to local grounded path on upstream timeout"],
+          ["`ENABLE_MORNING_BRIEF_TEXT_ONLY=true`", "Keep brief path text-first while voice stabilizes", "Prevents coupled live regressions"],
+          ["Structured partial failure codes", "Expose degraded-mode behavior clearly", "Users get transparent status instead of silent degradation"],
+          ["Debug run history endpoint", "Retain forensic chain for brief execution", "Supports replay and postmortem analysis"],
+        ],
+      },
+      { type: "heading", text: "6. Test Strategy and Release Guardrails" },
+      {
+        type: "code",
+        language: "bash",
+        caption: "Listing 2. Practical gate chain used before promotion.",
+        code:
+          "npm run check\\nnpm run test:google-context:smoke\\nnpm run test:google-context:ui\\nnpm run test:local:e2e\\n# plus targeted live trace replay in browser + server logs",
+      },
+      {
+        type: "list",
+        items: [
+          "Run both parser/intent smoke and UI-flow checks; either alone is insufficient.",
+          "Validate OAuth connect-url + callback on the exact host style you deploy (localhost, preview, production).",
+          "Confirm live token config summary for Google personal-context function wiring before blaming downstream tools.",
+          "Treat missing traces as contract violations, not optional telemetry gaps.",
+        ],
+      },
+      { type: "heading", text: "7. Challenges, Tradeoffs, and What Changed in Team Practice" },
+      {
+        type: "list",
+        items: [
+          "Challenge: fast shipping caused hidden assumptions about gate ownership. Fix: make server/runtime + token summary authoritative in docs and debugging.",
+          "Challenge: users interpreted silent wait as failure. Fix: explicit process/status labels in voice retrieval UX.",
+          "Challenge: generic errors slowed triage. Fix: classify failures into issue kinds and include trace IDs everywhere.",
+          "Challenge: legacy context rows can outlive fixes. Fix: add contamination filters and purpose-based exclusions to context assembly.",
+          "Challenge: preview-host OAuth drift. Fix: deterministic redirect selection and state-bound callback persistence.",
+        ],
+      },
+      { type: "heading", text: "8. Reusable Blueprint for Other Companion Teams" },
+      {
+        type: "quote",
+        text: "Do not ship personal-context voice features without a complete trace chain from intent to tool response and back into the live model.",
+      },
+      {
+        type: "list",
+        items: [
+          "Define one source of truth for feature gates (server/runtime) and one source of truth for session wiring (token summary).",
+          "Instrument boundary events with enough detail to classify failures without reproducing locally first.",
+          "Expose process state to users during retrieval so latency is legible.",
+          "Treat stale operational phrases as a memory safety problem and filter them explicitly.",
+          "Keep adjacent feature systems (for example, Morning Brief vs direct email/calendar tools) independently gated during expansion phases.",
+        ],
+      },
+      { type: "heading", text: "References" },
+      {
+        type: "references",
+        items: [
+          {
+            title: "GOOGLE_PERSONAL_CONTEXT_TRACKER",
+            href: "https://github.com/CheickDiakite-yikes/my-ai-companion/blob/main3/docs/GOOGLE_PERSONAL_CONTEXT_TRACKER.md",
+            note: "Rollout tracker for text + voice personal-context behavior and issue classes.",
+          },
+          {
+            title: "MORNING_BRIEF_GCP_ROLLOUT",
+            href: "https://github.com/CheickDiakite-yikes/my-ai-companion/blob/main3/docs/MORNING_BRIEF_GCP_ROLLOUT.md",
+            note: "Cloud Run brief deployment and fallback runbook.",
+          },
+          {
+            title: "GEMINI_INTEGRATION",
+            href: "https://github.com/CheickDiakite-yikes/my-ai-companion/blob/main3/docs/GEMINI_INTEGRATION.md",
+            note: "Live/text endpoint contracts, model/tool integration details, and runtime behaviors.",
+          },
+          {
+            title: "PROJECT_STATE",
+            href: "https://github.com/CheickDiakite-yikes/my-ai-companion/blob/main3/docs/PROJECT_STATE.md",
+            note: "Current architecture status and reliability priorities.",
+          },
+          {
+            title: "SESSION_LOG",
+            href: "https://github.com/CheickDiakite-yikes/my-ai-companion/blob/main3/docs/SESSION_LOG.md",
+            note: "Chronological incident notes and remediation checkpoints.",
+          },
+        ],
+      },
+    ],
+  },
   {
     id: "zeeme-platform-thesis-2026",
     title: "Research Paper I: ZeeMe as a Companion Operating System",

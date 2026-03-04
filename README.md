@@ -41,10 +41,18 @@ ZeeMe is a companion AI experience where users build a continuous relationship w
 - **Share images** in text chat via camera capture or photo library upload
 - **Share live camera** frames during voice sessions for visual context
 - **Run Morning Brief (text mode)** for a concise, grounded digest of top headlines and market context
-- **Query personal Google context** (unread Gmail + upcoming Calendar events) in text mode, with optional voice tool-calling support behind feature gates
+- **Query personal Google context** (unread Gmail + upcoming Calendar events) in both text and live voice via server-authoritative tool-calling with explicit tracing
 - **Personalize Zee** through profile settings, response style presets, and avatar customization
 - **Switch between voice and text** while staying in one stitched conversation thread with shared memory
 - **Customize appearance** with 4 color themes applied across the entire UI
+
+### Recent platform additions (March 2026)
+
+- **Voice email/calendar retrieval is now trace-first**: Live tool calls (`get_user_emails`, `get_calendar_events`) route through `POST /api/live/tool-response` with structured server events (`live.tool.*`, `live.tool_response.*`) and explicit issue classification.
+- **OAuth callback handling is environment-safe**: Google connect flow now resolves callback URI using a deterministic order (`redirectUri` override -> dynamic host callback -> configured env callback) and binds that URI to OAuth state for safe token exchange.
+- **Memory contamination hardening shipped**: Known "Google not connected" assistant fallbacks are filtered from memory context assembly to prevent stale operational phrasing from poisoning subsequent turns.
+- **Voice status UX uses explicit process events**: Voice path emits `webSearchEvents` (`searching`, `grounded`, `idle`) with intent-specific labels (for example, "Retrieving your emails…") so users see retrieval progress, not silent latency.
+- **GCP Morning Brief reliability improved**: Cloud Run gateway remains optional but now participates in a clearer fallback contract (`brief_gcp_upstream_timeout` -> local grounded path with forensic breadcrumbs).
 
 ### Companion persona
 
@@ -197,7 +205,7 @@ Client starts voice call
      -> consume voice + camera seconds quotas
 ```
 
-### Google personal context flow (text + optional voice)
+### Google personal context flow (text + live voice)
 
 ```
 Text query (e.g., "summarize my unread emails from last day")
@@ -217,7 +225,7 @@ Text query (e.g., "summarize my unread emails from last day")
        - emailFetchIssueKind + project number
        - calendarFetchIssueKind + project number
 
-Voice path (optional, feature-gated)
+Voice path (server-gated, token-wired)
   -> POST /api/live/tool-response
   -> enforce mode gates:
        - ENABLE_GOOGLE_PERSONAL_CONTEXT
@@ -412,7 +420,7 @@ All routes are same-origin under `/api/*`. Auth routes are public; all others re
 | Method | Endpoint | Description |
 |---|---|---|
 | `POST` | `/api/live/token` | Mint ephemeral Gemini Live session token |
-| `POST` | `/api/live/tool-response` | Resolve optional Live function calls (Morning Brief and Google personal context are independently feature-gated) |
+| `POST` | `/api/live/tool-response` | Resolve Live function calls (Google personal context + optional Morning Brief tools) with traceable status events |
 | `POST` | `/api/chat/respond` | Non-streaming text reply (legacy) |
 | `POST` | `/api/chat/respond/stream` | Streaming text reply (NDJSON) |
 
@@ -442,7 +450,12 @@ Common error codes from this endpoint:
 - `brief_live_disabled`
 - `google_scope_missing`
 - `google_token_refresh_failed`
+- `google_not_connected`
 - `google_fetch_failed`
+- `gmail_api_disabled`
+- `calendar_api_disabled`
+- `google_access_denied`
+- `google_timeout`
 - `brief_quota_blocked`
 
 ### Integrations and Diagnostics
@@ -559,8 +572,23 @@ Voice-mode execution path:
 - Server gate requires both:
   - `ENABLE_GOOGLE_PERSONAL_CONTEXT=true`
   - `ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE=true`
-- Client behavior is additionally controlled by `VITE_ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE`.
+- Live token contains `configSummary.googlePersonalContextFunctionCallingEnabled`, which is used by the client to decide whether to wire Google personal-context function declarations for the session.
 - If server gate is off, endpoint returns `google_personal_context_voice_disabled` with no partial execution.
+
+Voice tool-resolution lane (runtime view):
+
+```text
+live transcript intent
+  -> model emits functionCall(get_user_emails|get_calendar_events)
+    -> client: /api/live/tool-response
+      -> auth + conversation ownership + feature gate checks
+      -> resolve Google token + required scopes
+      -> fetch Gmail/Calendar
+      -> classify failures (api_disabled/access_denied/timeout)
+      -> return { functionResponses, webSearchEvents, traceId }
+    -> client sendToolResponse() back into Live session
+      -> assistant continues with grounded personal context
+```
 
 Context placement rationale:
 - Prior behavior injected Google context at the start of message history, which could allow stale prior turns to dominate.
@@ -571,6 +599,8 @@ Observability fields for incident triage:
 - `emailFetchIssueProjectNumber`
 - `calendarFetchIssueKind`
 - `calendarFetchIssueProjectNumber`
+- `live.tool.emails.*` / `live.tool.calendar.*` (server trace lifecycle)
+- `live.tool_call.*` / `live.google_context.*` (client debug lifecycle)
 
 ### Morning Brief (text mode first, voice-safe by default)
 
@@ -896,6 +926,28 @@ npm run dev
 
 The app will be available at `http://localhost:5000`.
 
+### Google OAuth local + preview testing
+
+Use this flow when validating Gmail/Calendar integration in local dev and ephemeral preview hosts (for example Replit dev URLs):
+
+1. Set baseline OAuth env values in `.env`:
+   - `GOOGLE_OAUTH_CLIENT_ID`
+   - `GOOGLE_OAUTH_CLIENT_SECRET`
+   - `GOOGLE_OAUTH_REDIRECT_URI` (stable callback you trust)
+2. Start app with `npm run dev`.
+3. Request a connect URL:
+   - `GET /api/integrations/google/connect-url`
+4. Confirm response includes:
+   - `redirectUri`
+   - `redirectSource` (`query_override`, `dynamic_host`, or `configured_env`)
+5. Complete OAuth and verify callback logs:
+   - `google.integration.callback.exchange_attempt`
+   - `google.integration.callback.connected`
+
+Optional (preview host override):
+- Set `VITE_GOOGLE_OAUTH_CONNECT_REDIRECT_URI` to a full callback URL ending with `/api/integrations/google/callback`.
+- This is useful for deterministic testing against a specific preview hostname without changing server default env.
+
 ### Expo wrapper quick start (mobile shell)
 
 ```bash
@@ -1019,12 +1071,13 @@ The selected callback is returned in API response as `redirectUri` + `redirectSo
 |---|---|---|
 | `ENABLE_GOOGLE_PERSONAL_CONTEXT` | `true` | Master flag for Google personal-context features |
 | `ENABLE_GOOGLE_PERSONAL_CONTEXT_TEXT` | `true` | Enable personal-context injection/guardrails in text mode |
-| `ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE` | `false` | Env-file default for staged rollout. If unset entirely, server fallback currently resolves to `true`; set explicitly per environment to avoid ambiguity |
-| `VITE_ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE` | `false` | Client-side voice-path gate (build-time). Must be rebuilt/redeployed after change |
+| `ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE` | `false` | Recommended explicit server runtime gate. Note: code fallback is `true` when unset, so set this value in every environment for deterministic behavior |
+| `VITE_ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE` | `false` | Legacy client diagnostic flag retained for telemetry visibility; does not authorize server fetches or override token/server gates |
 
 Precedence notes:
-- Server endpoint behavior (`/api/live/tool-response`) is controlled only by server env values at runtime.
-- `VITE_*` flags do not alter server authorization or fetch behavior; they only control client feature wiring/UI behavior.
+- Server endpoint behavior (`/api/live/tool-response`) is controlled by server runtime env values.
+- Live session function wiring is controlled by `configSummary.googlePersonalContextFunctionCallingEnabled` returned from `POST /api/live/token`.
+- `VITE_ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE` is not a hard authorization gate and should not be used as a security/control mechanism.
 
 ### Live voice / VAD configuration
 
@@ -1114,7 +1167,6 @@ Voice rollout toggle for UI checks:
 
 ```bash
 ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE=true \
-VITE_ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE=true \
 npm run test:google-context:ui
 ```
 
@@ -1135,7 +1187,6 @@ npm run test:local:e2e
 ENABLE_GOOGLE_PERSONAL_CONTEXT=true \
 ENABLE_GOOGLE_PERSONAL_CONTEXT_TEXT=true \
 ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE=true \
-VITE_ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE=true \
 npm run dev
 ```
 
@@ -1148,6 +1199,8 @@ npm run dev
 - `live.tool.emails.start` / `live.tool.emails.success` (or `.failed`)
 - `live.tool.calendar.start` / `live.tool.calendar.success` (or `.failed`)
 - `live.tool_response.generated`
+- `live.tool_call.received` / `live.tool_call.responded` (client bridge diagnostics)
+- `live.google_context.searching` (intent-detected progress state)
 - If disabled by configuration: `live.tool_response.disabled` with reason `google_personal_context_voice_disabled`
 
 5. Confirm failure routing quality
@@ -1197,15 +1250,16 @@ START_SERVER=0 TEST_HOST=127.0.0.1 TEST_PORT=5599 npm run test:local:e2e
 
 ### Voice personal-context rollout controls
 
-For production parity, configure both server runtime flags and client build-time flags:
+Voice email/calendar behavior is server-authoritative. Configure runtime flags explicitly in each environment:
 
 - Server runtime:
   - `ENABLE_GOOGLE_PERSONAL_CONTEXT=true`
   - `ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE=true`
-- Client build-time:
-  - `VITE_ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE=true`
 
-If you change any `VITE_*` variable, rebuild and redeploy the client bundle. A server restart alone does not apply build-time flag changes.
+Live token responses should confirm:
+- `configSummary.googlePersonalContextFunctionCallingEnabled=true`
+
+If runtime env values change, restart/redeploy the server revision so token generation and `/api/live/tool-response` gate checks use the updated values.
 
 ### Optional Morning Brief gateway (Cloud Run)
 
@@ -1311,7 +1365,7 @@ Design note:
 | Morning Brief blocked with cap during admin testing | Admin/test account not exempted | Check effective user email and cap policy logs (`brief.cap.policy`) | Set `MORNING_BRIEF_CAP_EXEMPT_EMAILS=<admin_email>` and restart |
 | Fetching indicator disappears early | Stream failed and fallback path not fully visible or stale build | Browser console: `chat.stream.failed`, then fallback attempt | Deploy latest client bundle and verify fallback keeps loading state until completion |
 | Zee reports wrong local time/day | Missing/incorrect timezone anchor | `ZEE_CALENDAR_TIMEZONE`, live token build logs | Set timezone (e.g. `America/New_York`), restart server, verify new anchor injection |
-| Voice works but Morning Brief should stay text-only | Voice brief accidentally enabled | Flags in env and client build | Keep `ENABLE_MORNING_BRIEF_TEXT_ONLY=true`, `ENABLE_LIVE_FUNCTION_CALLING_BRIEF=false`, `VITE_ENABLE_MORNING_BRIEF_VOICE_MODE=false` |
+| Voice works but Morning Brief should stay text-only | Voice brief function-calling accidentally enabled | Runtime env flags | Keep `ENABLE_MORNING_BRIEF_TEXT_ONLY=true` and `ENABLE_LIVE_FUNCTION_CALLING_BRIEF=false` |
 
 ### `Failed to generate Live API token` (502)
 
@@ -1354,7 +1408,9 @@ Design note:
 - Verify feature flags:
   - `ENABLE_GOOGLE_PERSONAL_CONTEXT=true`
   - `ENABLE_GOOGLE_PERSONAL_CONTEXT_TEXT=true`
-  - For voice-path testing: `ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE=true` and `VITE_ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE=true`
+  - For voice-path testing: `ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE=true`
+- Verify live token summary:
+  - `POST /api/live/token` response includes `configSummary.googlePersonalContextFunctionCallingEnabled=true`
 - Verify OAuth scope + token setup:
   - `/api/integrations/google/status` returns `connected: true`
   - `GOOGLE_OAUTH_SCOPES` includes both Gmail and Calendar read-only scopes
@@ -1375,18 +1431,41 @@ Design note:
 - Check server gates at runtime:
   - `ENABLE_GOOGLE_PERSONAL_CONTEXT=true`
   - `ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE=true`
-- Check client build gate:
-  - `VITE_ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE=true`
+- Check token wiring:
+  - `POST /api/live/token` returns `configSummary.googlePersonalContextFunctionCallingEnabled=true`
 - Validate server trace:
   - if blocked, you will see `live.tool_response.disabled` with reason `google_personal_context_voice_disabled`
 - Confirm session wiring:
   - Live model must emit `get_user_emails` or `get_calendar_events` function calls
   - client must forward those calls to `POST /api/live/tool-response`
 - Use voice-path trace signatures:
-  - `live.feature_gates` confirms token gate vs build-time gate effective state
+  - `live.feature_gates` confirms token gate effective state
   - `live.google_context.searching` confirms user intent was detected
   - `live.google_context.no_tool_call` means the model completed a turn without calling tools
   - `live.tool_call.received` / `live.tool_call.responded` confirms end-to-end tool dispatch and API return
+
+### Voice email/calendar path runs but debugging feels blind
+
+Use this exact signal chain to isolate missing visibility:
+
+1. **Client intent + nudge**
+   - Expect `live.google_context.searching`
+   - Expect `live.google_context.nudge_sent`
+2. **Client tool bridge**
+   - Expect `live.tool_call.received`
+   - Expect `live.tool_call.forwarding` with endpoint `/api/live/tool-response`
+3. **Server tool execution**
+   - Expect `live.tool_response.requested`
+   - Expect `live.tool.emails.*` and/or `live.tool.calendar.*`
+   - Expect `live.tool_response.generated`
+4. **Client response application**
+   - Expect `live.tool_call.responded`
+   - Expect web status transitions from `searching` -> `grounded`
+
+If the chain breaks:
+- No step 2: model did not emit function calls for the turn (prompting/intent issue).
+- No step 3: browser request failed before server (network/auth/session issue).
+- Step 3 exists but ends with failure: inspect `traceId` from `/api/live/tool-response` response payload and server trace logs for classified fetch/auth code.
 
 ### Web search not triggering or stale current-events answers
 
