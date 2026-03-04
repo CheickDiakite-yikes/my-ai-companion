@@ -324,7 +324,7 @@ const BLOG_POSTS: BlogPost[] = [
     blocks: [
       {
         type: "image",
-        src: "/blog/zeeme-reliability-cover.svg",
+        src: "/blog/og/zeeme-google-context-gcp-field-report-og.png",
         alt: "Cover plate for ZeeMe reliability field report.",
         caption: "Plate IV. Reliability expansion report (Google context + GCP).",
       },
