@@ -926,6 +926,9 @@ npm run dev
 
 The app will be available at `http://localhost:5000`.
 
+> `.env` safety rule: keep every entry as plain `KEY=value` only (no trailing shell commands on the same line).  
+> Example: `DATABASE_URL=postgresql://postgres@127.0.0.1:5432/my_ai_companion_local`
+
 ### Google OAuth local + preview testing
 
 Use this flow when validating Gmail/Calendar integration in local dev and ephemeral preview hosts (for example Replit dev URLs):

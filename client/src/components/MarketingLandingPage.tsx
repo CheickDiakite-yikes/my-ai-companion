@@ -1038,6 +1038,444 @@ const BLOG_POSTS: BlogPost[] = [
       },
     ],
   },
+  {
+    id: "zeeme-continuity-benchmark-paper-v-2026",
+    title: "Research Paper V: Continuity Benchmark",
+    subtitle:
+      "A benchmark framework for measuring companion continuity across voice and text, with external calibration against long-memory research and mainstream assistant constraints.",
+    excerpt:
+      "This paper defines ZeeMe's continuity benchmark, maps it to external memory evaluations, and compares companion-critical weaknesses observed in major assistants.",
+    publishedAt: "March 4, 2026",
+    readTime: "33 min read",
+    tags: [
+      "Research Paper",
+      "Benchmarking",
+      "Voice + Text Continuity",
+      "Companion Reliability",
+      "Competitive Analysis",
+    ],
+    blocks: [
+      {
+        type: "image",
+        src: "/blog/og/zeeme-continuity-benchmark-og.png",
+        alt: "Cover plate for Research Paper V continuity benchmark.",
+        caption: "Plate V. Continuity benchmark and external calibration framework.",
+      },
+      {
+        type: "meta",
+        items: [
+          { label: "Paper type", value: "Benchmark design + competitor gap analysis" },
+          { label: "Primary question", value: "How do we measure companion continuity in ways that reflect real user trust?" },
+          { label: "Test surfaces", value: "Voice-to-text handoff, memory recall, temporal anchoring, and grounded tool retrieval" },
+          { label: "External calibration set", value: "LoCoMo, LongMemEval, Lost in the Middle, vendor docs/release notes" },
+          { label: "Scope boundary", value: "Companion behavior reliability; not a generalized model IQ benchmark" },
+        ],
+      },
+      { type: "heading", text: "Executive Abstract" },
+      {
+        type: "paragraph",
+        text: "Companion quality degrades fastest at transitions: voice to text, long gaps, and retrieval under uncertainty. Research Paper V introduces a continuity benchmark built around those boundaries rather than broad knowledge accuracy alone. The benchmark combines scenario replay, metric scoring, and forensic trace checks. External literature (LoCoMo, LongMemEval, Lost in the Middle) confirms the same structural risk: long-context and multi-session recall remain fragile, including in advanced commercial systems. The result is a practical standard for shipping companion behavior: if continuity is not measurable, it is not reliable.",
+      },
+      { type: "heading", text: "1. Why Existing Benchmarks Are Not Enough for Companions" },
+      {
+        type: "table",
+        caption: "Table 1. Benchmark mismatch between general LLM evaluation and companion reliability needs.",
+        columns: ["Benchmark class", "What it measures well", "Companion gap that remains"],
+        rows: [
+          ["General QA/knowledge", "Single-turn factual correctness", "Does not test relationship continuity across sessions and modes"],
+          ["Tool-use success", "Whether tools execute and return data", "Does not guarantee legible, emotionally coherent transitions"],
+          ["Latency/perf metrics", "Speed and throughput under load", "Misses semantic drift and memory contamination failures"],
+          ["Safety-only checks", "Policy compliance under adversarial prompts", "Does not test normal-day trust erosion from subtle inconsistency"],
+        ],
+      },
+      {
+        type: "quote",
+        text: "Continuity is not one metric. It is the product of memory integrity, transition integrity, temporal integrity, and recovery integrity.",
+      },
+      { type: "heading", text: "2. External Evidence: What Research Already Shows" },
+      {
+        type: "table",
+        caption: "Table 2. External benchmark findings used to calibrate the continuity framework.",
+        columns: ["Source", "Relevant finding", "Implication for companion systems"],
+        rows: [
+          ["LoCoMo (ACL 2024)", "Long conversation memory evaluation remains difficult even for strong models", "Companions need explicit long-horizon memory controls, not naive transcript replay"],
+          ["LongMemEval (ICLR 2025 submission)", "Commercial assistants and long-context LLMs show notable accuracy drops as memory length and distraction rise", "Continuity quality can collapse nonlinearly with context depth"],
+          ["Lost in the Middle (TACL 2024)", "Models often underuse relevant information when it appears mid-context", "Memory assembly must prioritize relevance and recency; raw context size alone is insufficient"],
+        ],
+      },
+      {
+        type: "paragraph",
+        text: "These findings align with production companion incidents: users do not report \"attention index dropped by 30%.\" They report \"you forgot,\" \"you switched tone,\" or \"you contradicted yourself.\" The benchmark therefore translates research risk into user-visible failure classes and contract checks.",
+      },
+      { type: "heading", text: "3. Competitive Baseline: Companion-Critical Weaknesses in Major Assistants" },
+      {
+        type: "table",
+        caption: "Table 3. Publicly documented constraints relevant to companion continuity.",
+        columns: ["Assistant surface", "Documented constraint", "Companion risk"],
+        rows: [
+          ["OpenAI Voice Mode", "Release notes acknowledge rare voice hallucinations (ads/gibberish/background-audio artifacts) still under remediation", "Audio-side anomalies can break trust even when core answer intent is correct"],
+          ["OpenAI Memory", "Memory behavior is configurable and split across saved memories vs referenced chat history with plan/region variability", "Continuity perception can vary by account settings and availability"],
+          ["Gemini Workspace integration", "Cross-app context depends on explicit account linking and admin policy allowances", "Companion behavior can appear inconsistent when integration prerequisites differ by environment"],
+          ["Gemini activity controls", "History/activity settings affect what can be reused or surfaced in later interactions", "Users can unintentionally disable continuity paths while expecting persistent behavior"],
+        ],
+      },
+      {
+        type: "callout",
+        title: "Interpretation guardrail",
+        text: "This table is not a quality ranking. It maps public product constraints to companion failure risk. The same risk classes apply to ZeeMe and are explicitly benchmarked in this paper.",
+      },
+      { type: "heading", text: "4. ZeeMe Continuity Benchmark: Metric Definitions" },
+      {
+        type: "equation",
+        expression: "CBI = 0.35*VTHI + 0.25*MRS + 0.20*TGS + 0.20*RRS",
+        caption: "Eq. 1. Continuity Benchmark Index (CBI) used for release gating.",
+        terms: [
+          { symbol: "VTHI", meaning: "Voice-Text Handoff Integrity: semantic and persona continuity after mode switch" },
+          { symbol: "MRS", meaning: "Memory Recall Stability: correct retrieval of prior user state over delayed turns" },
+          { symbol: "TGS", meaning: "Temporal Grounding Stability: date/time continuity under relative references" },
+          { symbol: "RRS", meaning: "Retrieval Reliability Score: grounded email/calendar response correctness + observability completeness" },
+        ],
+      },
+      {
+        type: "table",
+        caption: "Table 4. Gate thresholds used for candidate release promotion.",
+        columns: ["Metric", "Gate threshold", "Block condition"],
+        rows: [
+          ["VTHI", ">= 0.90", "Any contradiction across voice->text replay in same conversation"],
+          ["MRS", ">= 0.88", "Incorrect recall of explicit user facts in benchmark scenarios"],
+          ["TGS", ">= 0.95", "Wrong day/date mapping for relative-time prompts"],
+          ["RRS", ">= 0.92", "Missing grounded evidence or missing trace chain during retrieval turns"],
+        ],
+      },
+      { type: "heading", text: "5. Scenario Matrix and Failure Classes" },
+      {
+        type: "table",
+        caption: "Table 5. Scenario-driven benchmark matrix.",
+        columns: ["Scenario", "Expected outcome", "Failure class"],
+        rows: [
+          ["Text->voice handoff with prior commitments", "Voice response continues exact context with no reset language", "handoff_drift"],
+          ["Voice->text follow-up after interruption", "Text response resumes unresolved thread cleanly", "mode_fragmentation"],
+          ["Unread email summary request in live voice", "Grounded summary with tool trace completion", "retrieval_opaque_failure"],
+          ["Relative date planning request across midnight boundary", "Stable date interpretation with timezone anchor", "temporal_anchor_miss"],
+          ["Reconnect after transient Google failure", "No stale failure phrase contamination in later turns", "memory_contamination"],
+        ],
+      },
+      {
+        type: "code",
+        language: "text",
+        caption: "Listing 1. Required trace chain for retrieval continuity scenarios.",
+        code:
+          "client: live.google_context.searching\\nclient: live.tool_call.received\\nclient: live.tool_call.forwarding\\nserver: live.tool_response.requested\\nserver: live.tool.emails|calendar.start\\nserver: live.tool.emails|calendar.auth_ok\\nserver: live.tool.emails|calendar.success\\nserver: live.tool_response.generated\\nclient: live.tool_call.responded",
+      },
+      { type: "heading", text: "6. Harness and Execution Model" },
+      {
+        type: "ascii",
+        text:
+          "scenario prompt set\\n  -> deterministic conversation seeds\\n  -> mode transitions (text<->voice)\\n  -> optional tool retrieval turns\\n  -> trace capture + transcript capture\\n  -> scorer (VTHI/MRS/TGS/RRS)\\n  -> release gate decision",
+      },
+      {
+        type: "code",
+        language: "bash",
+        caption: "Listing 2. Practical benchmark execution chain.",
+        code:
+          "npm run check\\nnpm run test:google-context:smoke\\nnpm run test:google-context:ui\\nbash script/google-personal-context-playwright-e2e.sh\\n# replay trace IDs for failed scenarios",
+      },
+      { type: "heading", text: "7. Key Observations from Initial Runs" },
+      {
+        type: "list",
+        items: [
+          "Transition quality regressed first when observability regressed; missing trace boundaries preceded user-visible continuity drift.",
+          "Raw memory length did not improve outcomes by itself; curated relevance and contamination filtering mattered more.",
+          "External benchmark findings on long-context degradation map directly to companion user complaints in production contexts.",
+          "Competitor-style constraints (activity toggles, integration prerequisites, voice-mode limitations) can be modeled as deterministic precondition checks in ZeeMe.",
+        ],
+      },
+      {
+        type: "metrics",
+        items: [
+          { label: "Highest risk boundary", value: "Mode transitions", detail: "Most continuity regressions begin at voice/text handoffs." },
+          { label: "Highest leverage control", value: "Trace-complete retrieval pipeline", detail: "Fast root-cause isolation prevents repeated blind fixes." },
+          { label: "Most fragile external factor", value: "Account/config prerequisites", detail: "Integration and activity settings can silently alter behavior." },
+          { label: "Practical benchmark insight", value: "Continuity > one-shot quality", detail: "Users tolerate occasional style variance, not trust-breaking inconsistency." },
+        ],
+      },
+      { type: "heading", text: "8. Replication Pack for Teams Building Companions" },
+      {
+        type: "list",
+        items: [
+          "Adopt a continuity index with explicit sub-metrics instead of one aggregate pass/fail score.",
+          "Require trace-chain completeness for all benchmark scenarios with retrieval or transition boundaries.",
+          "Benchmark against user-visible failure classes (forgetting, contradiction, stale failure carryover).",
+          "Treat vendor/platform constraints as test preconditions and make them visible in diagnostics.",
+          "Block release when continuity metrics fail even if generic quality metrics remain high.",
+        ],
+      },
+      { type: "heading", text: "References" },
+      {
+        type: "references",
+        items: [
+          {
+            title: "LoCoMo paper (ACL 2024)",
+            href: "https://aclanthology.org/2024.acl-long.747/",
+            note: "Long-term conversational memory benchmark and agent evaluation.",
+          },
+          {
+            title: "LoCoMo benchmark repository",
+            href: "https://github.com/snap-research/locomo",
+            note: "Dataset/task structure and benchmark artifacts.",
+          },
+          {
+            title: "LongMemEval (ICLR 2025 submission)",
+            href: "https://openreview.net/forum?id=LFwz8Rzf7T",
+            note: "Long-context memory and distraction robustness evaluation.",
+          },
+          {
+            title: "Lost in the Middle (TACL 2024)",
+            href: "https://aclanthology.org/2024.tacl-1.9/",
+            note: "Position sensitivity in long-context retrieval behavior.",
+          },
+          {
+            title: "OpenAI Voice Mode FAQ",
+            href: "https://help.openai.com/en/articles/8400625-voice-mode-faq",
+            note: "Voice mode behavior, controls, and operational constraints.",
+          },
+          {
+            title: "OpenAI ChatGPT release notes",
+            href: "https://help.openai.com/en/articles/6825453-chatgpt-release-notes",
+            note: "Publicly documented known limitations and voice updates.",
+          },
+          {
+            title: "OpenAI Memory FAQ",
+            href: "https://help.openai.com/en/articles/8590148-memory-faq",
+            note: "Memory model behavior and availability semantics.",
+          },
+          {
+            title: "Gemini Workspace integration announcement",
+            href: "https://workspaceupdates.googleblog.com/2025/08/use-gemini-in-google-calendar-gmail-docs-drive-and-more.html",
+            note: "Cross-app context capability and rollout constraints.",
+          },
+          {
+            title: "Gemini Apps activity settings help",
+            href: "https://support.google.com/gemini/answer/13594961",
+            note: "History/activity controls and retention implications.",
+          },
+          {
+            title: "Gemini in Workspace apps (Admin help)",
+            href: "https://support.google.com/a/answer/16332595?hl=en-EN",
+            note: "Admin controls affecting feature availability.",
+          },
+        ],
+      },
+    ],
+  },
+  {
+    id: "zeeme-google-data-handling-security-paper-2026",
+    title: "Security Paper: Google Data Handling by Design",
+    subtitle:
+      "A security and privacy architecture paper on how ZeeMe handles Gmail/Calendar context with scoped access, encryption boundaries, observable execution, and safe failure semantics.",
+    excerpt:
+      "This paper explains the end-to-end control model for Google personal context in ZeeMe: OAuth scope minimization, key management, token hygiene, traceability, and policy-by-design controls.",
+    publishedAt: "March 4, 2026",
+    readTime: "35 min read",
+    tags: [
+      "Security Paper",
+      "Google OAuth",
+      "Privacy Engineering",
+      "GCP Operations",
+      "Data Handling",
+    ],
+    blocks: [
+      {
+        type: "image",
+        src: "/blog/og/zeeme-google-data-handling-security-og.png",
+        alt: "Cover plate for ZeeMe Google data handling security paper.",
+        caption: "Security Plate I. Google data handling controls and threat model.",
+      },
+      {
+        type: "meta",
+        items: [
+          { label: "Paper type", value: "Applied security architecture and operations paper" },
+          { label: "Protection scope", value: "OAuth credentials, access tokens, refresh lifecycle, retrieval traces, and user-facing failure states" },
+          { label: "Threat classes", value: "Over-scope access, token misuse, callback drift, opaque failures, data retention ambiguity" },
+          { label: "Control surfaces", value: "Connect URL generation, callback verification, encrypted secret storage, live tool response pipeline" },
+          { label: "Policy anchors", value: "Google API Services User Data Policy + internal least-privilege standards" },
+        ],
+      },
+      { type: "heading", text: "Executive Abstract" },
+      {
+        type: "paragraph",
+        text: "Google-context features (email and calendar) are valuable only when users can trust their boundaries. ZeeMe's model is \"secure by default, observable by default\": request the minimum scopes, keep OAuth callback resolution deterministic across environments, encrypt integration secrets, and emit typed traces at each boundary. This paper documents the control plane in detail, including failure classification and what users should see when something is wrong. The central principle is that privacy and reliability are linked: if operators cannot diagnose failures precisely, teams compensate with broad access or vague messaging, both of which erode trust.",
+      },
+      { type: "heading", text: "1. Data Handling Objectives and Non-Negotiables" },
+      {
+        type: "table",
+        caption: "Table 1. Security objectives for personal-context retrieval.",
+        columns: ["Objective", "Design rule", "Failure consequence if absent"],
+        rows: [
+          ["Least privilege", "Only request read-only Gmail/Calendar scopes required for user asks", "Over-broad blast radius and policy risk"],
+          ["Deterministic auth routing", "Bind callback host/redirect strategy explicitly in state", "Intermittent auth failures and token confusion"],
+          ["Encrypted secret handling", "Never persist OAuth secrets or tokens in plaintext", "Credential exposure risk"],
+          ["Traceable execution", "Emit typed traces from request to response generation", "Opaque errors and slow incident response"],
+          ["Safe degradation", "Return explicit user-safe failure codes, never fabricated data", "Trust loss and unsafe behavior under fault"],
+        ],
+      },
+      {
+        type: "callout",
+        title: "Control philosophy",
+        text: "The safest data is data never fetched unnecessarily. The second safest is data fetched with minimal scope and immediately wrapped in auditable execution context.",
+      },
+      { type: "heading", text: "2. End-to-End Security Architecture" },
+      {
+        type: "ascii",
+        text:
+          "User intent (voice/text)\\n  -> gate + scope check\\n  -> /api/integrations/google/connect-url (state-bound redirect selection)\\n  -> Google OAuth callback exchange\\n  -> encrypted token persistence\\n  -> /api/live/tool-response or chat path retrieval\\n  -> classified success/failure + traceId\\n  -> user response (grounded or explicit degraded mode)",
+      },
+      {
+        type: "table",
+        caption: "Table 2. Boundary ownership and security controls.",
+        columns: ["Boundary", "Primary control", "Audit signal"],
+        rows: [
+          ["Connect URL generation", "Redirect URI source classification + state token issuance", "`google.integration.connect_url.created`"],
+          ["OAuth callback", "State validation + deterministic token exchange", "`google.integration.callback.exchange_attempt` / `connected`"],
+          ["Integration storage", "Encryption key health checks + encrypted payload handling", "Startup key preflight and integration status logs"],
+          ["Live retrieval execution", "Per-tool auth checks + issue classification", "`live.tool.*` traces and issueKind classification"],
+          ["Response synthesis", "Function response grounding + explicit failure surface", "`live.tool_response.generated` with trace references"],
+        ],
+      },
+      { type: "heading", text: "3. Scope and Access Design" },
+      {
+        type: "table",
+        caption: "Table 3. OAuth scope minimization strategy.",
+        columns: ["Scope", "Why requested", "Why this is constrained"],
+        rows: [
+          ["`gmail.readonly`", "Summarize unread/recent inbox messages on explicit user request", "No send/edit/delete capability"],
+          ["`calendar.events.readonly`", "Retrieve upcoming events and schedule context on explicit user request", "No create/update/delete capability"],
+          ["`openid email profile`", "Associate Google identity with ZeeMe user account", "Identity linkage only; no mailbox/calendar write rights"],
+        ],
+      },
+      {
+        type: "paragraph",
+        text: "Scopes are intentionally narrow so that feature growth requires explicit policy decisions. Security review remains tractable because every added scope introduces an explicit product justification and threat-model delta.",
+      },
+      { type: "heading", text: "4. Threat Model and Mitigations" },
+      {
+        type: "table",
+        caption: "Table 4. Core threat classes and mitigation posture.",
+        columns: ["Threat class", "Attack / failure path", "Mitigation"],
+        rows: [
+          ["Callback host drift", "Token exchange fails or resolves on unintended host", "Dynamic callback resolution with state-bound redirect metadata"],
+          ["Token misuse / key misconfig", "Stored integration unusable or decrypt fails", "Encryption key preflight checks + health diagnostics"],
+          ["Silent fetch failure", "Assistant gives vague or misleading response", "Issue classification (`api_disabled`, `access_denied`, `timeout`) + trace IDs"],
+          ["Over-collection pressure", "Feature creep increases data exposure", "Read-only scopes + request-by-intent retrieval path only"],
+          ["Context poisoning from old failures", "Past error phrasing leaks into future interactions", "Purpose-based exclusions + contamination filters in context assembly"],
+        ],
+      },
+      { type: "heading", text: "5. Observability as a Security Control" },
+      {
+        type: "code",
+        language: "text",
+        caption: "Listing 1. Security-relevant trace progression for live email retrieval.",
+        code:
+          "google.integration.connect_url.created\\ngoogle.integration.callback.exchange_attempt\\ngoogle.integration.callback.connected\\nlive.tool_response.requested\\nlive.tool.emails.start\\nlive.tool.emails.auth_ok\\nlive.tool.emails.success | live.tool.emails.failed\\nlive.tool_response.generated",
+      },
+      {
+        type: "paragraph",
+        text: "Typed trace progression reduces both user harm and operator error. It prevents \"guess-driven\" support responses and limits the temptation to broaden access simply to debug unknown failures. Observability therefore acts as a direct privacy control by reducing operational overreach.",
+      },
+      { type: "heading", text: "6. Policy and User-Control Alignment" },
+      {
+        type: "table",
+        caption: "Table 5. Policy anchors mapped to implementation behavior.",
+        columns: ["Policy expectation", "Implementation alignment", "User-visible behavior"],
+        rows: [
+          ["Google API data used only for declared user-facing features", "Retrieval happens only on explicit email/calendar intent paths", "No background autonomous scraping behavior"],
+          ["Clear data controls and account linkage transparency", "Integration status + disconnect flow exposed in profile", "Users can revoke connection and stop future retrievals"],
+          ["Avoid opaque retention/usage assumptions", "Activity and history requirements documented in product and support paths", "Users can reason about why continuity may differ by setting"],
+          ["Explicit safe failure over fabricated certainty", "Classified error codes and degraded-mode responses", "User gets actionable next step instead of false confidence"],
+        ],
+      },
+      {
+        type: "heading",
+        text: "7. Comparison to Common Companion Failure Patterns",
+      },
+      {
+        type: "list",
+        items: [
+          "Pattern: assistant appears confident but has no valid retrieval result. ZeeMe control: explicit tool trace + issue code before synthesis.",
+          "Pattern: environment-specific OAuth breakage in preview hosts. ZeeMe control: deterministic redirect source tracking and state binding.",
+          "Pattern: user toggles history/settings and continuity silently changes. ZeeMe control: surfaced integration/status diagnostics and explicit reconnect guidance.",
+          "Pattern: debugging requires broadening permissions. ZeeMe control: narrow scopes plus richer telemetry instead of privilege expansion.",
+        ],
+      },
+      {
+        type: "metrics",
+        items: [
+          { label: "Most important control", value: "Scope minimization + explicit intent gating", detail: "Prevents unnecessary access and narrows blast radius." },
+          { label: "Most important operations control", value: "Typed trace chain", detail: "Turns ambiguous outages into bounded fix paths." },
+          { label: "Highest trust-risk failure", value: "Fabricated certainty under fetch failure", detail: "Mitigated with strict safe-failure semantics." },
+          { label: "Design principle", value: "Security and continuity are coupled", detail: "Reliable boundaries improve both privacy and companion trust." },
+        ],
+      },
+      { type: "heading", text: "8. Implementation Checklist (Portable to Other Teams)" },
+      {
+        type: "list",
+        items: [
+          "Use read-only scopes first; require explicit review for any write scope introduction.",
+          "Treat OAuth callback host selection as a first-class reliability/security contract.",
+          "Encrypt integration secrets and fail fast when key health is invalid.",
+          "Emit boundary traces for connect, callback, auth, fetch, and synthesis.",
+          "Classify errors into user-actionable issue kinds and expose trace IDs for support.",
+          "Filter stale operational failure language from future context assembly.",
+        ],
+      },
+      { type: "heading", text: "References" },
+      {
+        type: "references",
+        items: [
+          {
+            title: "Google API Services User Data Policy",
+            href: "https://developers.google.com/terms/api-services-user-data-policy",
+            note: "Policy baseline for usage and transfer of Google API data.",
+          },
+          {
+            title: "Google OAuth 2.0 for APIs",
+            href: "https://developers.google.com/identity/protocols/oauth2",
+            note: "OAuth protocol guidance and implementation standards.",
+          },
+          {
+            title: "Gemini in Workspace apps (Admin help)",
+            href: "https://support.google.com/a/answer/16332595?hl=en-EN",
+            note: "Admin controls and feature availability requirements.",
+          },
+          {
+            title: "Gemini Apps activity settings",
+            href: "https://support.google.com/gemini/answer/13594961",
+            note: "History/activity controls and retention context.",
+          },
+          {
+            title: "Google privacy hub: Gemini for Workspace",
+            href: "https://privacy.google.com/businesses/gemini/",
+            note: "Data usage, review, and privacy posture statements.",
+          },
+          {
+            title: "OpenAI ChatGPT release notes",
+            href: "https://help.openai.com/en/articles/6825453-chatgpt-release-notes",
+            note: "Publicly documented voice-mode known limitations and remediation notes.",
+          },
+          {
+            title: "ZeeMe Field Report IV",
+            href: "/blog/zeeme-google-context-gcp-field-report-2026",
+            note: "System-level expansion report and incident remediations.",
+          },
+          {
+            title: "ZeeMe Google Personal Context Tracker",
+            href: "https://github.com/CheickDiakite-yikes/my-ai-companion/blob/main3/docs/GOOGLE_PERSONAL_CONTEXT_TRACKER.md",
+            note: "Operational tracker for integration behavior and fixes.",
+          },
+        ],
+      },
+    ],
+  },
 ];
 function getBlogCoverBlock(post: BlogPost): Extract<BlogPostBlock, { type: "image" }> | null {
   const cover = post.blocks.find((block): block is Extract<BlogPostBlock, { type: "image" }> => block.type === "image");

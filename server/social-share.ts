@@ -58,6 +58,22 @@ const PRIVACY_SHARE: BlogShareEntry = {
 };
 
 const BLOG_POST_SHARE: Record<string, BlogShareEntry> = {
+  "zeeme-google-data-handling-security-paper-2026": {
+    title: "Security Paper: Google Data Handling by Design",
+    description:
+      "A security architecture paper on ZeeMe's Google personal-context controls: OAuth scope minimization, token handling, traceability, and safe failure semantics.",
+    imagePath: "/blog/og/zeeme-google-data-handling-security-og.png",
+    imageAlt:
+      "Cover image for ZeeMe Security Paper on Google data handling by design.",
+  },
+  "zeeme-continuity-benchmark-paper-v-2026": {
+    title: "Research Paper V: Continuity Benchmark",
+    description:
+      "A benchmark framework for companion continuity across voice and text, calibrated against long-memory research and major assistant constraints.",
+    imagePath: "/blog/og/zeeme-continuity-benchmark-og.png",
+    imageAlt:
+      "Cover image for ZeeMe Research Paper V continuity benchmark.",
+  },
   "zeeme-google-context-gcp-field-report-2026": {
     title:
       "Field Report IV: Google Personal Context + GCP Reliability Expansion",
