@@ -598,7 +598,7 @@ const ENABLE_GOOGLE_PERSONAL_CONTEXT_TEXT = parseBooleanFlag(
 );
 const ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE = parseBooleanFlag(
   process.env.ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE,
-  false,
+  true,
 );
 const MORNING_BRIEF_DAILY_CAP = Math.max(
   1,
@@ -1286,7 +1286,8 @@ function renderGooglePersonalContextBlock(params: {
   authFailureMessage?: string | null;
 }): string {
   const lines: string[] = [
-    "[GOOGLE PERSONAL DATA CONTEXT — SOURCE OF TRUTH]",
+    "[GOOGLE PERSONAL DATA CONTEXT — LIVE FETCH RESULTS — THIS IS CURRENT AND OVERRIDES ANY PRIOR CONVERSATION ABOUT GOOGLE ACCESS]",
+    "IMPORTANT: The data below was fetched RIGHT NOW from the user's Google account. Even if prior messages said Google was unreachable, THIS data is fresh and valid. Use it.",
     `timezone: ${params.timeZone}`,
     `requestTime: ${new Date().toISOString()}`,
   ];
@@ -1383,7 +1384,9 @@ function renderGooglePersonalContextBlock(params: {
 
   lines.push(
     "",
-    "assistantInstruction: Use only this Google context for account-specific facts.",
+    "assistantInstruction: CRITICAL — This Google data was just fetched successfully. Summarize and discuss it naturally.",
+    "assistantInstruction: Do NOT say Google is unreachable or unavailable — the data above is live and current.",
+    "assistantInstruction: Use only this Google context for account-specific facts. Do not fabricate additional data.",
     "assistantInstruction: If any section is unavailable, say so clearly and avoid guessing.",
   );
   return lines.join("\\n");
@@ -10572,7 +10575,8 @@ export async function registerRoutes(
         mediaStore,
       });
       if (googlePersonalContext.contextBlock) {
-        modelMessages.unshift({
+        const insertIdx = Math.max(0, modelMessages.length - 1);
+        modelMessages.splice(insertIdx, 0, {
           sender: "assistant",
           text: googlePersonalContext.contextBlock,
           attachments: [],
@@ -12006,7 +12010,8 @@ export async function registerRoutes(
         mediaStore,
       });
       if (googlePersonalContext.contextBlock) {
-        modelMessages.unshift({
+        const insertIdx = Math.max(0, modelMessages.length - 1);
+        modelMessages.splice(insertIdx, 0, {
           sender: "assistant",
           text: googlePersonalContext.contextBlock,
           attachments: [],

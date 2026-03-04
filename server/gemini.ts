@@ -96,7 +96,7 @@ const ENABLE_GOOGLE_PERSONAL_CONTEXT = parseBooleanFlag(
 );
 const ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE = parseBooleanFlag(
   process.env.ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE,
-  false,
+  true,
 );
 const GOOGLE_SEARCH_TOOLS: GoogleSearchTool[] = [{ googleSearch: {} }];
 export const GOOGLE_DATA_FUNCTION_DECLARATIONS: LiveFunctionDeclaration[] = [
