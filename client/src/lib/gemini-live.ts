@@ -1434,6 +1434,29 @@ export class GeminiLiveVoiceSession {
 
     if (normalizedCalls.length === 0) return;
 
+    const callDebugSummary = normalizedCalls.map((call) => {
+      let parsedArgs: unknown = call.args;
+      if (typeof parsedArgs === "string") {
+        try {
+          parsedArgs = JSON.parse(parsedArgs);
+        } catch {
+          parsedArgs = null;
+        }
+      }
+      const argKeys =
+        parsedArgs && typeof parsedArgs === "object" && !Array.isArray(parsedArgs)
+          ? Object.keys(parsedArgs as Record<string, unknown>)
+          : [];
+      return {
+        id: call.id,
+        name: call.name,
+        argKeys,
+      };
+    });
+
+    const hasEmailCall = normalizedCalls.some(
+      (call) => call.name === "get_user_emails" || call.name === "get_inbox_digest",
+    );
     const hasInboxCall = normalizedCalls.some(
       (call) => call.name === "get_inbox_digest" || call.name === "get_user_emails",
     );
@@ -1442,16 +1465,18 @@ export class GeminiLiveVoiceSession {
     );
     this.emitWebSearchStatus(
       "searching",
-      hasCalendarCall
-        ? "Checking your calendar…"
-        : hasInboxCall
-          ? "Checking your inbox…"
-          : "Searching live sources…",
+      hasEmailCall && hasCalendarCall
+        ? "Retrieving your emails and calendar…"
+        : hasCalendarCall
+          ? "Retrieving your calendar…"
+          : hasInboxCall
+            ? "Retrieving your emails…"
+            : "Searching live sources…",
     );
 
     this.debug("live.tool_call.received", {
       functionCount: normalizedCalls.length,
-      names: normalizedCalls.map((call) => call.name),
+      calls: callDebugSummary,
     });
 
     try {
@@ -1470,12 +1495,36 @@ export class GeminiLiveVoiceSession {
       });
 
       if (!response.ok) {
-        throw new Error(
-          `Live tool-response request failed (${response.status})`,
-        );
+        let failureMessage = `Live tool-response request failed (${response.status})`;
+        try {
+          const errorPayload = (await response.json()) as {
+            message?: unknown;
+            traceId?: unknown;
+          };
+          const message =
+            typeof errorPayload.message === "string"
+              ? errorPayload.message
+              : null;
+          const traceId =
+            typeof errorPayload.traceId === "string"
+              ? errorPayload.traceId
+              : null;
+          this.debug("live.tool_call.http_failed", {
+            status: response.status,
+            traceId,
+            message,
+          });
+          if (message) {
+            failureMessage = `${failureMessage}: ${message}`;
+          }
+        } catch {
+          // no-op: preserve base failure message
+        }
+        throw new Error(failureMessage);
       }
 
       const payload = (await response.json()) as {
+        traceId?: unknown;
         functionResponses?: unknown;
         chatDigests?: unknown;
         webSearchEvents?: unknown;
@@ -1484,6 +1533,31 @@ export class GeminiLiveVoiceSession {
       const functionResponses = Array.isArray(payload.functionResponses)
         ? payload.functionResponses
         : [];
+      const functionResponseSummary = functionResponses.map((entry) => {
+        const responseObject =
+          entry && typeof entry === "object"
+            ? (entry as { response?: unknown; name?: unknown; id?: unknown })
+            : null;
+        const errorObject =
+          responseObject?.response &&
+          typeof responseObject.response === "object" &&
+          (responseObject.response as { error?: unknown }).error &&
+          typeof (responseObject.response as { error?: unknown }).error ===
+            "object"
+            ? ((responseObject.response as {
+                error: { code?: unknown; message?: unknown };
+              }).error ?? null)
+            : null;
+        return {
+          id: typeof responseObject?.id === "string" ? responseObject.id : null,
+          name:
+            typeof responseObject?.name === "string" ? responseObject.name : null,
+          status: errorObject ? "error" : "ok",
+          code: typeof errorObject?.code === "string" ? errorObject.code : null,
+          message:
+            typeof errorObject?.message === "string" ? errorObject.message : null,
+        };
+      });
       const sendToolResponse = (
         this.session as Session & {
           sendToolResponse?: (payload: {
@@ -1532,15 +1606,30 @@ export class GeminiLiveVoiceSession {
           this.emitWebSearchStatus(status, label);
         }
       } else {
-        this.emitWebSearchStatus("grounded", "Done.");
+        const hasError = functionResponseSummary.some(
+          (entry) => entry.status === "error",
+        );
+        this.emitWebSearchStatus(
+          "grounded",
+          hasError ? "Completed with issues" : "Context ready",
+        );
       }
 
       this.debug("live.tool_call.responded", {
         functionCount: normalizedCalls.length,
+        traceId: typeof payload.traceId === "string" ? payload.traceId : null,
+        responses: functionResponseSummary,
+        chatDigestCount: Array.isArray(payload.chatDigests)
+          ? payload.chatDigests.length
+          : 0,
+        webSearchEventCount: Array.isArray(payload.webSearchEvents)
+          ? payload.webSearchEvents.length
+          : 0,
       });
     } catch (error) {
       this.debug("live.tool_call.failed", {
         message: error instanceof Error ? error.message : String(error),
+        functionNames: normalizedCalls.map((call) => call.name),
       });
       this.emitWebSearchStatus("idle");
     }

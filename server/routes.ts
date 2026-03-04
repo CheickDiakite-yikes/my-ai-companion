@@ -8659,6 +8659,17 @@ export async function registerRoutes(
         );
         if (!conversation) return;
 
+        trace(req, "live.tool_response.requested", {
+          conversationId: conversation.id,
+          functionCount: parsed.functionCalls.length,
+          functionNames: parsed.functionCalls.map((call) => call.name),
+          morningBriefTextOnly: ENABLE_MORNING_BRIEF_TEXT_ONLY,
+          morningBriefLiveFunctionCalling: ENABLE_LIVE_FUNCTION_CALLING_BRIEF,
+          googlePersonalContextEnabled: ENABLE_GOOGLE_PERSONAL_CONTEXT,
+          googlePersonalContextVoiceEnabled: ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE,
+          elapsedMs: elapsedMs(startedAt),
+        });
+
         const functionResponses: Array<{
           id: string;
           name: string;
@@ -8693,6 +8704,8 @@ export async function registerRoutes(
             reason: ENABLE_MORNING_BRIEF_TEXT_ONLY
               ? "morning_brief_text_only"
               : "live_function_calling_disabled",
+            morningBriefTextOnly: ENABLE_MORNING_BRIEF_TEXT_ONLY,
+            morningBriefLiveFunctionCalling: ENABLE_LIVE_FUNCTION_CALLING_BRIEF,
             elapsedMs: elapsedMs(startedAt),
           });
           const functionResponses = parsed.functionCalls.map((functionCall) => ({
@@ -8726,6 +8739,8 @@ export async function registerRoutes(
           trace(req, "live.tool_response.disabled", {
             conversationId: conversation.id,
             reason: "google_personal_context_voice_disabled",
+            googlePersonalContextEnabled: ENABLE_GOOGLE_PERSONAL_CONTEXT,
+            googlePersonalContextVoiceEnabled: ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE,
             elapsedMs: elapsedMs(startedAt),
           });
           const functionResponses = parsed.functionCalls.map((functionCall) => ({
@@ -8749,6 +8764,12 @@ export async function registerRoutes(
 
         for (const functionCall of parsed.functionCalls) {
           const args = parseFunctionCallArgs(functionCall.args);
+          trace(req, "live.tool.call.received", {
+            conversationId: conversation.id,
+            functionId: functionCall.id,
+            functionName: functionCall.name,
+            argKeys: Object.keys(args),
+          });
           if (functionCall.name === "get_morning_brief") {
             webSearchEvents.push({
               status: "searching",
@@ -8910,7 +8931,7 @@ export async function registerRoutes(
           if (functionCall.name === "get_user_emails") {
             webSearchEvents.push({
               status: "searching",
-              label: "Checking your inbox…",
+              label: "Retrieving your emails…",
             });
             const maxThreads =
               typeof args.maxThreads === "number" && Number.isFinite(args.maxThreads)
@@ -8953,12 +8974,16 @@ export async function registerRoutes(
               });
               webSearchEvents.push({
                 status: "grounded",
-                label: "Inbox unavailable",
+                label:
+                  auth.code === "google_scope_missing"
+                    ? "Reconnect Google permissions"
+                    : "Inbox unavailable",
               });
               trace(req, "live.tool.emails.failed", {
                 conversationId: conversation.id,
                 stage: "auth",
                 code: auth.code,
+                requiredScope: GOOGLE_GMAIL_READONLY_SCOPE,
               });
               continue;
             }
@@ -8991,25 +9016,53 @@ export async function registerRoutes(
                 unreadOnly,
               });
             } catch (error) {
+              const fetchIssue = classifyGoogleFetchIssue(error, "gmail");
+              const errorCode = fetchIssue?.kind ?? "google_fetch_failed";
+              const message =
+                fetchIssue?.kind === "gmail_api_disabled"
+                  ? `Gmail API is disabled${fetchIssue.projectNumber ? ` in Google Cloud project ${fetchIssue.projectNumber}` : ""}. Enable it and retry in about a minute.`
+                  : fetchIssue?.kind === "google_access_denied"
+                    ? "Google email access was denied. Reconnect Google in Profile settings and retry."
+                    : fetchIssue?.kind === "google_timeout"
+                      ? "Google email retrieval timed out. Please retry shortly."
+                      : "Could not retrieve email data from Google right now. Please try again shortly.";
               functionResponses.push({
                 id: functionCall.id,
                 name: functionCall.name,
                 response: {
                   error: {
-                    code: "google_fetch_failed",
-                    message:
-                      "Could not retrieve email data from Google right now. Please try again shortly.",
+                    code: errorCode,
+                    message,
+                    details: fetchIssue
+                      ? {
+                          issueKind: fetchIssue.kind,
+                          projectNumber: fetchIssue.projectNumber,
+                          httpStatus: fetchIssue.httpStatus,
+                        }
+                      : undefined,
                   },
                 },
               });
               webSearchEvents.push({
                 status: "grounded",
-                label: "Inbox unavailable",
+                label:
+                  fetchIssue?.kind === "gmail_api_disabled"
+                    ? "Gmail API disabled"
+                    : fetchIssue?.kind === "google_access_denied"
+                      ? "Google access denied"
+                      : fetchIssue?.kind === "google_timeout"
+                        ? "Google timeout"
+                        : "Inbox unavailable",
               });
               traceError(req, "live.tool.emails.failed", error, {
                 conversationId: conversation.id,
                 stage: "fetch",
                 unreadOnly,
+                maxThreads,
+                sinceDays,
+                fetchIssueKind: fetchIssue?.kind ?? null,
+                fetchIssueProjectNumber: fetchIssue?.projectNumber ?? null,
+                fetchIssueHttpStatus: fetchIssue?.httpStatus ?? null,
               });
             }
             continue;
@@ -9018,7 +9071,7 @@ export async function registerRoutes(
           if (functionCall.name === "get_calendar_events") {
             webSearchEvents.push({
               status: "searching",
-              label: "Checking your calendar…",
+              label: "Retrieving your calendar…",
             });
             const timeRangeRaw =
               typeof args.timeRange === "string" ? args.timeRange : "today";
@@ -9069,12 +9122,16 @@ export async function registerRoutes(
               });
               webSearchEvents.push({
                 status: "grounded",
-                label: "Calendar unavailable",
+                label:
+                  auth.code === "google_scope_missing"
+                    ? "Reconnect Google permissions"
+                    : "Calendar unavailable",
               });
               trace(req, "live.tool.calendar.failed", {
                 conversationId: conversation.id,
                 stage: "auth",
                 code: auth.code,
+                requiredScope: GOOGLE_CALENDAR_EVENTS_READONLY_SCOPE,
               });
               continue;
             }
@@ -9108,24 +9165,53 @@ export async function registerRoutes(
                 eventCount: events.length,
               });
             } catch (error) {
+              const fetchIssue = classifyGoogleFetchIssue(error, "calendar");
+              const errorCode = fetchIssue?.kind ?? "google_fetch_failed";
+              const message =
+                fetchIssue?.kind === "calendar_api_disabled"
+                  ? `Google Calendar API is disabled${fetchIssue.projectNumber ? ` in Google Cloud project ${fetchIssue.projectNumber}` : ""}. Enable it and retry in about a minute.`
+                  : fetchIssue?.kind === "google_access_denied"
+                    ? "Google calendar access was denied. Reconnect Google in Profile settings and retry."
+                    : fetchIssue?.kind === "google_timeout"
+                      ? "Google calendar retrieval timed out. Please retry shortly."
+                      : "Could not retrieve calendar data from Google right now. Please try again shortly.";
               functionResponses.push({
                 id: functionCall.id,
                 name: functionCall.name,
                 response: {
                   error: {
-                    code: "google_fetch_failed",
-                    message:
-                      "Could not retrieve calendar data from Google right now. Please try again shortly.",
+                    code: errorCode,
+                    message,
+                    details: fetchIssue
+                      ? {
+                          issueKind: fetchIssue.kind,
+                          projectNumber: fetchIssue.projectNumber,
+                          httpStatus: fetchIssue.httpStatus,
+                        }
+                      : undefined,
                   },
                 },
               });
               webSearchEvents.push({
                 status: "grounded",
-                label: "Calendar unavailable",
+                label:
+                  fetchIssue?.kind === "calendar_api_disabled"
+                    ? "Calendar API disabled"
+                    : fetchIssue?.kind === "google_access_denied"
+                      ? "Google access denied"
+                      : fetchIssue?.kind === "google_timeout"
+                        ? "Google timeout"
+                        : "Calendar unavailable",
               });
               traceError(req, "live.tool.calendar.failed", error, {
                 conversationId: conversation.id,
                 stage: "fetch",
+                maxEvents,
+                timeRange,
+                timezone,
+                fetchIssueKind: fetchIssue?.kind ?? null,
+                fetchIssueProjectNumber: fetchIssue?.projectNumber ?? null,
+                fetchIssueHttpStatus: fetchIssue?.httpStatus ?? null,
               });
             }
             continue;
@@ -9148,6 +9234,24 @@ export async function registerRoutes(
           functionCount: parsed.functionCalls.length,
           responseCount: functionResponses.length,
           digestCount: chatDigests.length,
+          functionOutcomeSummary: functionResponses.map((entry) => {
+            const error =
+              entry.response &&
+              typeof entry.response === "object" &&
+              "error" in entry.response &&
+              entry.response.error &&
+              typeof entry.response.error === "object"
+                ? (entry.response.error as { code?: unknown })
+                : null;
+            return {
+              name: entry.name,
+              id: entry.id,
+              status: error ? "error" : "ok",
+              code: typeof error?.code === "string" ? error.code : null,
+            };
+          }),
+          webSearchEventCount: webSearchEvents.length,
+          webSearchStatuses: webSearchEvents.map((event) => event.status),
           elapsedMs: elapsedMs(startedAt),
         });
 
