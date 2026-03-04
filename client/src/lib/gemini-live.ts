@@ -1793,18 +1793,17 @@ export class GeminiLiveVoiceSession {
             typeof errorObject?.message === "string" ? errorObject.message : null,
         };
       });
-      const sendToolResponse = (
-        this.session as Session & {
+      if (functionResponses.length > 0 && this.session) {
+        const sessionWithTools = this.session as Session & {
           sendToolResponse?: (payload: {
             functionResponses: Array<Record<string, unknown>>;
           }) => void;
+        };
+        if (typeof sessionWithTools.sendToolResponse === "function") {
+          sessionWithTools.sendToolResponse({
+            functionResponses: functionResponses as Array<Record<string, unknown>>,
+          });
         }
-      ).sendToolResponse;
-
-      if (functionResponses.length > 0 && sendToolResponse) {
-        sendToolResponse({
-          functionResponses: functionResponses as Array<Record<string, unknown>>,
-        });
       }
 
       if (Array.isArray(payload.chatDigests)) {
