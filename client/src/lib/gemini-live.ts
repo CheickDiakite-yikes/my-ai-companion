@@ -670,16 +670,6 @@ export class GeminiLiveVoiceSession {
       effectiveLiveFunctionCallingEnabled: this.liveFunctionCallingEnabled,
     });
     if (
-      tokenGooglePersonalContextFunctionCallingEnabled &&
-      !googlePersonalContextFunctionCallingEnabled
-    ) {
-      this.debug("live.feature_gate.blocked", {
-        feature: "google_personal_context_voice",
-        reason: "client_flag_disabled",
-        envVar: "VITE_ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE",
-      });
-    }
-    if (
       tokenMorningBriefFunctionCallingEnabled &&
       !morningBriefFunctionCallingEnabled
     ) {
@@ -732,6 +722,18 @@ export class GeminiLiveVoiceSession {
             googleSearchGroundingEnabled,
             morningBriefFunctionCallingEnabled,
             googlePersonalContextFunctionCallingEnabled,
+            toolGroupCount: (() => {
+              let count = 0;
+              if (googleSearchGroundingEnabled) count++;
+              if (morningBriefFunctionCallingEnabled) count++;
+              if (googlePersonalContextFunctionCallingEnabled) count++;
+              return count;
+            })(),
+            personalContextTools: googlePersonalContextFunctionCallingEnabled
+              ? LIVE_GOOGLE_PERSONAL_CONTEXT_FUNCTION_DECLARATIONS.map(
+                  (d) => d.name,
+                )
+              : [],
           });
         },
         onmessage: (message) => {
@@ -1379,6 +1381,15 @@ export class GeminiLiveVoiceSession {
           liveGooglePersonalContextFunctionCallingEnabled:
             this.liveGooglePersonalContextFunctionCallingEnabled,
           liveFunctionCallingEnabled: this.liveFunctionCallingEnabled,
+          personalContextNudgeSentThisTurn:
+            this.personalContextNudgeSentThisTurn,
+          hint: !this.liveGooglePersonalContextFunctionCallingEnabled
+            ? "tools_not_registered_in_session"
+            : !this.liveFunctionCallingEnabled
+              ? "function_calling_disabled"
+              : this.personalContextNudgeSentThisTurn
+                ? "model_ignored_nudge_and_tools"
+                : "model_did_not_use_available_tools",
         });
         this.emitWebSearchStatus("idle");
       }
@@ -1489,6 +1500,7 @@ export class GeminiLiveVoiceSession {
       this.debug("live.google_context.searching", {
         textLength: text.length,
         intent: personalContextIntent,
+        detectedText: text.slice(0, 120),
       });
     }
 
@@ -1511,6 +1523,10 @@ export class GeminiLiveVoiceSession {
       this.debug("live.google_context.intent_blocked", {
         intent: personalContextIntent,
         reason: "google_personal_context_function_calling_disabled",
+        detectedText: text.slice(0, 120),
+        liveGooglePersonalContextFunctionCallingEnabled:
+          this.liveGooglePersonalContextFunctionCallingEnabled,
+        liveFunctionCallingEnabled: this.liveFunctionCallingEnabled,
       });
     }
 
@@ -1685,12 +1701,20 @@ export class GeminiLiveVoiceSession {
             : "Searching live sources…",
     );
 
+    const toolCallStartedAt = Date.now();
     this.debug("live.tool_call.received", {
       functionCount: normalizedCalls.length,
       calls: callDebugSummary,
     });
 
     try {
+      this.debug("live.tool_call.forwarding", {
+        endpoint: "/api/live/tool-response",
+        conversationId: this.conversationId,
+        functionNames: normalizedCalls.map((c) => c.name),
+        hasEmailCall,
+        hasCalendarCall,
+      });
       const response = await fetch("/api/live/tool-response", {
         method: "POST",
         credentials: "include",
@@ -1836,11 +1860,13 @@ export class GeminiLiveVoiceSession {
         webSearchEventCount: Array.isArray(payload.webSearchEvents)
           ? payload.webSearchEvents.length
           : 0,
+        elapsedMs: Date.now() - toolCallStartedAt,
       });
     } catch (error) {
       this.debug("live.tool_call.failed", {
         message: error instanceof Error ? error.message : String(error),
         functionNames: normalizedCalls.map((call) => call.name),
+        elapsedMs: Date.now() - toolCallStartedAt,
       });
       this.emitWebSearchStatus("idle");
     }

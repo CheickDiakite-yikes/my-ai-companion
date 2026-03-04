@@ -9065,6 +9065,7 @@ export async function registerRoutes(
           }
 
           if (functionCall.name === "get_user_emails") {
+            const emailToolStartedAt = Date.now();
             webSearchEvents.push({
               status: "searching",
               label: "Retrieving your emails…",
@@ -9081,6 +9082,7 @@ export async function registerRoutes(
 
             trace(req, "live.tool.emails.start", {
               conversationId: conversation.id,
+              userId: req.session.userId,
               maxThreads,
               sinceDays,
               unreadOnly,
@@ -9115,14 +9117,25 @@ export async function registerRoutes(
                     ? "Reconnect Google permissions"
                     : "Inbox unavailable",
               });
-              trace(req, "live.tool.emails.failed", {
+              trace(req, "live.tool.emails.auth_failed", {
                 conversationId: conversation.id,
+                userId: req.session.userId,
                 stage: "auth",
                 code: auth.code,
+                message: auth.message,
+                missingScopes: auth.code === "google_scope_missing" ? (auth as any).missingScopes : undefined,
                 requiredScope: GOOGLE_GMAIL_READONLY_SCOPE,
+                elapsedMs: elapsedMs(emailToolStartedAt),
               });
               continue;
             }
+
+            trace(req, "live.tool.emails.auth_ok", {
+              conversationId: conversation.id,
+              email: auth.email,
+              wasRefreshed: auth.wasRefreshed,
+              elapsedMs: elapsedMs(emailToolStartedAt),
+            });
 
             try {
               const inboxHighlights = await fetchGmailInboxDigest({
@@ -9150,6 +9163,7 @@ export async function registerRoutes(
                 conversationId: conversation.id,
                 emailCount: inboxHighlights.length,
                 unreadOnly,
+                elapsedMs: elapsedMs(emailToolStartedAt),
               });
             } catch (error) {
               const fetchIssue = classifyGoogleFetchIssue(error, "gmail");
@@ -9199,12 +9213,14 @@ export async function registerRoutes(
                 fetchIssueKind: fetchIssue?.kind ?? null,
                 fetchIssueProjectNumber: fetchIssue?.projectNumber ?? null,
                 fetchIssueHttpStatus: fetchIssue?.httpStatus ?? null,
+                elapsedMs: elapsedMs(emailToolStartedAt),
               });
             }
             continue;
           }
 
           if (functionCall.name === "get_calendar_events") {
+            const calendarToolStartedAt = Date.now();
             webSearchEvents.push({
               status: "searching",
               label: "Retrieving your calendar…",
@@ -9229,6 +9245,7 @@ export async function registerRoutes(
 
             trace(req, "live.tool.calendar.start", {
               conversationId: conversation.id,
+              userId: req.session.userId,
               timeRange,
               timezone,
               maxEvents,
@@ -9263,14 +9280,25 @@ export async function registerRoutes(
                     ? "Reconnect Google permissions"
                     : "Calendar unavailable",
               });
-              trace(req, "live.tool.calendar.failed", {
+              trace(req, "live.tool.calendar.auth_failed", {
                 conversationId: conversation.id,
+                userId: req.session.userId,
                 stage: "auth",
                 code: auth.code,
+                message: auth.message,
+                missingScopes: auth.code === "google_scope_missing" ? (auth as any).missingScopes : undefined,
                 requiredScope: GOOGLE_CALENDAR_EVENTS_READONLY_SCOPE,
+                elapsedMs: elapsedMs(calendarToolStartedAt),
               });
               continue;
             }
+
+            trace(req, "live.tool.calendar.auth_ok", {
+              conversationId: conversation.id,
+              email: auth.email,
+              wasRefreshed: auth.wasRefreshed,
+              elapsedMs: elapsedMs(calendarToolStartedAt),
+            });
 
             try {
               const events = await fetchGoogleCalendarEvents({
@@ -9299,6 +9327,7 @@ export async function registerRoutes(
               trace(req, "live.tool.calendar.success", {
                 conversationId: conversation.id,
                 eventCount: events.length,
+                elapsedMs: elapsedMs(calendarToolStartedAt),
               });
             } catch (error) {
               const fetchIssue = classifyGoogleFetchIssue(error, "calendar");
@@ -9348,6 +9377,7 @@ export async function registerRoutes(
                 fetchIssueKind: fetchIssue?.kind ?? null,
                 fetchIssueProjectNumber: fetchIssue?.projectNumber ?? null,
                 fetchIssueHttpStatus: fetchIssue?.httpStatus ?? null,
+                elapsedMs: elapsedMs(calendarToolStartedAt),
               });
             }
             continue;
