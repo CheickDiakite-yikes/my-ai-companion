@@ -80,56 +80,50 @@ When the master gate is `false` (current default), all agentic routing — build
 ### High-level system map
 
 ```
-                                  +------------------------------+
-                                  | Gemini APIs                  |
-                                  |------------------------------|
-                                  | Text: gemini-3-flash-preview |
-                                  | Live: gemini-2.5-flash-      |
-                                  | native-audio-preview-12-2025 |
-                                  +---------------+--------------+
-                                                  ^
-                                                  |
-                                     generate / realtime WS
-                                                  |
-+--------------------+        HTTP/JSON + NDJSON +-----------------------------+
-| React + Vite SPA   | <-----------------------> | Express API (single server) |
-| (mobile-first UI)  |                           | /api/* routes               |
-|                    |                           | auth + quota + media + AI   |
-+---------+----------+                           +--------+----------+---------+
-          |                                               |          |
-          | local mic/cam capture                         |          | optional text-only brief path
-          v                                               |          v
-+---------------------------+                             |  +------------------------------+
-| Browser Media APIs        |                             |  | Cloud Run Morning Brief      |
-| getUserMedia, AudioContext |                             |  | gateway (/v1/brief/*, /healthz)|
-| canvas video frame capture |                             |  +---------------+--------------+
-+---------------------------+                             |                  |
-                                                          |                  | grounded fetch + compose
-                                                          |                  v
-                                                          |        +--------------------------+
-                                                          |        | Google Search grounding  |
-                                                          |        | (+ optional Gmail read)  |
-                                                          |        +--------------------------+
-                                                          |
-                                                          | Drizzle ORM
-                                                          v
-                                                +--------------------------+
-                                                | PostgreSQL               |
-                                                | users, sessions,         |
-                                                | conversations, messages, |
-                                                | attachments, profiles,   |
-                                                | preferences, voice_logs, |
-                                                | usage_events, memory     |
-                                                +--------------------------+
-                                                          |
-                                                          | binary object refs
-                                                          v
-                                                +--------------------------+
-                                                | Media Store              |
-                                                | Replit Object Storage    |
-                                                | (or local /tmp fallback) |
-                                                +--------------------------+
++-------------------------------------+             +--------------------------------------+
+| Browser App (React + Vite SPA)      |             | Google APIs                          |
+|-------------------------------------|             |--------------------------------------|
+| Text chat UI + stream renderer      |             | Gmail API (readonly)                 |
+| Live voice/camera UI + Live WS      |             | Calendar API (events.readonly)       |
+| Google connect + status surfaces    |             | Search grounding                      |
++----------------+--------------------+             +------------------+-------------------+
+                 |                                                       ^
+                 | HTTP/NDJSON/JSON                                      | OAuth token + API calls
+                 v                                                       |
++----------------+-------------------------------------------------------+------------------+
+| Express API (single origin server)                                                        |
+|-------------------------------------------------------------------------------------------|
+| auth/session  quota  memory context builder  chat orchestrator  live token mint          |
+| google intent detect + context injection  live tool-response executor  forensic tracing   |
++----------------------+----------------------------+--------------------+------------------+
+                       |                            |                    |
+                       | Drizzle ORM                | signed media URLs  | @google/genai
+                       v                            v                    v
+            +----------+---------------+   +--------+---------------+   +-------------------------------+
+            | PostgreSQL               |   | Media Store            |   | Gemini API                    |
+            | users/sessions           |   | Replit Object Storage  |   | text generateContent          |
+            | conversations/messages   |   | local /tmp fallback    |   | live token + realtime WS      |
+            | preferences/voice/memory |   +------------------------+   +-------------------------------+
+            | quota + integrations     |
+            +--------------------------+
+                       |
+                       | optional brief/news pipeline
+                       v
+            +-------------------------------+
+            | Cloud Run Morning Brief       |
+            | /v1/brief/news|inbox|compose  |
+            +-------------------------------+
 ```
+
+### Core request planes
+
+| Plane | Primary Endpoint(s) | External Dependencies | Persisted State | Key Trace Anchors |
+|---|---|---|---|---|
+| Text chat | `POST /api/chat/respond/stream` | Gemini text model (+ optional Google Search grounding) | user + assistant messages, usage events | `chat.stream.*`, `google.context.*` |
+| Live session bootstrap | `POST /api/live/token` | Gemini Live token API | usage prechecks, live memory build metadata | `live.token.*` |
+| Live function resolution | `POST /api/live/tool-response` | Gmail/Calendar APIs, brief gateway, optional local brief fallback | none directly (function responses are ephemeral) | `live.tool.*`, `live.tool_response.*` |
+| Google OAuth lifecycle | `GET /api/integrations/google/connect-url`, `GET /api/integrations/google/callback`, `GET /api/integrations/google/status` | Google OAuth endpoints | encrypted integration token row (`google_integrations`) | `google.integration.*` |
+| Morning Brief orchestration | `POST /api/chat/respond*` + optional brief gateway calls | Cloud Run Brief gateway, Google Search grounding | brief cache entries + debug run history | `brief.*`, `google.context.*` |
 
 ### Runtime topology
 
@@ -187,6 +181,16 @@ Client starts voice call
   -> mic PCM stream -> sendRealtimeInput(audio)
   -> optional camera frames -> sendRealtimeInput(video) @ ~1 FPS
   -> transcript-based search-intent detector can send grounding nudge
+  -> model may emit function calls:
+       - get_user_emails / get_calendar_events
+       - (optional) get_morning_brief / get_inbox_digest
+  -> client forwards pending function calls to POST /api/live/tool-response
+  -> server resolves tool calls (Google OAuth + fetch + guardrails)
+  -> server returns:
+       - functionResponses[]
+       - chatDigests[] (optional human-readable digest)
+       - webSearchEvents[] (searching/grounded/idle labels)
+  -> client returns functionResponses back into Live session
   -> model audio playback + transcript capture
   -> transcript segments persisted to shared messages table
   -> POST /api/voice-sessions on end
@@ -201,17 +205,26 @@ Text query (e.g., "summarize my unread emails from last day")
   -> detectGooglePersonalContextIntent
   -> resolve Google OAuth token + required scopes
   -> fetch Gmail digest and/or Calendar events
-  -> inject [GOOGLE PERSONAL DATA CONTEXT — SOURCE OF TRUTH] into model context
+  -> build [GOOGLE PERSONAL DATA CONTEXT — LIVE FETCH RESULTS]
+  -> inject context immediately before current user prompt
+       (splice modelMessages[length-1, 0, contextBlock])
   -> if fetch fails, classify issue:
        - gmail_api_disabled / calendar_api_disabled
        - google_access_denied
        - google_timeout
   -> return targeted guardrail reply instead of generic fallback
+  -> trace completion with:
+       - emailFetchIssueKind + project number
+       - calendarFetchIssueKind + project number
 
 Voice path (optional, feature-gated)
   -> POST /api/live/tool-response
-  -> same token/scope resolution + fetch logic
-  -> tool response returned to active live session
+  -> enforce mode gates:
+       - ENABLE_GOOGLE_PERSONAL_CONTEXT
+       - ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE
+  -> resolve auth + scoped token per function call
+  -> return functionResponses[] to active live session
+  -> emit webSearchEvents + trace diagnostics for each tool leg
 ```
 
 ---
@@ -403,6 +416,35 @@ All routes are same-origin under `/api/*`. Auth routes are public; all others re
 | `POST` | `/api/chat/respond` | Non-streaming text reply (legacy) |
 | `POST` | `/api/chat/respond/stream` | Streaming text reply (NDJSON) |
 
+### Live tool-response contract (`/api/live/tool-response`)
+
+Request body (high-level):
+- `conversationId`: owned conversation id
+- `clientTimeZone`: optional IANA timezone
+- `functionCalls[]`:
+  - `id`
+  - `name`
+  - `args` (JSON string)
+
+Supported function names:
+- `get_user_emails`
+- `get_calendar_events`
+- `get_morning_brief`
+- `get_inbox_digest`
+
+Response body (high-level):
+- `functionResponses[]`: one entry per function call id/name with either `result` or `error`
+- `chatDigests[]`: optional assistant-safe digest text blocks for UI
+- `webSearchEvents[]`: status telemetry used by client pills (`searching`, `grounded`, `idle`)
+
+Common error codes from this endpoint:
+- `google_personal_context_voice_disabled`
+- `brief_live_disabled`
+- `google_scope_missing`
+- `google_token_refresh_failed`
+- `google_fetch_failed`
+- `brief_quota_blocked`
+
 ### Integrations and Diagnostics
 
 | Method | Endpoint | Description |
@@ -502,8 +544,9 @@ Text-mode execution path:
 1. Detect intent from the latest user prompt.
 2. Resolve Google OAuth token with required scopes.
 3. Fetch Gmail digest and/or Calendar events.
-4. Inject a structured context block into model input.
-5. On failure, return targeted guardrail messaging from classified issue kinds.
+4. Build a live context block that explicitly marks current fetch results as source of truth.
+5. Insert that block immediately before the user’s current message in the model context window.
+6. On failure, return targeted guardrail messaging from classified issue kinds.
 
 Failure classification currently used in logs and guardrails:
 - `gmail_api_disabled`
@@ -512,8 +555,22 @@ Failure classification currently used in logs and guardrails:
 - `google_timeout`
 
 Voice-mode execution path:
-- Available through `POST /api/live/tool-response` only when voice personal-context flags are enabled.
-- Keep disabled by default for rollout safety, then enable per environment for staged validation.
+- Model function calls (`get_user_emails`, `get_calendar_events`) are resolved through `POST /api/live/tool-response`.
+- Server gate requires both:
+  - `ENABLE_GOOGLE_PERSONAL_CONTEXT=true`
+  - `ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE=true`
+- Client behavior is additionally controlled by `VITE_ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE`.
+- If server gate is off, endpoint returns `google_personal_context_voice_disabled` with no partial execution.
+
+Context placement rationale:
+- Prior behavior injected Google context at the start of message history, which could allow stale prior turns to dominate.
+- Current behavior inserts context directly before the latest user request so fresh account data is temporally closest to the asked question.
+
+Observability fields for incident triage:
+- `emailFetchIssueKind`
+- `emailFetchIssueProjectNumber`
+- `calendarFetchIssueKind`
+- `calendarFetchIssueProjectNumber`
 
 ### Morning Brief (text mode first, voice-safe by default)
 
@@ -955,8 +1012,12 @@ Source of truth: `.env.example`
 |---|---|---|
 | `ENABLE_GOOGLE_PERSONAL_CONTEXT` | `true` | Master flag for Google personal-context features |
 | `ENABLE_GOOGLE_PERSONAL_CONTEXT_TEXT` | `true` | Enable personal-context injection/guardrails in text mode |
-| `ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE` | `false` | Enable personal-context tool responses in live voice mode |
-| `VITE_ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE` | `false` | Client-side voice-path gate (requires rebuild when changed) |
+| `ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE` | `false` | Env-file default for staged rollout. If unset entirely, server fallback currently resolves to `true`; set explicitly per environment to avoid ambiguity |
+| `VITE_ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE` | `false` | Client-side voice-path gate (build-time). Must be rebuilt/redeployed after change |
+
+Precedence notes:
+- Server endpoint behavior (`/api/live/tool-response`) is controlled only by server env values at runtime.
+- `VITE_*` flags do not alter server authorization or fetch behavior; they only control client feature wiring/UI behavior.
 
 ### Live voice / VAD configuration
 
@@ -1049,6 +1110,43 @@ VITE_ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE=true \
 npm run test:google-context:ui
 ```
 
+### Voice personal-context validation runbook
+
+Use this sequence to verify text and voice stay aligned after config or prompt-orchestration changes.
+
+1. Baseline server + parser integrity
+
+```bash
+npm run test:google-context:smoke
+npm run test:local:e2e
+```
+
+2. Enable voice personal context explicitly for deterministic test intent
+
+```bash
+ENABLE_GOOGLE_PERSONAL_CONTEXT=true \
+ENABLE_GOOGLE_PERSONAL_CONTEXT_TEXT=true \
+ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE=true \
+VITE_ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE=true \
+npm run dev
+```
+
+3. Validate in-app voice prompts
+- "Summarize my unread emails from last day"
+- "What’s on my calendar today?"
+- "Any key emails or events this week?"
+
+4. Confirm expected runtime traces
+- `live.tool.emails.start` / `live.tool.emails.success` (or `.failed`)
+- `live.tool.calendar.start` / `live.tool.calendar.success` (or `.failed`)
+- `live.tool_response.generated`
+- If disabled by configuration: `live.tool_response.disabled` with reason `google_personal_context_voice_disabled`
+
+5. Confirm failure routing quality
+- API disabled scenario should classify to `*_api_disabled` with project number when available
+- Auth/scope issues should surface `google_access_denied` or `google_scope_missing`
+- Timeouts should classify as `google_timeout`
+
 ### Isolated local E2E tests
 
 ```bash
@@ -1088,6 +1186,18 @@ START_SERVER=0 TEST_HOST=127.0.0.1 TEST_PORT=5599 npm run test:local:e2e
 - Run command: `node ./dist/index.cjs`
 - Internal app port: `5000`
 - Object storage: Configured via Replit Object Storage integration
+
+### Voice personal-context rollout controls
+
+For production parity, configure both server runtime flags and client build-time flags:
+
+- Server runtime:
+  - `ENABLE_GOOGLE_PERSONAL_CONTEXT=true`
+  - `ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE=true`
+- Client build-time:
+  - `VITE_ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE=true`
+
+If you change any `VITE_*` variable, rebuild and redeploy the client bundle. A server restart alone does not apply build-time flag changes.
 
 ### Optional Morning Brief gateway (Cloud Run)
 
@@ -1241,10 +1351,26 @@ Design note:
 - Inspect classified issue fields in traces:
   - `emailFetchIssueKind`, `emailFetchIssueProjectNumber`
   - `calendarFetchIssueKind`, `calendarFetchIssueProjectNumber`
+- Verify context placement path:
+  - recent server builds should inject Google context directly before the latest user prompt
+  - if regression appears, inspect diff around model message insertion for any `unshift(...)` reintroduction
 - Expected handling:
   - `*_api_disabled` -> enable that API in the indicated Google Cloud project
   - `google_access_denied` -> reconnect Google account/scopes
   - `google_timeout` -> retry and inspect upstream/network latency
+
+### Voice says Google context is text-only
+
+- Check server gates at runtime:
+  - `ENABLE_GOOGLE_PERSONAL_CONTEXT=true`
+  - `ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE=true`
+- Check client build gate:
+  - `VITE_ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE=true`
+- Validate server trace:
+  - if blocked, you will see `live.tool_response.disabled` with reason `google_personal_context_voice_disabled`
+- Confirm session wiring:
+  - Live model must emit `get_user_emails` or `get_calendar_events` function calls
+  - client must forward those calls to `POST /api/live/tool-response`
 
 ### Web search not triggering or stale current-events answers
 
