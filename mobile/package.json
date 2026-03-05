@@ -22,5 +22,11 @@
     "@expo/ngrok": "^4.1.0",
     "@types/react": "~19.0.10",
     "typescript": "~5.8.3"
+  },
+  "overrides": {
+    "minimatch@3": "3.1.4",
+    "minimatch@9": "9.0.7",
+    "minimatch@10": "10.2.3",
+    "tar": "7.5.10"
   }
 }
