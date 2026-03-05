@@ -9250,6 +9250,13 @@ function App() {
           if (liveSessionRef.current === liveSession) {
             liveSessionRef.current = null;
           }
+          if (liveSession) {
+            try {
+              void liveSession.stop();
+            } catch {
+              // Best-effort cleanup of old session resources.
+            }
+          }
 
           if (shouldAutoResume) {
             if (autoResumeBudgetRef.current <= 0) {
