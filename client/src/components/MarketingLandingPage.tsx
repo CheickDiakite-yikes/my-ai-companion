@@ -67,6 +67,24 @@ type BlogPostBlock =
   | { type: "code"; code: string; language?: string; caption?: string }
   | { type: "equation"; expression: string; caption?: string; terms?: { symbol: string; meaning: string }[] }
   | { type: "metrics"; items: { label: string; value: string; detail?: string }[] }
+  | {
+      type: "barChart";
+      title: string;
+      items: { label: string; value: number; note?: string; color?: string }[];
+      max?: number;
+      unit?: string;
+      footnote?: string;
+      caption?: string;
+    }
+  | {
+      type: "columnChart";
+      title: string;
+      items: { label: string; value: number; note?: string; color?: string }[];
+      max?: number;
+      unit?: string;
+      footnote?: string;
+      caption?: string;
+    }
   | { type: "list"; items: string[] }
   | { type: "table"; columns: string[]; rows: string[][]; caption?: string }
   | { type: "references"; items: { title: string; href: string; note?: string }[] }
@@ -1107,6 +1125,21 @@ const BLOG_POSTS: BlogPost[] = [
         type: "paragraph",
         text: "These findings align with production companion incidents: users do not report \"attention index dropped by 30%.\" They report \"you forgot,\" \"you switched tone,\" or \"you contradicted yourself.\" The benchmark therefore translates research risk into user-visible failure classes and contract checks.",
       },
+      {
+        type: "barChart",
+        title:
+          "Chart 1. External weakness-pressure map (synthesis, higher = more continuity pressure)",
+        unit: "/100",
+        max: 100,
+        footnote:
+          "Heuristic synthesis from LoCoMo, LongMemEval, Lost in the Middle, and public assistant docs. Used for ZeeMe prioritization, not as a vendor scorecard.",
+        items: [
+          { label: "Long-horizon memory recall", value: 88, color: "#E8B37B" },
+          { label: "Voice/text handoff consistency", value: 82, color: "#DFA066" },
+          { label: "Grounded retrieval continuity", value: 76, color: "#CD824E" },
+          { label: "Temporal reference stability", value: 64, color: "#B86C43" },
+        ],
+      },
       { type: "heading", text: "3. Competitive Baseline: Companion-Critical Weaknesses in Major Assistants" },
       {
         type: "table",
@@ -1117,6 +1150,40 @@ const BLOG_POSTS: BlogPost[] = [
           ["OpenAI Memory", "Memory behavior is configurable and split across saved memories vs referenced chat history with plan/region variability", "Continuity perception can vary by account settings and availability"],
           ["Gemini Workspace integration", "Cross-app context depends on explicit account linking and admin policy allowances", "Companion behavior can appear inconsistent when integration prerequisites differ by environment"],
           ["Gemini activity controls", "History/activity settings affect what can be reused or surfaced in later interactions", "Users can unintentionally disable continuity paths while expecting persistent behavior"],
+        ],
+      },
+      {
+        type: "columnChart",
+        title: "Chart 3. Companion continuity friction baseline (directional, lower = better)",
+        unit: "/100",
+        max: 100,
+        footnote:
+          "Directional synthesis from public docs/release notes plus product behavior spot-checks. Not a controlled vendor lab benchmark.",
+        items: [
+          {
+            label: "ZeeMe (main3)",
+            value: 34,
+            note: "Internal scenario replay with trace-complete retrieval boundaries.",
+            color: "#E8B37B",
+          },
+          {
+            label: "OpenAI ChatGPT",
+            value: 57,
+            note: "Publicly documented voice/memory constraints and known voice anomaly remediation notes.",
+            color: "#DFA066",
+          },
+          {
+            label: "Google Gemini",
+            value: 61,
+            note: "Continuity can vary by integration, activity, and admin-policy configuration.",
+            color: "#CD824E",
+          },
+          {
+            label: "Tolan (snapshot)",
+            value: 68,
+            note: "Directional external snapshot; full standardized harness run pending.",
+            color: "#B86C43",
+          },
         ],
       },
       {
@@ -1134,6 +1201,19 @@ const BLOG_POSTS: BlogPost[] = [
           { symbol: "MRS", meaning: "Memory Recall Stability: correct retrieval of prior user state over delayed turns" },
           { symbol: "TGS", meaning: "Temporal Grounding Stability: date/time continuity under relative references" },
           { symbol: "RRS", meaning: "Retrieval Reliability Score: grounded email/calendar response correctness + observability completeness" },
+        ],
+      },
+      {
+        type: "barChart",
+        title: "Chart 2. CBI weight distribution (Eq. 1)",
+        unit: "%",
+        max: 40,
+        footnote: "Fixed benchmark weights used during release gating.",
+        items: [
+          { label: "VTHI (handoff integrity)", value: 35, color: "#E8B37B" },
+          { label: "MRS (memory recall stability)", value: 25, color: "#DFA066" },
+          { label: "TGS (temporal grounding stability)", value: 20, color: "#CD824E" },
+          { label: "RRS (retrieval reliability)", value: 20, color: "#B86C43" },
         ],
       },
       {
@@ -1477,6 +1557,8 @@ const BLOG_POSTS: BlogPost[] = [
     ],
   },
 ];
+
+const BLOG_PIN_ORDER = ["zeeme-continuity-benchmark-paper-v-2026"] as const;
 function getBlogCoverBlock(post: BlogPost): Extract<BlogPostBlock, { type: "image" }> | null {
   const cover = post.blocks.find((block): block is Extract<BlogPostBlock, { type: "image" }> => block.type === "image");
   return cover ?? null;
@@ -1873,6 +1955,19 @@ function InfoPageOverlay({
     page === "blog"
       ? BLOG_POSTS.find((post) => post.id === activeBlogPostId) ?? null
       : null;
+  const orderedBlogPosts = useMemo(() => {
+    const pinIndex = new Map<string, number>(
+      BLOG_PIN_ORDER.map((id, idx) => [id, idx]),
+    );
+    return [...BLOG_POSTS].sort((a, b) => {
+      const aPin = pinIndex.get(a.id);
+      const bPin = pinIndex.get(b.id);
+      if (aPin === undefined && bPin === undefined) return 0;
+      if (aPin === undefined) return 1;
+      if (bPin === undefined) return -1;
+      return aPin - bPin;
+    });
+  }, []);
   const activeBlogSections = useMemo(() => {
     if (!activeBlogPost) return [];
     let index = 0;
@@ -2565,6 +2660,208 @@ function InfoPageOverlay({
                         </div>
                       );
                     }
+                    if (block.type === "barChart") {
+                      const computedMax = Math.max(
+                        block.max ?? 0,
+                        ...block.items.map((item) => item.value),
+                        1,
+                      );
+                      return (
+                        <figure
+                          key={`${activeBlogPost.id}-bar-chart-${idx}`}
+                          className="border-y px-1 py-4"
+                          style={{
+                            borderColor: "rgba(255, 217, 172, 0.2)",
+                            background:
+                              "linear-gradient(180deg, rgba(33, 19, 17, 0.28), rgba(21, 12, 11, 0.28))",
+                          }}
+                        >
+                          <figcaption
+                            className="mb-3 text-xs font-semibold uppercase tracking-[0.16em]"
+                            style={{ color: "rgba(255, 214, 172, 0.72)" }}
+                          >
+                            {block.title}
+                          </figcaption>
+                          <div className="space-y-3">
+                            {block.items.map((item) => {
+                              const pct = Math.max(
+                                3,
+                                Math.min(100, (item.value / computedMax) * 100),
+                              );
+                              return (
+                                <article
+                                  key={`${activeBlogPost.id}-bar-chart-${idx}-${item.label}`}
+                                >
+                                  <div className="mb-1.5 flex items-center justify-between gap-3">
+                                    <p
+                                      className="text-[12px] leading-relaxed"
+                                      style={{ color: "rgba(255, 224, 196, 0.84)" }}
+                                    >
+                                      {item.label}
+                                    </p>
+                                    <p
+                                      className="text-[11px] font-semibold tracking-[0.08em]"
+                                      style={{ color: "rgba(255, 214, 172, 0.82)" }}
+                                    >
+                                      {item.value}
+                                      {block.unit ? ` ${block.unit}` : ""}
+                                    </p>
+                                  </div>
+                                  <div
+                                    className="h-2.5 w-full overflow-hidden"
+                                    style={{
+                                      background: "rgba(255, 217, 172, 0.14)",
+                                      border: "1px solid rgba(255, 217, 172, 0.16)",
+                                    }}
+                                  >
+                                    <div
+                                      className="h-full"
+                                      style={{
+                                        width: `${pct}%`,
+                                        background: `linear-gradient(90deg, ${
+                                          item.color ?? "#E8B37B"
+                                        }, rgba(255, 214, 172, 0.95))`,
+                                      }}
+                                    />
+                                  </div>
+                                  {item.note ? (
+                                    <p
+                                      className="mt-1 text-[11px] leading-relaxed"
+                                      style={{ color: "rgba(255, 214, 172, 0.58)" }}
+                                    >
+                                      {item.note}
+                                    </p>
+                                  ) : null}
+                                </article>
+                              );
+                            })}
+                          </div>
+                          {block.footnote ? (
+                            <p
+                              className="mt-3 text-[11px] italic leading-relaxed"
+                              style={{ color: "rgba(255, 214, 172, 0.54)" }}
+                            >
+                              {block.footnote}
+                            </p>
+                          ) : null}
+                          {block.caption ? (
+                            <figcaption
+                              className="mt-2 text-xs italic"
+                              style={{ color: "rgba(255, 214, 172, 0.56)" }}
+                            >
+                              {block.caption}
+                            </figcaption>
+                          ) : null}
+                        </figure>
+                      );
+                    }
+                    if (block.type === "columnChart") {
+                      const computedMax = Math.max(
+                        block.max ?? 0,
+                        ...block.items.map((item) => item.value),
+                        1,
+                      );
+                      return (
+                        <figure
+                          key={`${activeBlogPost.id}-column-chart-${idx}`}
+                          className="border-y px-1 py-4"
+                          style={{
+                            borderColor: "rgba(255, 217, 172, 0.2)",
+                            background:
+                              "linear-gradient(180deg, rgba(33, 19, 17, 0.28), rgba(21, 12, 11, 0.28))",
+                          }}
+                        >
+                          <figcaption
+                            className="mb-3 text-xs font-semibold uppercase tracking-[0.16em]"
+                            style={{ color: "rgba(255, 214, 172, 0.72)" }}
+                          >
+                            {block.title}
+                          </figcaption>
+                          <div className="overflow-x-auto">
+                            <div
+                              className="min-w-[640px] items-end gap-4"
+                              style={{
+                                display: "grid",
+                                gridTemplateColumns: `repeat(${Math.max(
+                                  block.items.length,
+                                  1,
+                                )}, minmax(120px, 1fr))`,
+                              }}
+                            >
+                              {block.items.map((item) => {
+                                const pct = Math.max(
+                                  4,
+                                  Math.min(100, (item.value / computedMax) * 100),
+                                );
+                                return (
+                                  <article
+                                    key={`${activeBlogPost.id}-column-chart-${idx}-${item.label}`}
+                                    className="flex flex-col gap-2"
+                                  >
+                                    <div
+                                      className="flex h-44 items-end overflow-hidden border"
+                                      style={{
+                                        background: "rgba(255, 217, 172, 0.1)",
+                                        borderColor: "rgba(255, 217, 172, 0.16)",
+                                      }}
+                                    >
+                                      <div
+                                        className="w-full"
+                                        style={{
+                                          height: `${pct}%`,
+                                          background: `linear-gradient(180deg, ${
+                                            item.color ?? "#E8B37B"
+                                          }, rgba(255, 214, 172, 0.92))`,
+                                        }}
+                                      />
+                                    </div>
+                                    <div>
+                                      <p
+                                        className="text-[12px] leading-relaxed"
+                                        style={{ color: "rgba(255, 224, 196, 0.86)" }}
+                                      >
+                                        {item.label}
+                                      </p>
+                                      <p
+                                        className="text-[11px] font-semibold tracking-[0.08em]"
+                                        style={{ color: "rgba(255, 214, 172, 0.84)" }}
+                                      >
+                                        {item.value}
+                                        {block.unit ? ` ${block.unit}` : ""}
+                                      </p>
+                                      {item.note ? (
+                                        <p
+                                          className="mt-1 text-[11px] leading-relaxed"
+                                          style={{ color: "rgba(255, 214, 172, 0.58)" }}
+                                        >
+                                          {item.note}
+                                        </p>
+                                      ) : null}
+                                    </div>
+                                  </article>
+                                );
+                              })}
+                            </div>
+                          </div>
+                          {block.footnote ? (
+                            <p
+                              className="mt-3 text-[11px] italic leading-relaxed"
+                              style={{ color: "rgba(255, 214, 172, 0.54)" }}
+                            >
+                              {block.footnote}
+                            </p>
+                          ) : null}
+                          {block.caption ? (
+                            <figcaption
+                              className="mt-2 text-xs italic"
+                              style={{ color: "rgba(255, 214, 172, 0.56)" }}
+                            >
+                              {block.caption}
+                            </figcaption>
+                          ) : null}
+                        </figure>
+                      );
+                    }
                     if (block.type === "quote") {
                       return (
                         <blockquote
@@ -2727,7 +3024,7 @@ function InfoPageOverlay({
               </motion.article>
             ) : (
               <div className="space-y-6">
-                {BLOG_POSTS.map((post, idx) => (
+                {orderedBlogPosts.map((post, idx) => (
                   (() => {
                     const coverBlock = getBlogCoverBlock(post);
                     return (
