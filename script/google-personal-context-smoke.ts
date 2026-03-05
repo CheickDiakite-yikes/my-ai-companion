@@ -13,6 +13,9 @@ async function run(): Promise<void> {
   const emailPrompt = "can you summarize my unread emails from last day";
   const combinedPrompt =
     "any key emails or events i should have on mind this week?";
+  const followupCalendarPrompt =
+    "hahaha how about tomorrow and rest of the week?";
+  const nonIntentPrompt = "tomorrow should be a good day to rest";
 
   const calendarIntent = detectGooglePersonalContextIntent(calendarPrompt);
   assert.equal(calendarIntent.calendarIntent, true, "calendar prompt should set calendarIntent");
@@ -32,6 +35,37 @@ async function run(): Promise<void> {
   assert.equal(combinedIntent.emailUnreadOnly, false, "combined prompt should not force unreadOnly");
   assert.equal(combinedIntent.emailSinceDays, 3, "combined prompt should default email lookback");
   assert.equal(combinedIntent.timeRange, "this_week", "combined prompt should infer this_week");
+
+  const followupCalendarIntent = detectGooglePersonalContextIntent(
+    followupCalendarPrompt,
+  );
+  assert.equal(
+    followupCalendarIntent.calendarIntent,
+    true,
+    "calendar follow-up prompt should trigger calendar intent",
+  );
+  assert.equal(
+    followupCalendarIntent.emailIntent,
+    false,
+    "calendar follow-up prompt should not trigger email intent",
+  );
+  assert.equal(
+    followupCalendarIntent.timeRange,
+    "this_week",
+    "calendar follow-up prompt should infer this_week for rest-of-week phrasing",
+  );
+
+  const nonIntent = detectGooglePersonalContextIntent(nonIntentPrompt);
+  assert.equal(
+    nonIntent.calendarIntent,
+    false,
+    "generic tomorrow statement should not trigger calendar intent",
+  );
+  assert.equal(
+    nonIntent.emailIntent,
+    false,
+    "generic tomorrow statement should not trigger email intent",
+  );
 
   assert.equal(
     detectGooglePersonalContextIntent("let's just chat").calendarIntent,

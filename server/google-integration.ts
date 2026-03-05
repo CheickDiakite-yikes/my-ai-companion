@@ -118,6 +118,10 @@ const GOOGLE_COMBINED_HINT_PATTERN =
   /\b(what should i know|anything important|key (emails?|messages?|events?)|overview of (my\s+)?(day|week))\b/i;
 const GOOGLE_CALENDAR_INTENT_PATTERN =
   /\b(calendar|schedule|meeting|meetings|events?|agenda|appointments?|busy|free\s*(today|tomorrow)?|what do i have|what's on my schedule|whats on my schedule)\b/i;
+const GOOGLE_CALENDAR_FOLLOWUP_TIME_PATTERN =
+  /\b(tomorrow|rest\s+of\s+the\s+week|later\s+this\s+week|this\s+week|next\s+week|next\s+7\s+days|weekend)\b/i;
+const GOOGLE_CALENDAR_FOLLOWUP_REQUEST_PATTERN =
+  /\b(how\s+about|what\s+about|check(\s+again)?|look(\s+again)?|can\s+you\s+check|what\s+do\s+i\s+have|do\s+i\s+have|am\s+i\s+free|anything\s+on)\b/i;
 const GOOGLE_EMAIL_INTENT_PATTERN =
   /\b(emails?|inbox|unread|messages?\s+from|important\s+(emails?|messages?)|mail|gmail|check\s+my\s+(mail|email|inbox))\b/i;
 
@@ -1151,6 +1155,9 @@ export async function fetchGoogleCalendarEvents(params: {
 
 function inferTimeRangeFromText(input: string): GoogleDataTimeRange {
   const text = input.toLowerCase();
+  const mentionsRestOfWeek =
+    /\b(rest\s+of\s+the\s+week|later\s+this\s+week|weekend)\b/i.test(text);
+  if (mentionsRestOfWeek) return "this_week";
   if (/(\btomorrow\b)/i.test(text)) return "tomorrow";
   if (/(\bthis\s+week\b|\bweekly\b)/i.test(text)) return "this_week";
   if (/(\bnext\s+week\b|\bnext\s+7\s+days\b|\bnext\s+seven\s+days\b)/i.test(text)) {
@@ -1185,6 +1192,9 @@ export function detectGooglePersonalContextIntent(
   }
 
   const calendarIntent = GOOGLE_CALENDAR_INTENT_PATTERN.test(normalized);
+  const calendarFollowupIntent =
+    GOOGLE_CALENDAR_FOLLOWUP_TIME_PATTERN.test(normalized) &&
+    GOOGLE_CALENDAR_FOLLOWUP_REQUEST_PATTERN.test(normalized);
   const emailIntent = GOOGLE_EMAIL_INTENT_PATTERN.test(normalized);
   const combinedHint = GOOGLE_COMBINED_HINT_PATTERN.test(normalized);
   const emailSinceDays = inferGoogleEmailSinceDays(normalized);
@@ -1194,7 +1204,7 @@ export function detectGooglePersonalContextIntent(
     /\binbox\s+zero\b/i.test(normalized);
 
   return {
-    calendarIntent: combinedHint ? true : calendarIntent,
+    calendarIntent: combinedHint ? true : calendarIntent || calendarFollowupIntent,
     emailIntent: combinedHint ? true : emailIntent,
     emailUnreadOnly,
     emailSinceDays,

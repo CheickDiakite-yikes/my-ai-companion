@@ -136,6 +136,10 @@ const LIVE_WEB_SEARCH_SIGNAL_PATTERN =
 const LIVE_EMAIL_SIGNAL_PATTERN = /\b(email|emails|inbox|unread|mail|gmail)\b/i;
 const LIVE_CALENDAR_SIGNAL_PATTERN =
   /\b(calendar|meeting|meetings|schedule|event|events|appointment|appointments)\b/i;
+const LIVE_CALENDAR_FOLLOWUP_TIME_PATTERN =
+  /\b(tomorrow|rest\s+of\s+the\s+week|later\s+this\s+week|this\s+week|next\s+week|next\s+7\s+days|weekend)\b/i;
+const LIVE_CALENDAR_FOLLOWUP_REQUEST_PATTERN =
+  /\b(how\s+about|what\s+about|check(\s+again)?|look(\s+again)?|can\s+you\s+check|what\s+do\s+i\s+have|do\s+i\s+have|am\s+i\s+free|anything\s+on)\b/i;
 const ENABLE_MORNING_BRIEF_VOICE_MODE = parseClientBoolean(
   liveClientEnv.VITE_ENABLE_MORNING_BRIEF_VOICE_MODE,
   false,
@@ -220,7 +224,10 @@ function classifyLivePersonalContextIntent(
   text: string,
 ): LivePersonalContextIntent | null {
   const hasEmailIntent = LIVE_EMAIL_SIGNAL_PATTERN.test(text);
-  const hasCalendarIntent = LIVE_CALENDAR_SIGNAL_PATTERN.test(text);
+  const hasCalendarIntent =
+    LIVE_CALENDAR_SIGNAL_PATTERN.test(text) ||
+    (LIVE_CALENDAR_FOLLOWUP_TIME_PATTERN.test(text) &&
+      LIVE_CALENDAR_FOLLOWUP_REQUEST_PATTERN.test(text));
   if (hasEmailIntent && hasCalendarIntent) return "both";
   if (hasEmailIntent) return "email";
   if (hasCalendarIntent) return "calendar";
