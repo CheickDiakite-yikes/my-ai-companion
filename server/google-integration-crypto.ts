@@ -2,6 +2,7 @@ import { createCipheriv, createDecipheriv, randomBytes, createHash } from "crypt
 
 const ENCRYPTION_ALGO = "aes-256-gcm";
 const IV_LENGTH_BYTES = 12;
+const AUTH_TAG_LENGTH_BYTES = 16;
 
 export type GoogleIntegrationEncryptionKeyMode =
   | "base64_32byte"
@@ -87,7 +88,7 @@ function resolveEncryptionKey(): Buffer {
 export function encryptGoogleToken(value: string): string {
   const key = resolveEncryptionKey();
   const iv = randomBytes(IV_LENGTH_BYTES);
-  const cipher = createCipheriv(ENCRYPTION_ALGO, key, iv);
+  const cipher = createCipheriv(ENCRYPTION_ALGO, key, iv, { authTagLength: AUTH_TAG_LENGTH_BYTES });
   const encrypted = Buffer.concat([cipher.update(value, "utf8"), cipher.final()]);
   const authTag = cipher.getAuthTag();
   return `v1:${iv.toString("base64")}:${authTag.toString("base64")}:${encrypted.toString("base64")}`;
@@ -103,7 +104,7 @@ export function decryptGoogleToken(payload: string): string {
   const iv = Buffer.from(parts[1], "base64");
   const authTag = Buffer.from(parts[2], "base64");
   const ciphertext = Buffer.from(parts[3], "base64");
-  const decipher = createDecipheriv(ENCRYPTION_ALGO, key, iv);
+  const decipher = createDecipheriv(ENCRYPTION_ALGO, key, iv, { authTagLength: AUTH_TAG_LENGTH_BYTES });
   decipher.setAuthTag(authTag);
   const decrypted = Buffer.concat([
     decipher.update(ciphertext),
