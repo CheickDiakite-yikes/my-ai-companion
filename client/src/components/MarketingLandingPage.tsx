@@ -2685,7 +2685,7 @@ function InfoPageOverlay({
                           <div className="space-y-3">
                             {block.items.map((item) => {
                               const pct = Math.max(
-                                3,
+                                0,
                                 Math.min(100, (item.value / computedMax) * 100),
                               );
                               return (
@@ -2761,6 +2761,13 @@ function InfoPageOverlay({
                         ...block.items.map((item) => item.value),
                         1,
                       );
+                      const axisTicks = [1, 0.75, 0.5, 0.25, 0];
+                      const gridTemplateColumns = `repeat(${Math.max(
+                        block.items.length,
+                        1,
+                      )}, minmax(120px, 1fr))`;
+                      const formatAxisValue = (value: number) =>
+                        Number.isInteger(value) ? `${value}` : value.toFixed(1);
                       return (
                         <figure
                           key={`${activeBlogPost.id}-column-chart-${idx}`}
@@ -2777,45 +2784,91 @@ function InfoPageOverlay({
                           >
                             {block.title}
                           </figcaption>
-                          <div className="overflow-x-auto">
-                            <div
-                              className="min-w-[640px] items-end gap-4"
-                              style={{
-                                display: "grid",
-                                gridTemplateColumns: `repeat(${Math.max(
-                                  block.items.length,
-                                  1,
-                                )}, minmax(120px, 1fr))`,
-                              }}
-                            >
-                              {block.items.map((item) => {
-                                const pct = Math.max(
-                                  4,
-                                  Math.min(100, (item.value / computedMax) * 100),
-                                );
-                                return (
-                                  <article
-                                    key={`${activeBlogPost.id}-column-chart-${idx}-${item.label}`}
-                                    className="flex flex-col gap-2"
-                                  >
-                                    <div
-                                      className="flex h-44 items-end overflow-hidden border"
-                                      style={{
-                                        background: "rgba(255, 217, 172, 0.1)",
-                                        borderColor: "rgba(255, 217, 172, 0.16)",
-                                      }}
-                                    >
+                          <div className="grid grid-cols-[42px_minmax(0,1fr)] gap-2">
+                            <div className="relative h-48">
+                              {axisTicks.map((fraction) => (
+                                <p
+                                  key={`${activeBlogPost.id}-column-chart-axis-${idx}-${fraction}`}
+                                  className="absolute left-0 text-[10px] font-semibold tracking-[0.08em]"
+                                  style={{
+                                    bottom: `calc(${fraction * 100}% - 7px)`,
+                                    color: "rgba(255, 214, 172, 0.62)",
+                                  }}
+                                >
+                                  {formatAxisValue(computedMax * fraction)}
+                                </p>
+                              ))}
+                            </div>
+                            <div className="overflow-x-auto pb-1">
+                              <div className="min-w-[680px]">
+                                <div
+                                  className="relative h-48 border px-2"
+                                  style={{
+                                    background: "rgba(255, 217, 172, 0.06)",
+                                    borderColor: "rgba(255, 217, 172, 0.16)",
+                                  }}
+                                >
+                                  <div className="pointer-events-none absolute inset-0">
+                                    {axisTicks.map((fraction) => (
                                       <div
-                                        className="w-full"
+                                        key={`${activeBlogPost.id}-column-chart-grid-${idx}-${fraction}`}
+                                        className="absolute inset-x-0 border-t"
                                         style={{
-                                          height: `${pct}%`,
-                                          background: `linear-gradient(180deg, ${
-                                            item.color ?? "#E8B37B"
-                                          }, rgba(255, 214, 172, 0.92))`,
+                                          bottom: `${fraction * 100}%`,
+                                          borderColor:
+                                            fraction === 0
+                                              ? "rgba(255, 217, 172, 0.32)"
+                                              : "rgba(255, 217, 172, 0.12)",
                                         }}
                                       />
-                                    </div>
-                                    <div>
+                                    ))}
+                                  </div>
+                                  <div
+                                    className="relative z-10 grid h-full items-end gap-4"
+                                    style={{ gridTemplateColumns }}
+                                  >
+                                    {block.items.map((item) => {
+                                      const pct = Math.max(
+                                        0,
+                                        Math.min(100, (item.value / computedMax) * 100),
+                                      );
+                                      return (
+                                        <article
+                                          key={`${activeBlogPost.id}-column-chart-${idx}-${item.label}`}
+                                          className="flex h-full items-end"
+                                        >
+                                          <div
+                                            className="relative w-full overflow-hidden border-x border-t"
+                                            style={{
+                                              height: `${pct}%`,
+                                              borderColor: "rgba(255, 217, 172, 0.18)",
+                                              background:
+                                                "linear-gradient(180deg, rgba(255, 214, 172, 0.08), rgba(255, 214, 172, 0.02))",
+                                            }}
+                                          >
+                                            <div
+                                              className="h-full w-full"
+                                              style={{
+                                                background: `linear-gradient(180deg, ${
+                                                  item.color ?? "#E8B37B"
+                                                }, rgba(255, 214, 172, 0.92))`,
+                                              }}
+                                            />
+                                          </div>
+                                        </article>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                                <div
+                                  className="mt-2 grid gap-4"
+                                  style={{ gridTemplateColumns }}
+                                >
+                                  {block.items.map((item) => (
+                                    <div
+                                      key={`${activeBlogPost.id}-column-chart-label-${idx}-${item.label}`}
+                                      className="min-h-[88px]"
+                                    >
                                       <p
                                         className="text-[12px] leading-relaxed"
                                         style={{ color: "rgba(255, 224, 196, 0.86)" }}
@@ -2838,9 +2891,9 @@ function InfoPageOverlay({
                                         </p>
                                       ) : null}
                                     </div>
-                                  </article>
-                                );
-                              })}
+                                  ))}
+                                </div>
+                              </div>
                             </div>
                           </div>
                           {block.footnote ? (
