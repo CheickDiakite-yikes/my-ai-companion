@@ -49,7 +49,7 @@ ZeeMe is a companion AI experience where users build a continuous relationship w
 ### Recent platform additions (March 2026)
 
 - **Voice email/calendar retrieval is now trace-first**: Live tool calls (`get_user_emails`, `get_calendar_events`) route through `POST /api/live/tool-response` with structured server events (`live.tool.*`, `live.tool_response.*`) and explicit issue classification.
-- **OAuth callback handling is environment-safe**: Google connect flow now resolves callback URI using a deterministic order (`redirectUri` override -> dynamic host callback -> configured env callback) and binds that URI to OAuth state for safe token exchange.
+- **OAuth callback handling is environment-safe**: Google connect flow now uses signed, TTL-bound OAuth state and prefers your configured callback URI in production (with optional host switching when explicitly enabled).
 - **Memory contamination hardening shipped**: Known "Google not connected" assistant fallbacks are filtered from memory context assembly to prevent stale operational phrasing from poisoning subsequent turns.
 - **Voice status UX uses explicit process events**: Voice path emits `webSearchEvents` (`searching`, `grounded`, `idle`) with intent-specific labels (for example, "Retrieving your emails…") so users see retrieval progress, not silent latency.
 - **GCP Morning Brief reliability improved**: Cloud Run gateway remains optional but now participates in a clearer fallback contract (`brief_gcp_upstream_timeout` -> local grounded path with forensic breadcrumbs).
@@ -936,13 +936,15 @@ Use this flow when validating Gmail/Calendar integration in local dev and epheme
 1. Set baseline OAuth env values in `.env`:
    - `GOOGLE_OAUTH_CLIENT_ID`
    - `GOOGLE_OAUTH_CLIENT_SECRET`
-   - `GOOGLE_OAUTH_REDIRECT_URI` (stable callback you trust)
+   - `GOOGLE_OAUTH_REDIRECT_URI` (stable callback you trust, for production use `https://zeeme.io/api/integrations/google/callback`)
+   - `GOOGLE_OAUTH_STATE_SIGNING_SECRET` (recommended; falls back to `SESSION_SECRET` when unset)
 2. Start app with `npm run dev`.
 3. Request a connect URL:
    - `GET /api/integrations/google/connect-url`
 4. Confirm response includes:
    - `redirectUri`
    - `redirectSource` (`query_override`, `dynamic_host`, or `configured_env`)
+   - `state` is now signed and TTL-bound; callback no longer depends on in-memory cache persistence.
 5. Complete OAuth and verify callback logs:
    - `google.integration.callback.exchange_attempt`
    - `google.integration.callback.connected`
@@ -950,6 +952,7 @@ Use this flow when validating Gmail/Calendar integration in local dev and epheme
 Optional (preview host override):
 - Set `VITE_GOOGLE_OAUTH_CONNECT_REDIRECT_URI` to a full callback URL ending with `/api/integrations/google/callback`.
 - This is useful for deterministic testing against a specific preview hostname without changing server default env.
+- Keep this unset in production so live auth uses `GOOGLE_OAUTH_REDIRECT_URI`.
 
 ### Expo wrapper quick start (mobile shell)
 
@@ -1057,16 +1060,18 @@ Source of truth: `.env.example`
 |---|---|---|
 | `GOOGLE_OAUTH_CLIENT_ID` | — | OAuth client ID for Gmail connector |
 | `GOOGLE_OAUTH_CLIENT_SECRET` | — | OAuth client secret |
-| `GOOGLE_OAUTH_REDIRECT_URI` | — | Base OAuth callback URI. Runtime may dynamically switch callback host to match current request host |
+| `GOOGLE_OAUTH_REDIRECT_URI` | — | Canonical OAuth callback URI (production recommended: `https://zeeme.io/api/integrations/google/callback`) |
 | `GOOGLE_OAUTH_SCOPES` | `openid,email,profile,https://www.googleapis.com/auth/gmail.readonly,https://www.googleapis.com/auth/calendar.events.readonly` | Scopes for read-only Gmail + Calendar access |
+| `GOOGLE_OAUTH_STATE_SIGNING_SECRET` | — | Optional dedicated HMAC secret for signed OAuth state tokens (falls back to `SESSION_SECRET`) |
+| `ENABLE_GOOGLE_OAUTH_DYNAMIC_CALLBACK_HOST` | `true` in non-production, `false` in production | Allow callback host switching to current request host when it differs from configured redirect URI host |
 | `GOOGLE_INTEGRATION_ENCRYPTION_KEY` | — | AES-GCM key for encrypted token storage |
 
 OAuth callback resolution order (`GET /api/integrations/google/connect-url`):
 1. `redirectUri` query param (if provided, valid callback path, and allowed format)
-2. Dynamic host callback (`https://<request-host>/api/integrations/google/callback`) when host differs from configured redirect URI host
-3. `GOOGLE_OAUTH_REDIRECT_URI` (configured default)
+2. `GOOGLE_OAUTH_REDIRECT_URI` (configured default; always used when host matches, or when dynamic host switching is disabled)
+3. Dynamic host callback (`https://<request-host>/api/integrations/google/callback`) only when host differs and `ENABLE_GOOGLE_OAUTH_DYNAMIC_CALLBACK_HOST=true`
 
-The selected callback is returned in API response as `redirectUri` + `redirectSource`, and persisted in OAuth `state` so callback token exchange uses the exact same URI.
+The selected callback is returned in API response as `redirectUri` + `redirectSource`, and encoded into signed OAuth `state` so callback token exchange uses the exact same URI across reloads/restarts.
 
 ### Google personal context controls
 

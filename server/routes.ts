@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "crypto";
+import { createHash, createHmac, randomUUID, timingSafeEqual } from "crypto";
 import { buildDocumentRenderPayload } from "./artifact-render-spec";
 import type { Express } from "express";
 import multer, { MulterError } from "multer";
@@ -341,17 +341,79 @@ type BriefRunDebugRecord = {
   events: BriefRunDebugEvent[];
 };
 
-const googleOauthStateCache = new Map<
-  string,
-  {
-    userId: string;
-    returnTo: string;
-    redirectUri: string;
-    redirectSource: "configured_env" | "dynamic_host" | "query_override";
-    createdAtMs: number;
-  }
->();
 const GOOGLE_OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
+const GOOGLE_OAUTH_STATE_CLOCK_SKEW_MS = 60 * 1000;
+const GOOGLE_OAUTH_STATE_VERSION = 1 as const;
+
+const googleOAuthStatePayloadSchema = z.object({
+  v: z.literal(GOOGLE_OAUTH_STATE_VERSION),
+  uid: z.string().min(1),
+  returnTo: z.string().min(1),
+  redirectUri: z.string().url(),
+  redirectSource: z.enum(["configured_env", "dynamic_host", "query_override"]),
+  iat: z.number().int().nonnegative(),
+  exp: z.number().int().nonnegative(),
+  nonce: z.string().min(1),
+});
+
+function parseBooleanEnv(input: string | undefined, fallback: boolean): boolean {
+  if (!input) return fallback;
+  const normalized = input.trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "off"].includes(normalized)) return false;
+  return fallback;
+}
+
+function isGoogleOAuthDynamicHostEnabled(): boolean {
+  return parseBooleanEnv(
+    process.env.ENABLE_GOOGLE_OAUTH_DYNAMIC_CALLBACK_HOST,
+    process.env.NODE_ENV !== "production",
+  );
+}
+
+function getGoogleOAuthStateSigningSecret(): string {
+  const stateSecret = process.env.GOOGLE_OAUTH_STATE_SIGNING_SECRET?.trim();
+  if (stateSecret) return stateSecret;
+  const sessionSecret = process.env.SESSION_SECRET?.trim();
+  if (sessionSecret) return sessionSecret;
+  return "dev-google-oauth-state-signing-secret";
+}
+
+function signGoogleOAuthStatePayload(payloadPart: string): string {
+  return createHmac("sha256", getGoogleOAuthStateSigningSecret())
+    .update(payloadPart)
+    .digest("base64url");
+}
+
+function encodeGoogleOAuthStatePayload(
+  payload: z.infer<typeof googleOAuthStatePayloadSchema>,
+): string {
+  return Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
+}
+
+function decodeGoogleOAuthStatePayload(
+  payloadPart: string,
+): z.infer<typeof googleOAuthStatePayloadSchema> | null {
+  try {
+    const decoded = Buffer.from(payloadPart, "base64url").toString("utf8");
+    const parsed = JSON.parse(decoded) as unknown;
+    return googleOAuthStatePayloadSchema.parse(parsed);
+  } catch {
+    return null;
+  }
+}
+
+function verifyGoogleOAuthStateSignature(
+  payloadPart: string,
+  providedSignaturePart: string,
+): boolean {
+  if (!providedSignaturePart) return false;
+  const expected = signGoogleOAuthStatePayload(payloadPart);
+  const expectedBuffer = Buffer.from(expected, "utf8");
+  const providedBuffer = Buffer.from(providedSignaturePart, "utf8");
+  if (expectedBuffer.length !== providedBuffer.length) return false;
+  return timingSafeEqual(expectedBuffer, providedBuffer);
+}
 
 const briefRunDebugHistory: BriefRunDebugRecord[] = [];
 const briefRunDebugById = new Map<string, BriefRunDebugRecord>();
@@ -413,6 +475,13 @@ function resolveGoogleRedirectUriFromRequest(
     };
   }
 
+  if (!isGoogleOAuthDynamicHostEnabled()) {
+    return {
+      redirectUri: configuredUri,
+      source: "configured_env",
+    };
+  }
+
   const protocol = req.get?.("x-forwarded-proto") ?? req.protocol ?? "https";
   return {
     redirectUri: `${protocol}://${host}/api/integrations/google/callback`,
@@ -426,30 +495,26 @@ function normalizeReturnToPath(value: string | undefined): string {
   return value;
 }
 
-function pruneGoogleOAuthStateCache(nowMs = Date.now()): void {
-  googleOauthStateCache.forEach((record, state) => {
-    if (nowMs - record.createdAtMs > GOOGLE_OAUTH_STATE_TTL_MS) {
-      googleOauthStateCache.delete(state);
-    }
-  });
-}
-
 function createGoogleOAuthStateRecord(params: {
   userId: string;
   returnTo: string;
   redirectUri: string;
   redirectSource: "configured_env" | "dynamic_host" | "query_override";
 }): string {
-  pruneGoogleOAuthStateCache();
-  const state = randomUUID();
-  googleOauthStateCache.set(state, {
-    userId: params.userId,
+  const nowMs = Date.now();
+  const payload = {
+    v: GOOGLE_OAUTH_STATE_VERSION,
+    uid: params.userId,
     returnTo: params.returnTo,
     redirectUri: params.redirectUri,
     redirectSource: params.redirectSource,
-    createdAtMs: Date.now(),
-  });
-  return state;
+    iat: nowMs,
+    exp: nowMs + GOOGLE_OAUTH_STATE_TTL_MS,
+    nonce: randomUUID(),
+  } satisfies z.infer<typeof googleOAuthStatePayloadSchema>;
+  const payloadPart = encodeGoogleOAuthStatePayload(payload);
+  const signaturePart = signGoogleOAuthStatePayload(payloadPart);
+  return `${payloadPart}.${signaturePart}`;
 }
 
 function resolveGoogleOAuthStateRecord(params: {
@@ -462,11 +527,17 @@ function resolveGoogleOAuthStateRecord(params: {
       redirectSource: "configured_env" | "dynamic_host" | "query_override";
     }
   | null {
-  pruneGoogleOAuthStateCache();
-  const record = googleOauthStateCache.get(params.state);
+  const [payloadPart, signaturePart, ...extra] = params.state.split(".");
+  if (!payloadPart || !signaturePart || extra.length > 0) return null;
+  if (!verifyGoogleOAuthStateSignature(payloadPart, signaturePart)) return null;
+  const record = decodeGoogleOAuthStatePayload(payloadPart);
   if (!record) return null;
-  googleOauthStateCache.delete(params.state);
-  if (record.userId !== params.userId) return null;
+  if (record.uid !== params.userId) return null;
+  const nowMs = Date.now();
+  if (record.exp < nowMs || record.iat > nowMs + GOOGLE_OAUTH_STATE_CLOCK_SKEW_MS) {
+    return null;
+  }
+  if (!isValidGoogleRedirectUriOverride(record.redirectUri)) return null;
   return {
     returnTo: record.returnTo,
     redirectUri: record.redirectUri,
