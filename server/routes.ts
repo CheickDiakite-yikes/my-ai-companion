@@ -371,6 +371,13 @@ function isGoogleOAuthDynamicHostEnabled(): boolean {
   );
 }
 
+function isGoogleOAuthRedirectOverrideEnabled(): boolean {
+  return parseBooleanEnv(
+    process.env.ENABLE_GOOGLE_OAUTH_REDIRECT_URI_OVERRIDE,
+    process.env.NODE_ENV !== "production",
+  );
+}
+
 function getGoogleOAuthStateSigningSecret(): string {
   const stateSecret = process.env.GOOGLE_OAUTH_STATE_SIGNING_SECRET?.trim();
   if (stateSecret) return stateSecret;
@@ -440,7 +447,7 @@ function resolveGoogleRedirectUriFromRequest(
   source: "configured_env" | "dynamic_host" | "query_override";
 } {
   const trimmedOverride = overrideUri?.trim();
-  if (trimmedOverride) {
+  if (trimmedOverride && isGoogleOAuthRedirectOverrideEnabled()) {
     if (!isValidGoogleRedirectUriOverride(trimmedOverride)) {
       throw new Error(
         "redirectUri must point to /api/integrations/google/callback with https (or http on localhost)",

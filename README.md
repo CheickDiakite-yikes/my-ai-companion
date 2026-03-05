@@ -1064,10 +1064,11 @@ Source of truth: `.env.example`
 | `GOOGLE_OAUTH_SCOPES` | `openid,email,profile,https://www.googleapis.com/auth/gmail.readonly,https://www.googleapis.com/auth/calendar.events.readonly` | Scopes for read-only Gmail + Calendar access |
 | `GOOGLE_OAUTH_STATE_SIGNING_SECRET` | — | Optional dedicated HMAC secret for signed OAuth state tokens (falls back to `SESSION_SECRET`) |
 | `ENABLE_GOOGLE_OAUTH_DYNAMIC_CALLBACK_HOST` | `true` in non-production, `false` in production | Allow callback host switching to current request host when it differs from configured redirect URI host |
+| `ENABLE_GOOGLE_OAUTH_REDIRECT_URI_OVERRIDE` | `true` in non-production, `false` in production | Allow `redirectUri` query overrides on `/api/integrations/google/connect-url` |
 | `GOOGLE_INTEGRATION_ENCRYPTION_KEY` | — | AES-GCM key for encrypted token storage |
 
 OAuth callback resolution order (`GET /api/integrations/google/connect-url`):
-1. `redirectUri` query param (if provided, valid callback path, and allowed format)
+1. `redirectUri` query param (if provided, valid callback path, and `ENABLE_GOOGLE_OAUTH_REDIRECT_URI_OVERRIDE=true`)
 2. `GOOGLE_OAUTH_REDIRECT_URI` (configured default; always used when host matches, or when dynamic host switching is disabled)
 3. Dynamic host callback (`https://<request-host>/api/integrations/google/callback`) only when host differs and `ENABLE_GOOGLE_OAUTH_DYNAMIC_CALLBACK_HOST=true`
 
