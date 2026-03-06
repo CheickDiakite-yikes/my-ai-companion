@@ -163,6 +163,21 @@ function assertLiveTraceMarkers(
   required.forEach((event) => {
     assert.ok(events.has(event), `trace export is missing required marker: ${event}`);
   });
+
+  if (events.has("live.assistant.interrupt_button_pressed")) {
+    assert.ok(
+      events.has("live.assistant.interrupt_requested") ||
+        events.has("live.assistant.interrupt_ignored") ||
+        events.has("live.assistant.interrupt_ignored_no_assistant_audio"),
+      "interrupt button traces must include requested or ignored marker",
+    );
+  }
+  if (events.has("live.assistant.interrupt_requested")) {
+    assert.ok(
+      events.has("live.audio.activity_start_sent"),
+      "interrupt request must emit activity_start_sent marker",
+    );
+  }
 }
 
 void main().catch((error) => {

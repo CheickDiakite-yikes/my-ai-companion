@@ -9,6 +9,13 @@ export type LiveSpeechState =
   | "user_speaking"
   | "assistant_speaking"
   | "cooldown";
+export type LiveInterruptTrigger = "none" | "button" | "speech_detector";
+export type LiveSocketState =
+  | "connecting"
+  | "open"
+  | "closing"
+  | "closed"
+  | "unavailable";
 type LiveTranscriptionPayload = {
   text?: string;
   finished?: boolean;
@@ -28,6 +35,13 @@ export interface LiveVoiceDebugState {
   activeThreshold: number;
   manualActivityActive: boolean;
   assistantTurnActive: boolean;
+  interruptPending: boolean;
+  interruptTrigger: LiveInterruptTrigger;
+  lastInterruptReason: string | null;
+  lastInterruptRequestedAt: number | null;
+  manualInterruptWatchdogExpiresAt: number | null;
+  sessionReadyForRealtimeInput: boolean;
+  socketState: LiveSocketState;
   analyzerKind: "audio_worklet" | "script_processor";
   trackSettings: Record<string, unknown> | null;
   trackCapabilities: Record<string, unknown> | null;
@@ -320,6 +334,10 @@ const USER_SPEECH_PREFIX_FRAMES = parseClientPositiveInt(
 const USER_SPEECH_COOLDOWN_MS = parseClientPositiveInt(
   liveClientEnv.VITE_LIVE_AUDIO_USER_SPEECH_COOLDOWN_MS,
   220,
+);
+const MANUAL_INTERRUPT_IDLE_TIMEOUT_MS = parseClientPositiveInt(
+  liveClientEnv.VITE_LIVE_AUDIO_MANUAL_INTERRUPT_IDLE_TIMEOUT_MS,
+  1400,
 );
 const LIVE_DEBUG_STATE_EMIT_MIN_INTERVAL_MS = parseClientPositiveInt(
   liveClientEnv.VITE_LIVE_DEBUG_STATE_EMIT_MIN_INTERVAL_MS,
@@ -880,6 +898,12 @@ export class GeminiLiveVoiceSession {
   private speechCandidateFrames = 0;
   private speechSilenceFrames = 0;
   private interruptPending = false;
+  private interruptTrigger: LiveInterruptTrigger = "none";
+  private lastInterruptReason: string | null = null;
+  private lastInterruptRequestedAt: number | null = null;
+  private manualInterruptSpeechObserved = false;
+  private manualInterruptWatchdogTimeout: number | null = null;
+  private manualInterruptWatchdogExpiresAt: number | null = null;
   private bufferedPrefixAudioFrames: BufferedAudioFrame[] = [];
   private analyzerKind: "audio_worklet" | "script_processor" = "script_processor";
   private debugStateTrackSettings: Record<string, unknown> | null = null;
@@ -978,6 +1002,11 @@ export class GeminiLiveVoiceSession {
     this.assistantTurnActive = false;
     this.speechState = "idle";
     this.manualActivityActive = false;
+    this.interruptTrigger = "none";
+    this.lastInterruptReason = null;
+    this.lastInterruptRequestedAt = null;
+    this.manualInterruptSpeechObserved = false;
+    this.clearManualInterruptWatchdog();
     this.assistantPlaybackTailUntilMs = 0;
     this.assistantSpeechWindowStartMs = 0;
     this.assistantTurnReleaseAtMs = 0;
@@ -1101,6 +1130,9 @@ export class GeminiLiveVoiceSession {
           this.sessionReadyForRealtimeInput = false;
           this.manualActivityActive = false;
           this.interruptPending = false;
+          this.interruptTrigger = "none";
+          this.manualInterruptSpeechObserved = false;
+          this.clearManualInterruptWatchdog();
           this.speechCandidateFrames = 0;
           this.speechSilenceFrames = 0;
           this.syncSpeechStateFromActivity("session_error");
@@ -1115,6 +1147,9 @@ export class GeminiLiveVoiceSession {
           this.sessionReadyForRealtimeInput = false;
           this.manualActivityActive = false;
           this.interruptPending = false;
+          this.interruptTrigger = "none";
+          this.manualInterruptSpeechObserved = false;
+          this.clearManualInterruptWatchdog();
           this.speechCandidateFrames = 0;
           this.speechSilenceFrames = 0;
           this.session = null;
@@ -1188,6 +1223,7 @@ export class GeminiLiveVoiceSession {
       userSpeechEndSilenceFrames: USER_SPEECH_END_SILENCE_FRAMES,
       userSpeechPrefixFrames: USER_SPEECH_PREFIX_FRAMES,
       userSpeechCooldownMs: USER_SPEECH_COOLDOWN_MS,
+      manualInterruptIdleTimeoutMs: MANUAL_INTERRUPT_IDLE_TIMEOUT_MS,
       suppressUserTranscriptDuringAssistantSpeech:
         SUPPRESS_USER_TRANSCRIPT_DURING_ASSISTANT_SPEECH,
     });
@@ -1230,9 +1266,15 @@ export class GeminiLiveVoiceSession {
     this.audioNoiseGateFailOpenFramesRemaining = 0;
     this.clearAssistantTurnIdleReleaseTimeout();
     this.clearSpeechCooldownTimeout();
+    this.clearManualInterruptWatchdog();
     this.assistantTurnActive = false;
     this.speechState = "idle";
     this.manualActivityActive = false;
+    this.interruptPending = false;
+    this.interruptTrigger = "none";
+    this.lastInterruptReason = null;
+    this.lastInterruptRequestedAt = null;
+    this.manualInterruptSpeechObserved = false;
     this.assistantPlaybackTailUntilMs = 0;
     this.assistantSpeechWindowStartMs = 0;
     this.assistantTurnReleaseAtMs = 0;
@@ -1455,7 +1497,25 @@ export class GeminiLiveVoiceSession {
   }
 
   interruptAssistantPlayback(reason = "user_request"): boolean {
-    return this.beginUserSpeech(reason, true);
+    const assistantWindowActive = this.isAssistantSpeechWindowActive();
+    this.debug("live.assistant.interrupt_button_pressed", {
+      reason,
+      assistantWindowActive,
+      manualActivityActive: this.manualActivityActive,
+      interruptPending: this.interruptPending,
+      sessionReadyForRealtimeInput: this.sessionReadyForRealtimeInput,
+      socketState: this.getSocketStateLabel(),
+    });
+    if (!assistantWindowActive) {
+      this.debug("live.assistant.interrupt_ignored_no_assistant_audio", {
+        reason,
+        manualActivityActive: this.manualActivityActive,
+        interruptPending: this.interruptPending,
+      });
+      this.emitDebugState(true);
+      return false;
+    }
+    return this.beginUserSpeech(reason, true, "button");
   }
 
   private getDebugState(): LiveVoiceDebugState {
@@ -1466,6 +1526,13 @@ export class GeminiLiveVoiceSession {
       activeThreshold: this.activeSpeechThreshold,
       manualActivityActive: this.manualActivityActive,
       assistantTurnActive: this.assistantTurnActive,
+      interruptPending: this.interruptPending,
+      interruptTrigger: this.interruptTrigger,
+      lastInterruptReason: this.lastInterruptReason,
+      lastInterruptRequestedAt: this.lastInterruptRequestedAt,
+      manualInterruptWatchdogExpiresAt: this.manualInterruptWatchdogExpiresAt,
+      sessionReadyForRealtimeInput: this.sessionReadyForRealtimeInput,
+      socketState: this.getSocketStateLabel(),
       analyzerKind: this.analyzerKind,
       trackSettings: this.debugStateTrackSettings,
       trackCapabilities: this.debugStateTrackCapabilities,
@@ -1543,6 +1610,41 @@ export class GeminiLiveVoiceSession {
     }, USER_SPEECH_COOLDOWN_MS);
   }
 
+  private clearManualInterruptWatchdog(): void {
+    if (this.manualInterruptWatchdogTimeout !== null) {
+      window.clearTimeout(this.manualInterruptWatchdogTimeout);
+      this.manualInterruptWatchdogTimeout = null;
+    }
+    this.manualInterruptWatchdogExpiresAt = null;
+  }
+
+  private scheduleManualInterruptWatchdog(reason: string): void {
+    this.clearManualInterruptWatchdog();
+    const timeoutMs = MANUAL_INTERRUPT_IDLE_TIMEOUT_MS;
+    this.manualInterruptWatchdogExpiresAt = Date.now() + timeoutMs;
+    this.debug("live.assistant.interrupt_watchdog_started", {
+      reason,
+      timeoutMs,
+      trigger: this.interruptTrigger,
+    });
+    this.emitDebugState(true);
+    this.manualInterruptWatchdogTimeout = window.setTimeout(() => {
+      this.manualInterruptWatchdogTimeout = null;
+      this.manualInterruptWatchdogExpiresAt = null;
+      if (!this.manualActivityActive || this.interruptTrigger !== "button") {
+        return;
+      }
+      if (this.manualInterruptSpeechObserved) {
+        return;
+      }
+      this.debug("live.assistant.interrupt_watchdog_timeout", {
+        reason,
+        timeoutMs,
+      });
+      this.endUserSpeech("manual_interrupt_idle_timeout");
+    }, timeoutMs);
+  }
+
   private bufferPrefixAudioFrame(pcmBase64: string): void {
     this.bufferedPrefixAudioFrames.push({
       pcmBase64,
@@ -1553,6 +1655,37 @@ export class GeminiLiveVoiceSession {
         0,
         this.bufferedPrefixAudioFrames.length - USER_SPEECH_PREFIX_FRAMES,
       );
+    }
+  }
+
+  private getSessionSocketReadyState(): number | null {
+    if (!this.session) {
+      return null;
+    }
+    const maybeConnection = (this.session as { conn?: unknown }).conn as
+      | { ws?: { readyState?: number } }
+      | undefined;
+    return typeof maybeConnection?.ws?.readyState === "number"
+      ? maybeConnection.ws.readyState
+      : null;
+  }
+
+  private getSocketStateLabel(): LiveSocketState {
+    const readyState = this.getSessionSocketReadyState();
+    if (readyState === null) {
+      return "unavailable";
+    }
+    switch (readyState) {
+      case 0:
+        return "connecting";
+      case 1:
+        return "open";
+      case 2:
+        return "closing";
+      case 3:
+        return "closed";
+      default:
+        return "unavailable";
     }
   }
 
@@ -1583,6 +1716,11 @@ export class GeminiLiveVoiceSession {
         );
       if (websocketClosed) {
         this.sessionReadyForRealtimeInput = false;
+        this.manualActivityActive = false;
+        this.interruptPending = false;
+        this.interruptTrigger = "none";
+        this.manualInterruptSpeechObserved = false;
+        this.clearManualInterruptWatchdog();
       }
       this.debug(failureEvent, {
         ...failureMetadata,
@@ -1599,12 +1737,7 @@ export class GeminiLiveVoiceSession {
     if (!this.session || !this.sessionReadyForRealtimeInput) {
       return false;
     }
-    // SDK forwards directly to WebSocket.send; guard by raw socket readyState first
-    // to avoid browser-level "WebSocket is already in CLOSING or CLOSED state." spam.
-    const maybeConnection = (this.session as { conn?: unknown }).conn as
-      | { ws?: { readyState?: number } }
-      | undefined;
-    const socketReadyState = maybeConnection?.ws?.readyState;
+    const socketReadyState = this.getSessionSocketReadyState();
     if (
       typeof socketReadyState === "number" &&
       socketReadyState !== WebSocket.OPEN
@@ -1612,6 +1745,9 @@ export class GeminiLiveVoiceSession {
       this.sessionReadyForRealtimeInput = false;
       this.manualActivityActive = false;
       this.interruptPending = false;
+      this.interruptTrigger = "none";
+      this.manualInterruptSpeechObserved = false;
+      this.clearManualInterruptWatchdog();
       const now = Date.now();
       if (now - this.lastSocketNotOpenLogAtMs > 1500) {
         this.lastSocketNotOpenLogAtMs = now;
@@ -1657,6 +1793,11 @@ export class GeminiLiveVoiceSession {
         );
       if (websocketClosed) {
         this.sessionReadyForRealtimeInput = false;
+        this.manualActivityActive = false;
+        this.interruptPending = false;
+        this.interruptTrigger = "none";
+        this.manualInterruptSpeechObserved = false;
+        this.clearManualInterruptWatchdog();
       }
       this.debug("live.tool_call.send_response_failed", {
         message,
@@ -1689,7 +1830,11 @@ export class GeminiLiveVoiceSession {
     });
   }
 
-  private beginUserSpeech(reason: string, force = false): boolean {
+  private beginUserSpeech(
+    reason: string,
+    force = false,
+    trigger: LiveInterruptTrigger = "speech_detector",
+  ): boolean {
     if (!this.session) {
       return false;
     }
@@ -1706,6 +1851,7 @@ export class GeminiLiveVoiceSession {
       return true;
     }
     if (this.manualActivityActive) {
+      this.interruptTrigger = trigger;
       this.setSpeechState("user_speaking", { reason, resumed: true });
       return true;
     }
@@ -1720,10 +1866,11 @@ export class GeminiLiveVoiceSession {
     this.interruptPending = assistantWindowActive;
     this.clearPlaybackQueue();
 
+    const interruptRequestedAt = Date.now();
     const activityStarted = this.sendRealtimeInputSafely(
       { activityStart: {} },
       "live.assistant.interrupt_failed",
-      { reason },
+      { reason, trigger },
     );
     if (!activityStarted) {
       this.interruptPending = false;
@@ -1731,9 +1878,26 @@ export class GeminiLiveVoiceSession {
     }
 
     this.manualActivityActive = true;
+    this.interruptTrigger = trigger;
+    this.lastInterruptReason = reason;
+    this.lastInterruptRequestedAt = interruptRequestedAt;
+    this.manualInterruptSpeechObserved = false;
     this.speechCandidateFrames = 0;
     this.speechSilenceFrames = 0;
     this.flushBufferedPrefixAudioFrames();
+    if (trigger === "button") {
+      this.scheduleManualInterruptWatchdog(reason);
+    } else {
+      this.clearManualInterruptWatchdog();
+    }
+    this.debug("live.audio.activity_start_sent", {
+      reason,
+      trigger,
+      assistantWindowActive,
+      interruptPending: this.interruptPending,
+      sessionReadyForRealtimeInput: this.sessionReadyForRealtimeInput,
+      socketState: this.getSocketStateLabel(),
+    });
     if (assistantWindowActive) {
       this.debug("live.audio.barge_in_detected", {
         rms: this.latestInputRms,
@@ -1759,13 +1923,24 @@ export class GeminiLiveVoiceSession {
       this.syncSpeechStateFromActivity(reason);
       return;
     }
-    this.sendRealtimeInputSafely(
+    const activityEnded = this.sendRealtimeInputSafely(
       { activityEnd: {} },
       "live.audio.activity_end_failed",
       { reason },
     );
+    this.debug("live.audio.activity_end_sent", {
+      reason,
+      activityEnded,
+      trigger: this.interruptTrigger,
+      manualInterruptSpeechObserved: this.manualInterruptSpeechObserved,
+      sessionReadyForRealtimeInput: this.sessionReadyForRealtimeInput,
+      socketState: this.getSocketStateLabel(),
+    });
     this.manualActivityActive = false;
     this.interruptPending = false;
+    this.interruptTrigger = "none";
+    this.manualInterruptSpeechObserved = false;
+    this.clearManualInterruptWatchdog();
     this.speechCandidateFrames = 0;
     this.speechSilenceFrames = 0;
     this.enterSpeechCooldown(reason);
@@ -1809,6 +1984,18 @@ export class GeminiLiveVoiceSession {
 
     if (this.manualActivityActive) {
       if (isSpeechLike) {
+        if (
+          this.interruptTrigger === "button" &&
+          !this.manualInterruptSpeechObserved
+        ) {
+          this.manualInterruptSpeechObserved = true;
+          this.clearManualInterruptWatchdog();
+          this.debug("live.assistant.interrupt_watchdog_cleared_user_speech", {
+            reason: "speech_detected_after_button_interrupt",
+            rms,
+            threshold,
+          });
+        }
         this.speechSilenceFrames = 0;
         this.setSpeechState("user_speaking", {
           reason: "speech_continues",
@@ -1837,6 +2024,8 @@ export class GeminiLiveVoiceSession {
           assistantWindowActive
             ? "detected_user_barge_in"
             : "detected_user_speech",
+          false,
+          "speech_detector",
         );
       }
       this.emitDebugState();
@@ -2457,6 +2646,9 @@ export class GeminiLiveVoiceSession {
         });
       }
       this.interruptPending = false;
+      if (!this.manualActivityActive) {
+        this.interruptTrigger = "none";
+      }
       this.assistantTurnActive = false;
       this.assistantTurnReleaseAtMs = 0;
       this.clearAssistantTurnIdleReleaseTimeout();
@@ -2502,6 +2694,9 @@ export class GeminiLiveVoiceSession {
         });
       }
       this.interruptPending = false;
+      if (!this.manualActivityActive) {
+        this.interruptTrigger = "none";
+      }
       this.assistantTurnReleaseAtMs = 0;
       if (this.pendingPersonalContextTurn && !this.personalContextToolCalledThisTurn) {
         this.debug("live.google_context.no_tool_call", {

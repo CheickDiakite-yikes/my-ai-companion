@@ -4467,6 +4467,14 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
                         </span>
                         <span>{liveDebug.state?.analyzerKind ?? "script_processor"}</span>
                         <span className="text-[10px] uppercase tracking-[0.18em]" style={{ color: "var(--app-on-dark-muted)" }}>
+                          Socket
+                        </span>
+                        <span>{liveDebug.state?.socketState ?? "unavailable"}</span>
+                        <span className="text-[10px] uppercase tracking-[0.18em]" style={{ color: "var(--app-on-dark-muted)" }}>
+                          Session Ready
+                        </span>
+                        <span>{liveDebug.state?.sessionReadyForRealtimeInput ? "yes" : "no"}</span>
+                        <span className="text-[10px] uppercase tracking-[0.18em]" style={{ color: "var(--app-on-dark-muted)" }}>
                           Current RMS
                         </span>
                         <span>{(liveDebug.state?.currentRms ?? 0).toFixed(4)}</span>
@@ -4474,6 +4482,28 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
                           Manual Activity
                         </span>
                         <span>{liveDebug.state?.manualActivityActive ? "on" : "off"}</span>
+                        <span className="text-[10px] uppercase tracking-[0.18em]" style={{ color: "var(--app-on-dark-muted)" }}>
+                          Interrupt Pending
+                        </span>
+                        <span>{liveDebug.state?.interruptPending ? "yes" : "no"}</span>
+                        <span className="text-[10px] uppercase tracking-[0.18em]" style={{ color: "var(--app-on-dark-muted)" }}>
+                          Interrupt Trigger
+                        </span>
+                        <span>{liveDebug.state?.interruptTrigger ?? "none"}</span>
+                      </div>
+                      <div className="mt-2 text-[10px]" style={{ color: "var(--app-on-dark-muted)" }}>
+                        Last interrupt:
+                        {" "}
+                        {liveDebug.state?.lastInterruptRequestedAt
+                          ? `${new Date(liveDebug.state.lastInterruptRequestedAt).toLocaleTimeString()} (${liveDebug.state?.lastInterruptReason ?? "unknown"})`
+                          : "none"}
+                      </div>
+                      <div className="mt-1 text-[10px]" style={{ color: "var(--app-on-dark-muted)" }}>
+                        Interrupt watchdog:
+                        {" "}
+                        {liveDebug.state?.manualInterruptWatchdogExpiresAt
+                          ? `active until ${new Date(liveDebug.state.manualInterruptWatchdogExpiresAt).toLocaleTimeString()}`
+                          : "inactive"}
                       </div>
                       <div className="mt-3 text-[10px]" style={{ color: "var(--app-on-dark-muted)" }}>
                         Resumption handle updated:
@@ -9941,10 +9971,31 @@ function App() {
       return;
     }
 
+    logLiveTrace("live.assistant.interrupt_button_pressed", {
+      runId: liveRunIdRef.current,
+      source: "voice_view_button",
+      speechState: liveDebugState?.speechState ?? null,
+      manualActivityActive: liveDebugState?.manualActivityActive ?? null,
+      interruptPending: liveDebugState?.interruptPending ?? null,
+      interruptTrigger: liveDebugState?.interruptTrigger ?? null,
+      socketState: liveDebugState?.socketState ?? null,
+      sessionReadyForRealtimeInput:
+        liveDebugState?.sessionReadyForRealtimeInput ?? null,
+    });
+
     const interrupted = liveSessionRef.current.interruptAssistantPlayback(
       "voice_view_button",
     );
     if (!interrupted) {
+      logLiveTrace("live.assistant.interrupt_ignored", {
+        runId: liveRunIdRef.current,
+        source: "voice_view_button",
+        speechState: liveDebugState?.speechState ?? null,
+        manualActivityActive: liveDebugState?.manualActivityActive ?? null,
+        interruptPending: liveDebugState?.interruptPending ?? null,
+        interruptTrigger: liveDebugState?.interruptTrigger ?? null,
+        socketState: liveDebugState?.socketState ?? null,
+      });
       return;
     }
 
