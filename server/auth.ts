@@ -157,6 +157,20 @@ export function setupAuth(app: Express) {
 }
 
 export function registerAuthRoutes(app: Express) {
+  const ssoConfig = getGoogleSsoConfig();
+  if (ssoConfig.configured) {
+    const baseUri = ssoConfig.integrationRedirectUri ?? ssoConfig.redirectUriOverride ?? "(request-derived)";
+    console.log(
+      `[auth] Google SSO configured (client_id=${ssoConfig.clientId.slice(0, 12)}…). ` +
+      `Callback will derive from: ${baseUri}. ` +
+      `Ensure the resulting /api/auth/google/callback URL is registered in Google Cloud Console.`,
+    );
+  } else {
+    console.warn(
+      `[auth] Google SSO NOT configured. Missing env: ${ssoConfig.missing.join(", ")}`,
+    );
+  }
+
   app.get("/api/auth/google/start", async (req, res) => {
     const fallbackReturnTo = sanitizeReturnTo(
       (process.env.GOOGLE_AUTH_POST_LOGIN_REDIRECT ?? "/").trim(),
@@ -177,6 +191,7 @@ export function registerAuthRoutes(app: Express) {
 
       const mode = typeof req.query.mode === "string" ? req.query.mode : "signin";
       const callbackUrl = resolveGoogleSsoCallbackUrl(req);
+      console.log("[auth/google/start] computed callback:", callbackUrl, "host:", req.get("host"), "proto:", req.protocol);
       const state = randomBase64Url(32);
       const codeVerifier = randomBase64Url(64);
       const codeChallenge = createCodeChallenge(codeVerifier);
@@ -276,7 +291,8 @@ export function registerAuthRoutes(app: Express) {
         const text = await tokenResponse.text().catch(() => "");
         console.error("[auth/google/callback] token exchange failed", {
           status: tokenResponse.status,
-          body: text.slice(0, 300),
+          body: text.slice(0, 500),
+          callbackUrl,
         });
         req.session.googleAuth = undefined;
         return redirectWithError("oauth_exchange_failed", returnTo);
