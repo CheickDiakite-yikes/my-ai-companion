@@ -1220,6 +1220,17 @@ function composeLiveSystemInstruction(params: {
     ].join("\n"),
   );
 
+  sections.push(
+    [
+      "LIVE VOICE TURN-TAKING POLICY:",
+      "- Default to short spoken turns. Unless the user explicitly asks for depth, answer in 1 to 3 short sentences and then pause.",
+      "- Lead with the direct answer first. Offer to go deeper instead of front-loading long monologues.",
+      "- For broad or multi-part requests, handle the highest-priority part first and check whether the user wants more.",
+      "- If the transcript sounds clipped, noisy, or uncertain, ask a brief confirmation question instead of guessing.",
+      "- If the user says stop, wait, hold on, or starts cutting in, stop the current thought and listen.",
+    ].join("\n"),
+  );
+
   const memoryBlock = cleanTextInput(params.memoryContextBlock);
   if (memoryBlock) {
     sections.push(`LIVE MEMORY CONTEXT:\n${memoryBlock}`);

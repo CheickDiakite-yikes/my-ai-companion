@@ -681,6 +681,7 @@ export class GeminiLiveVoiceSession {
   private assistantTurnActive = false;
   private assistantPlaybackTailUntilMs = 0;
   private assistantSpeechWindowStartMs = 0;
+  private interruptPending = false;
   private conversationId: string | null = null;
   private liveGoogleSearchEnabled = false;
   private liveMorningBriefFunctionCallingEnabled = false;
@@ -970,6 +971,7 @@ export class GeminiLiveVoiceSession {
     this.assistantTurnActive = false;
     this.assistantPlaybackTailUntilMs = 0;
     this.assistantSpeechWindowStartMs = 0;
+    this.interruptPending = false;
     this.conversationId = null;
     this.liveGoogleSearchEnabled = false;
     this.liveMorningBriefFunctionCallingEnabled = false;
@@ -1158,6 +1160,46 @@ export class GeminiLiveVoiceSession {
 
   getFacingMode(): CameraFacingMode {
     return this.preferredFacingMode;
+  }
+
+  interruptAssistantPlayback(reason = "user_request"): boolean {
+    if (!this.session) {
+      return false;
+    }
+
+    const hasInterruptibleOutput =
+      this.assistantTurnActive ||
+      this.isAssistantAudioLikelyActive() ||
+      Date.now() < this.assistantPlaybackTailUntilMs;
+    if (!hasInterruptibleOutput) {
+      return false;
+    }
+
+    // Persist whatever Zee has already said before yielding the floor back.
+    this.flushPendingTranscript("assistant", "idle_timeout");
+    this.assistantTurnActive = false;
+    this.assistantPlaybackTailUntilMs = 0;
+    this.assistantSpeechWindowStartMs = 0;
+    this.interruptPending = true;
+    this.clearPlaybackQueue();
+
+    try {
+      this.session.sendClientContent({
+        turnComplete: false,
+      });
+      this.debug("live.assistant.interrupt_requested", {
+        reason,
+      });
+    } catch (error) {
+      this.interruptPending = false;
+      this.debug("live.assistant.interrupt_failed", {
+        reason,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      return false;
+    }
+
+    return true;
   }
 
   private startVideoCaptureLoop(): void {
@@ -1556,6 +1598,12 @@ export class GeminiLiveVoiceSession {
 
     if (serverContent.interrupted) {
       this.debug("live.server.interrupted");
+      if (this.interruptPending) {
+        this.debug("live.assistant.interrupt_acknowledged", {
+          source: "server_interrupted",
+        });
+      }
+      this.interruptPending = false;
       this.assistantTurnActive = false;
       this.assistantPlaybackTailUntilMs = Math.max(
         this.assistantPlaybackTailUntilMs,
@@ -1564,17 +1612,33 @@ export class GeminiLiveVoiceSession {
       this.clearPlaybackQueue();
     }
 
-    for (const part of modelParts) {
-      const audioData = part.inlineData?.data;
-      if (audioData) {
-        this.enqueueAudio(audioData);
+    const shouldDropAssistantOutput = this.interruptPending;
+    if (shouldDropAssistantOutput && (audioPartCount > 0 || Boolean(serverContent.outputTranscription?.text))) {
+      this.debug("live.assistant.output_dropped_after_interrupt", {
+        audioPartCount,
+        hasOutputTranscription: Boolean(serverContent.outputTranscription?.text),
+      });
+    } else {
+      for (const part of modelParts) {
+        const audioData = part.inlineData?.data;
+        if (audioData) {
+          this.enqueueAudio(audioData);
+        }
       }
     }
 
     this.captureTranscript("user", serverContent.inputTranscription);
-    this.captureTranscript("assistant", serverContent.outputTranscription);
+    if (!shouldDropAssistantOutput) {
+      this.captureTranscript("assistant", serverContent.outputTranscription);
+    }
 
     if (serverContent.turnComplete) {
+      if (this.interruptPending) {
+        this.debug("live.assistant.interrupt_acknowledged", {
+          source: "turn_complete",
+        });
+      }
+      this.interruptPending = false;
       if (this.pendingPersonalContextTurn && !this.personalContextToolCalledThisTurn) {
         this.debug("live.google_context.no_tool_call", {
           liveGooglePersonalContextFunctionCallingEnabled:

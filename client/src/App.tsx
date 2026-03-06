@@ -40,6 +40,7 @@ import {
   Maximize2,
   Globe,
   SwitchCamera,
+  VolumeX,
 } from "lucide-react";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -4252,10 +4253,11 @@ const SharedHeader = ({
   );
 };
 
-const VoiceView = ({ isActive, isConnecting, onEndCall, onProfile, assistantName, assistantAvatar, selectedVoice, setSelectedVoice, mode, setMode, duration, userProfileImage, isVideoEnabled, onToggleVideo, onFlipCamera, videoStream, isVideoTransitioning, cameraFacingMode, webLookupStatus, webLookupLabel }: {
+const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, onProfile, assistantName, assistantAvatar, selectedVoice, setSelectedVoice, mode, setMode, duration, userProfileImage, isVideoEnabled, onToggleVideo, onFlipCamera, videoStream, isVideoTransitioning, cameraFacingMode, webLookupStatus, webLookupLabel }: {
   isActive: boolean; 
   isConnecting: boolean;
   onEndCall: () => void;
+  onInterruptAssistant: () => void;
   onProfile: () => void;
   assistantName: Persona;
   assistantAvatar: string;
@@ -4625,7 +4627,7 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onProfile, assistantName
             style={{ paddingBottom: "max(5rem, calc(env(safe-area-inset-bottom) + 4.1rem))" }}
           >
             {isActive && (
-              <div className="flex items-center justify-center gap-8 mb-4">
+              <div className="mb-4 flex flex-wrap items-center justify-center gap-4">
                  <Button 
                     variant="outline" 
                     size="icon" 
@@ -4647,6 +4649,21 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onProfile, assistantName
                     data-testid="button-toggle-video"
                   >
                     <Video className="w-6 h-6" />
+                  </Button>
+                  <Button
+                    variant="outline"
+                    className="h-14 rounded-full border-2 px-5 text-sm font-medium transition-colors hover:opacity-90"
+                    style={{
+                      backgroundColor: "var(--app-soft-card-bg)",
+                      borderColor: "var(--app-soft-card-border)",
+                      color: "var(--app-on-dark)",
+                    }}
+                    onClick={onInterruptAssistant}
+                    aria-label="Interrupt Zee and start talking"
+                    data-testid="button-interrupt-assistant"
+                  >
+                    <VolumeX className="mr-2 h-4 w-4" />
+                    Interrupt
                   </Button>
                   <Button 
                     variant="destructive" 
@@ -9554,6 +9571,25 @@ function App() {
     }
   };
 
+  const handleInterruptAssistant = () => {
+    if (!liveSessionRef.current || !isCalling) {
+      return;
+    }
+
+    const interrupted = liveSessionRef.current.interruptAssistantPlayback(
+      "voice_view_button",
+    );
+    if (!interrupted) {
+      return;
+    }
+
+    setLiveError(null);
+    logLiveTrace("live.assistant.interrupt_requested", {
+      runId: liveRunIdRef.current,
+      source: "voice_view_button",
+    });
+  };
+
   const handleFlipCamera = async () => {
     if (!liveSessionRef.current || !isCalling || !isVideoEnabled) {
       return;
@@ -9805,6 +9841,7 @@ function App() {
             isActive={isCalling} 
             isConnecting={isLiveConnecting}
             onEndCall={handleEndCall}
+            onInterruptAssistant={handleInterruptAssistant}
             onProfile={() => {
               setShowSettings(false);
               setShowOutputsHistory(false);
