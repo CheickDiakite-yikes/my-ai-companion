@@ -890,6 +890,7 @@ export class GeminiLiveVoiceSession {
   private latestGoAwayReceivedAt: number | null = null;
   private lastDebugStateEmittedAtMs = 0;
   private lastDebugStateSnapshot = "";
+  private lastSocketNotOpenLogAtMs = 0;
   private conversationId: string | null = null;
   private liveGoogleSearchEnabled = false;
   private liveMorningBriefFunctionCallingEnabled = false;
@@ -1116,6 +1117,7 @@ export class GeminiLiveVoiceSession {
           this.interruptPending = false;
           this.speechCandidateFrames = 0;
           this.speechSilenceFrames = 0;
+          this.session = null;
           this.syncSpeechStateFromActivity("session_closed");
           this.debug("live.session.closed", { reason: event.reason || "unknown" });
           this.callbacks.onClosed?.(event.reason || undefined);
@@ -1563,16 +1565,22 @@ export class GeminiLiveVoiceSession {
       | "live.video.frame_send_failed",
     failureMetadata: Record<string, unknown> = {},
   ): boolean {
-    if (!this.session || !this.sessionReadyForRealtimeInput) {
+    if (!this.isSessionSocketReadyForSend(failureMetadata)) {
+      return false;
+    }
+    const activeSession = this.session;
+    if (!activeSession) {
       return false;
     }
     try {
-      this.session.sendRealtimeInput(payload);
+      activeSession.sendRealtimeInput(payload);
       return true;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const websocketClosed =
-        /WebSocket.+(CLOSING|CLOSED)|not open|closed/i.test(message);
+        /WebSocket.+(CONNECTING|CLOSING|CLOSED)|not open|closed|Still in CONNECTING/i.test(
+          message,
+        );
       if (websocketClosed) {
         this.sessionReadyForRealtimeInput = false;
       }
@@ -1580,6 +1588,80 @@ export class GeminiLiveVoiceSession {
         ...failureMetadata,
         message,
         websocketClosed,
+      });
+      return false;
+    }
+  }
+
+  private isSessionSocketReadyForSend(
+    failureMetadata: Record<string, unknown> = {},
+  ): boolean {
+    if (!this.session || !this.sessionReadyForRealtimeInput) {
+      return false;
+    }
+    // SDK forwards directly to WebSocket.send; guard by raw socket readyState first
+    // to avoid browser-level "WebSocket is already in CLOSING or CLOSED state." spam.
+    const maybeConnection = (this.session as { conn?: unknown }).conn as
+      | { ws?: { readyState?: number } }
+      | undefined;
+    const socketReadyState = maybeConnection?.ws?.readyState;
+    if (
+      typeof socketReadyState === "number" &&
+      socketReadyState !== WebSocket.OPEN
+    ) {
+      this.sessionReadyForRealtimeInput = false;
+      this.manualActivityActive = false;
+      this.interruptPending = false;
+      const now = Date.now();
+      if (now - this.lastSocketNotOpenLogAtMs > 1500) {
+        this.lastSocketNotOpenLogAtMs = now;
+        this.debug("live.session.send_skipped_socket_not_open", {
+          ...failureMetadata,
+          socketReadyState,
+        });
+      }
+      return false;
+    }
+    return true;
+  }
+
+  private sendToolResponseSafely(
+    functionResponses: Array<Record<string, unknown>>,
+  ): boolean {
+    if (!this.isSessionSocketReadyForSend({ source: "tool_response" })) {
+      this.debug("live.tool_call.response_skipped_session_not_ready", {
+        functionResponseCount: functionResponses.length,
+      });
+      return false;
+    }
+    const activeSession = this.session;
+    if (!activeSession) {
+      return false;
+    }
+    const sessionWithTools = activeSession as Session & {
+      sendToolResponse?: (payload: {
+        functionResponses: Array<Record<string, unknown>>;
+      }) => void;
+    };
+    if (typeof sessionWithTools.sendToolResponse !== "function") {
+      return false;
+    }
+    try {
+      sessionWithTools.sendToolResponse({ functionResponses });
+      return true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const websocketClosed =
+        /WebSocket.+(CONNECTING|CLOSING|CLOSED)|not open|closed|Still in CONNECTING/i.test(
+          message,
+        );
+      if (websocketClosed) {
+        this.sessionReadyForRealtimeInput = false;
+      }
+      this.debug("live.tool_call.send_response_failed", {
+        message,
+        websocketClosed,
+        functionResponseCount: functionResponses.length,
       });
       return false;
     }
@@ -2855,17 +2937,10 @@ export class GeminiLiveVoiceSession {
             typeof errorObject?.message === "string" ? errorObject.message : null,
         };
       });
-      if (functionResponses.length > 0 && this.session) {
-        const sessionWithTools = this.session as Session & {
-          sendToolResponse?: (payload: {
-            functionResponses: Array<Record<string, unknown>>;
-          }) => void;
-        };
-        if (typeof sessionWithTools.sendToolResponse === "function") {
-          sessionWithTools.sendToolResponse({
-            functionResponses: functionResponses as Array<Record<string, unknown>>,
-          });
-        }
+      if (functionResponses.length > 0) {
+        this.sendToolResponseSafely(
+          functionResponses as Array<Record<string, unknown>>,
+        );
       }
 
       if (Array.isArray(payload.chatDigests)) {

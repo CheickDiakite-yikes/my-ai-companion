@@ -9649,11 +9649,13 @@ function App() {
         onClosed: (reason) => {
           pauseCameraUsageTracking();
           setWebLookupStatus("voice", "idle");
-          logLiveTrace("live.video.session_closed", {
+          const hadVideoEnabled = isVideoEnabledRef.current;
+          logLiveTrace("live.session.closed", {
             runId,
             reason: reason ?? "unknown",
+            hadVideoEnabled,
           });
-          const shouldAutoResume = !manualLiveStopRef.current;
+          const shouldAutoResume = !manualLiveStopRef.current && hadVideoEnabled;
           setIsLiveConnecting(false);
           setIsCalling(false);
           setCallStartTime(null);
@@ -9672,7 +9674,6 @@ function App() {
 
           if (shouldAutoResume) {
             if (autoResumeBudgetRef.current <= 0) {
-              const hadVideoEnabled = isVideoEnabledRef.current;
               logLiveTrace("live.video.auto_resume_failed", {
                 runId,
                 reason: "budget_exhausted",
@@ -9688,8 +9689,14 @@ function App() {
             autoResumeBudgetRef.current -= 1;
             void startLiveSession({
               autoResumed: true,
-              restoreVideo: isVideoEnabledRef.current,
+              restoreVideo: hadVideoEnabled,
             });
+          } else if (!manualLiveStopRef.current) {
+            setLiveError(
+              hadVideoEnabled
+                ? "Live camera session ended. Reconnect to continue sharing video."
+                : "Live voice session ended. Reconnect to continue.",
+            );
           }
         },
         onDebug: (message, metadata) => {
