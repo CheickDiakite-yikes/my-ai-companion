@@ -4579,9 +4579,9 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
                             liveDebug.traces
                               .slice()
                               .reverse()
-                              .map((trace) => (
+                              .map((trace, index) => (
                                 <div
-                                  key={`${trace.at}-${trace.event}`}
+                                  key={`${trace.at}-${trace.event}-${index}`}
                                   className="rounded-xl border px-2 py-2"
                                   style={{
                                     borderColor:
@@ -9670,6 +9670,13 @@ function App() {
           });
         },
         onError: (error) => {
+          if (liveSessionRef.current !== liveSession) {
+            logLiveTrace("live.session.error_ignored_stale", {
+              runId,
+              error: error.message,
+            });
+            return;
+          }
           console.error("Gemini Live session error:", {
             runId,
             error: error.message,
@@ -9677,9 +9684,18 @@ function App() {
           setLiveError(error.message);
         },
         onClosed: (reason) => {
+          const isCurrentSession = liveSessionRef.current === liveSession;
+          const hadVideoEnabled = Boolean(liveSession?.isVideoEnabled());
+          if (!isCurrentSession) {
+            logLiveTrace("live.session.closed_ignored_stale", {
+              runId,
+              reason: reason ?? "unknown",
+              hadVideoEnabled,
+            });
+            return;
+          }
           pauseCameraUsageTracking();
           setWebLookupStatus("voice", "idle");
-          const hadVideoEnabled = isVideoEnabledRef.current;
           logLiveTrace("live.session.closed", {
             runId,
             reason: reason ?? "unknown",
@@ -9691,9 +9707,7 @@ function App() {
           setCallStartTime(null);
           setIsVideoEnabled(false);
           setVideoStream(null);
-          if (liveSessionRef.current === liveSession) {
-            liveSessionRef.current = null;
-          }
+          liveSessionRef.current = null;
           if (liveSession) {
             try {
               void liveSession.stop();

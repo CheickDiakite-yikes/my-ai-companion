@@ -1474,7 +1474,6 @@ export async function createLiveToken(
     ...(responseModality === "AUDIO" ? ["speechConfig"] : []),
     "realtimeInputConfig",
     "contextWindowCompression",
-    "explicitVadSignal",
     "inputAudioTranscription",
     "outputAudioTranscription",
   ];
@@ -1542,7 +1541,6 @@ export async function createLiveToken(
                       slidingWindow: {},
                     }
                   : undefined,
-                explicitVadSignal: true,
                 proactivity:
                   effectiveProactiveAudio
                     ? { proactiveAudio: true }

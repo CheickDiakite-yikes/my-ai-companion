@@ -1,4 +1,11 @@
-import { GoogleGenAI, Modality, type LiveServerMessage, type Session } from "@google/genai";
+import {
+  ActivityHandling,
+  GoogleGenAI,
+  Modality,
+  TurnCoverage,
+  type LiveServerMessage,
+  type Session,
+} from "@google/genai";
 
 type TranscriptSender = "user" | "assistant";
 type CameraFacingMode = "user" | "environment";
@@ -1087,8 +1094,18 @@ export class GeminiLiveVoiceSession {
     const connectPromise = ai.live.connect({
       model: params.model,
       config: {
+        realtimeInputConfig: {
+          activityHandling: ActivityHandling.START_OF_ACTIVITY_INTERRUPTS,
+          turnCoverage: TurnCoverage.TURN_INCLUDES_ONLY_ACTIVITY,
+          automaticActivityDetection: {
+            disabled: true,
+          },
+        },
         sessionResumption: {
           handle: params.sessionResumptionHandle ?? undefined,
+        },
+        contextWindowCompression: {
+          slidingWindow: {},
         },
       },
       callbacks: {
@@ -1663,11 +1680,26 @@ export class GeminiLiveVoiceSession {
       return null;
     }
     const maybeConnection = (this.session as { conn?: unknown }).conn as
-      | { ws?: { readyState?: number } }
+      | {
+          ws?: { readyState?: number };
+          socket?: { readyState?: number };
+          webSocket?: { readyState?: number; ws?: { readyState?: number } };
+          _ws?: { readyState?: number };
+        }
       | undefined;
-    return typeof maybeConnection?.ws?.readyState === "number"
-      ? maybeConnection.ws.readyState
-      : null;
+    const candidates = [
+      maybeConnection?.ws?.readyState,
+      maybeConnection?.socket?.readyState,
+      maybeConnection?.webSocket?.readyState,
+      maybeConnection?.webSocket?.ws?.readyState,
+      maybeConnection?._ws?.readyState,
+    ];
+    for (const candidate of candidates) {
+      if (typeof candidate === "number") {
+        return candidate;
+      }
+    }
+    return null;
   }
 
   private getSocketStateLabel(): LiveSocketState {
@@ -1721,6 +1753,8 @@ export class GeminiLiveVoiceSession {
         this.interruptTrigger = "none";
         this.manualInterruptSpeechObserved = false;
         this.clearManualInterruptWatchdog();
+        this.session = null;
+        this.syncSpeechStateFromActivity("socket_send_failed");
       }
       this.debug(failureEvent, {
         ...failureMetadata,
@@ -1748,6 +1782,10 @@ export class GeminiLiveVoiceSession {
       this.interruptTrigger = "none";
       this.manualInterruptSpeechObserved = false;
       this.clearManualInterruptWatchdog();
+      if (socketReadyState === WebSocket.CLOSING || socketReadyState === WebSocket.CLOSED) {
+        this.session = null;
+        this.syncSpeechStateFromActivity("socket_not_open");
+      }
       const now = Date.now();
       if (now - this.lastSocketNotOpenLogAtMs > 1500) {
         this.lastSocketNotOpenLogAtMs = now;
@@ -1798,11 +1836,65 @@ export class GeminiLiveVoiceSession {
         this.interruptTrigger = "none";
         this.manualInterruptSpeechObserved = false;
         this.clearManualInterruptWatchdog();
+        this.session = null;
+        this.syncSpeechStateFromActivity("tool_response_socket_send_failed");
       }
       this.debug("live.tool_call.send_response_failed", {
         message,
         websocketClosed,
         functionResponseCount: functionResponses.length,
+      });
+      return false;
+    }
+  }
+
+  private sendClientContentSafely(
+    payload: {
+      turns: string;
+      turnComplete: boolean;
+    },
+    failureEvent: "live.web_search.nudge_failed" | "live.google_context.nudge_failed",
+    failureMetadata: Record<string, unknown> = {},
+  ): boolean {
+    if (!this.isSessionSocketReadyForSend({ source: "client_content", ...failureMetadata })) {
+      return false;
+    }
+    const activeSession = this.session;
+    if (!activeSession) {
+      return false;
+    }
+    const sessionWithClientContent = activeSession as Session & {
+      sendClientContent?: (params: {
+        turns: string;
+        turnComplete: boolean;
+      }) => void;
+    };
+    if (typeof sessionWithClientContent.sendClientContent !== "function") {
+      return false;
+    }
+    try {
+      sessionWithClientContent.sendClientContent(payload);
+      return true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const websocketClosed =
+        /WebSocket.+(CONNECTING|CLOSING|CLOSED)|not open|closed|Still in CONNECTING/i.test(
+          message,
+        );
+      if (websocketClosed) {
+        this.sessionReadyForRealtimeInput = false;
+        this.manualActivityActive = false;
+        this.interruptPending = false;
+        this.interruptTrigger = "none";
+        this.manualInterruptSpeechObserved = false;
+        this.clearManualInterruptWatchdog();
+        this.session = null;
+        this.syncSpeechStateFromActivity("client_content_socket_send_failed");
+      }
+      this.debug(failureEvent, {
+        ...failureMetadata,
+        message,
+        websocketClosed,
       });
       return false;
     }
@@ -3212,27 +3304,19 @@ export class GeminiLiveVoiceSession {
   }
 
   private sendWebSearchNudge(userTranscript: string): void {
-    if (!this.session) return;
     const query = normalizeText(userTranscript);
     if (!query) return;
-    try {
-      (
-        this.session as Session & {
-          sendClientContent?: (payload: {
-            turns: string;
-            turnComplete: boolean;
-          }) => void;
-        }
-      ).sendClientContent?.({
+    const sent = this.sendClientContentSafely(
+      {
         turns: `Use Google Search grounding for this latest user request and answer with current verified facts: ${query}`,
         turnComplete: true,
-      });
+      },
+      "live.web_search.nudge_failed",
+      { textLength: query.length },
+    );
+    if (sent) {
       this.debug("live.web_search.nudge_sent", {
         textLength: query.length,
-      });
-    } catch (error) {
-      this.debug("live.web_search.nudge_failed", {
-        message: error instanceof Error ? error.message : String(error),
       });
     }
   }
@@ -3241,31 +3325,22 @@ export class GeminiLiveVoiceSession {
     userTranscript: string,
     intent: LivePersonalContextIntent,
   ): void {
-    if (!this.session) return;
     const query = normalizeText(userTranscript);
     if (!query) return;
 
     const toolInstruction = buildPersonalContextToolInstruction(query, intent);
 
-    try {
-      (
-        this.session as Session & {
-          sendClientContent?: (payload: {
-            turns: string;
-            turnComplete: boolean;
-          }) => void;
-        }
-      ).sendClientContent?.({
+    const sent = this.sendClientContentSafely(
+      {
         turns: `For this latest user request, you MUST use the connected Google personal context function tools before giving any natural-language answer. ${toolInstruction} Do not answer from memory or earlier tool results. Fetch fresh data now. Never invent email or calendar details. User request: ${query}`,
         turnComplete: true,
-      });
+      },
+      "live.google_context.nudge_failed",
+      { textLength: query.length, intent },
+    );
+    if (sent) {
       this.debug("live.google_context.nudge_sent", {
         textLength: query.length,
-        intent,
-      });
-    } catch (error) {
-      this.debug("live.google_context.nudge_failed", {
-        message: error instanceof Error ? error.message : String(error),
         intent,
       });
     }
