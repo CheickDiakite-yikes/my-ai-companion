@@ -38,7 +38,6 @@ const OUTPUT_SAMPLE_RATE = 24000;
 const VIDEO_FRAME_INTERVAL_MS = 1000;
 const VIDEO_MAX_EDGE = 640;
 const VIDEO_PERMISSION_TIMEOUT_MS = 12000;
-const MICROPHONE_PERMISSION_TIMEOUT_MS = 12000;
 const TRANSCRIPT_DUPLICATE_WINDOW_MS = 1500;
 const TRANSCRIPT_FLUSH_DEBOUNCE_MS = 900;
 const TRANSCRIPT_OVERLAP_MIN_CHARS = 6;
@@ -77,6 +76,54 @@ function parseClientBoundedNumber(
   const parsed = Number.parseFloat(value);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.min(Math.max(parsed, min), max);
+}
+
+type LiveAudioCompatibilityProfile = {
+  isAndroid: boolean;
+  androidMajor: number | null;
+  isLegacyAndroid: boolean;
+  microphonePermissionTimeoutMs: number;
+  connectionTimeoutMs: number;
+};
+
+type MicCaptureAttemptFailure = {
+  attempt: number;
+  label: string;
+  errorName: string | null;
+  errorMessage: string;
+};
+
+function resolveAndroidMajorVersion(userAgent: string): number | null {
+  const match = userAgent.match(/Android\s+(\d+)/i);
+  if (!match) return null;
+  const parsed = Number.parseInt(match[1], 10);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function resolveLiveAudioCompatibilityProfile(): LiveAudioCompatibilityProfile {
+  const userAgent =
+    typeof navigator !== "undefined" && typeof navigator.userAgent === "string"
+      ? navigator.userAgent
+      : "";
+  const isAndroid = /android/i.test(userAgent);
+  const androidMajor = isAndroid ? resolveAndroidMajorVersion(userAgent) : null;
+  const isLegacyAndroid =
+    isAndroid && typeof androidMajor === "number" && androidMajor <= 10;
+  const microphonePermissionTimeoutMs = parseClientPositiveInt(
+    liveClientEnv.VITE_LIVE_MICROPHONE_PERMISSION_TIMEOUT_MS,
+    isLegacyAndroid ? 25000 : isAndroid ? 18000 : 12000,
+  );
+  const connectionTimeoutMs = parseClientPositiveInt(
+    liveClientEnv.VITE_LIVE_CONNECTION_TIMEOUT_MS,
+    isLegacyAndroid ? 30000 : isAndroid ? 22000 : 15000,
+  );
+  return {
+    isAndroid,
+    androidMajor,
+    isLegacyAndroid,
+    microphonePermissionTimeoutMs,
+    connectionTimeoutMs,
+  };
 }
 
 const liveClientEnv = (import.meta.env as Record<string, unknown>) ?? {};
@@ -137,7 +184,7 @@ const LIVE_EMAIL_SIGNAL_PATTERN = /\b(email|emails|inbox|unread|mail|gmail)\b/i;
 const LIVE_CALENDAR_SIGNAL_PATTERN =
   /\b(calendar|meeting|meetings|schedule|event|events|appointment|appointments)\b/i;
 const LIVE_CALENDAR_FOLLOWUP_TIME_PATTERN =
-  /\b(tomorrow|rest\s+of\s+the\s+week|later\s+this\s+week|this\s+week|next\s+week|next\s+7\s+days|weekend)\b/i;
+  /\b(tomorrow|tomor+ow|tomore|tmrw|rest\s+of\s+the\s+week|later\s+this\s+week|this\s+week|next\s+week|next\s+7\s+days|next\s+few\s+days|weekend)\b/i;
 const LIVE_CALENDAR_FOLLOWUP_REQUEST_PATTERN =
   /\b(how\s+about|what\s+about|check(\s+again)?|look(\s+again)?|can\s+you\s+check|what\s+do\s+i\s+have|do\s+i\s+have|am\s+i\s+free|anything\s+on)\b/i;
 const ENABLE_MORNING_BRIEF_VOICE_MODE = parseClientBoolean(
@@ -219,6 +266,7 @@ function isLikelyLiveWebSearchQuery(text: string): boolean {
 }
 
 type LivePersonalContextIntent = "email" | "calendar" | "both";
+type CalendarNudgeTimeRange = "today" | "tomorrow" | "this_week" | "next_7_days";
 
 function classifyLivePersonalContextIntent(
   text: string,
@@ -232,6 +280,42 @@ function classifyLivePersonalContextIntent(
   if (hasEmailIntent) return "email";
   if (hasCalendarIntent) return "calendar";
   return null;
+}
+
+function inferCalendarTimeRangeForNudge(text: string): CalendarNudgeTimeRange {
+  const normalized = normalizeText(text).toLowerCase();
+  if (
+    /\b(tomorrow|tomor+ow|tomore|tmrw)\b/.test(normalized)
+  ) {
+    return "tomorrow";
+  }
+  if (
+    /\b(next\s+week|next\s+7\s+days|next\s+few\s+days)\b/.test(normalized)
+  ) {
+    return "next_7_days";
+  }
+  if (
+    /\b(rest\s+of\s+the\s+week|later\s+this\s+week|this\s+week|weekend)\b/.test(
+      normalized,
+    )
+  ) {
+    return "this_week";
+  }
+  return "today";
+}
+
+function buildPersonalContextToolInstruction(
+  query: string,
+  intent: LivePersonalContextIntent,
+): string {
+  const calendarTimeRange = inferCalendarTimeRangeForNudge(query);
+  if (intent === "both") {
+    return `Call get_user_emails with {"refresh": true} and get_calendar_events with {"timeRange":"${calendarTimeRange}","timezone":"user_local","refresh": true} before answering.`;
+  }
+  if (intent === "calendar") {
+    return `Call get_calendar_events with {"timeRange":"${calendarTimeRange}","timezone":"user_local","refresh": true} before answering.`;
+  }
+  return 'Call get_user_emails with {"refresh": true} before answering.';
 }
 
 function extractToolCallNames(toolCallPayload: unknown): string[] {
@@ -390,7 +474,15 @@ function getAudioContextConstructor(): typeof AudioContext {
 
 function createAudioContext(options?: AudioContextOptions): AudioContext {
   const AudioContextCtor = getAudioContextConstructor();
-  return new AudioContextCtor(options);
+  if (!options) {
+    return new AudioContextCtor();
+  }
+  try {
+    return new AudioContextCtor(options);
+  } catch {
+    // Older Android WebView/Chrome builds can reject explicit sample-rate configs.
+    return new AudioContextCtor();
+  }
 }
 
 function chooseVideoSize(video: HTMLVideoElement): { width: number; height: number } {
@@ -490,41 +582,75 @@ export async function collectMediaCaptureDebugContext(): Promise<Record<string, 
 }
 
 export async function getMicrophoneStreamWithFallback(): Promise<MediaStream> {
-  const attemptConstraints: MediaStreamConstraints[] = [
+  const compatibility = resolveLiveAudioCompatibilityProfile();
+  const attemptConstraints: Array<{
+    label: string;
+    constraints: MediaStreamConstraints;
+  }> = [
     {
-      audio: {
-        channelCount: 1,
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
+      label: "processed_mono",
+      constraints: {
+        audio: {
+          channelCount: 1,
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+        video: false,
       },
-      video: false,
     },
     {
-      audio: {
-        channelCount: 1,
+      label: "mono_only",
+      constraints: {
+        audio: {
+          channelCount: 1,
+        },
+        video: false,
       },
-      video: false,
     },
     {
-      audio: true,
-      video: false,
+      label: "basic_audio",
+      constraints: {
+        audio: true,
+        video: false,
+      },
     },
   ];
 
   let lastError: unknown = null;
+  const attemptFailures: MicCaptureAttemptFailure[] = [];
   for (let index = 0; index < attemptConstraints.length; index += 1) {
     try {
       return await getUserMediaWithTimeout(
-        attemptConstraints[index],
-        MICROPHONE_PERMISSION_TIMEOUT_MS,
+        attemptConstraints[index].constraints,
+        compatibility.microphonePermissionTimeoutMs,
       );
     } catch (error) {
       lastError = error;
+      attemptFailures.push({
+        attempt: index + 1,
+        label: attemptConstraints[index].label,
+        errorName:
+          typeof (error as { name?: unknown })?.name === "string"
+            ? ((error as { name: string }).name ?? null)
+            : null,
+        errorMessage:
+          error instanceof Error ? error.message : String(error ?? "unknown"),
+      });
     }
   }
 
-  throw lastError ?? new Error("Microphone permission was denied or unavailable");
+  const message =
+    lastError instanceof Error
+      ? lastError.message
+      : "Microphone permission was denied or unavailable";
+  const wrapped = new Error(message) as Error & {
+    attemptFailures?: MicCaptureAttemptFailure[];
+    compatibility?: LiveAudioCompatibilityProfile;
+  };
+  wrapped.attemptFailures = attemptFailures;
+  wrapped.compatibility = compatibility;
+  throw wrapped;
 }
 
 export class GeminiLiveVoiceSession {
@@ -689,7 +815,9 @@ export class GeminiLiveVoiceSession {
       });
     }
 
-    const CONNECTION_TIMEOUT_MS = 15_000;
+    const compatibilityProfile = resolveLiveAudioCompatibilityProfile();
+    const CONNECTION_TIMEOUT_MS = compatibilityProfile.connectionTimeoutMs;
+    this.debug("live.audio.compatibility_profile", compatibilityProfile);
     let connectionOpened = false;
     let timedOut = false;
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
@@ -1193,6 +1321,24 @@ export class GeminiLiveVoiceSession {
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "Microphone permission was denied or unavailable";
+      const micAttemptFailures = Array.isArray(
+        (error as { attemptFailures?: unknown })?.attemptFailures,
+      )
+        ? (((error as { attemptFailures?: unknown[] }).attemptFailures ??
+            []) as unknown[])
+        : [];
+      const compatibility = (
+        error as { compatibility?: LiveAudioCompatibilityProfile | null }
+      )?.compatibility;
+      this.debug("live.audio.capture_failed", {
+        message,
+        errorName:
+          typeof (error as { name?: unknown })?.name === "string"
+            ? (error as { name: string }).name
+            : null,
+        micAttemptFailures,
+        compatibility: compatibility ?? null,
+      });
       this.emitError(new Error(message));
       throw error;
     }
@@ -1972,12 +2118,7 @@ export class GeminiLiveVoiceSession {
     const query = normalizeText(userTranscript);
     if (!query) return;
 
-    const toolInstruction =
-      intent === "both"
-        ? "Call get_user_emails and get_calendar_events before answering."
-        : intent === "calendar"
-          ? "Call get_calendar_events before answering."
-          : "Call get_user_emails before answering.";
+    const toolInstruction = buildPersonalContextToolInstruction(query, intent);
 
     try {
       (
@@ -1988,7 +2129,7 @@ export class GeminiLiveVoiceSession {
           }) => void;
         }
       ).sendClientContent?.({
-        turns: `For this latest user request, use the connected Google personal context tools. ${toolInstruction} Never invent email or calendar details. User request: ${query}`,
+        turns: `For this latest user request, you MUST use the connected Google personal context function tools before giving any natural-language answer. ${toolInstruction} Do not answer from memory or earlier tool results. Fetch fresh data now. Never invent email or calendar details. User request: ${query}`,
         turnComplete: true,
       });
       this.debug("live.google_context.nudge_sent", {

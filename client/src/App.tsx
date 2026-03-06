@@ -9081,6 +9081,14 @@ function App() {
       } catch (micError: any) {
         setIsLiveConnecting(false);
         const msg = micError?.message ?? "";
+        const micAttemptFailures = Array.isArray(micError?.attemptFailures)
+          ? micError.attemptFailures
+          : [];
+        const micCompatibility =
+          micError?.compatibility && typeof micError.compatibility === "object"
+            ? micError.compatibility
+            : null;
+        const isAndroidUa = /android/i.test(navigator.userAgent || "");
         const captureContext = await collectMediaCaptureDebugContext().catch(
           () => ({} as Record<string, unknown>),
         );
@@ -9088,6 +9096,8 @@ function App() {
           runId,
           error: msg,
           errorName: micError?.name ?? null,
+          micAttemptFailures,
+          micCompatibility,
           ...(captureContext ?? {}),
         });
         if (/denied|not allowed|permission/i.test(msg)) {
@@ -9096,11 +9106,15 @@ function App() {
           );
         } else if (/not available|not supported/i.test(msg)) {
           setLiveError(
-            "Your browser does not support microphone access. Please try using Safari or Chrome."
+            isAndroidUa
+              ? "This Android browser/WebView does not fully support live microphone capture. Update Chrome/WebView and try again."
+              : "Your browser does not support microphone access. Please try using Safari or Chrome."
           );
         } else if (/timed?\s*out/i.test(msg)) {
           setLiveError(
-            "Microphone permission request timed out. Please tap the call button again and allow microphone access when prompted."
+            isAndroidUa
+              ? "Microphone permission timed out on Android. Tap call again and allow mic access promptly, or update Chrome/WebView."
+              : "Microphone permission request timed out. Please tap the call button again and allow microphone access when prompted."
           );
         } else {
           setLiveError(
@@ -9118,6 +9132,8 @@ function App() {
                 error: msg,
                 errorName: micError?.name,
                 userAgent: navigator.userAgent,
+                micAttemptFailures,
+                micCompatibility,
                 ...(captureContext ?? {}),
               },
             }),
@@ -9333,6 +9349,23 @@ function App() {
 
       const isTimeout = /timed?\s*out/i.test(error?.message ?? "");
       const retryAttempt = (options as any)?._retryAttempt ?? 0;
+      const isLikelyMicFailure =
+        /microphone|media capture|getusermedia|audio/i.test(
+          error?.message ?? "",
+        ) || Array.isArray((error as any)?.attemptFailures);
+      const micCaptureContext = isLikelyMicFailure
+        ? await collectMediaCaptureDebugContext().catch(
+            () => ({} as Record<string, unknown>),
+          )
+        : null;
+      const micAttemptFailures = Array.isArray((error as any)?.attemptFailures)
+        ? (error as any).attemptFailures
+        : undefined;
+      const micCompatibility =
+        (error as any)?.compatibility &&
+        typeof (error as any).compatibility === "object"
+          ? (error as any).compatibility
+          : undefined;
 
       try {
         await fetch("/api/live/client-error", {
@@ -9350,6 +9383,9 @@ function App() {
               retryAttempt,
               model: tokenModel,
               userAgent: navigator.userAgent,
+              micAttemptFailures,
+              micCompatibility,
+              ...(micCaptureContext ?? {}),
             },
           }),
         });
@@ -9406,6 +9442,11 @@ function App() {
         error: getErrorMessage(error),
         wasTimeout: isTimeout,
         retriesExhausted: isTimeout && retryAttempt >= MAX_RETRIES,
+        isLikelyMicFailure,
+        micAttemptFailures:
+          typeof micAttemptFailures === "undefined"
+            ? undefined
+            : micAttemptFailures,
       });
     } finally {
       if (startNonce === liveStartNonceRef.current) {
