@@ -12,11 +12,11 @@ count() {
   (rg -n "$pattern" "$LOG_FILE" || true) | wc -l | tr -d ' '
 }
 
-INTERRUPTED_COUNT="$(count 'live\.server\.content.*interrupted: true')"
-GEN_COMPLETE_COUNT="$(count 'live\.server\.content.*generationComplete: true')"
-TURN_COMPLETE_COUNT="$(count 'live\.server\.content.*turnComplete: true')"
-USER_TRANSCRIPT_COUNT="$(count 'live\.transcript\.received.*sender: "user"')"
-ASSISTANT_TRANSCRIPT_COUNT="$(count 'live\.transcript\.received.*sender: "assistant"')"
+INTERRUPTED_COUNT="$(count 'live\.server\.content.*(interrupted: true|"interrupted":[[:space:]]*true)')"
+GEN_COMPLETE_COUNT="$(count 'live\.server\.content.*(generationComplete: true|"generationComplete":[[:space:]]*true)')"
+TURN_COMPLETE_COUNT="$(count 'live\.server\.content.*(turnComplete: true|"turnComplete":[[:space:]]*true)')"
+USER_TRANSCRIPT_COUNT="$(count 'live\.transcript\.received.*(sender: "user"|"sender":[[:space:]]*"user")')"
+ASSISTANT_TRANSCRIPT_COUNT="$(count 'live\.transcript\.received.*(sender: "assistant"|"sender":[[:space:]]*"assistant")')"
 USER_SUPPRESSED_COUNT="$(count 'live\.transcript\.user_suppressed_during_assistant_speech')"
 FAIL_OPEN_COUNT="$(count 'live\.audio\.noise_gate\.fail_open')"
 INTERRUPT_BUTTON_COUNT="$(count 'live\.assistant\.interrupt_button_pressed')"
