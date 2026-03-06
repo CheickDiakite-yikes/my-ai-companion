@@ -10,6 +10,8 @@
   "scripts": {
     "dev:client": "vite dev --port 5000",
     "dev": "NODE_ENV=development tsx server/index.ts",
+    "dev:all": "npm run db:push && npm run check && npm run test:voice:language && npm run test:voice:ui && npm run dev",
+    "dev:quick": "npm run db:push && npm run dev",
     "mobile:install": "npm --prefix mobile install",
     "mobile:start": "npm --prefix mobile run start",
     "mobile:ios": "npm --prefix mobile run ios",
