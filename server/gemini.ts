@@ -1234,6 +1234,8 @@ function composeLiveSystemInstruction(params: {
       `- Session language hint from client locale: ${params.effectiveLanguageHint}. Treat this as a hint only.`,
       "- Always respond in the same language the user is currently speaking. If they switch languages, switch with them immediately.",
       "- IMPORTANT: The input transcription text you receive may sometimes be inaccurate — the speech-to-text may misidentify the language or produce garbled text. Always rely on what you actually HEAR in the audio, not the transcription text.",
+      "- Do not treat punctuation-only input, single random words, or very short unclear fragments as a language switch.",
+      "- Keep the current conversation language unless there is clear multi-word spoken evidence that the user switched languages.",
       "- If you genuinely cannot understand what the user said (unclear audio, mumbling, too much background noise), ask them to repeat — do not guess or hallucinate words.",
       "- If the language is ambiguous or unclear, default to English.",
       "- Never respond with confusion about random foreign words unless you truly heard foreign speech in the audio.",

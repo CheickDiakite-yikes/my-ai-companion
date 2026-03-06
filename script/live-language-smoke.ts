@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import {
   analyzeTranscriptScript,
+  evaluateUserTranscriptPersistence,
   normalizeLanguageHint,
   normalizeLanguageHintList,
   resolveEffectiveLanguageHint,
@@ -55,6 +56,34 @@ function main(): void {
   assert.equal(resolveExpectedScriptFamilyForLanguage("en-US"), "latin");
   assert.equal(resolveExpectedScriptFamilyForLanguage("ar"), "arabic");
   assert.equal(resolveExpectedScriptFamilyForLanguage("hi-IN"), "devanagari");
+
+  const punctuationOnlyDecision = evaluateUserTranscriptPersistence({
+    text: ".",
+    expectedScriptFamily: "latin",
+  });
+  assert.equal(punctuationOnlyDecision.discard, true);
+  assert.equal(punctuationOnlyDecision.reason, "punctuation_only");
+
+  const crossScriptShortDecision = evaluateUserTranscriptPersistence({
+    text: "يعني",
+    expectedScriptFamily: "latin",
+  });
+  assert.equal(crossScriptShortDecision.discard, true);
+  assert.equal(crossScriptShortDecision.reason, "cross_script_short_fragment");
+
+  const crossScriptLongDecision = evaluateUserTranscriptPersistence({
+    text: "مرحبا كيف الحال اليوم",
+    expectedScriptFamily: "latin",
+  });
+  assert.equal(crossScriptLongDecision.discard, false);
+  assert.equal(crossScriptLongDecision.reason, "none");
+
+  const expectedLatinShortDecision = evaluateUserTranscriptPersistence({
+    text: "yes",
+    expectedScriptFamily: "latin",
+  });
+  assert.equal(expectedLatinShortDecision.discard, false);
+  assert.equal(expectedLatinShortDecision.reason, "none");
 
   assert.equal(
     shouldFlagTranscriptLanguageMismatch({

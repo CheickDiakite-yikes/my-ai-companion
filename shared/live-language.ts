@@ -14,6 +14,12 @@ export type TranscriptScriptFamily =
   | "mixed"
   | "unknown";
 
+export type UserTranscriptDiscardReason =
+  | "none"
+  | "punctuation_only"
+  | "too_few_letters"
+  | "cross_script_short_fragment";
+
 export interface TranscriptScriptStats {
   scriptFamily: TranscriptScriptFamily;
   dominantScript: Exclude<TranscriptScriptFamily, "mixed" | "unknown"> | null;
@@ -25,6 +31,14 @@ export interface TranscriptScriptStats {
     hebrew: number;
     devanagari: number;
   };
+}
+
+export interface UserTranscriptPersistenceDecision {
+  discard: boolean;
+  reason: UserTranscriptDiscardReason;
+  mismatch: boolean;
+  wordCount: number;
+  scriptStats: TranscriptScriptStats;
 }
 
 export interface EffectiveLanguageHintResolution {
@@ -108,6 +122,20 @@ function classifyCodePoint(
   if (isHebrewCodePoint(codePoint)) return "hebrew";
   if (isDevanagariCodePoint(codePoint)) return "devanagari";
   return null;
+}
+
+function isAsciiDigit(codePoint: number): boolean {
+  return codePoint >= 0x30 && codePoint <= 0x39;
+}
+
+function hasLetterOrDigit(text: string): boolean {
+  for (const char of text) {
+    const codePoint = char.codePointAt(0);
+    if (typeof codePoint !== "number") continue;
+    if (isAsciiDigit(codePoint)) return true;
+    if (classifyCodePoint(codePoint)) return true;
+  }
+  return false;
 }
 
 export function normalizeLanguageHint(
@@ -292,4 +320,84 @@ export function shouldFlagTranscriptLanguageMismatch(params: {
     return params.dominantScript !== params.expectedScriptFamily;
   }
   return true;
+}
+
+function countTranscriptWords(text: string): number {
+  return text
+    .split(/\s+/)
+    .filter((part) => part.length > 0 && hasLetterOrDigit(part)).length;
+}
+
+function isPunctuationOrSymbolsOnly(text: string): boolean {
+  return !hasLetterOrDigit(text);
+}
+
+export function evaluateUserTranscriptPersistence(params: {
+  text: string;
+  expectedScriptFamily: TranscriptScriptFamily;
+  minimumLetters?: number;
+  crossScriptShortFragmentMaxWords?: number;
+  crossScriptShortFragmentMaxLetters?: number;
+}): UserTranscriptPersistenceDecision {
+  const normalized = params.text.trim();
+  const scriptStats = analyzeTranscriptScript(normalized);
+  const wordCount = countTranscriptWords(normalized);
+  const minimumLetters = Math.max(1, params.minimumLetters ?? 2);
+  const crossScriptShortFragmentMaxWords = Math.max(
+    1,
+    params.crossScriptShortFragmentMaxWords ?? 2,
+  );
+  const crossScriptShortFragmentMaxLetters = Math.max(
+    minimumLetters,
+    params.crossScriptShortFragmentMaxLetters ?? 10,
+  );
+  const mismatch = shouldFlagTranscriptLanguageMismatch({
+    expectedScriptFamily: params.expectedScriptFamily,
+    observedScriptFamily: scriptStats.scriptFamily,
+    dominantScript: scriptStats.dominantScript,
+    lettersAnalyzed: scriptStats.lettersAnalyzed,
+    minimumLetters,
+  });
+
+  if (!normalized || isPunctuationOrSymbolsOnly(normalized)) {
+    return {
+      discard: true,
+      reason: "punctuation_only",
+      mismatch,
+      wordCount,
+      scriptStats,
+    };
+  }
+
+  if (scriptStats.lettersAnalyzed < minimumLetters) {
+    return {
+      discard: true,
+      reason: "too_few_letters",
+      mismatch,
+      wordCount,
+      scriptStats,
+    };
+  }
+
+  if (
+    mismatch &&
+    wordCount <= crossScriptShortFragmentMaxWords &&
+    scriptStats.lettersAnalyzed <= crossScriptShortFragmentMaxLetters
+  ) {
+    return {
+      discard: true,
+      reason: "cross_script_short_fragment",
+      mismatch,
+      wordCount,
+      scriptStats,
+    };
+  }
+
+  return {
+    discard: false,
+    reason: "none",
+    mismatch,
+    wordCount,
+    scriptStats,
+  };
 }

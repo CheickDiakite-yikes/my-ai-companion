@@ -11,12 +11,36 @@ if [[ ! -x "$SKILL_SCRIPT" ]]; then
   exit 1
 fi
 
+merge_profile_overrides() {
+  local overrides_json="$1"
+  node -e '
+const fs = require("node:fs");
+const raw = fs.readFileSync(0, "utf8");
+const base = JSON.parse(raw);
+const overrides = JSON.parse(process.argv[1]);
+const merged = { ...base, ...overrides };
+process.stdout.write(`${JSON.stringify(merged, null, 2)}\n`);
+' "$overrides_json"
+}
+
 case "$PROFILE" in
   stable)
-    exec "$SKILL_SCRIPT" stable
+    "$SKILL_SCRIPT" stable | merge_profile_overrides '{
+      "VITE_LIVE_AUDIO_SUPPRESS_INPUT_COOLDOWN_MS": "300",
+      "VITE_LIVE_AUDIO_USER_SPEECH_START_CONSECUTIVE_FRAMES": "4",
+      "VITE_LIVE_AUDIO_USER_SPEECH_ASSISTANT_CONSECUTIVE_FRAMES": "6",
+      "VITE_LIVE_AUDIO_USER_SPEECH_END_SILENCE_FRAMES": "10",
+      "VITE_LIVE_AUDIO_USER_SPEECH_COOLDOWN_MS": "300"
+    }'
     ;;
   lab)
-    exec "$SKILL_SCRIPT" balanced
+    "$SKILL_SCRIPT" balanced | merge_profile_overrides '{
+      "VITE_LIVE_AUDIO_SUPPRESS_INPUT_COOLDOWN_MS": "300",
+      "VITE_LIVE_AUDIO_USER_SPEECH_START_CONSECUTIVE_FRAMES": "4",
+      "VITE_LIVE_AUDIO_USER_SPEECH_ASSISTANT_CONSECUTIVE_FRAMES": "6",
+      "VITE_LIVE_AUDIO_USER_SPEECH_END_SILENCE_FRAMES": "10",
+      "VITE_LIVE_AUDIO_USER_SPEECH_COOLDOWN_MS": "300"
+    }'
     ;;
   *)
     echo "Usage: bash script/live-voice-profile.sh [stable|lab]" >&2

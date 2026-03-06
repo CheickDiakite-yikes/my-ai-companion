@@ -8,6 +8,7 @@ import {
 } from "@google/genai";
 import {
   analyzeTranscriptScript,
+  evaluateUserTranscriptPersistence,
   resolveExpectedScriptFamilyForLanguage,
   shouldFlagTranscriptLanguageMismatch,
   type TranscriptScriptFamily,
@@ -331,15 +332,15 @@ const USER_SPEECH_MAX_RMS_THRESHOLD = parseClientBoundedNumber(
 );
 const USER_SPEECH_START_CONSECUTIVE_FRAMES = parseClientPositiveInt(
   liveClientEnv.VITE_LIVE_AUDIO_USER_SPEECH_START_CONSECUTIVE_FRAMES,
-  3,
+  4,
 );
 const USER_SPEECH_ASSISTANT_CONSECUTIVE_FRAMES = parseClientPositiveInt(
   liveClientEnv.VITE_LIVE_AUDIO_USER_SPEECH_ASSISTANT_CONSECUTIVE_FRAMES,
-  5,
+  6,
 );
 const USER_SPEECH_END_SILENCE_FRAMES = parseClientPositiveInt(
   liveClientEnv.VITE_LIVE_AUDIO_USER_SPEECH_END_SILENCE_FRAMES,
-  8,
+  10,
 );
 const USER_SPEECH_PREFIX_FRAMES = parseClientPositiveInt(
   liveClientEnv.VITE_LIVE_AUDIO_USER_SPEECH_PREFIX_FRAMES,
@@ -347,7 +348,7 @@ const USER_SPEECH_PREFIX_FRAMES = parseClientPositiveInt(
 );
 const USER_SPEECH_COOLDOWN_MS = parseClientPositiveInt(
   liveClientEnv.VITE_LIVE_AUDIO_USER_SPEECH_COOLDOWN_MS,
-  220,
+  300,
 );
 const MANUAL_INTERRUPT_IDLE_TIMEOUT_MS = parseClientPositiveInt(
   liveClientEnv.VITE_LIVE_AUDIO_MANUAL_INTERRUPT_IDLE_TIMEOUT_MS,
@@ -3122,6 +3123,29 @@ export class GeminiLiveVoiceSession {
   ): void {
     const text = normalizeText(rawText);
     if (!text) return;
+
+    if (sender === "user") {
+      const persistenceDecision = evaluateUserTranscriptPersistence({
+        text,
+        expectedScriptFamily: this.expectedScriptFamily,
+      });
+      if (persistenceDecision.discard) {
+        this.debug("live.transcript.user_discarded_low_signal", {
+          reason,
+          discardReason: persistenceDecision.reason,
+          mismatch: persistenceDecision.mismatch,
+          wordCount: persistenceDecision.wordCount,
+          scriptFamily: persistenceDecision.scriptStats.scriptFamily,
+          dominantScript: persistenceDecision.scriptStats.dominantScript,
+          lettersAnalyzed: persistenceDecision.scriptStats.lettersAnalyzed,
+          scriptCounts: persistenceDecision.scriptStats.scriptCounts,
+          expectedLanguageHint: this.expectedLanguageHint,
+          expectedScriptFamily: this.expectedScriptFamily,
+          textLength: text.length,
+        });
+        return;
+      }
+    }
 
     const now = Date.now();
     const last = this.lastTranscriptBySender[sender];
