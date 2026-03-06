@@ -131,6 +131,11 @@ const liveTokenSchema = z.object({
   voice: liveVoiceSchema.optional(),
   deviceClass: z.enum(["mobile", "desktop", "unknown"]).optional(),
   clientTimeZone: z.string().trim().min(1).max(80).optional(),
+  clientLanguage: z.string().trim().min(1).max(40).optional(),
+  clientLanguages: z
+    .array(z.string().trim().min(1).max(40))
+    .max(10)
+    .optional(),
   memoryModeOverride: liveMemoryModeSchema.optional(),
 });
 
@@ -9709,6 +9714,8 @@ export async function registerRoutes(
         responseModality: parsed.responseModality ?? "AUDIO",
         deviceClass: parsed.deviceClass ?? "unknown",
         clientTimeZone: parsed.clientTimeZone ?? null,
+        clientLanguage: parsed.clientLanguage ?? null,
+        clientLanguages: parsed.clientLanguages ?? [],
         memoryMode: memoryMeta.mode,
         memoryFallback: memoryMeta.fallbackUsed,
       });
@@ -9722,6 +9729,8 @@ export async function registerRoutes(
         profileContext: profileContext ?? null,
         memoryPolicy: memoryMeta.mode,
         clientTimeZone: parsed.clientTimeZone ?? null,
+        clientLanguage: parsed.clientLanguage ?? null,
+        clientLanguages: parsed.clientLanguages ?? null,
       });
 
       trace(req, "live.token.generated", {
@@ -9738,6 +9747,9 @@ export async function registerRoutes(
         forceAlwaysRespond: token.configSummary.forceAlwaysRespond,
         vadSilenceMs: token.configSummary.vadSilenceMs,
         thinkingBudget: token.configSummary.thinkingBudget,
+        effectiveLanguageHint: token.configSummary.effectiveLanguageHint,
+        languageHintSource: token.configSummary.languageHintSource,
+        nativeAudioLanguageMode: token.configSummary.nativeAudioLanguageMode,
         googleSearchGroundingEnabled:
           token.configSummary.googleSearchGroundingEnabled,
         morningBriefFunctionCallingEnabled:

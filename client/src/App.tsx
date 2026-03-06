@@ -87,6 +87,14 @@ import type {
   UnifiedAgentTaskCardModel,
   UnifiedAgentTaskTimelineItem,
 } from "@shared/agent";
+import type {
+  LanguageHintSource,
+  NativeAudioLanguageMode,
+} from "@shared/live-language";
+import {
+  normalizeLanguageHint,
+  normalizeLanguageHintList,
+} from "@shared/live-language";
 
 import {
   DropdownMenu,
@@ -660,6 +668,9 @@ interface LiveTokenConfigSummary {
   topK: number | null;
   maxOutputTokens: number;
   deviceClass: "mobile" | "desktop" | "unknown";
+  effectiveLanguageHint: string;
+  languageHintSource: LanguageHintSource;
+  nativeAudioLanguageMode: NativeAudioLanguageMode;
   googleSearchGroundingEnabled: boolean;
   morningBriefFunctionCallingEnabled: boolean;
   googlePersonalContextFunctionCallingEnabled: boolean;
@@ -770,6 +781,27 @@ function detectClientTimeZone(): string | null {
   }
   const candidate = Intl.DateTimeFormat().resolvedOptions().timeZone?.trim();
   return candidate && candidate.length > 0 ? candidate : null;
+}
+
+function detectClientLanguageHints(): {
+  clientLanguage: string | null;
+  clientLanguages: string[];
+} {
+  if (typeof navigator === "undefined") {
+    return {
+      clientLanguage: null,
+      clientLanguages: [],
+    };
+  }
+
+  const primary = normalizeLanguageHint(navigator.language);
+  const list = normalizeLanguageHintList(
+    navigator.languages ? Array.from(navigator.languages) : [],
+  );
+  return {
+    clientLanguage: primary,
+    clientLanguages: list,
+  };
 }
 
 function getErrorMessage(error: unknown): string {
@@ -8208,12 +8240,15 @@ function App() {
       deviceClass: "mobile" | "desktop" | "unknown";
     }) => {
       const clientTimeZone = detectClientTimeZone();
+      const languageHints = detectClientLanguageHints();
       const res = await apiRequest("POST", "/api/live/token", {
         conversationId: data.conversationId,
         persona: data.persona,
         voice: data.voice,
         deviceClass: data.deviceClass,
         clientTimeZone,
+        clientLanguage: languageHints.clientLanguage,
+        clientLanguages: languageHints.clientLanguages,
         responseModality: "AUDIO",
       });
       const body = (await res.json()) as LiveTokenResponse;
@@ -9632,6 +9667,11 @@ function App() {
         effectiveInterruptMode:
           tokenPayload.configSummary?.effectiveInterruptMode ?? null,
         thinkingBudget: tokenPayload.configSummary?.thinkingBudget ?? null,
+        effectiveLanguageHint:
+          tokenPayload.configSummary?.effectiveLanguageHint ?? null,
+        languageHintSource: tokenPayload.configSummary?.languageHintSource ?? null,
+        nativeAudioLanguageMode:
+          tokenPayload.configSummary?.nativeAudioLanguageMode ?? null,
         googleSearchGroundingEnabled:
           tokenPayload.configSummary?.googleSearchGroundingEnabled ?? null,
         googlePersonalContextFunctionCallingEnabled:
@@ -9788,6 +9828,8 @@ function App() {
         googlePersonalContextFunctionCallingEnabled:
           tokenPayload.configSummary?.googlePersonalContextFunctionCallingEnabled ??
           false,
+        expectedLanguageHint:
+          tokenPayload.configSummary?.effectiveLanguageHint ?? null,
       });
 
       if (startNonce !== liveStartNonceRef.current) {

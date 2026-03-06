@@ -8,6 +8,11 @@ import {
   type GenerateContentResponseUsageMetadata,
 } from "@google/genai";
 import type { ArtifactIntentContract, ChatTurnIntent } from "@shared/agent";
+import {
+  resolveEffectiveLanguageHint,
+  type LanguageHintSource,
+  type NativeAudioLanguageMode,
+} from "@shared/live-language";
 import { execFile } from "child_process";
 import { readFile } from "fs/promises";
 import { resolve } from "path";
@@ -1144,6 +1149,8 @@ export interface CreateLiveTokenInput {
   memoryPolicy?: LiveMemoryPolicy;
   deviceClass?: "mobile" | "desktop" | "unknown";
   clientTimeZone?: string | null;
+  clientLanguage?: string | null;
+  clientLanguages?: string[] | null;
 }
 
 export interface LiveTokenConfigSummary {
@@ -1168,6 +1175,9 @@ export interface LiveTokenConfigSummary {
   topK: number | null;
   maxOutputTokens: number;
   deviceClass: "mobile" | "desktop" | "unknown";
+  effectiveLanguageHint: string;
+  languageHintSource: LanguageHintSource;
+  nativeAudioLanguageMode: NativeAudioLanguageMode;
   googleSearchGroundingEnabled: boolean;
   morningBriefFunctionCallingEnabled: boolean;
   googlePersonalContextFunctionCallingEnabled: boolean;
@@ -1190,6 +1200,7 @@ function composeLiveSystemInstruction(params: {
   memoryContextBlock?: string;
   profileContext?: TextPersonalizationProfile | null;
   memoryPolicy: LiveMemoryPolicy;
+  effectiveLanguageHint: string;
   clientTimeZone?: string | null;
   preferWebGrounding?: boolean;
   enableMorningBriefTools?: boolean;
@@ -1220,8 +1231,8 @@ function composeLiveSystemInstruction(params: {
     [
       "LANGUAGE AND TRANSCRIPTION POLICY:",
       "- You are a multilingual assistant. You natively understand audio in any of the 70+ languages supported by the Live API.",
-      "- The user's primary language is English, but they may switch to other languages at any time.",
-      "- Always respond in the same language the user is currently speaking. If the user speaks English, respond in English. If they switch to Arabic, respond in Arabic, etc.",
+      `- Session language hint from client locale: ${params.effectiveLanguageHint}. Treat this as a hint only.`,
+      "- Always respond in the same language the user is currently speaking. If they switch languages, switch with them immediately.",
       "- IMPORTANT: The input transcription text you receive may sometimes be inaccurate — the speech-to-text may misidentify the language or produce garbled text. Always rely on what you actually HEAR in the audio, not the transcription text.",
       "- If you genuinely cannot understand what the user said (unclear audio, mumbling, too much background noise), ask them to repeat — do not guess or hallucinate words.",
       "- If the language is ambiguous or unclear, default to English.",
@@ -1308,11 +1319,16 @@ export async function createLiveToken(
     !ENABLE_MORNING_BRIEF_TEXT_ONLY;
   const enableGooglePersonalContextFunctionCalling =
     ENABLE_GOOGLE_PERSONAL_CONTEXT && ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE;
+  const languageHintResolution = resolveEffectiveLanguageHint({
+    clientLanguage: input.clientLanguage,
+    clientLanguages: input.clientLanguages,
+  });
   const systemInstruction = composeLiveSystemInstruction({
     personaPrompt,
     memoryContextBlock: input.memoryContextBlock,
     profileContext: input.profileContext ?? null,
     memoryPolicy,
+    effectiveLanguageHint: languageHintResolution.effectiveLanguageHint,
     clientTimeZone: input.clientTimeZone ?? null,
     preferWebGrounding: requestedGoogleSearchGrounding,
     enableMorningBriefTools: enableMorningBriefFunctionCalling,
@@ -1473,6 +1489,9 @@ export async function createLiveToken(
     topK: liveTopK ?? null,
     maxOutputTokens: liveMaxOutputTokens,
     deviceClass,
+    effectiveLanguageHint: languageHintResolution.effectiveLanguageHint,
+    languageHintSource: languageHintResolution.languageHintSource,
+    nativeAudioLanguageMode: "auto_detect",
     googleSearchGroundingEnabled: false,
     morningBriefFunctionCallingEnabled: enableMorningBriefFunctionCalling,
     googlePersonalContextFunctionCallingEnabled:
@@ -1532,6 +1551,7 @@ export async function createLiveToken(
                 speechConfig:
                   responseModality === "AUDIO"
                     ? {
+                        // Native-audio models choose language automatically.
                         voiceConfig: {
                           prebuiltVoiceConfig: {
                             voiceName,

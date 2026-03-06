@@ -6,6 +6,12 @@ import {
   type LiveServerMessage,
   type Session,
 } from "@google/genai";
+import {
+  analyzeTranscriptScript,
+  resolveExpectedScriptFamilyForLanguage,
+  shouldFlagTranscriptLanguageMismatch,
+  type TranscriptScriptFamily,
+} from "@shared/live-language";
 
 type TranscriptSender = "user" | "assistant";
 type CameraFacingMode = "user" | "environment";
@@ -88,6 +94,7 @@ export interface GeminiLiveVoiceSessionStartParams {
   conversationId: string;
   sessionResumptionHandle?: string | null;
   preAcquiredMicStream?: MediaStream;
+  expectedLanguageHint?: string | null;
   googleSearchGroundingEnabled?: boolean;
   morningBriefFunctionCallingEnabled?: boolean;
   googlePersonalContextFunctionCallingEnabled?: boolean;
@@ -937,6 +944,8 @@ export class GeminiLiveVoiceSession {
     user: "",
     assistant: "",
   };
+  private expectedLanguageHint: string | null = null;
+  private expectedScriptFamily: TranscriptScriptFamily = "unknown";
   private transcriptFlushTimeoutBySender: Record<TranscriptSender, number | null> = {
     user: null,
     assistant: null,
@@ -1034,6 +1043,14 @@ export class GeminiLiveVoiceSession {
     this.lastDebugStateEmittedAtMs = 0;
     this.lastDebugStateSnapshot = "";
     this.conversationId = params.conversationId;
+    this.expectedLanguageHint = normalizeText(params.expectedLanguageHint ?? undefined)
+      .toLowerCase();
+    if (!this.expectedLanguageHint) {
+      this.expectedLanguageHint = null;
+    }
+    this.expectedScriptFamily = resolveExpectedScriptFamilyForLanguage(
+      this.expectedLanguageHint,
+    );
     const googleSearchGroundingEnabled = Boolean(
       params.googleSearchGroundingEnabled,
     );
@@ -1072,6 +1089,8 @@ export class GeminiLiveVoiceSession {
       effectiveGooglePersonalContextFunctionCallingEnabled:
         googlePersonalContextFunctionCallingEnabled,
       effectiveLiveFunctionCallingEnabled: this.liveFunctionCallingEnabled,
+      expectedLanguageHint: this.expectedLanguageHint,
+      expectedScriptFamily: this.expectedScriptFamily,
     });
     if (
       tokenMorningBriefFunctionCallingEnabled &&
@@ -1313,6 +1332,8 @@ export class GeminiLiveVoiceSession {
     this.lastDebugStateEmittedAtMs = 0;
     this.lastDebugStateSnapshot = "";
     this.conversationId = null;
+    this.expectedLanguageHint = null;
+    this.expectedScriptFamily = "unknown";
     this.liveGoogleSearchEnabled = false;
     this.liveMorningBriefFunctionCallingEnabled = false;
     this.liveGooglePersonalContextFunctionCallingEnabled = false;
@@ -3028,13 +3049,39 @@ export class GeminiLiveVoiceSession {
       this.pendingTranscriptBySender[sender],
       text,
     );
+    const mergedScriptStats = analyzeTranscriptScript(mergedText);
     this.pendingTranscriptBySender[sender] = mergedText;
     this.debug("live.transcript.received", {
       sender,
       textLength: text.length,
       mergedTextLength: mergedText.length,
       finished: Boolean(transcript.finished),
+      scriptFamily: mergedScriptStats.scriptFamily,
+      dominantScript: mergedScriptStats.dominantScript,
+      lettersAnalyzed: mergedScriptStats.lettersAnalyzed,
+      scriptCounts: mergedScriptStats.scriptCounts,
+      expectedLanguageHint: this.expectedLanguageHint,
+      expectedScriptFamily: this.expectedScriptFamily,
     });
+
+    if (
+      sender === "user" &&
+      transcript.finished &&
+      shouldFlagTranscriptLanguageMismatch({
+        expectedScriptFamily: this.expectedScriptFamily,
+        observedScriptFamily: mergedScriptStats.scriptFamily,
+        dominantScript: mergedScriptStats.dominantScript,
+        lettersAnalyzed: mergedScriptStats.lettersAnalyzed,
+      })
+    ) {
+      this.debug("live.transcript.language_mismatch_observed", {
+        expectedLanguageHint: this.expectedLanguageHint,
+        expectedScriptFamily: this.expectedScriptFamily,
+        observedScriptFamily: mergedScriptStats.scriptFamily,
+        dominantScript: mergedScriptStats.dominantScript,
+        lettersAnalyzed: mergedScriptStats.lettersAnalyzed,
+      });
+    }
 
     if (transcript.finished) {
       this.scheduleTranscriptFlush(sender);
