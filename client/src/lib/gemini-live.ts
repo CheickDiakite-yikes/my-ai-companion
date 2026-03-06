@@ -192,23 +192,41 @@ const ENABLE_ASSISTANT_BARGE_IN = parseClientBoolean(
 );
 const ASSISTANT_BARGE_IN_RMS_THRESHOLD = parseClientBoundedNumber(
   liveClientEnv.VITE_LIVE_AUDIO_BARGE_IN_RMS_THRESHOLD,
-  0.02,
+  0.015,
   0.008,
   0.08,
 );
 const ASSISTANT_BARGE_IN_CONSECUTIVE_FRAMES = parseClientPositiveInt(
   liveClientEnv.VITE_LIVE_AUDIO_BARGE_IN_CONSECUTIVE_FRAMES,
-  7,
+  4,
 );
 const ASSISTANT_BARGE_IN_AMBIENT_MULTIPLIER = parseClientBoundedNumber(
   liveClientEnv.VITE_LIVE_AUDIO_BARGE_IN_AMBIENT_MULTIPLIER,
-  2.6,
+  1.9,
   1.2,
   6,
 );
+const ASSISTANT_BARGE_IN_MAX_RMS_THRESHOLD = parseClientBoundedNumber(
+  liveClientEnv.VITE_LIVE_AUDIO_BARGE_IN_MAX_RMS_THRESHOLD,
+  0.045,
+  0.012,
+  0.09,
+);
 const ASSISTANT_BARGE_IN_MIN_GAP_MS = parseClientPositiveInt(
   liveClientEnv.VITE_LIVE_AUDIO_BARGE_IN_MIN_GAP_MS,
-  1200,
+  900,
+);
+const ASSISTANT_IDLE_RELEASE_USER_SPEECH_RMS_THRESHOLD = parseClientBoundedNumber(
+  liveClientEnv.VITE_LIVE_AUDIO_ASSISTANT_IDLE_RELEASE_USER_SPEECH_RMS_THRESHOLD,
+  0.009,
+  0.004,
+  0.05,
+);
+const ASSISTANT_IDLE_RELEASE_AMBIENT_MULTIPLIER = parseClientBoundedNumber(
+  liveClientEnv.VITE_LIVE_AUDIO_ASSISTANT_IDLE_RELEASE_AMBIENT_MULTIPLIER,
+  1.35,
+  1,
+  4,
 );
 const SUPPRESS_USER_TRANSCRIPT_DURING_ASSISTANT_SPEECH = parseClientBoolean(
   liveClientEnv.VITE_LIVE_AUDIO_SUPPRESS_USER_TRANSCRIPT_DURING_ASSISTANT_SPEECH,
@@ -986,7 +1004,12 @@ export class GeminiLiveVoiceSession {
         ASSISTANT_BARGE_IN_CONSECUTIVE_FRAMES,
       assistantBargeInAmbientMultiplier:
         ASSISTANT_BARGE_IN_AMBIENT_MULTIPLIER,
+      assistantBargeInMaxRmsThreshold: ASSISTANT_BARGE_IN_MAX_RMS_THRESHOLD,
       assistantBargeInMinGapMs: ASSISTANT_BARGE_IN_MIN_GAP_MS,
+      assistantIdleReleaseUserSpeechRmsThreshold:
+        ASSISTANT_IDLE_RELEASE_USER_SPEECH_RMS_THRESHOLD,
+      assistantIdleReleaseAmbientMultiplier:
+        ASSISTANT_IDLE_RELEASE_AMBIENT_MULTIPLIER,
       assistantTurnIdleReleaseMs: ASSISTANT_TURN_IDLE_RELEASE_MS,
       suppressUserTranscriptDuringAssistantSpeech:
         SUPPRESS_USER_TRANSCRIPT_DURING_ASSISTANT_SPEECH,
@@ -1494,11 +1517,14 @@ export class GeminiLiveVoiceSession {
       return false;
     }
 
-    const effectiveThreshold = Math.max(
+    const effectiveThreshold = Math.min(
+      ASSISTANT_BARGE_IN_MAX_RMS_THRESHOLD,
+      Math.max(
       ASSISTANT_BARGE_IN_RMS_THRESHOLD,
       this.inputAmbientRms > 0
         ? this.inputAmbientRms * ASSISTANT_BARGE_IN_AMBIENT_MULTIPLIER
         : 0,
+      ),
     );
     if (rms < effectiveThreshold) {
       this.assistantBargeInConsecutiveFrames = 0;
@@ -1643,7 +1669,27 @@ export class GeminiLiveVoiceSession {
       const inputSamples = event.inputBuffer.getChannelData(0);
       const rms = calculateRms(inputSamples);
       this.updateInputAmbientRms(rms);
-      if (this.isAssistantSpeechWindowActive()) {
+      let assistantSpeechWindowActive = this.isAssistantSpeechWindowActive();
+      if (assistantSpeechWindowActive) {
+        // If the assistant is no longer audibly speaking, prioritize reopening the mic.
+        if (
+          !this.isAssistantAudioLikelyActive() &&
+          Date.now() >= this.assistantPlaybackTailUntilMs
+        ) {
+          const idleReleaseThreshold = Math.max(
+            ASSISTANT_IDLE_RELEASE_USER_SPEECH_RMS_THRESHOLD,
+            this.inputAmbientRms > 0
+              ? this.inputAmbientRms *
+                ASSISTANT_IDLE_RELEASE_AMBIENT_MULTIPLIER
+              : 0,
+          );
+          if (rms >= idleReleaseThreshold) {
+            this.releaseAssistantTurn("user_speaking_while_assistant_idle");
+            assistantSpeechWindowActive = this.isAssistantSpeechWindowActive();
+          }
+        }
+      }
+      if (assistantSpeechWindowActive) {
         this.maybeInterruptAssistantFromUserSpeech(rms);
         this.audioNoiseGateConsecutiveDrops = 0;
         this.audioNoiseGateFailOpenFramesRemaining = 0;

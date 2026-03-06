@@ -333,13 +333,7 @@ function resolveTurnCoverage(): TurnCoverage {
 function resolveActivityHandling(
   _isMobileDevice: boolean,
 ): ActivityHandling {
-  const fallback = "NO_INTERRUPTION";
-  const raw = (process.env.GEMINI_LIVE_ACTIVITY_HANDLING ?? fallback)
-    .trim()
-    .toUpperCase();
-  return raw === "NO_INTERRUPTION"
-    ? ActivityHandling.NO_INTERRUPTION
-    : ActivityHandling.START_OF_ACTIVITY_INTERRUPTS;
+  return ActivityHandling.NO_INTERRUPTION;
 }
 
 function parseBoundedNumber(
@@ -1402,10 +1396,11 @@ export async function createLiveToken(
   const liveTopK =
     parseOptionalPositiveInt(process.env.GEMINI_LIVE_TOP_K) ??
     (lowLatencyMode ? 24 : 32);
-  const liveMaxOutputTokens = parsePositiveInt(
+  const configuredLiveMaxOutputTokens = parsePositiveInt(
     process.env.GEMINI_LIVE_MAX_OUTPUT_TOKENS,
     1000,
   );
+  const liveMaxOutputTokens = Math.max(700, configuredLiveMaxOutputTokens);
   const minVadPrefixPaddingMs = parsePositiveInt(
     process.env.GEMINI_LIVE_MIN_VAD_PREFIX_PADDING_MS,
     50,
