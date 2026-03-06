@@ -178,6 +178,10 @@ const ASSISTANT_TURN_RELEASE_GRACE_MS = parseClientPositiveInt(
   liveClientEnv.VITE_LIVE_ASSISTANT_TURN_RELEASE_GRACE_MS,
   Math.max(360, SUPPRESS_INPUT_COOLDOWN_MS + 140),
 );
+const ASSISTANT_TURN_STALL_TIMEOUT_MS = parseClientPositiveInt(
+  liveClientEnv.VITE_LIVE_ASSISTANT_TURN_STALL_TIMEOUT_MS,
+  12000,
+);
 const SUPPRESS_USER_TRANSCRIPT_DURING_ASSISTANT_SPEECH = parseClientBoolean(
   liveClientEnv.VITE_LIVE_AUDIO_SUPPRESS_USER_TRANSCRIPT_DURING_ASSISTANT_SPEECH,
   true,
@@ -686,6 +690,7 @@ export class GeminiLiveVoiceSession {
   private assistantPlaybackTailUntilMs = 0;
   private assistantSpeechWindowStartMs = 0;
   private assistantTurnReleaseAtMs = 0;
+  private lastAssistantActivityAtMs = 0;
   private interruptPending = false;
   private conversationId: string | null = null;
   private liveGoogleSearchEnabled = false;
@@ -977,6 +982,7 @@ export class GeminiLiveVoiceSession {
     this.assistantPlaybackTailUntilMs = 0;
     this.assistantSpeechWindowStartMs = 0;
     this.assistantTurnReleaseAtMs = 0;
+    this.lastAssistantActivityAtMs = 0;
     this.interruptPending = false;
     this.conversationId = null;
     this.liveGoogleSearchEnabled = false;
@@ -1369,6 +1375,25 @@ export class GeminiLiveVoiceSession {
     return true;
   }
 
+  private isAssistantTurnStalled(): boolean {
+    if (!this.assistantTurnActive) {
+      return false;
+    }
+    if (this.interruptPending) {
+      return false;
+    }
+    if (this.isAssistantAudioLikelyActive()) {
+      return false;
+    }
+    if (Date.now() < this.assistantPlaybackTailUntilMs) {
+      return false;
+    }
+    if (this.lastAssistantActivityAtMs <= 0) {
+      return false;
+    }
+    return Date.now() - this.lastAssistantActivityAtMs >= ASSISTANT_TURN_STALL_TIMEOUT_MS;
+  }
+
   private isAssistantSpeechWindowActive(): boolean {
     if (!SUPPRESS_INPUT_WHILE_ASSISTANT_SPEAKING) return false;
     if (
@@ -1390,17 +1415,21 @@ export class GeminiLiveVoiceSession {
       this.assistantSpeechWindowStartMs = Date.now();
     }
     if (Date.now() - this.assistantSpeechWindowStartMs > GeminiLiveVoiceSession.MAX_SPEECH_SUPPRESSION_MS) {
-      this.debug("live.audio.suppression_guard_triggered", {
+      if (this.isAssistantTurnStalled()) {
+        this.debug("live.audio.suppression_guard_releasing_stalled_turn", {
+          durationMs: Date.now() - this.assistantSpeechWindowStartMs,
+          lastAssistantActivityAgeMs: Date.now() - this.lastAssistantActivityAtMs,
+          stallTimeoutMs: ASSISTANT_TURN_STALL_TIMEOUT_MS,
+        });
+        this.releaseAssistantTurn("suppression_guard_stalled_turn");
+        return false;
+      }
+      this.debug("live.audio.suppression_guard_extended_for_active_playback", {
         durationMs: Date.now() - this.assistantSpeechWindowStartMs,
         activePlaybackNodes: this.activePlaybackNodes.size,
         assistantTurnActive: this.assistantTurnActive,
       });
-      this.assistantTurnActive = false;
-      this.assistantPlaybackTailUntilMs = 0;
-      this.assistantSpeechWindowStartMs = 0;
-      this.assistantTurnReleaseAtMs = 0;
-      this.clearPlaybackQueue();
-      return false;
+      this.assistantSpeechWindowStartMs = Date.now();
     }
     return true;
   }
@@ -1642,6 +1671,7 @@ export class GeminiLiveVoiceSession {
     }
 
     if (audioPartCount > 0 || Boolean(serverContent.outputTranscription?.text)) {
+      this.lastAssistantActivityAtMs = Date.now();
       this.assistantTurnActive = true;
       this.assistantPlaybackTailUntilMs = Math.max(
         this.assistantPlaybackTailUntilMs,
@@ -1784,6 +1814,7 @@ export class GeminiLiveVoiceSession {
     this.scheduledPlaybackTime = nodeEndTime;
     this.activePlaybackNodes.add(source);
     this.playbackNodeEndTimes.set(source, nodeEndTime);
+    this.lastAssistantActivityAtMs = Date.now();
     this.assistantPlaybackTailUntilMs = Math.max(
       this.assistantPlaybackTailUntilMs,
       Date.now() + Math.round(audioBuffer.duration * 1000) + SUPPRESS_INPUT_COOLDOWN_MS,
@@ -1792,6 +1823,9 @@ export class GeminiLiveVoiceSession {
     source.onended = () => {
       this.activePlaybackNodes.delete(source);
       this.playbackNodeEndTimes.delete(source);
+      if (this.assistantTurnReleaseAtMs > 0) {
+        this.releaseAssistantTurn("playback_drained");
+      }
     };
   }
 
