@@ -3128,6 +3128,7 @@ export class GeminiLiveVoiceSession {
       const persistenceDecision = evaluateUserTranscriptPersistence({
         text,
         expectedScriptFamily: this.expectedScriptFamily,
+        expectedLanguageHint: this.expectedLanguageHint,
       });
       if (persistenceDecision.discard) {
         this.debug("live.transcript.user_discarded_low_signal", {

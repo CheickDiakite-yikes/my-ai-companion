@@ -11,6 +11,10 @@ export type TranscriptScriptFamily =
   | "cyrillic"
   | "hebrew"
   | "devanagari"
+  | "cjk"
+  | "southeast_asian"
+  | "south_asian"
+  | "other_known"
   | "mixed"
   | "unknown";
 
@@ -18,7 +22,9 @@ export type UserTranscriptDiscardReason =
   | "none"
   | "punctuation_only"
   | "too_few_letters"
-  | "cross_script_short_fragment";
+  | "cross_script_short_fragment"
+  | "unknown_script_when_latin_expected"
+  | "non_english_latin_short_fragment";
 
 export interface TranscriptScriptStats {
   scriptFamily: TranscriptScriptFamily;
@@ -30,6 +36,10 @@ export interface TranscriptScriptStats {
     cyrillic: number;
     hebrew: number;
     devanagari: number;
+    cjk: number;
+    southeast_asian: number;
+    south_asian: number;
+    other_known: number;
   };
 }
 
@@ -107,6 +117,51 @@ function isDevanagariCodePoint(codePoint: number): boolean {
   );
 }
 
+function isCjkCodePoint(codePoint: number): boolean {
+  return (
+    (codePoint >= 0x4e00 && codePoint <= 0x9fff) ||
+    (codePoint >= 0x3400 && codePoint <= 0x4dbf) ||
+    (codePoint >= 0x3040 && codePoint <= 0x309f) ||
+    (codePoint >= 0x30a0 && codePoint <= 0x30ff) ||
+    (codePoint >= 0xac00 && codePoint <= 0xd7af) ||
+    (codePoint >= 0x1100 && codePoint <= 0x11ff)
+  );
+}
+
+function isSoutheastAsianCodePoint(codePoint: number): boolean {
+  return (
+    (codePoint >= 0x0e00 && codePoint <= 0x0e7f) ||
+    (codePoint >= 0x0e80 && codePoint <= 0x0eff) ||
+    (codePoint >= 0x1000 && codePoint <= 0x109f) ||
+    (codePoint >= 0x1780 && codePoint <= 0x17ff)
+  );
+}
+
+function isSouthAsianCodePoint(codePoint: number): boolean {
+  return (
+    (codePoint >= 0x0980 && codePoint <= 0x09ff) ||
+    (codePoint >= 0x0a00 && codePoint <= 0x0a7f) ||
+    (codePoint >= 0x0a80 && codePoint <= 0x0aff) ||
+    (codePoint >= 0x0b00 && codePoint <= 0x0b7f) ||
+    (codePoint >= 0x0b80 && codePoint <= 0x0bff) ||
+    (codePoint >= 0x0c00 && codePoint <= 0x0c7f) ||
+    (codePoint >= 0x0c80 && codePoint <= 0x0cff) ||
+    (codePoint >= 0x0d00 && codePoint <= 0x0d7f) ||
+    (codePoint >= 0x0d80 && codePoint <= 0x0dff)
+  );
+}
+
+function isOtherKnownScriptCodePoint(codePoint: number): boolean {
+  return (
+    (codePoint >= 0x0370 && codePoint <= 0x03ff) ||
+    (codePoint >= 0x1f00 && codePoint <= 0x1fff) ||
+    (codePoint >= 0x10a0 && codePoint <= 0x10ff) ||
+    (codePoint >= 0x0530 && codePoint <= 0x058f) ||
+    (codePoint >= 0x10d0 && codePoint <= 0x10ff) ||
+    (codePoint >= 0x1200 && codePoint <= 0x137f)
+  );
+}
+
 function classifyCodePoint(
   codePoint: number,
 ): Exclude<TranscriptScriptFamily, "mixed" | "unknown"> | null {
@@ -121,6 +176,10 @@ function classifyCodePoint(
   if (isCyrillicCodePoint(codePoint)) return "cyrillic";
   if (isHebrewCodePoint(codePoint)) return "hebrew";
   if (isDevanagariCodePoint(codePoint)) return "devanagari";
+  if (isCjkCodePoint(codePoint)) return "cjk";
+  if (isSoutheastAsianCodePoint(codePoint)) return "southeast_asian";
+  if (isSouthAsianCodePoint(codePoint)) return "south_asian";
+  if (isOtherKnownScriptCodePoint(codePoint)) return "other_known";
   return null;
 }
 
@@ -134,6 +193,56 @@ function hasLetterOrDigit(text: string): boolean {
     if (typeof codePoint !== "number") continue;
     if (isAsciiDigit(codePoint)) return true;
     if (classifyCodePoint(codePoint)) return true;
+  }
+  return false;
+}
+
+const COMMON_ENGLISH_WORDS = new Set([
+  "a", "about", "all", "also", "am", "an", "and", "any", "are", "as", "at",
+  "back", "be", "been", "but", "by", "can", "come", "could", "day", "did",
+  "do", "does", "down", "even", "first", "for", "from", "get", "give", "go",
+  "going", "good", "got", "great", "had", "has", "have", "he", "her", "here",
+  "hey", "hi", "him", "his", "how", "huh", "i", "if", "in", "into", "is",
+  "it", "its", "just", "know", "last", "let", "like", "look", "lot", "make",
+  "man", "me", "mine", "more", "much", "my", "need", "new", "next", "no",
+  "not", "now", "of", "oh", "ok", "okay", "on", "one", "only", "or", "other",
+  "our", "out", "over", "people", "right", "said", "say", "see", "she",
+  "should", "so", "some", "sure", "tell", "than", "thank", "thanks", "that",
+  "the", "their", "them", "then", "there", "these", "they", "thing", "think",
+  "this", "time", "to", "too", "try", "two", "up", "us", "use", "very",
+  "want", "was", "way", "we", "well", "were", "what", "when", "which", "who",
+  "why", "will", "with", "would", "ya", "yah", "yeah", "yep", "yes", "yet",
+  "yo", "you", "your",
+  "again", "check", "cool", "done", "email", "emails", "fun", "haha",
+  "hello", "heyy", "hmm", "lol", "morning", "nah", "nope", "nothing",
+  "please", "read", "repeat", "same", "still", "stop", "today", "tomorrow",
+  "tonight", "wait", "what's", "whats", "where", "yep", "yoo", "yooo",
+  "sup", "wassup", "bruh", "bro", "dude", "alright", "bye", "goodnight",
+  "hear", "heard", "listen", "loud", "clear", "calendar", "schedule",
+  "summary", "summarize",
+]);
+
+function hasCommonEnglishWord(text: string): boolean {
+  const words = text
+    .toLowerCase()
+    .replace(/['']/g, "'")
+    .split(/[\s,.!?;:]+/)
+    .filter((w) => w.length > 0);
+  for (const word of words) {
+    const cleaned = word.replace(/[^a-z']/g, "");
+    if (cleaned.length > 0 && COMMON_ENGLISH_WORDS.has(cleaned)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function hasNonAsciiLatinCharacters(text: string): boolean {
+  const nfc = text.normalize("NFC");
+  for (const char of nfc) {
+    const cp = char.codePointAt(0);
+    if (typeof cp !== "number") continue;
+    if (isLatinSupplement(cp) || isLatinExtended(cp)) return true;
   }
   return false;
 }
@@ -212,6 +321,16 @@ export function resolveExpectedScriptFamilyForLanguage(
   }
   if (["he", "iw", "yi"].includes(normalized)) return "hebrew";
   if (["hi", "mr", "ne"].includes(normalized)) return "devanagari";
+  if (["zh", "ja", "ko"].includes(normalized)) return "cjk";
+  if (["th", "lo", "my", "km"].includes(normalized)) return "southeast_asian";
+  if (
+    ["bn", "gu", "pa", "or", "ta", "te", "kn", "ml", "si"].includes(
+      normalized,
+    )
+  ) {
+    return "south_asian";
+  }
+  if (["ka", "hy", "am"].includes(normalized)) return "other_known";
   if (
     [
       "en",
@@ -261,6 +380,10 @@ export function analyzeTranscriptScript(text: string): TranscriptScriptStats {
     cyrillic: 0,
     hebrew: 0,
     devanagari: 0,
+    cjk: 0,
+    southeast_asian: 0,
+    south_asian: 0,
+    other_known: 0,
   };
 
   for (const char of text) {
@@ -312,8 +435,11 @@ export function shouldFlagTranscriptLanguageMismatch(params: {
   const minimumLetters = Math.max(1, params.minimumLetters ?? 3);
   if (params.lettersAnalyzed < minimumLetters) return false;
   if (params.expectedScriptFamily === "unknown") return false;
-  if (params.observedScriptFamily === "unknown") return false;
   if (params.observedScriptFamily === params.expectedScriptFamily) return false;
+
+  if (params.observedScriptFamily === "unknown") {
+    return true;
+  }
 
   if (params.observedScriptFamily === "mixed") {
     if (!params.dominantScript) return false;
@@ -335,6 +461,7 @@ function isPunctuationOrSymbolsOnly(text: string): boolean {
 export function evaluateUserTranscriptPersistence(params: {
   text: string;
   expectedScriptFamily: TranscriptScriptFamily;
+  expectedLanguageHint?: string | null;
   minimumLetters?: number;
   crossScriptShortFragmentMaxWords?: number;
   crossScriptShortFragmentMaxLetters?: number;
@@ -345,11 +472,11 @@ export function evaluateUserTranscriptPersistence(params: {
   const minimumLetters = Math.max(1, params.minimumLetters ?? 2);
   const crossScriptShortFragmentMaxWords = Math.max(
     1,
-    params.crossScriptShortFragmentMaxWords ?? 2,
+    params.crossScriptShortFragmentMaxWords ?? 4,
   );
   const crossScriptShortFragmentMaxLetters = Math.max(
     minimumLetters,
-    params.crossScriptShortFragmentMaxLetters ?? 10,
+    params.crossScriptShortFragmentMaxLetters ?? 20,
   );
   const mismatch = shouldFlagTranscriptLanguageMismatch({
     expectedScriptFamily: params.expectedScriptFamily,
@@ -391,6 +518,35 @@ export function evaluateUserTranscriptPersistence(params: {
       wordCount,
       scriptStats,
     };
+  }
+
+  const effectiveLang = normalizeLanguageHint(params.expectedLanguageHint);
+  const isEnglishExpected = effectiveLang === "en" || (!effectiveLang && params.expectedScriptFamily === "latin");
+
+  if (
+    isEnglishExpected &&
+    scriptStats.scriptFamily === "latin" &&
+    wordCount <= 3 &&
+    scriptStats.lettersAnalyzed <= 15
+  ) {
+    if (hasNonAsciiLatinCharacters(normalized) && !hasCommonEnglishWord(normalized)) {
+      return {
+        discard: true,
+        reason: "non_english_latin_short_fragment",
+        mismatch: false,
+        wordCount,
+        scriptStats,
+      };
+    }
+    if (!hasCommonEnglishWord(normalized) && wordCount <= 2 && scriptStats.lettersAnalyzed <= 8) {
+      return {
+        discard: true,
+        reason: "non_english_latin_short_fragment",
+        mismatch: false,
+        wordCount,
+        scriptStats,
+      };
+    }
   }
 
   return {
