@@ -1350,6 +1350,8 @@ export async function createLiveToken(
     process.env.GEMINI_LIVE_ENABLE_AFFECTIVE_DIALOG,
     true,
   );
+  const speechLanguageCode =
+    (process.env.GEMINI_LIVE_SPEECH_LANGUAGE_CODE || "en-US").trim();
   const proactiveAudio = parseBooleanFlag(
     process.env.GEMINI_LIVE_PROACTIVE_AUDIO,
     false,
@@ -1519,6 +1521,7 @@ export async function createLiveToken(
                 speechConfig:
                   responseModality === "AUDIO"
                     ? {
+                        languageCode: speechLanguageCode,
                         voiceConfig: {
                           prebuiltVoiceConfig: {
                             voiceName,
