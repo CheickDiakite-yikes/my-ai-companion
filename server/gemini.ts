@@ -1218,6 +1218,19 @@ function composeLiveSystemInstruction(params: {
 
   sections.push(
     [
+      "LANGUAGE AND TRANSCRIPTION POLICY:",
+      "- You are a multilingual assistant. You natively understand audio in any of the 70+ languages supported by the Live API.",
+      "- The user's primary language is English, but they may switch to other languages at any time.",
+      "- Always respond in the same language the user is currently speaking. If the user speaks English, respond in English. If they switch to Arabic, respond in Arabic, etc.",
+      "- IMPORTANT: The input transcription text you receive may sometimes be inaccurate — the speech-to-text may misidentify the language or produce garbled text. Always rely on what you actually HEAR in the audio, not the transcription text.",
+      "- If you genuinely cannot understand what the user said (unclear audio, mumbling, too much background noise), ask them to repeat — do not guess or hallucinate words.",
+      "- If the language is ambiguous or unclear, default to English.",
+      "- Never respond with confusion about random foreign words unless you truly heard foreign speech in the audio.",
+    ].join("\n"),
+  );
+
+  sections.push(
+    [
       "LIVE VOICE TURN-TAKING POLICY:",
       "- Default to short spoken turns. Unless the user explicitly asks for depth, answer in 1 to 3 short sentences and then pause.",
       "- Lead with the direct answer first. Offer to go deeper instead of front-loading long monologues.",
@@ -1350,8 +1363,6 @@ export async function createLiveToken(
     process.env.GEMINI_LIVE_ENABLE_AFFECTIVE_DIALOG,
     true,
   );
-  const speechLanguageCode =
-    (process.env.GEMINI_LIVE_SPEECH_LANGUAGE_CODE || "en-US").trim();
   const proactiveAudio = parseBooleanFlag(
     process.env.GEMINI_LIVE_PROACTIVE_AUDIO,
     false,
@@ -1521,7 +1532,6 @@ export async function createLiveToken(
                 speechConfig:
                   responseModality === "AUDIO"
                     ? {
-                        languageCode: speechLanguageCode,
                         voiceConfig: {
                           prebuiltVoiceConfig: {
                             voiceName,
