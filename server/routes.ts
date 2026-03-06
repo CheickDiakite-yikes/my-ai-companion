@@ -9771,6 +9771,7 @@ export async function registerRoutes(
           traceId: getTraceId(req),
         });
       }
+      console.error("[live.token.failed]", error instanceof Error ? `${error.name}: ${error.message}` : String(error));
       traceError(req, "live.token.failed", error, {
         elapsedMs: elapsedMs(startedAt),
         ...summarizeLiveTokenFailure(error),

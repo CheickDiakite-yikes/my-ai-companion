@@ -279,7 +279,7 @@ function getGeminiAlphaClient(): GoogleGenAI {
   if (!geminiAlphaClient) {
     geminiAlphaClient = new GoogleGenAI({
       apiKey: requireGeminiApiKey(),
-      apiVersion: "v1alpha",
+      httpOptions: { apiVersion: "v1alpha" },
     });
   }
   return geminiAlphaClient;
