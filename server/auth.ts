@@ -32,8 +32,6 @@ function getGoogleSsoConfig() {
     (process.env.GOOGLE_AUTH_POST_LOGIN_REDIRECT ?? "/").trim() || "/";
   const redirectUriOverride =
     (process.env.GOOGLE_OAUTH_AUTH_REDIRECT_URI ?? "").trim() || null;
-  const integrationRedirectUri =
-    (process.env.GOOGLE_OAUTH_REDIRECT_URI ?? "").trim() || null;
   const missing: string[] = [];
   if (!clientId) missing.push("GOOGLE_OAUTH_CLIENT_ID");
   if (!clientSecret) missing.push("GOOGLE_OAUTH_CLIENT_SECRET");
@@ -42,7 +40,6 @@ function getGoogleSsoConfig() {
     clientSecret,
     postLoginRedirect,
     redirectUriOverride,
-    integrationRedirectUri,
     missing,
     configured: missing.length === 0,
   };
@@ -80,17 +77,6 @@ function sanitizeReturnTo(returnToRaw: unknown, fallback: string): string {
 function resolveGoogleSsoCallbackUrl(req: Request): string {
   const config = getGoogleSsoConfig();
   if (config.redirectUriOverride) return config.redirectUriOverride;
-  if (config.integrationRedirectUri) {
-    try {
-      const url = new URL(config.integrationRedirectUri);
-      url.pathname = "/api/auth/google/callback";
-      url.search = "";
-      url.hash = "";
-      return url.toString();
-    } catch {
-      // ignore malformed env and fall back to request-derived callback
-    }
-  }
   return `${req.protocol}://${req.get("host")}/api/auth/google/callback`;
 }
 
@@ -159,7 +145,7 @@ export function setupAuth(app: Express) {
 export function registerAuthRoutes(app: Express) {
   const ssoConfig = getGoogleSsoConfig();
   if (ssoConfig.configured) {
-    const baseUri = ssoConfig.integrationRedirectUri ?? ssoConfig.redirectUriOverride ?? "(request-derived)";
+    const baseUri = ssoConfig.redirectUriOverride ?? "(request-derived host)";
     console.log(
       `[auth] Google SSO configured (client_id=${ssoConfig.clientId.slice(0, 12)}…). ` +
       `Callback will derive from: ${baseUri}. ` +
