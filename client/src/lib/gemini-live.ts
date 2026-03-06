@@ -2,6 +2,7 @@ import { GoogleGenAI, Modality, type LiveServerMessage, type Session } from "@go
 
 type TranscriptSender = "user" | "assistant";
 type CameraFacingMode = "user" | "environment";
+type LiveRealtimeInputPayload = Parameters<Session["sendRealtimeInput"]>[0];
 export type LiveSpeechState =
   | "idle"
   | "candidate_user_speech"
@@ -841,6 +842,7 @@ export class GeminiLiveVoiceSession {
   private readonly callbacks: GeminiLiveVoiceSessionCallbacks;
 
   private session: Session | null = null;
+  private sessionReadyForRealtimeInput = false;
   private outputContext: AudioContext | null = null;
   private inputContext: AudioContext | null = null;
   private mediaStream: MediaStream | null = null;
@@ -947,6 +949,7 @@ export class GeminiLiveVoiceSession {
       apiKey: params.ephemeralToken,
       apiVersion: "v1alpha",
     });
+    this.sessionReadyForRealtimeInput = false;
 
     this.outputContext = createAudioContext({ sampleRate: OUTPUT_SAMPLE_RATE });
     await this.outputContext.resume();
@@ -1061,6 +1064,7 @@ export class GeminiLiveVoiceSession {
       callbacks: {
         onopen: () => {
           connectionOpened = true;
+          this.sessionReadyForRealtimeInput = true;
           if (timeoutId !== undefined) {
             clearTimeout(timeoutId);
             timeoutId = undefined;
@@ -1093,6 +1097,12 @@ export class GeminiLiveVoiceSession {
         onerror: (event) => {
           reportError("live.ws.error", { message: event.message, model: params.model });
           if (timedOut) return;
+          this.sessionReadyForRealtimeInput = false;
+          this.manualActivityActive = false;
+          this.interruptPending = false;
+          this.speechCandidateFrames = 0;
+          this.speechSilenceFrames = 0;
+          this.syncSpeechStateFromActivity("session_error");
           const error = new Error(event.message || "Gemini Live session error");
           this.emitError(error);
         },
@@ -1101,6 +1111,12 @@ export class GeminiLiveVoiceSession {
             reportError("live.ws.closed_before_open", { reason: event.reason, model: params.model });
           }
           if (timedOut) return;
+          this.sessionReadyForRealtimeInput = false;
+          this.manualActivityActive = false;
+          this.interruptPending = false;
+          this.speechCandidateFrames = 0;
+          this.speechSilenceFrames = 0;
+          this.syncSpeechStateFromActivity("session_closed");
           this.debug("live.session.closed", { reason: event.reason || "unknown" });
           this.callbacks.onClosed?.(event.reason || undefined);
         },
@@ -1181,12 +1197,12 @@ export class GeminiLiveVoiceSession {
     this.flushPendingTranscript("user", "turn_complete");
     this.flushPendingTranscript("assistant", "turn_complete");
 
-    try {
-      if (this.session && this.manualActivityActive) {
-        this.session.sendRealtimeInput({ activityEnd: {} });
-      }
-    } catch {
-      // Ignore cleanup error.
+    if (this.manualActivityActive) {
+      this.sendRealtimeInputSafely(
+        { activityEnd: {} },
+        "live.audio.activity_end_failed",
+        { reason: "session_stop" },
+      );
     }
 
     try {
@@ -1196,6 +1212,7 @@ export class GeminiLiveVoiceSession {
     }
 
     this.session = null;
+    this.sessionReadyForRealtimeInput = false;
     this.pendingTranscriptBySender = {
       user: "",
       assistant: "",
@@ -1380,6 +1397,10 @@ export class GeminiLiveVoiceSession {
   }
 
   async stopVideo(): Promise<void> {
+    const hadActiveVideo =
+      this.videoCaptureInterval !== null ||
+      this.videoElement !== null ||
+      this.videoStream !== null;
     if (this.videoCaptureInterval !== null) {
       window.clearInterval(this.videoCaptureInterval);
       this.videoCaptureInterval = null;
@@ -1399,7 +1420,9 @@ export class GeminiLiveVoiceSession {
     }
 
     this.videoCanvas = null;
-    this.debug("live.video.stopped");
+    if (hadActiveVideo) {
+      this.debug("live.video.stopped");
+    }
   }
 
   async flipCamera(): Promise<CameraFacingMode> {
@@ -1531,22 +1554,47 @@ export class GeminiLiveVoiceSession {
     }
   }
 
-  private sendAudioFrame(pcmBase64: string): void {
-    if (!this.session) {
-      return;
+  private sendRealtimeInputSafely(
+    payload: LiveRealtimeInputPayload,
+    failureEvent:
+      | "live.audio.send_failed"
+      | "live.assistant.interrupt_failed"
+      | "live.audio.activity_end_failed"
+      | "live.video.frame_send_failed",
+    failureMetadata: Record<string, unknown> = {},
+  ): boolean {
+    if (!this.session || !this.sessionReadyForRealtimeInput) {
+      return false;
     }
     try {
-      this.session.sendRealtimeInput({
+      this.session.sendRealtimeInput(payload);
+      return true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const websocketClosed =
+        /WebSocket.+(CLOSING|CLOSED)|not open|closed/i.test(message);
+      if (websocketClosed) {
+        this.sessionReadyForRealtimeInput = false;
+      }
+      this.debug(failureEvent, {
+        ...failureMetadata,
+        message,
+        websocketClosed,
+      });
+      return false;
+    }
+  }
+
+  private sendAudioFrame(pcmBase64: string): void {
+    this.sendRealtimeInputSafely(
+      {
         audio: {
           data: pcmBase64,
           mimeType: `audio/pcm;rate=${INPUT_SAMPLE_RATE}`,
         },
-      });
-    } catch (error) {
-      this.debug("live.audio.send_failed", {
-        message: error instanceof Error ? error.message : String(error),
-      });
-    }
+      },
+      "live.audio.send_failed",
+    );
   }
 
   private flushBufferedPrefixAudioFrames(): void {
@@ -1590,14 +1638,13 @@ export class GeminiLiveVoiceSession {
     this.interruptPending = assistantWindowActive;
     this.clearPlaybackQueue();
 
-    try {
-      this.session.sendRealtimeInput({ activityStart: {} });
-    } catch (error) {
+    const activityStarted = this.sendRealtimeInputSafely(
+      { activityStart: {} },
+      "live.assistant.interrupt_failed",
+      { reason },
+    );
+    if (!activityStarted) {
       this.interruptPending = false;
-      this.debug("live.assistant.interrupt_failed", {
-        reason,
-        message: error instanceof Error ? error.message : String(error),
-      });
       return false;
     }
 
@@ -1626,18 +1673,15 @@ export class GeminiLiveVoiceSession {
   }
 
   private endUserSpeech(reason: string): void {
-    if (!this.session || !this.manualActivityActive) {
+    if (!this.manualActivityActive) {
       this.syncSpeechStateFromActivity(reason);
       return;
     }
-    try {
-      this.session.sendRealtimeInput({ activityEnd: {} });
-    } catch (error) {
-      this.debug("live.audio.activity_end_failed", {
-        reason,
-        message: error instanceof Error ? error.message : String(error),
-      });
-    }
+    this.sendRealtimeInputSafely(
+      { activityEnd: {} },
+      "live.audio.activity_end_failed",
+      { reason },
+    );
     this.manualActivityActive = false;
     this.interruptPending = false;
     this.speechCandidateFrames = 0;
@@ -1815,12 +1859,18 @@ export class GeminiLiveVoiceSession {
           return;
         }
 
-        this.session.sendRealtimeInput({
-          video: {
-            data: base64,
-            mimeType: "image/jpeg",
+        const sent = this.sendRealtimeInputSafely(
+          {
+            video: {
+              data: base64,
+              mimeType: "image/jpeg",
+            },
           },
-        });
+          "live.video.frame_send_failed",
+        );
+        if (!sent) {
+          return;
+        }
         this.debug("live.video.frame_sent", {
           bytes: Math.floor((base64.length * 3) / 4),
           mimeType: "image/jpeg",

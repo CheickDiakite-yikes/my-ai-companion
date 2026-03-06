@@ -9672,12 +9672,16 @@ function App() {
 
           if (shouldAutoResume) {
             if (autoResumeBudgetRef.current <= 0) {
+              const hadVideoEnabled = isVideoEnabledRef.current;
               logLiveTrace("live.video.auto_resume_failed", {
                 runId,
                 reason: "budget_exhausted",
+                hadVideoEnabled,
               });
               setLiveError(
-                "Live camera session ended. Reconnect to continue sharing video.",
+                hadVideoEnabled
+                  ? "Live camera session ended. Reconnect to continue sharing video."
+                  : "Live voice session ended. Reconnect to continue.",
               );
               return;
             }
