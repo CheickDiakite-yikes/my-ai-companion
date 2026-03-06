@@ -350,6 +350,15 @@ const USER_SPEECH_COOLDOWN_MS = parseClientPositiveInt(
   liveClientEnv.VITE_LIVE_AUDIO_USER_SPEECH_COOLDOWN_MS,
   220,
 );
+const USER_SPEECH_REFERENCE_FRAME_DURATION_MS =
+  (PROCESSOR_BUFFER_SIZE / INPUT_SAMPLE_RATE) * 1000;
+const USER_SPEECH_START_MIN_DURATION_MS =
+  USER_SPEECH_START_CONSECUTIVE_FRAMES * USER_SPEECH_REFERENCE_FRAME_DURATION_MS;
+const USER_SPEECH_ASSISTANT_MIN_DURATION_MS =
+  USER_SPEECH_ASSISTANT_CONSECUTIVE_FRAMES *
+  USER_SPEECH_REFERENCE_FRAME_DURATION_MS;
+const USER_SPEECH_END_SILENCE_MIN_DURATION_MS =
+  USER_SPEECH_END_SILENCE_FRAMES * USER_SPEECH_REFERENCE_FRAME_DURATION_MS;
 const MANUAL_INTERRUPT_IDLE_TIMEOUT_MS = parseClientPositiveInt(
   liveClientEnv.VITE_LIVE_AUDIO_MANUAL_INTERRUPT_IDLE_TIMEOUT_MS,
   1400,
@@ -912,6 +921,8 @@ export class GeminiLiveVoiceSession {
   private inputAmbientRms = 0;
   private speechCandidateFrames = 0;
   private speechSilenceFrames = 0;
+  private speechCandidateMs = 0;
+  private speechSilenceMs = 0;
   private interruptPending = false;
   private interruptTrigger: LiveInterruptTrigger = "none";
   private lastInterruptReason: string | null = null;
@@ -1033,6 +1044,8 @@ export class GeminiLiveVoiceSession {
     this.inputAmbientRms = 0;
     this.speechCandidateFrames = 0;
     this.speechSilenceFrames = 0;
+    this.speechCandidateMs = 0;
+    this.speechSilenceMs = 0;
     this.bufferedPrefixAudioFrames = [];
     this.analyzerKind = "script_processor";
     this.debugStateTrackSettings = null;
@@ -1172,6 +1185,8 @@ export class GeminiLiveVoiceSession {
           this.clearManualInterruptWatchdog();
           this.speechCandidateFrames = 0;
           this.speechSilenceFrames = 0;
+          this.speechCandidateMs = 0;
+          this.speechSilenceMs = 0;
           this.syncSpeechStateFromActivity("session_error");
           const error = new Error(event.message || "Gemini Live session error");
           this.emitError(error);
@@ -1189,6 +1204,8 @@ export class GeminiLiveVoiceSession {
           this.clearManualInterruptWatchdog();
           this.speechCandidateFrames = 0;
           this.speechSilenceFrames = 0;
+          this.speechCandidateMs = 0;
+          this.speechSilenceMs = 0;
           this.session = null;
           this.syncSpeechStateFromActivity("session_closed");
           this.debug("live.session.closed", { reason: event.reason || "unknown" });
@@ -1258,6 +1275,11 @@ export class GeminiLiveVoiceSession {
       userSpeechAssistantConsecutiveFrames:
         USER_SPEECH_ASSISTANT_CONSECUTIVE_FRAMES,
       userSpeechEndSilenceFrames: USER_SPEECH_END_SILENCE_FRAMES,
+      userSpeechReferenceFrameDurationMs: USER_SPEECH_REFERENCE_FRAME_DURATION_MS,
+      userSpeechStartMinDurationMs: USER_SPEECH_START_MIN_DURATION_MS,
+      userSpeechAssistantMinDurationMs: USER_SPEECH_ASSISTANT_MIN_DURATION_MS,
+      userSpeechEndSilenceMinDurationMs:
+        USER_SPEECH_END_SILENCE_MIN_DURATION_MS,
       userSpeechPrefixFrames: USER_SPEECH_PREFIX_FRAMES,
       userSpeechCooldownMs: USER_SPEECH_COOLDOWN_MS,
       manualInterruptIdleTimeoutMs: MANUAL_INTERRUPT_IDLE_TIMEOUT_MS,
@@ -1321,6 +1343,8 @@ export class GeminiLiveVoiceSession {
     this.inputAmbientRms = 0;
     this.speechCandidateFrames = 0;
     this.speechSilenceFrames = 0;
+    this.speechCandidateMs = 0;
+    this.speechSilenceMs = 0;
     this.bufferedPrefixAudioFrames = [];
     this.interruptPending = false;
     this.analyzerKind = "script_processor";
@@ -2021,6 +2045,8 @@ export class GeminiLiveVoiceSession {
     this.manualInterruptSpeechObserved = false;
     this.speechCandidateFrames = 0;
     this.speechSilenceFrames = 0;
+    this.speechCandidateMs = 0;
+    this.speechSilenceMs = 0;
     this.flushBufferedPrefixAudioFrames();
     if (trigger === "button") {
       this.scheduleManualInterruptWatchdog(reason);
@@ -2070,6 +2096,7 @@ export class GeminiLiveVoiceSession {
       activityEnded,
       trigger: this.interruptTrigger,
       manualInterruptSpeechObserved: this.manualInterruptSpeechObserved,
+      speechSilenceMs: this.speechSilenceMs,
       sessionReadyForRealtimeInput: this.sessionReadyForRealtimeInput,
       socketState: this.getSocketStateLabel(),
     });
@@ -2080,12 +2107,14 @@ export class GeminiLiveVoiceSession {
     this.clearManualInterruptWatchdog();
     this.speechCandidateFrames = 0;
     this.speechSilenceFrames = 0;
+    this.speechCandidateMs = 0;
+    this.speechSilenceMs = 0;
     this.enterSpeechCooldown(reason);
   }
 
   private computeSpeechThreshold(assistantWindowActive: boolean): {
     threshold: number;
-    consecutiveFrames: number;
+    minSpeechDurationMs: number;
   } {
     const baseThreshold = assistantWindowActive
       ? USER_SPEECH_ASSISTANT_RMS_THRESHOLD
@@ -2106,18 +2135,26 @@ export class GeminiLiveVoiceSession {
     );
     return {
       threshold,
-      consecutiveFrames: assistantWindowActive
-        ? assistantFrames
-        : USER_SPEECH_START_CONSECUTIVE_FRAMES,
+      minSpeechDurationMs:
+        (assistantWindowActive
+          ? assistantFrames
+          : USER_SPEECH_START_CONSECUTIVE_FRAMES) *
+        USER_SPEECH_REFERENCE_FRAME_DURATION_MS,
     };
   }
 
-  private processSpeechInput(rms: number): void {
+  private processSpeechInput(rms: number, frameDurationMs?: number): void {
+    const effectiveFrameDurationMs =
+      typeof frameDurationMs === "number" &&
+      Number.isFinite(frameDurationMs) &&
+      frameDurationMs > 0
+        ? frameDurationMs
+        : USER_SPEECH_REFERENCE_FRAME_DURATION_MS;
     this.latestInputRms = rms;
     this.updateInputAmbientRms(rms);
 
     const assistantWindowActive = this.isAssistantSpeechWindowActive();
-    const { threshold, consecutiveFrames } =
+    const { threshold, minSpeechDurationMs } =
       this.computeSpeechThreshold(assistantWindowActive);
     this.activeSpeechThreshold = threshold;
 
@@ -2138,13 +2175,15 @@ export class GeminiLiveVoiceSession {
           });
         }
         this.speechSilenceFrames = 0;
+        this.speechSilenceMs = 0;
         this.setSpeechState("user_speaking", {
           reason: "speech_continues",
           assistantWindowActive,
         });
       } else {
         this.speechSilenceFrames += 1;
-        if (this.speechSilenceFrames >= USER_SPEECH_END_SILENCE_FRAMES) {
+        this.speechSilenceMs += effectiveFrameDurationMs;
+        if (this.speechSilenceMs >= USER_SPEECH_END_SILENCE_MIN_DURATION_MS) {
           this.endUserSpeech("user_silence_detected");
         }
       }
@@ -2154,13 +2193,14 @@ export class GeminiLiveVoiceSession {
 
     if (isSpeechLike) {
       this.speechCandidateFrames += 1;
+      this.speechCandidateMs += effectiveFrameDurationMs;
       if (this.speechState !== "candidate_user_speech") {
         this.setSpeechState("candidate_user_speech", {
           threshold,
           assistantWindowActive,
         });
       }
-      if (this.speechCandidateFrames >= consecutiveFrames) {
+      if (this.speechCandidateMs >= minSpeechDurationMs) {
         this.beginUserSpeech(
           assistantWindowActive
             ? "detected_user_barge_in"
@@ -2174,6 +2214,7 @@ export class GeminiLiveVoiceSession {
     }
 
     this.speechCandidateFrames = 0;
+    this.speechCandidateMs = 0;
     if (this.speechState === "candidate_user_speech") {
       this.syncSpeechStateFromActivity("candidate_cleared");
     } else {
@@ -2205,7 +2246,18 @@ export class GeminiLiveVoiceSession {
         if (rms === null) {
           return;
         }
-        this.processSpeechInput(rms);
+        const sampleCount =
+          typeof event.data?.sampleCount === "number" &&
+          Number.isFinite(event.data.sampleCount) &&
+          event.data.sampleCount > 0
+            ? event.data.sampleCount
+            : null;
+        const analyzerSampleRate = this.inputContext?.sampleRate ?? INPUT_SAMPLE_RATE;
+        const frameDurationMs =
+          sampleCount !== null && analyzerSampleRate > 0
+            ? (sampleCount / analyzerSampleRate) * 1000
+            : undefined;
+        this.processSpeechInput(rms, frameDurationMs);
       };
       this.mediaSourceNode.connect(this.analyzerNode);
       this.analyzerNode.connect(this.mutedGainNode);
@@ -2576,7 +2628,12 @@ export class GeminiLiveVoiceSession {
       }
       const inputSamples = event.inputBuffer.getChannelData(0);
       if (this.analyzerKind === "script_processor") {
-        this.processSpeechInput(calculateRms(inputSamples));
+        this.processSpeechInput(
+          calculateRms(inputSamples),
+          this.inputContext.sampleRate > 0
+            ? (inputSamples.length / this.inputContext.sampleRate) * 1000
+            : undefined,
+        );
       }
       const pcmBase64 = pcm16ToBase64(
         inputSamples,
