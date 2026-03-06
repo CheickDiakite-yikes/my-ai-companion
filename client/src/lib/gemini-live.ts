@@ -1055,7 +1055,6 @@ export class GeminiLiveVoiceSession {
       model: params.model,
       config: {
         sessionResumption: {
-          transparent: true,
           handle: params.sessionResumptionHandle ?? undefined,
         },
       },

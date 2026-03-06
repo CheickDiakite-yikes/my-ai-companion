@@ -1535,9 +1535,7 @@ export async function createLiveToken(
                   },
                 },
                 sessionResumption: sessionResumptionEnabled
-                  ? {
-                      transparent: true,
-                    }
+                  ? {}
                   : undefined,
                 contextWindowCompression: contextWindowCompressionEnabled
                   ? {
