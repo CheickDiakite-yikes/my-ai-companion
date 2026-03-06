@@ -46,6 +46,7 @@ const authLimiter = rateLimit({
 app.use("/api", apiLimiter);
 app.use("/api/auth/login", authLimiter);
 app.use("/api/auth/register", authLimiter);
+app.use("/api/auth/google/start", authLimiter);
 
 app.use(
   express.json({

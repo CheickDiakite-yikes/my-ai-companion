@@ -1662,6 +1662,37 @@ const AuthPage = ({ onLogin, onRegister, loginError, registerError, isLoggingIn,
     referralSource: "",
   });
   const [localError, setLocalError] = useState("");
+  const startGoogleAuth = useCallback(
+    (mode: "signin" | "signup") => {
+      const returnTo = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+      const url = new URL("/api/auth/google/start", window.location.origin);
+      url.searchParams.set("mode", mode);
+      url.searchParams.set("returnTo", returnTo);
+      window.location.assign(url.toString());
+    },
+    [],
+  );
+
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    const authError = url.searchParams.get("auth_error");
+    if (!authError) return;
+
+    const errorMap: Record<string, string> = {
+      invalid_oauth_state: "Google sign-in session expired. Please try again.",
+      expired_oauth_state: "Google sign-in took too long. Please try again.",
+      oauth_exchange_failed: "Google sign-in failed at token exchange. Please try again.",
+      access_denied: "Google sign-in was canceled.",
+      google_sign_in_failed: "Google sign-in failed. Please try again.",
+      google_sso_not_configured: "Google sign-in is not configured yet.",
+      missing_email: "Google did not return an email for this account.",
+    };
+
+    setLocalError(errorMap[authError] ?? "Google sign-in failed. Please try again.");
+    setAuthMode("login");
+    url.searchParams.delete("auth_error");
+    window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+  }, []);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1787,6 +1818,15 @@ const AuthPage = ({ onLogin, onRegister, loginError, registerError, isLoggingIn,
                 data-testid="button-login-submit"
               >
                 {isLoggingIn ? "Signing in..." : "Sign In"}
+              </Button>
+
+              <Button
+                type="button"
+                onClick={() => startGoogleAuth("signin")}
+                className="w-full h-14 text-base rounded-2xl border border-white/20 bg-white/10 text-white hover:bg-white/15 transition-colors font-semibold"
+                data-testid="button-login-google"
+              >
+                Continue with Google
               </Button>
 
               <p className="text-center text-white/50 text-sm">
@@ -1943,6 +1983,15 @@ const AuthPage = ({ onLogin, onRegister, loginError, registerError, isLoggingIn,
                 data-testid="button-register-submit"
               >
                 {isRegistering ? "Creating account..." : "Create Account"}
+              </Button>
+
+              <Button
+                type="button"
+                onClick={() => startGoogleAuth("signup")}
+                className="w-full h-14 mt-3 text-base rounded-2xl border border-white/20 bg-white/10 text-white hover:bg-white/15 transition-colors font-semibold"
+                data-testid="button-register-google"
+              >
+                Sign up with Google
               </Button>
 
               <p className="text-center text-white/50 text-sm mt-4">
