@@ -232,7 +232,7 @@ const SUPPRESS_INPUT_WHILE_ASSISTANT_SPEAKING = parseClientBoolean(
 );
 const SUPPRESS_INPUT_COOLDOWN_MS = parseClientPositiveInt(
   liveClientEnv.VITE_LIVE_AUDIO_SUPPRESS_INPUT_COOLDOWN_MS,
-  240,
+  480,
 );
 const ASSISTANT_TURN_RELEASE_GRACE_MS = parseClientPositiveInt(
   liveClientEnv.VITE_LIVE_ASSISTANT_TURN_RELEASE_GRACE_MS,
@@ -252,29 +252,29 @@ const ENABLE_ASSISTANT_BARGE_IN = parseClientBoolean(
 );
 const ASSISTANT_BARGE_IN_RMS_THRESHOLD = parseClientBoundedNumber(
   liveClientEnv.VITE_LIVE_AUDIO_BARGE_IN_RMS_THRESHOLD,
-  0.015,
+  0.028,
   0.008,
   0.08,
 );
 const ASSISTANT_BARGE_IN_CONSECUTIVE_FRAMES = parseClientPositiveInt(
   liveClientEnv.VITE_LIVE_AUDIO_BARGE_IN_CONSECUTIVE_FRAMES,
-  4,
+  7,
 );
 const ASSISTANT_BARGE_IN_AMBIENT_MULTIPLIER = parseClientBoundedNumber(
   liveClientEnv.VITE_LIVE_AUDIO_BARGE_IN_AMBIENT_MULTIPLIER,
-  1.9,
+  3.5,
   1.2,
-  6,
+  8,
 );
 const ASSISTANT_BARGE_IN_MAX_RMS_THRESHOLD = parseClientBoundedNumber(
   liveClientEnv.VITE_LIVE_AUDIO_BARGE_IN_MAX_RMS_THRESHOLD,
-  0.045,
+  0.06,
   0.012,
-  0.09,
+  0.12,
 );
 const ASSISTANT_BARGE_IN_MIN_GAP_MS = parseClientPositiveInt(
   liveClientEnv.VITE_LIVE_AUDIO_BARGE_IN_MIN_GAP_MS,
-  900,
+  1400,
 );
 const ASSISTANT_IDLE_RELEASE_USER_SPEECH_RMS_THRESHOLD = parseClientBoundedNumber(
   liveClientEnv.VITE_LIVE_AUDIO_ASSISTANT_IDLE_RELEASE_USER_SPEECH_RMS_THRESHOLD,
@@ -312,9 +312,9 @@ const USER_SPEECH_AMBIENT_MULTIPLIER = parseClientBoundedNumber(
 );
 const USER_SPEECH_ASSISTANT_AMBIENT_MULTIPLIER = parseClientBoundedNumber(
   liveClientEnv.VITE_LIVE_AUDIO_USER_SPEECH_ASSISTANT_AMBIENT_MULTIPLIER,
-  Math.max(1.4, ASSISTANT_BARGE_IN_AMBIENT_MULTIPLIER),
+  Math.max(2.5, ASSISTANT_BARGE_IN_AMBIENT_MULTIPLIER),
   1,
-  6,
+  8,
 );
 const USER_SPEECH_MAX_RMS_THRESHOLD = parseClientBoundedNumber(
   liveClientEnv.VITE_LIVE_AUDIO_USER_SPEECH_MAX_RMS_THRESHOLD,
@@ -328,7 +328,7 @@ const USER_SPEECH_START_CONSECUTIVE_FRAMES = parseClientPositiveInt(
 );
 const USER_SPEECH_ASSISTANT_CONSECUTIVE_FRAMES = parseClientPositiveInt(
   liveClientEnv.VITE_LIVE_AUDIO_USER_SPEECH_ASSISTANT_CONSECUTIVE_FRAMES,
-  2,
+  5,
 );
 const USER_SPEECH_END_SILENCE_FRAMES = parseClientPositiveInt(
   liveClientEnv.VITE_LIVE_AUDIO_USER_SPEECH_END_SILENCE_FRAMES,
@@ -1935,6 +1935,29 @@ export class GeminiLiveVoiceSession {
       this.assistantTurnActive ||
       this.isAssistantAudioLikelyActive() ||
       Date.now() < this.assistantPlaybackTailUntilMs;
+
+    if (
+      !force &&
+      assistantWindowActive &&
+      trigger === "speech_detector"
+    ) {
+      if (!ENABLE_ASSISTANT_BARGE_IN) {
+        this.debug("live.barge_in.blocked_disabled", { reason });
+        return false;
+      }
+      if (
+        this.lastInterruptRequestedAt !== null &&
+        Date.now() - this.lastInterruptRequestedAt < ASSISTANT_BARGE_IN_MIN_GAP_MS
+      ) {
+        this.debug("live.barge_in.blocked_min_gap", {
+          reason,
+          sinceLastMs: Date.now() - this.lastInterruptRequestedAt,
+          minGapMs: ASSISTANT_BARGE_IN_MIN_GAP_MS,
+        });
+        return false;
+      }
+    }
+
     if (
       !force &&
       !assistantWindowActive &&
@@ -2055,10 +2078,14 @@ export class GeminiLiveVoiceSession {
         this.inputAmbientRms > 0 ? this.inputAmbientRms * ambientMultiplier : 0,
       ),
     );
+    const assistantFrames = Math.max(
+      USER_SPEECH_ASSISTANT_CONSECUTIVE_FRAMES,
+      ASSISTANT_BARGE_IN_CONSECUTIVE_FRAMES,
+    );
     return {
       threshold,
       consecutiveFrames: assistantWindowActive
-        ? USER_SPEECH_ASSISTANT_CONSECUTIVE_FRAMES
+        ? assistantFrames
         : USER_SPEECH_START_CONSECUTIVE_FRAMES,
     };
   }
