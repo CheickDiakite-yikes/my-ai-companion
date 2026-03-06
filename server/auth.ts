@@ -5,7 +5,7 @@ import connectPg from "connect-pg-simple";
 import bcrypt from "bcryptjs";
 import { db } from "./db";
 import { users, registerSchema, loginSchema, type User } from "@shared/models/auth";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 
 declare module "express-session" {
   interface SessionData {
@@ -19,38 +19,30 @@ declare module "express-session" {
   }
 }
 
-const GOOGLE_SSO_PASSWORD_PLACEHOLDER = "__AUTH0_GOOGLE_SSO_ACCOUNT__";
+const GOOGLE_SSO_PASSWORD_PLACEHOLDER = "__GOOGLE_SSO_ACCOUNT__";
 const GOOGLE_AUTH_STATE_TTL_MS = 10 * 60 * 1000;
+const GOOGLE_AUTH_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth";
+const GOOGLE_TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token";
+const GOOGLE_USERINFO_ENDPOINT = "https://openidconnect.googleapis.com/v1/userinfo";
 
-function parseAuth0Domain(): string | null {
-  const raw = (process.env.AUTH0_DOMAIN ?? "").trim();
-  if (!raw) return null;
-  const withoutProtocol = raw.replace(/^https?:\/\//i, "").replace(/\/+$/, "");
-  return withoutProtocol || null;
-}
-
-function getAuth0Config() {
-  const domain = parseAuth0Domain();
-  const clientId = (process.env.AUTH0_CLIENT_ID ?? "").trim();
-  const clientSecret = (process.env.AUTH0_CLIENT_SECRET ?? "").trim();
-  const connection = (process.env.AUTH0_GOOGLE_CONNECTION ?? "google-oauth2").trim();
-  const audience = (process.env.AUTH0_AUDIENCE ?? "").trim() || null;
+function getGoogleSsoConfig() {
+  const clientId = (process.env.GOOGLE_OAUTH_CLIENT_ID ?? "").trim();
+  const clientSecret = (process.env.GOOGLE_OAUTH_CLIENT_SECRET ?? "").trim();
   const postLoginRedirect =
-    (process.env.AUTH0_POST_LOGIN_REDIRECT ?? "/").trim() || "/";
+    (process.env.GOOGLE_AUTH_POST_LOGIN_REDIRECT ?? "/").trim() || "/";
   const redirectUriOverride =
-    (process.env.AUTH0_REDIRECT_URI ?? "").trim() || null;
+    (process.env.GOOGLE_OAUTH_AUTH_REDIRECT_URI ?? "").trim() || null;
+  const integrationRedirectUri =
+    (process.env.GOOGLE_OAUTH_REDIRECT_URI ?? "").trim() || null;
   const missing: string[] = [];
-  if (!domain) missing.push("AUTH0_DOMAIN");
-  if (!clientId) missing.push("AUTH0_CLIENT_ID");
-  if (!clientSecret) missing.push("AUTH0_CLIENT_SECRET");
+  if (!clientId) missing.push("GOOGLE_OAUTH_CLIENT_ID");
+  if (!clientSecret) missing.push("GOOGLE_OAUTH_CLIENT_SECRET");
   return {
-    domain,
     clientId,
     clientSecret,
-    connection,
-    audience,
     postLoginRedirect,
     redirectUriOverride,
+    integrationRedirectUri,
     missing,
     configured: missing.length === 0,
   };
@@ -86,8 +78,19 @@ function sanitizeReturnTo(returnToRaw: unknown, fallback: string): string {
 }
 
 function resolveGoogleSsoCallbackUrl(req: Request): string {
-  const auth0 = getAuth0Config();
-  if (auth0.redirectUriOverride) return auth0.redirectUriOverride;
+  const config = getGoogleSsoConfig();
+  if (config.redirectUriOverride) return config.redirectUriOverride;
+  if (config.integrationRedirectUri) {
+    try {
+      const url = new URL(config.integrationRedirectUri);
+      url.pathname = "/api/auth/google/callback";
+      url.search = "";
+      url.hash = "";
+      return url.toString();
+    } catch {
+      // ignore malformed env and fall back to request-derived callback
+    }
+  }
   return `${req.protocol}://${req.get("host")}/api/auth/google/callback`;
 }
 
@@ -101,6 +104,20 @@ function deriveNamesFromProfile(email: string, givenName?: string | null, family
     return "User";
   })();
   return { firstName, lastName };
+}
+
+function normalizeEmail(email: string): string {
+  return email.trim().toLowerCase();
+}
+
+async function findUserByEmailCaseInsensitive(email: string): Promise<User | undefined> {
+  const normalized = normalizeEmail(email);
+  const [user] = await db
+    .select()
+    .from(users)
+    .where(sql`lower(${users.email}) = ${normalized}`)
+    .limit(1);
+  return user;
 }
 
 export function setupAuth(app: Express) {
@@ -142,7 +159,7 @@ export function setupAuth(app: Express) {
 export function registerAuthRoutes(app: Express) {
   app.get("/api/auth/google/start", async (req, res) => {
     const fallbackReturnTo = sanitizeReturnTo(
-      (process.env.AUTH0_POST_LOGIN_REDIRECT ?? "/").trim(),
+      (process.env.GOOGLE_AUTH_POST_LOGIN_REDIRECT ?? "/").trim(),
       "/",
     );
     const returnTo = sanitizeReturnTo(req.query.returnTo, fallbackReturnTo);
@@ -153,8 +170,8 @@ export function registerAuthRoutes(app: Express) {
     };
 
     try {
-      const auth0 = getAuth0Config();
-      if (!auth0.configured || !auth0.domain) {
+      const config = getGoogleSsoConfig();
+      if (!config.configured) {
         return redirectWithError("google_sso_not_configured");
       }
 
@@ -170,21 +187,18 @@ export function registerAuthRoutes(app: Express) {
         issuedAt: Date.now(),
       };
 
-      const authorizeUrl = new URL(`https://${auth0.domain}/authorize`);
+      const authorizeUrl = new URL(GOOGLE_AUTH_ENDPOINT);
       authorizeUrl.searchParams.set("response_type", "code");
-      authorizeUrl.searchParams.set("client_id", auth0.clientId);
+      authorizeUrl.searchParams.set("client_id", config.clientId);
       authorizeUrl.searchParams.set("redirect_uri", callbackUrl);
       authorizeUrl.searchParams.set("scope", "openid profile email");
       authorizeUrl.searchParams.set("state", state);
       authorizeUrl.searchParams.set("code_challenge", codeChallenge);
       authorizeUrl.searchParams.set("code_challenge_method", "S256");
-      authorizeUrl.searchParams.set("connection", auth0.connection);
       authorizeUrl.searchParams.set("prompt", "select_account");
+      authorizeUrl.searchParams.set("include_granted_scopes", "true");
       if (mode === "signup") {
-        authorizeUrl.searchParams.set("screen_hint", "signup");
-      }
-      if (auth0.audience) {
-        authorizeUrl.searchParams.set("audience", auth0.audience);
+        authorizeUrl.searchParams.set("prompt", "consent select_account");
       }
 
       return res.redirect(authorizeUrl.toString());
@@ -196,7 +210,7 @@ export function registerAuthRoutes(app: Express) {
 
   app.get("/api/auth/google/callback", async (req, res) => {
     const fallbackReturnTo = sanitizeReturnTo(
-      (process.env.AUTH0_POST_LOGIN_REDIRECT ?? "/").trim(),
+      (process.env.GOOGLE_AUTH_POST_LOGIN_REDIRECT ?? "/").trim(),
       "/",
     );
     const redirectWithError = (reason: string, returnToOverride?: string) => {
@@ -209,8 +223,8 @@ export function registerAuthRoutes(app: Express) {
     };
 
     try {
-      const auth0 = getAuth0Config();
-      if (!auth0.configured || !auth0.domain) {
+      const config = getGoogleSsoConfig();
+      if (!config.configured) {
         return redirectWithError("google_sso_not_configured");
       }
 
@@ -242,19 +256,20 @@ export function registerAuthRoutes(app: Express) {
       }
 
       const callbackUrl = resolveGoogleSsoCallbackUrl(req);
-      const tokenResponse = await fetch(`https://${auth0.domain}/oauth/token`, {
+      const tokenBody = new URLSearchParams({
+        grant_type: "authorization_code",
+        client_id: config.clientId,
+        client_secret: config.clientSecret,
+        code,
+        redirect_uri: callbackUrl,
+        code_verifier: stateFromSession.codeVerifier,
+      });
+      const tokenResponse = await fetch(GOOGLE_TOKEN_ENDPOINT, {
         method: "POST",
         headers: {
-          "Content-Type": "application/json",
+          "Content-Type": "application/x-www-form-urlencoded",
         },
-        body: JSON.stringify({
-          grant_type: "authorization_code",
-          client_id: auth0.clientId,
-          client_secret: auth0.clientSecret,
-          code,
-          redirect_uri: callbackUrl,
-          code_verifier: stateFromSession.codeVerifier,
-        }),
+        body: tokenBody,
       });
 
       if (!tokenResponse.ok) {
@@ -269,13 +284,15 @@ export function registerAuthRoutes(app: Express) {
 
       const tokenPayload = (await tokenResponse.json()) as {
         access_token?: string;
+        error?: string;
+        error_description?: string;
       };
       if (!tokenPayload.access_token) {
         req.session.googleAuth = undefined;
         return redirectWithError("missing_access_token", returnTo);
       }
 
-      const userInfoResponse = await fetch(`https://${auth0.domain}/userinfo`, {
+      const userInfoResponse = await fetch(GOOGLE_USERINFO_ENDPOINT, {
         headers: {
           Authorization: `Bearer ${tokenPayload.access_token}`,
         },
@@ -293,7 +310,7 @@ export function registerAuthRoutes(app: Express) {
         name?: string;
         picture?: string;
       };
-      const email = (profile.email ?? "").trim().toLowerCase();
+      const email = normalizeEmail(profile.email ?? "");
       if (!email) {
         req.session.googleAuth = undefined;
         return redirectWithError("missing_email", returnTo);
@@ -306,7 +323,7 @@ export function registerAuthRoutes(app: Express) {
         profile.name,
       );
 
-      const [existing] = await db.select().from(users).where(eq(users.email, email));
+      const existing = await findUserByEmailCaseInsensitive(email);
       let user: User;
       if (existing) {
         const updatePayload: Partial<typeof users.$inferInsert> = {
@@ -353,9 +370,10 @@ export function registerAuthRoutes(app: Express) {
         return res.status(400).json({ message: parsed.error.issues[0].message });
       }
 
-      const { email, password, firstName, lastName, profession, referralSource } = parsed.data;
+      const { password, firstName, lastName, profession, referralSource } = parsed.data;
+      const email = normalizeEmail(parsed.data.email);
 
-      const [existing] = await db.select().from(users).where(eq(users.email, email));
+      const existing = await findUserByEmailCaseInsensitive(email);
       if (existing) {
         return res.status(409).json({ message: "An account with this email already exists" });
       }
@@ -391,9 +409,10 @@ export function registerAuthRoutes(app: Express) {
         return res.status(400).json({ message: parsed.error.issues[0].message });
       }
 
-      const { email, password } = parsed.data;
+      const { password } = parsed.data;
+      const email = normalizeEmail(parsed.data.email);
 
-      const [user] = await db.select().from(users).where(eq(users.email, email));
+      const user = await findUserByEmailCaseInsensitive(email);
       if (!user) {
         return res.status(401).json({ message: "Invalid email or password" });
       }
