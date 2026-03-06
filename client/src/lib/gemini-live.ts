@@ -182,6 +182,34 @@ const ASSISTANT_TURN_STALL_TIMEOUT_MS = parseClientPositiveInt(
   liveClientEnv.VITE_LIVE_ASSISTANT_TURN_STALL_TIMEOUT_MS,
   12000,
 );
+const ASSISTANT_TURN_IDLE_RELEASE_MS = parseClientPositiveInt(
+  liveClientEnv.VITE_LIVE_ASSISTANT_TURN_IDLE_RELEASE_MS,
+  1200,
+);
+const ENABLE_ASSISTANT_BARGE_IN = parseClientBoolean(
+  liveClientEnv.VITE_LIVE_AUDIO_BARGE_IN_ENABLED,
+  true,
+);
+const ASSISTANT_BARGE_IN_RMS_THRESHOLD = parseClientBoundedNumber(
+  liveClientEnv.VITE_LIVE_AUDIO_BARGE_IN_RMS_THRESHOLD,
+  0.02,
+  0.008,
+  0.08,
+);
+const ASSISTANT_BARGE_IN_CONSECUTIVE_FRAMES = parseClientPositiveInt(
+  liveClientEnv.VITE_LIVE_AUDIO_BARGE_IN_CONSECUTIVE_FRAMES,
+  7,
+);
+const ASSISTANT_BARGE_IN_AMBIENT_MULTIPLIER = parseClientBoundedNumber(
+  liveClientEnv.VITE_LIVE_AUDIO_BARGE_IN_AMBIENT_MULTIPLIER,
+  2.6,
+  1.2,
+  6,
+);
+const ASSISTANT_BARGE_IN_MIN_GAP_MS = parseClientPositiveInt(
+  liveClientEnv.VITE_LIVE_AUDIO_BARGE_IN_MIN_GAP_MS,
+  1200,
+);
 const SUPPRESS_USER_TRANSCRIPT_DURING_ASSISTANT_SPEECH = parseClientBoolean(
   liveClientEnv.VITE_LIVE_AUDIO_SUPPRESS_USER_TRANSCRIPT_DURING_ASSISTANT_SPEECH,
   true,
@@ -690,7 +718,11 @@ export class GeminiLiveVoiceSession {
   private assistantPlaybackTailUntilMs = 0;
   private assistantSpeechWindowStartMs = 0;
   private assistantTurnReleaseAtMs = 0;
+  private assistantTurnIdleReleaseTimeout: number | null = null;
   private lastAssistantActivityAtMs = 0;
+  private inputAmbientRms = 0;
+  private assistantBargeInConsecutiveFrames = 0;
+  private lastAssistantBargeInAtMs = 0;
   private interruptPending = false;
   private conversationId: string | null = null;
   private liveGoogleSearchEnabled = false;
@@ -773,8 +805,15 @@ export class GeminiLiveVoiceSession {
     this.audioNoiseGateHangoverFrames = 0;
     this.audioNoiseGateConsecutiveDrops = 0;
     this.audioNoiseGateFailOpenFramesRemaining = 0;
+    this.clearAssistantTurnIdleReleaseTimeout();
     this.assistantTurnActive = false;
     this.assistantPlaybackTailUntilMs = 0;
+    this.assistantSpeechWindowStartMs = 0;
+    this.assistantTurnReleaseAtMs = 0;
+    this.lastAssistantActivityAtMs = 0;
+    this.inputAmbientRms = 0;
+    this.assistantBargeInConsecutiveFrames = 0;
+    this.lastAssistantBargeInAtMs = 0;
     this.conversationId = params.conversationId;
     const googleSearchGroundingEnabled = Boolean(
       params.googleSearchGroundingEnabled,
@@ -941,6 +980,14 @@ export class GeminiLiveVoiceSession {
       suppressInputWhileAssistantSpeaking:
         SUPPRESS_INPUT_WHILE_ASSISTANT_SPEAKING,
       suppressInputCooldownMs: SUPPRESS_INPUT_COOLDOWN_MS,
+      assistantBargeInEnabled: ENABLE_ASSISTANT_BARGE_IN,
+      assistantBargeInRmsThreshold: ASSISTANT_BARGE_IN_RMS_THRESHOLD,
+      assistantBargeInConsecutiveFrames:
+        ASSISTANT_BARGE_IN_CONSECUTIVE_FRAMES,
+      assistantBargeInAmbientMultiplier:
+        ASSISTANT_BARGE_IN_AMBIENT_MULTIPLIER,
+      assistantBargeInMinGapMs: ASSISTANT_BARGE_IN_MIN_GAP_MS,
+      assistantTurnIdleReleaseMs: ASSISTANT_TURN_IDLE_RELEASE_MS,
       suppressUserTranscriptDuringAssistantSpeech:
         SUPPRESS_USER_TRANSCRIPT_DURING_ASSISTANT_SPEECH,
     });
@@ -978,11 +1025,15 @@ export class GeminiLiveVoiceSession {
     this.audioNoiseGateHangoverFrames = 0;
     this.audioNoiseGateConsecutiveDrops = 0;
     this.audioNoiseGateFailOpenFramesRemaining = 0;
+    this.clearAssistantTurnIdleReleaseTimeout();
     this.assistantTurnActive = false;
     this.assistantPlaybackTailUntilMs = 0;
     this.assistantSpeechWindowStartMs = 0;
     this.assistantTurnReleaseAtMs = 0;
     this.lastAssistantActivityAtMs = 0;
+    this.inputAmbientRms = 0;
+    this.assistantBargeInConsecutiveFrames = 0;
+    this.lastAssistantBargeInAtMs = 0;
     this.interruptPending = false;
     this.conversationId = null;
     this.liveGoogleSearchEnabled = false;
@@ -1193,6 +1244,8 @@ export class GeminiLiveVoiceSession {
     this.assistantPlaybackTailUntilMs = 0;
     this.assistantSpeechWindowStartMs = 0;
     this.assistantTurnReleaseAtMs = 0;
+    this.clearAssistantTurnIdleReleaseTimeout();
+    this.assistantBargeInConsecutiveFrames = 0;
     this.interruptPending = true;
     this.clearPlaybackQueue();
 
@@ -1350,9 +1403,48 @@ export class GeminiLiveVoiceSession {
     });
   }
 
+  private clearAssistantTurnIdleReleaseTimeout(): void {
+    if (this.assistantTurnIdleReleaseTimeout !== null) {
+      window.clearTimeout(this.assistantTurnIdleReleaseTimeout);
+      this.assistantTurnIdleReleaseTimeout = null;
+    }
+  }
+
+  private scheduleAssistantTurnIdleRelease(reason: string): void {
+    this.clearAssistantTurnIdleReleaseTimeout();
+    if (!this.assistantTurnActive || this.interruptPending) {
+      return;
+    }
+
+    this.assistantTurnIdleReleaseTimeout = window.setTimeout(() => {
+      this.assistantTurnIdleReleaseTimeout = null;
+      if (!this.assistantTurnActive || this.interruptPending) {
+        return;
+      }
+      if (this.isAssistantAudioLikelyActive()) {
+        this.scheduleAssistantTurnIdleRelease(reason);
+        return;
+      }
+      if (Date.now() < this.assistantPlaybackTailUntilMs) {
+        this.scheduleAssistantTurnIdleRelease(reason);
+        return;
+      }
+      const lastActivityAgeMs =
+        this.lastAssistantActivityAtMs > 0
+          ? Date.now() - this.lastAssistantActivityAtMs
+          : ASSISTANT_TURN_IDLE_RELEASE_MS;
+      if (lastActivityAgeMs < ASSISTANT_TURN_IDLE_RELEASE_MS) {
+        this.scheduleAssistantTurnIdleRelease(reason);
+        return;
+      }
+      this.releaseAssistantTurn(reason);
+    }, ASSISTANT_TURN_IDLE_RELEASE_MS);
+  }
+
   private releaseAssistantTurn(reason: string): boolean {
     if (!this.assistantTurnActive) {
       this.assistantTurnReleaseAtMs = 0;
+      this.clearAssistantTurnIdleReleaseTimeout();
       return false;
     }
     if (this.interruptPending) {
@@ -1368,11 +1460,71 @@ export class GeminiLiveVoiceSession {
     this.assistantTurnActive = false;
     this.assistantSpeechWindowStartMs = 0;
     this.assistantTurnReleaseAtMs = 0;
+    this.clearAssistantTurnIdleReleaseTimeout();
+    this.assistantBargeInConsecutiveFrames = 0;
     this.flushPendingTranscript("assistant", "idle_timeout");
     this.debug("live.assistant.turn_released", {
       reason,
     });
     return true;
+  }
+
+  private updateInputAmbientRms(rms: number): void {
+    if (!Number.isFinite(rms) || rms <= 0) {
+      return;
+    }
+    if (this.inputAmbientRms <= 0) {
+      this.inputAmbientRms = rms;
+      return;
+    }
+    const smoothingFactor = rms <= this.inputAmbientRms ? 0.08 : 0.02;
+    this.inputAmbientRms =
+      this.inputAmbientRms * (1 - smoothingFactor) + rms * smoothingFactor;
+  }
+
+  private maybeInterruptAssistantFromUserSpeech(rms: number): boolean {
+    if (!ENABLE_ASSISTANT_BARGE_IN || this.interruptPending) {
+      this.assistantBargeInConsecutiveFrames = 0;
+      return false;
+    }
+
+    const now = Date.now();
+    if (now - this.lastAssistantBargeInAtMs < ASSISTANT_BARGE_IN_MIN_GAP_MS) {
+      this.assistantBargeInConsecutiveFrames = 0;
+      return false;
+    }
+
+    const effectiveThreshold = Math.max(
+      ASSISTANT_BARGE_IN_RMS_THRESHOLD,
+      this.inputAmbientRms > 0
+        ? this.inputAmbientRms * ASSISTANT_BARGE_IN_AMBIENT_MULTIPLIER
+        : 0,
+    );
+    if (rms < effectiveThreshold) {
+      this.assistantBargeInConsecutiveFrames = 0;
+      return false;
+    }
+
+    this.assistantBargeInConsecutiveFrames += 1;
+    if (
+      this.assistantBargeInConsecutiveFrames <
+      ASSISTANT_BARGE_IN_CONSECUTIVE_FRAMES
+    ) {
+      return false;
+    }
+
+    this.assistantBargeInConsecutiveFrames = 0;
+    const interrupted = this.interruptAssistantPlayback("detected_user_barge_in");
+    if (interrupted) {
+      this.lastAssistantBargeInAtMs = now;
+      this.debug("live.audio.barge_in_detected", {
+        rms,
+        ambientRms: this.inputAmbientRms,
+        threshold: effectiveThreshold,
+        consecutiveFrames: ASSISTANT_BARGE_IN_CONSECUTIVE_FRAMES,
+      });
+    }
+    return interrupted;
   }
 
   private isAssistantTurnStalled(): boolean {
@@ -1488,14 +1640,17 @@ export class GeminiLiveVoiceSession {
         this.inputContext.resume().catch(() => {});
         return;
       }
+      const inputSamples = event.inputBuffer.getChannelData(0);
+      const rms = calculateRms(inputSamples);
+      this.updateInputAmbientRms(rms);
       if (this.isAssistantSpeechWindowActive()) {
+        this.maybeInterruptAssistantFromUserSpeech(rms);
         this.audioNoiseGateConsecutiveDrops = 0;
         this.audioNoiseGateFailOpenFramesRemaining = 0;
         return;
       }
-      const inputSamples = event.inputBuffer.getChannelData(0);
+      this.assistantBargeInConsecutiveFrames = 0;
       if (ENABLE_AUDIO_NOISE_GATE) {
-        const rms = calculateRms(inputSamples);
         const assistantAudioActive = this.isAssistantAudioLikelyActive();
         const effectiveThreshold = assistantAudioActive
           ? AUDIO_NOISE_GATE_RMS_THRESHOLD *
@@ -1671,6 +1826,7 @@ export class GeminiLiveVoiceSession {
     }
 
     if (audioPartCount > 0 || Boolean(serverContent.outputTranscription?.text)) {
+      this.clearAssistantTurnIdleReleaseTimeout();
       this.lastAssistantActivityAtMs = Date.now();
       this.assistantTurnActive = true;
       this.assistantPlaybackTailUntilMs = Math.max(
@@ -1695,9 +1851,11 @@ export class GeminiLiveVoiceSession {
       );
     }
 
+    const interruptedByClientRequest =
+      Boolean(serverContent.interrupted) && this.interruptPending;
     if (serverContent.interrupted) {
       this.debug("live.server.interrupted");
-      if (this.interruptPending) {
+      if (interruptedByClientRequest) {
         this.debug("live.assistant.interrupt_acknowledged", {
           source: "server_interrupted",
         });
@@ -1705,14 +1863,23 @@ export class GeminiLiveVoiceSession {
       this.interruptPending = false;
       this.assistantTurnActive = false;
       this.assistantTurnReleaseAtMs = 0;
+      this.clearAssistantTurnIdleReleaseTimeout();
+      this.assistantBargeInConsecutiveFrames = 0;
       this.assistantPlaybackTailUntilMs = Math.max(
         this.assistantPlaybackTailUntilMs,
         Date.now() + SUPPRESS_INPUT_COOLDOWN_MS,
       );
-      this.clearPlaybackQueue();
+      if (interruptedByClientRequest) {
+        this.clearPlaybackQueue();
+      } else {
+        this.debug("live.assistant.buffered_audio_preserved_after_unexpected_interrupt", {
+          bufferedNodes: this.activePlaybackNodes.size,
+        });
+      }
     }
 
-    const shouldDropAssistantOutput = this.interruptPending;
+    const shouldDropAssistantOutput =
+      this.interruptPending || interruptedByClientRequest;
     if (shouldDropAssistantOutput && (audioPartCount > 0 || Boolean(serverContent.outputTranscription?.text))) {
       this.debug("live.assistant.output_dropped_after_interrupt", {
         audioPartCount,
@@ -1814,6 +1981,7 @@ export class GeminiLiveVoiceSession {
     this.scheduledPlaybackTime = nodeEndTime;
     this.activePlaybackNodes.add(source);
     this.playbackNodeEndTimes.set(source, nodeEndTime);
+    this.clearAssistantTurnIdleReleaseTimeout();
     this.lastAssistantActivityAtMs = Date.now();
     this.assistantPlaybackTailUntilMs = Math.max(
       this.assistantPlaybackTailUntilMs,
@@ -1825,6 +1993,8 @@ export class GeminiLiveVoiceSession {
       this.playbackNodeEndTimes.delete(source);
       if (this.assistantTurnReleaseAtMs > 0) {
         this.releaseAssistantTurn("playback_drained");
+      } else if (this.activePlaybackNodes.size === 0) {
+        this.scheduleAssistantTurnIdleRelease("playback_idle");
       }
     };
   }

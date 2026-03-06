@@ -331,11 +331,9 @@ function resolveTurnCoverage(): TurnCoverage {
 }
 
 function resolveActivityHandling(
-  isMobileDevice: boolean,
+  _isMobileDevice: boolean,
 ): ActivityHandling {
-  const fallback = isMobileDevice
-    ? "NO_INTERRUPTION"
-    : "START_OF_ACTIVITY_INTERRUPTS";
+  const fallback = "NO_INTERRUPTION";
   const raw = (process.env.GEMINI_LIVE_ACTIVITY_HANDLING ?? fallback)
     .trim()
     .toUpperCase();
@@ -1406,13 +1404,7 @@ export async function createLiveToken(
     (lowLatencyMode ? 24 : 32);
   const liveMaxOutputTokens = parsePositiveInt(
     process.env.GEMINI_LIVE_MAX_OUTPUT_TOKENS,
-    isMobileDevice
-      ? lowLatencyMode
-        ? 180
-        : 180
-      : lowLatencyMode
-        ? 220
-        : 280,
+    1000,
   );
   const minVadPrefixPaddingMs = parsePositiveInt(
     process.env.GEMINI_LIVE_MIN_VAD_PREFIX_PADDING_MS,
