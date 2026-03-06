@@ -61,6 +61,7 @@ import {
   GeminiLiveVoiceSession,
   collectMediaCaptureDebugContext,
   getMicrophoneStreamWithFallback,
+  type LiveVoiceDebugState,
 } from "@/lib/gemini-live";
 import {
   APP_THEME_OPTIONS,
@@ -640,6 +641,7 @@ interface LiveTokenMemoryMeta {
 interface LiveTokenConfigSummary {
   lowLatencyMode: boolean;
   activityHandling: "START_OF_ACTIVITY_INTERRUPTS" | "NO_INTERRUPTION";
+  automaticActivityDetectionDisabled: boolean;
   forceAlwaysRespond: boolean;
   vadStartSensitivity: "HIGH" | "LOW";
   vadEndSensitivity: "HIGH" | "LOW";
@@ -648,6 +650,9 @@ interface LiveTokenConfigSummary {
   turnCoverage: "TURN_INCLUDES_ONLY_ACTIVITY" | "TURN_INCLUDES_ALL_INPUT";
   affectiveDialog: boolean;
   proactiveAudio: boolean;
+  sessionResumptionEnabled: boolean;
+  contextWindowCompressionEnabled: boolean;
+  effectiveInterruptMode: "client_manual_activity";
   thinkingBudget: number | null;
   includeThoughts: boolean;
   temperature: number;
@@ -666,6 +671,12 @@ interface LiveTokenResponse extends TraceAwareResponse {
   voice?: LiveVoiceName;
   memoryMeta?: LiveTokenMemoryMeta;
   configSummary?: LiveTokenConfigSummary;
+}
+
+interface LiveTraceEntry {
+  at: number;
+  event: string;
+  metadata: Record<string, unknown>;
 }
 
 interface GoogleIntegrationStatusResponse extends TraceAwareResponse {
@@ -4253,7 +4264,15 @@ const SharedHeader = ({
   );
 };
 
-const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, onProfile, assistantName, assistantAvatar, selectedVoice, setSelectedVoice, mode, setMode, duration, userProfileImage, isVideoEnabled, onToggleVideo, onFlipCamera, videoStream, isVideoTransitioning, cameraFacingMode, webLookupStatus, webLookupLabel }: {
+interface VoiceLiveDebugPanelProps {
+  enabled: boolean;
+  state: LiveVoiceDebugState | null;
+  tokenConfigSummary: LiveTokenConfigSummary | null;
+  traces: LiveTraceEntry[];
+  onExport: () => void;
+}
+
+const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, onProfile, assistantName, assistantAvatar, selectedVoice, setSelectedVoice, mode, setMode, duration, userProfileImage, isVideoEnabled, onToggleVideo, onFlipCamera, videoStream, isVideoTransitioning, cameraFacingMode, webLookupStatus, webLookupLabel, liveDebug }: {
   isActive: boolean; 
   isConnecting: boolean;
   onEndCall: () => void;
@@ -4275,8 +4294,10 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
   cameraFacingMode: CameraFacingMode;
   webLookupStatus: WebLookupStatus | null;
   webLookupLabel?: string | null;
+  liveDebug: VoiceLiveDebugPanelProps;
 }) => {
   const videoPreviewRef = useRef<HTMLVideoElement | null>(null);
+  const [debugPanelOpen, setDebugPanelOpen] = useState(false);
 
   useEffect(() => {
     if (!videoPreviewRef.current) return;
@@ -4315,6 +4336,247 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
             userProfileImage={userProfileImage}
           />
         </div>
+
+        {liveDebug.enabled && (
+          <div className="absolute right-3 top-[5.6rem] z-40 pointer-events-auto">
+            <button
+              type="button"
+              className="rounded-full border px-3 py-1.5 text-[11px] font-semibold tracking-[0.18em] uppercase backdrop-blur-md"
+              style={{
+                borderColor: "color-mix(in srgb, var(--app-soft-card-border) 80%, transparent)",
+                backgroundColor:
+                  "color-mix(in srgb, var(--app-soft-card-bg) 92%, transparent)",
+                color: "var(--app-on-dark)",
+              }}
+              onClick={() => setDebugPanelOpen((current) => !current)}
+              data-testid="button-live-debug-panel"
+            >
+              {debugPanelOpen ? "Hide Debug" : "Live Debug"}
+            </button>
+            <AnimatePresence>
+              {debugPanelOpen && (
+                <motion.div
+                  initial={{ opacity: 0, y: -8, scale: 0.98 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: -8, scale: 0.98 }}
+                  transition={{ duration: 0.16, ease: "easeOut" }}
+                  className="mt-2 w-[min(92vw,24rem)] overflow-hidden rounded-[1.35rem] border shadow-2xl"
+                  style={{
+                    borderColor:
+                      "color-mix(in srgb, var(--app-soft-card-border) 85%, transparent)",
+                    backgroundColor:
+                      "color-mix(in srgb, var(--app-soft-card-bg) 96%, transparent)",
+                  }}
+                >
+                  <div className="flex items-center justify-between border-b px-4 py-3"
+                    style={{
+                      borderColor:
+                        "color-mix(in srgb, var(--app-soft-card-border) 72%, transparent)",
+                    }}
+                  >
+                    <div>
+                      <div
+                        className="text-[11px] font-semibold uppercase tracking-[0.22em]"
+                        style={{ color: "var(--app-on-dark-muted)" }}
+                      >
+                        Voice Debug
+                      </div>
+                      <div
+                        className="text-xs"
+                        style={{ color: "var(--app-on-dark)" }}
+                      >
+                        Manual activity and trace diagnostics
+                      </div>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-8 rounded-full px-3 text-[11px] uppercase tracking-[0.16em]"
+                      onClick={liveDebug.onExport}
+                    >
+                      Export JSON
+                    </Button>
+                  </div>
+                  <div className="space-y-3 px-4 py-3 text-xs" style={{ color: "var(--app-on-dark)" }}>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="rounded-2xl border px-3 py-2"
+                        style={{
+                          borderColor:
+                            "color-mix(in srgb, var(--app-soft-card-border) 72%, transparent)",
+                        }}
+                      >
+                        <div className="text-[10px] uppercase tracking-[0.18em]" style={{ color: "var(--app-on-dark-muted)" }}>
+                          Speech State
+                        </div>
+                        <div className="mt-1 font-medium">
+                          {liveDebug.state?.speechState ?? "idle"}
+                        </div>
+                      </div>
+                      <div className="rounded-2xl border px-3 py-2"
+                        style={{
+                          borderColor:
+                            "color-mix(in srgb, var(--app-soft-card-border) 72%, transparent)",
+                        }}
+                      >
+                        <div className="text-[10px] uppercase tracking-[0.18em]" style={{ color: "var(--app-on-dark-muted)" }}>
+                          Interrupt Mode
+                        </div>
+                        <div className="mt-1 font-medium">
+                          {liveDebug.tokenConfigSummary?.effectiveInterruptMode ??
+                            "client_manual_activity"}
+                        </div>
+                      </div>
+                      <div className="rounded-2xl border px-3 py-2"
+                        style={{
+                          borderColor:
+                            "color-mix(in srgb, var(--app-soft-card-border) 72%, transparent)",
+                        }}
+                      >
+                        <div className="text-[10px] uppercase tracking-[0.18em]" style={{ color: "var(--app-on-dark-muted)" }}>
+                          Ambient RMS
+                        </div>
+                        <div className="mt-1 font-medium">
+                          {(liveDebug.state?.ambientRms ?? 0).toFixed(4)}
+                        </div>
+                      </div>
+                      <div className="rounded-2xl border px-3 py-2"
+                        style={{
+                          borderColor:
+                            "color-mix(in srgb, var(--app-soft-card-border) 72%, transparent)",
+                        }}
+                      >
+                        <div className="text-[10px] uppercase tracking-[0.18em]" style={{ color: "var(--app-on-dark-muted)" }}>
+                          Active Threshold
+                        </div>
+                        <div className="mt-1 font-medium">
+                          {(liveDebug.state?.activeThreshold ?? 0).toFixed(4)}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="rounded-2xl border px-3 py-3"
+                      style={{
+                        borderColor:
+                          "color-mix(in srgb, var(--app-soft-card-border) 72%, transparent)",
+                      }}
+                    >
+                      <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+                        <span className="text-[10px] uppercase tracking-[0.18em]" style={{ color: "var(--app-on-dark-muted)" }}>
+                          Analyzer
+                        </span>
+                        <span>{liveDebug.state?.analyzerKind ?? "script_processor"}</span>
+                        <span className="text-[10px] uppercase tracking-[0.18em]" style={{ color: "var(--app-on-dark-muted)" }}>
+                          Current RMS
+                        </span>
+                        <span>{(liveDebug.state?.currentRms ?? 0).toFixed(4)}</span>
+                        <span className="text-[10px] uppercase tracking-[0.18em]" style={{ color: "var(--app-on-dark-muted)" }}>
+                          Manual Activity
+                        </span>
+                        <span>{liveDebug.state?.manualActivityActive ? "on" : "off"}</span>
+                      </div>
+                      <div className="mt-3 text-[10px]" style={{ color: "var(--app-on-dark-muted)" }}>
+                        Resumption handle updated:
+                        {" "}
+                        {liveDebug.state?.sessionResumptionUpdatedAt
+                          ? new Date(
+                              liveDebug.state.sessionResumptionUpdatedAt,
+                            ).toLocaleTimeString()
+                          : "not yet"}
+                      </div>
+                      <div className="mt-1 text-[10px]" style={{ color: "var(--app-on-dark-muted)" }}>
+                        GoAway time left:
+                        {" "}
+                        {liveDebug.state?.goAwayTimeLeft ?? "none"}
+                      </div>
+                    </div>
+
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <div className="rounded-2xl border px-3 py-3"
+                        style={{
+                          borderColor:
+                            "color-mix(in srgb, var(--app-soft-card-border) 72%, transparent)",
+                        }}
+                      >
+                        <div className="text-[10px] uppercase tracking-[0.18em]" style={{ color: "var(--app-on-dark-muted)" }}>
+                          Granted Mic Settings
+                        </div>
+                        <pre className="mt-2 whitespace-pre-wrap break-words text-[10px] leading-4">
+                          {JSON.stringify(
+                            liveDebug.state?.trackSettings ?? null,
+                            null,
+                            2,
+                          )}
+                        </pre>
+                      </div>
+                      <div className="rounded-2xl border px-3 py-3"
+                        style={{
+                          borderColor:
+                            "color-mix(in srgb, var(--app-soft-card-border) 72%, transparent)",
+                        }}
+                      >
+                        <div className="text-[10px] uppercase tracking-[0.18em]" style={{ color: "var(--app-on-dark-muted)" }}>
+                          Track Capabilities
+                        </div>
+                        <pre className="mt-2 whitespace-pre-wrap break-words text-[10px] leading-4">
+                          {JSON.stringify(
+                            liveDebug.state?.trackCapabilities ?? null,
+                            null,
+                            2,
+                          )}
+                        </pre>
+                      </div>
+                    </div>
+
+                    <div className="rounded-2xl border px-3 py-3"
+                      style={{
+                        borderColor:
+                          "color-mix(in srgb, var(--app-soft-card-border) 72%, transparent)",
+                      }}
+                    >
+                      <div className="mb-2 flex items-center justify-between">
+                        <div className="text-[10px] uppercase tracking-[0.18em]" style={{ color: "var(--app-on-dark-muted)" }}>
+                          LiveTrace Buffer ({liveDebug.traces.length})
+                        </div>
+                      </div>
+                      <ScrollArea className="h-48 pr-3">
+                        <div className="space-y-2 text-[10px] leading-4">
+                          {liveDebug.traces.length === 0 ? (
+                            <div style={{ color: "var(--app-on-dark-muted)" }}>
+                              No traces captured yet.
+                            </div>
+                          ) : (
+                            liveDebug.traces
+                              .slice()
+                              .reverse()
+                              .map((trace) => (
+                                <div
+                                  key={`${trace.at}-${trace.event}`}
+                                  className="rounded-xl border px-2 py-2"
+                                  style={{
+                                    borderColor:
+                                      "color-mix(in srgb, var(--app-soft-card-border) 60%, transparent)",
+                                  }}
+                                >
+                                  <div className="font-medium">{trace.event}</div>
+                                  <div style={{ color: "var(--app-on-dark-muted)" }}>
+                                    {new Date(trace.at).toLocaleTimeString()}
+                                  </div>
+                                  <pre className="mt-1 whitespace-pre-wrap break-words">
+                                    {JSON.stringify(trace.metadata, null, 2)}
+                                  </pre>
+                                </div>
+                              ))
+                          )}
+                        </div>
+                      </ScrollArea>
+                    </div>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+        )}
 
         <motion.div
           className="flex-1 flex flex-col pointer-events-auto"
@@ -7101,6 +7363,11 @@ function App() {
   const [voiceWebLookupLabel, setVoiceWebLookupLabel] = useState<string | null>(
     null,
   );
+  const [liveDebugState, setLiveDebugState] =
+    useState<LiveVoiceDebugState | null>(null);
+  const [liveTokenConfigSummary, setLiveTokenConfigSummary] =
+    useState<LiveTokenConfigSummary | null>(null);
+  const [liveTraceEntries, setLiveTraceEntries] = useState<LiveTraceEntry[]>([]);
 
   const [pendingAttachments, setPendingAttachments] = useState<
     PendingImageAttachment[]
@@ -7124,6 +7391,7 @@ function App() {
   const transcriptSeenRef = useRef<Map<string, number>>(new Map());
   const manualLiveStopRef = useRef(false);
   const autoResumeBudgetRef = useRef(1);
+  const liveSessionResumptionHandleRef = useRef<string | null>(null);
   const isVideoEnabledRef = useRef(false);
   const cameraFacingModeRef = useRef<CameraFacingMode>("user");
   const pendingAttachmentsRef = useRef<PendingImageAttachment[]>([]);
@@ -7136,9 +7404,16 @@ function App() {
   } | null>(null);
   const cameraAccumulatedSecondsRef = useRef(0);
   const cameraActiveStartedAtRef = useRef<number | null>(null);
+  const liveTraceEntriesRef = useRef<LiveTraceEntry[]>([]);
   const forceOnboardingRef = useRef<boolean>(
     typeof window !== "undefined" &&
       new URLSearchParams(window.location.search).get("onboarding") === "1",
+  );
+  const liveDebugEnabled = useMemo(
+    () =>
+      typeof window !== "undefined" &&
+      new URLSearchParams(window.location.search).get("liveDebug") === "1",
+    [],
   );
   const textWebLookupClearTimerRef = useRef<number | null>(null);
   const voiceWebLookupClearTimerRef = useRef<number | null>(null);
@@ -7147,12 +7422,42 @@ function App() {
   const voiceSearchMinTimerRef = useRef<number | null>(null);
   const textSearchMinTimerRef = useRef<number | null>(null);
 
-  const logLiveTrace = (
+  const logLiveTrace = useCallback((
     event: string,
     metadata: Record<string, unknown> = {},
   ) => {
+    const entry: LiveTraceEntry = {
+      at: Date.now(),
+      event,
+      metadata,
+    };
+    const nextEntries = [...liveTraceEntriesRef.current, entry].slice(-200);
+    liveTraceEntriesRef.current = nextEntries;
+    if (liveDebugEnabled) {
+      setLiveTraceEntries(nextEntries);
+    }
     console.log("[LiveTrace]", event, metadata);
-  };
+  }, [liveDebugEnabled]);
+
+  const exportLiveDebugTrace = useCallback(() => {
+    const payload = {
+      exportedAt: new Date().toISOString(),
+      speechState: liveDebugState,
+      tokenConfigSummary: liveTokenConfigSummary,
+      traces: liveTraceEntriesRef.current,
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], {
+      type: "application/json",
+    });
+    const href = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = href;
+    anchor.download = `live-debug-${Date.now()}.json`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(href), 0);
+  }, [liveDebugState, liveTokenConfigSummary]);
 
   const clearWebLookupStatus = useCallback((mode: WebLookupMode) => {
     if (mode === "text") {
@@ -9094,6 +9399,7 @@ function App() {
 
     liveConversationRef.current = null;
     liveRunIdRef.current = null;
+    liveSessionResumptionHandleRef.current = null;
     transcriptSeenRef.current = new Map();
     transcriptQueueRef.current = Promise.resolve();
     setIsCalling(false);
@@ -9102,6 +9408,12 @@ function App() {
     setIsVideoEnabled(false);
     setVideoStream(null);
     setIsVideoTransitioning(false);
+    setLiveDebugState(null);
+    setLiveTokenConfigSummary(null);
+    liveTraceEntriesRef.current = [];
+    if (liveDebugEnabled) {
+      setLiveTraceEntries([]);
+    }
     quotaAutoStopReasonRef.current = null;
     liveQuotaBudgetRef.current = null;
     resetCallUsageTracking();
@@ -9114,6 +9426,15 @@ function App() {
     autoResumed?: boolean;
     restoreVideo?: boolean;
   }) => {
+    if (!options?.autoResumed) {
+      liveSessionResumptionHandleRef.current = null;
+      setLiveDebugState(null);
+      liveTraceEntriesRef.current = [];
+      if (liveDebugEnabled) {
+        setLiveTraceEntries([]);
+      }
+    }
+
     if (!options?.autoResumed) {
       if (quotaSummary && quotaSummary.remaining.voiceSeconds <= 0) {
         setLiveError(
@@ -9266,12 +9587,20 @@ function App() {
         profileApplied: Boolean(tokenPayload.memoryMeta?.profileApplied),
         lowLatencyMode: tokenPayload.configSummary?.lowLatencyMode ?? null,
         activityHandling: tokenPayload.configSummary?.activityHandling ?? null,
+        automaticActivityDetectionDisabled:
+          tokenPayload.configSummary?.automaticActivityDetectionDisabled ?? null,
         forceAlwaysRespond: tokenPayload.configSummary?.forceAlwaysRespond ?? null,
         vadPrefixPaddingMs: tokenPayload.configSummary?.vadPrefixPaddingMs ?? null,
         vadSilenceMs: tokenPayload.configSummary?.vadSilenceMs ?? null,
         turnCoverage: tokenPayload.configSummary?.turnCoverage ?? null,
         affectiveDialog: tokenPayload.configSummary?.affectiveDialog ?? null,
         proactiveAudio: tokenPayload.configSummary?.proactiveAudio ?? null,
+        sessionResumptionEnabled:
+          tokenPayload.configSummary?.sessionResumptionEnabled ?? null,
+        contextWindowCompressionEnabled:
+          tokenPayload.configSummary?.contextWindowCompressionEnabled ?? null,
+        effectiveInterruptMode:
+          tokenPayload.configSummary?.effectiveInterruptMode ?? null,
         thinkingBudget: tokenPayload.configSummary?.thinkingBudget ?? null,
         googleSearchGroundingEnabled:
           tokenPayload.configSummary?.googleSearchGroundingEnabled ?? null,
@@ -9279,6 +9608,7 @@ function App() {
           tokenPayload.configSummary?.googlePersonalContextFunctionCallingEnabled ??
           null,
       });
+      setLiveTokenConfigSummary(tokenPayload.configSummary ?? null);
       if (!tokenPayload.configSummary?.googlePersonalContextFunctionCallingEnabled) {
         logLiveTrace("live.google_context.gate_disabled", {
           runId,
@@ -9364,6 +9694,26 @@ function App() {
             ...(metadata ?? {}),
           });
         },
+        onDebugState: (state) => {
+          setLiveDebugState(state);
+        },
+        onSessionResumption: ({ handle, resumable, lastConsumedClientMessageIndex, at }) => {
+          liveSessionResumptionHandleRef.current = handle;
+          logLiveTrace("live.session_resumption.client_updated", {
+            runId,
+            resumable,
+            handlePresent: Boolean(handle),
+            lastConsumedClientMessageIndex,
+            at,
+          });
+        },
+        onGoAway: ({ timeLeft, at }) => {
+          logLiveTrace("live.session.go_away.client_received", {
+            runId,
+            timeLeft,
+            at,
+          });
+        },
       });
 
       liveSessionRef.current = liveSession;
@@ -9371,6 +9721,10 @@ function App() {
         ephemeralToken: tokenPayload.ephemeralToken,
         model: tokenPayload.model,
         conversationId,
+        sessionResumptionHandle:
+          options?.autoResumed
+            ? liveSessionResumptionHandleRef.current
+            : null,
         preAcquiredMicStream: preAcquiredMicStream ?? undefined,
         googleSearchGroundingEnabled:
           tokenPayload.configSummary?.googleSearchGroundingEnabled ?? false,
@@ -9863,6 +10217,13 @@ function App() {
             cameraFacingMode={cameraFacingMode}
             webLookupStatus={voiceWebLookupStatus}
             webLookupLabel={voiceWebLookupLabel}
+            liveDebug={{
+              enabled: liveDebugEnabled,
+              state: liveDebugState,
+              tokenConfigSummary: liveTokenConfigSummary,
+              traces: liveTraceEntries,
+              onExport: exportLiveDebugTrace,
+            }}
           />
 
           <AnimatePresence>

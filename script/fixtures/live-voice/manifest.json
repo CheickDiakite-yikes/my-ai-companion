@@ -1,0 +1,25 @@
+{
+  "fixtures": [
+    {
+      "id": "noise_only",
+      "kind": "noise",
+      "durationMs": 1800,
+      "gain": 0.018
+    },
+    {
+      "id": "speech_burst",
+      "kind": "voice_like",
+      "durationMs": 2200,
+      "gain": 0.082,
+      "carrierHz": 190
+    },
+    {
+      "id": "speech_burst_loud_room",
+      "kind": "voice_like",
+      "durationMs": 2200,
+      "gain": 0.078,
+      "carrierHz": 210,
+      "backgroundNoiseGain": 0.012
+    }
+  ]
+}

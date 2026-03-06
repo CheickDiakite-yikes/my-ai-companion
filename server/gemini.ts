@@ -333,7 +333,7 @@ function resolveTurnCoverage(): TurnCoverage {
 function resolveActivityHandling(
   _isMobileDevice: boolean,
 ): ActivityHandling {
-  return ActivityHandling.NO_INTERRUPTION;
+  return ActivityHandling.START_OF_ACTIVITY_INTERRUPTS;
 }
 
 function parseBoundedNumber(
@@ -1149,6 +1149,7 @@ export interface CreateLiveTokenInput {
 export interface LiveTokenConfigSummary {
   lowLatencyMode: boolean;
   activityHandling: "START_OF_ACTIVITY_INTERRUPTS" | "NO_INTERRUPTION";
+  automaticActivityDetectionDisabled: boolean;
   vadStartSensitivity: "HIGH" | "LOW";
   vadEndSensitivity: "HIGH" | "LOW";
   forceAlwaysRespond: boolean;
@@ -1157,6 +1158,9 @@ export interface LiveTokenConfigSummary {
   turnCoverage: "TURN_INCLUDES_ONLY_ACTIVITY" | "TURN_INCLUDES_ALL_INPUT";
   affectiveDialog: boolean;
   proactiveAudio: boolean;
+  sessionResumptionEnabled: boolean;
+  contextWindowCompressionEnabled: boolean;
+  effectiveInterruptMode: "client_manual_activity";
   thinkingBudget: number | null;
   includeThoughts: boolean;
   temperature: number;
@@ -1364,18 +1368,19 @@ export async function createLiveToken(
     process.env.GEMINI_LIVE_ALLOW_ZERO_THINKING_BUDGET,
     false,
   );
+  const minimumThinkingBudget = parsePositiveInt(
+    process.env.GEMINI_LIVE_MIN_THINKING_BUDGET,
+    128,
+  );
   let thinkingBudgetValue = parseNonNegativeInt(
     process.env.GEMINI_LIVE_THINKING_BUDGET,
-    isMobileDevice
-      ? lowLatencyMode
-        ? 24
-        : 64
-      : lowLatencyMode
-        ? 32
-        : 96,
+    minimumThinkingBudget,
   );
   if (!allowZeroThinkingBudget && thinkingBudgetValue === 0) {
-    thinkingBudgetValue = isMobileDevice ? 24 : 32;
+    thinkingBudgetValue = minimumThinkingBudget;
+  }
+  if (!allowZeroThinkingBudget) {
+    thinkingBudgetValue = Math.max(minimumThinkingBudget, thinkingBudgetValue);
   }
   const includeThoughts = parseBooleanFlag(
     process.env.GEMINI_LIVE_INCLUDE_THOUGHTS,
@@ -1400,7 +1405,7 @@ export async function createLiveToken(
     process.env.GEMINI_LIVE_MAX_OUTPUT_TOKENS,
     1000,
   );
-  const liveMaxOutputTokens = Math.max(700, configuredLiveMaxOutputTokens);
+  const liveMaxOutputTokens = Math.max(1000, configuredLiveMaxOutputTokens);
   const minVadPrefixPaddingMs = parsePositiveInt(
     process.env.GEMINI_LIVE_MIN_VAD_PREFIX_PADDING_MS,
     50,
@@ -1420,12 +1425,16 @@ export async function createLiveToken(
         includeThoughts,
       }
     : undefined;
+  const automaticActivityDetectionDisabled = true;
+  const sessionResumptionEnabled = true;
+  const contextWindowCompressionEnabled = true;
   const configSummary: LiveTokenConfigSummary = {
     lowLatencyMode,
     activityHandling:
       activityHandling === ActivityHandling.NO_INTERRUPTION
         ? "NO_INTERRUPTION"
         : "START_OF_ACTIVITY_INTERRUPTS",
+    automaticActivityDetectionDisabled,
     vadStartSensitivity:
       vadStartSensitivity === StartSensitivity.START_SENSITIVITY_LOW
         ? "LOW"
@@ -1441,6 +1450,9 @@ export async function createLiveToken(
         : "TURN_INCLUDES_ONLY_ACTIVITY",
     affectiveDialog: responseModality === "AUDIO" ? enableAffectiveDialog : false,
     proactiveAudio: effectiveProactiveAudio,
+    sessionResumptionEnabled,
+    contextWindowCompressionEnabled,
+    effectiveInterruptMode: "client_manual_activity",
     thinkingBudget: thinkingConfig ? thinkingBudgetValue : null,
     includeThoughts: thinkingConfig ? includeThoughts : false,
     temperature: liveTemperature,
@@ -1461,6 +1473,8 @@ export async function createLiveToken(
     "systemInstruction",
     ...(responseModality === "AUDIO" ? ["speechConfig"] : []),
     "realtimeInputConfig",
+    "contextWindowCompression",
+    "explicitVadSignal",
     "inputAudioTranscription",
     "outputAudioTranscription",
   ];
@@ -1517,12 +1531,20 @@ export async function createLiveToken(
                   activityHandling,
                   turnCoverage,
                   automaticActivityDetection: {
-                    startOfSpeechSensitivity: vadStartSensitivity,
-                    endOfSpeechSensitivity: vadEndSensitivity,
-                    prefixPaddingMs: effectiveVadPrefixPaddingMs,
-                    silenceDurationMs: effectiveVadSilenceMs,
+                    disabled: automaticActivityDetectionDisabled,
                   },
                 },
+                sessionResumption: sessionResumptionEnabled
+                  ? {
+                      transparent: true,
+                    }
+                  : undefined,
+                contextWindowCompression: contextWindowCompressionEnabled
+                  ? {
+                      slidingWindow: {},
+                    }
+                  : undefined,
+                explicitVadSignal: true,
                 proactivity:
                   effectiveProactiveAudio
                     ? { proactiveAudio: true }
