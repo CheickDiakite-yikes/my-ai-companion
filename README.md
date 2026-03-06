@@ -1113,11 +1113,11 @@ Precedence notes:
 | `VITE_LIVE_AUDIO_PROCESSOR_BUFFER_SIZE` | `512` | Audio processor buffer |
 | `VITE_LIVE_AUDIO_NOISE_GATE_ENABLED` | `false` | Client-side noise gate |
 | `VITE_LIVE_AUDIO_SUPPRESS_INPUT_WHILE_ASSISTANT_SPEAKING` | `true` | Duplex suppression |
-| `VITE_LIVE_AUDIO_SUPPRESS_INPUT_COOLDOWN_MS` | `300` | Suppression cooldown |
-| `VITE_LIVE_AUDIO_USER_SPEECH_START_CONSECUTIVE_FRAMES` | `4` | Frames required before user speech starts |
-| `VITE_LIVE_AUDIO_USER_SPEECH_ASSISTANT_CONSECUTIVE_FRAMES` | `6` | Frames required while assistant is speaking |
-| `VITE_LIVE_AUDIO_USER_SPEECH_END_SILENCE_FRAMES` | `10` | Silence frames before ending user speech |
-| `VITE_LIVE_AUDIO_USER_SPEECH_COOLDOWN_MS` | `300` | Cooldown before returning to idle |
+| `VITE_LIVE_AUDIO_SUPPRESS_INPUT_COOLDOWN_MS` | `240` | Suppression cooldown |
+| `VITE_LIVE_AUDIO_USER_SPEECH_START_CONSECUTIVE_FRAMES` | `3` | Frames required before user speech starts |
+| `VITE_LIVE_AUDIO_USER_SPEECH_ASSISTANT_CONSECUTIVE_FRAMES` | `5` | Frames required while assistant is speaking |
+| `VITE_LIVE_AUDIO_USER_SPEECH_END_SILENCE_FRAMES` | `8` | Silence frames before ending user speech |
+| `VITE_LIVE_AUDIO_USER_SPEECH_COOLDOWN_MS` | `220` | Cooldown before returning to idle |
 
 ### Memory controls
 

@@ -62,6 +62,11 @@ import type {
   MorningBriefResult,
 } from "@shared/agent";
 import {
+  evaluateUserTranscriptPersistence,
+  resolveEffectiveLanguageHint,
+  resolveExpectedScriptFamilyForLanguage,
+} from "@shared/live-language";
+import {
   classifyTurnIntentWithModel,
   createLiveToken,
   DEFAULT_LIVE_VOICE,
@@ -2546,6 +2551,7 @@ type LiveMemoryBuildResult = {
   crossChatMessagesUsed: number;
   durableMemoryItemsUsed: number;
   redactionCount: number;
+  filteredSuspectUserMessages: number;
 };
 
 async function buildLiveMemoryContext(params: {
@@ -2557,8 +2563,13 @@ async function buildLiveMemoryContext(params: {
   activeThreadMaxMessages: number;
   crossChatMaxMessages: number;
   clientTimeZone?: string | null;
+  expectedLanguageHint?: string | null;
 }): Promise<LiveMemoryBuildResult> {
+  const expectedScriptFamily = resolveExpectedScriptFamilyForLanguage(
+    params.expectedLanguageHint,
+  );
   const activeMessages = await storage.getMessagesWithAttachments(params.conversationId);
+  let filteredSuspectUserMessages = 0;
   const activeHistory: MemorySourceMessage[] = activeMessages
     .filter((message) => shouldIncludeMessageInConversationContext(message))
     .filter(
@@ -2571,7 +2582,18 @@ async function buildLiveMemoryContext(params: {
       text: toMemoryMessageText(message),
       createdAt: message.createdAt ?? null,
     }))
-    .filter((message) => message.text.trim().length > 0);
+    .filter((message) => message.text.trim().length > 0)
+    .filter((message) => {
+      if (message.sender !== "user") return true;
+      const decision = evaluateUserTranscriptPersistence({
+        text: message.text,
+        expectedScriptFamily,
+        expectedLanguageHint: params.expectedLanguageHint ?? null,
+      });
+      if (!decision.discard) return true;
+      filteredSuspectUserMessages += 1;
+      return false;
+    });
 
   const recentActive = activeHistory.slice(
     -Math.max(1, params.activeThreadMaxMessages),
@@ -2635,7 +2657,18 @@ async function buildLiveMemoryContext(params: {
         text: normalizeMemoryText(message.text),
         createdAt: message.createdAt ?? null,
       }))
-      .filter((message) => message.text.length > 0);
+      .filter((message) => message.text.length > 0)
+      .filter((message) => {
+        if (message.sender !== "user") return true;
+        const decision = evaluateUserTranscriptPersistence({
+          text: message.text,
+          expectedScriptFamily,
+          expectedLanguageHint: params.expectedLanguageHint ?? null,
+        });
+        if (!decision.discard) return true;
+        filteredSuspectUserMessages += 1;
+        return false;
+      });
 
     const activeKeywords = new Set(
       recentActive.flatMap((message) => extractKeywords(message.text)),
@@ -2770,6 +2803,7 @@ async function buildLiveMemoryContext(params: {
     crossChatMessagesUsed: crossChatLines.length + durableMemoryLines.length,
     durableMemoryItemsUsed: durableMemoryLines.length,
     redactionCount,
+    filteredSuspectUserMessages,
   };
 }
 
@@ -9586,6 +9620,10 @@ export async function registerRoutes(
       const profileContext = ENABLE_PROFILE_PERSONALIZATION
         ? toProfilePromptContext(await storage.getUserProfile(req.session.userId))
         : undefined;
+      const languageHintForMemory = resolveEffectiveLanguageHint({
+        clientLanguage: parsed.clientLanguage ?? null,
+        clientLanguages: parsed.clientLanguages ?? [],
+      }).effectiveLanguageHint;
 
       const memoryBuildStartedAt = Date.now();
       const memoryMeta: LiveTokenMemoryMeta = {
@@ -9599,6 +9637,7 @@ export async function registerRoutes(
       let memoryContextBlock: string | undefined;
       let memoryRedactionCount = 0;
       let memoryDurableItemsUsed = 0;
+      let memoryFilteredSuspectMessages = 0;
 
       if (ENABLE_LIVE_MEMORY_CONTEXT) {
         const deadlineAt = memoryBuildStartedAt + LIVE_MEMORY_BUILD_TIMEOUT_MS;
@@ -9619,6 +9658,7 @@ export async function registerRoutes(
               activeThreadMaxMessages: LIVE_MEMORY_ACTIVE_THREAD_MAX_MESSAGES,
               crossChatMaxMessages: LIVE_MEMORY_CROSS_CHAT_MAX_MESSAGES,
               clientTimeZone: parsed.clientTimeZone ?? null,
+              expectedLanguageHint: languageHintForMemory,
             }),
             remainingMs,
             "live_memory_build_timeout",
@@ -9633,6 +9673,7 @@ export async function registerRoutes(
           memoryMeta.fallbackUsed = "none";
           memoryRedactionCount = fullContext.redactionCount;
           memoryDurableItemsUsed = fullContext.durableMemoryItemsUsed;
+          memoryFilteredSuspectMessages = fullContext.filteredSuspectUserMessages;
         } catch (fullError) {
           traceError(req, "live.memory.build.full.failed", fullError, {
             conversationId: conversation.id,
@@ -9649,6 +9690,8 @@ export async function registerRoutes(
             memoryMeta.fallbackUsed = "active_thread_only";
             memoryRedactionCount = activeOnlyContext.redactionCount;
             memoryDurableItemsUsed = activeOnlyContext.durableMemoryItemsUsed;
+            memoryFilteredSuspectMessages =
+              activeOnlyContext.filteredSuspectUserMessages;
           } catch (activeOnlyError) {
             traceError(req, "live.memory.build.active_only.failed", activeOnlyError, {
               conversationId: conversation.id,
@@ -9659,6 +9702,7 @@ export async function registerRoutes(
             memoryContextBlock = undefined;
             memoryRedactionCount = 0;
             memoryDurableItemsUsed = 0;
+            memoryFilteredSuspectMessages = 0;
           }
         }
       }
@@ -9674,6 +9718,7 @@ export async function registerRoutes(
         fallbackUsed: memoryMeta.fallbackUsed,
         redactionCount: memoryRedactionCount,
         durableMemoryItemsUsed: memoryDurableItemsUsed,
+        filteredSuspectUserMessages: memoryFilteredSuspectMessages,
         crossChatMemoryEnabled,
         accountMemoryMode,
         memoryOverrideApplied: memoryOverride.success,
