@@ -87,6 +87,7 @@ import type {
   UnifiedAgentTaskCardModel,
   UnifiedAgentTaskTimelineItem,
 } from "@shared/agent";
+import { resolveLiveAudioCompatibilityProfile } from "@shared/live-audio-compatibility";
 import type {
   LanguageHintSource,
   NativeAudioLanguageMode,
@@ -771,8 +772,21 @@ function createRequestTraceId(): string {
 
 function detectLiveDeviceClass(): "mobile" | "desktop" | "unknown" {
   if (typeof navigator === "undefined") return "unknown";
-  const ua = navigator.userAgent || "";
-  return /android|iphone|ipad|ipod|mobile/i.test(ua) ? "mobile" : "desktop";
+  const compatibility = resolveLiveAudioCompatibilityProfile({
+    userAgent: navigator.userAgent ?? "",
+    maxTouchPoints:
+      typeof navigator.maxTouchPoints === "number"
+        ? navigator.maxTouchPoints
+        : 0,
+    isStandalonePwa:
+      (typeof window !== "undefined" &&
+        typeof window.matchMedia === "function" &&
+        window.matchMedia("(display-mode: standalone)").matches) ||
+      Boolean(
+        (navigator as Navigator & { standalone?: boolean }).standalone,
+      ),
+  });
+  return compatibility.isMobile ? "mobile" : "desktop";
 }
 
 function detectClientTimeZone(): string | null {
@@ -4513,6 +4527,40 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
                           {Math.round(
                             liveDebug.state?.speechCandidateSilenceMs ?? 0,
                           )}
+                          {" / "}
+                          {Math.round(
+                            liveDebug.state?.speechCandidateClearTargetMs ?? 0,
+                          )}
+                        </div>
+                      </div>
+                      <div className="rounded-2xl border px-3 py-2"
+                        style={{
+                          borderColor:
+                            "color-mix(in srgb, var(--app-soft-card-border) 72%, transparent)",
+                        }}
+                      >
+                        <div className="text-[10px] uppercase tracking-[0.18em]" style={{ color: "var(--app-on-dark-muted)" }}>
+                          Candidate Peak
+                        </div>
+                        <div className="mt-1 font-medium">
+                          {(liveDebug.state?.speechCandidatePeakRms ?? 0).toFixed(4)}
+                          {" / "}
+                          {liveDebug.state?.speechCandidateFrames ?? 0}
+                        </div>
+                      </div>
+                      <div className="rounded-2xl border px-3 py-2"
+                        style={{
+                          borderColor:
+                            "color-mix(in srgb, var(--app-soft-card-border) 72%, transparent)",
+                        }}
+                      >
+                        <div className="text-[10px] uppercase tracking-[0.18em]" style={{ color: "var(--app-on-dark-muted)" }}>
+                          Platform/Profile
+                        </div>
+                        <div className="mt-1 font-medium">
+                          {(liveDebug.state?.compatibilityPlatform ?? "desktop")}
+                          {" / "}
+                          {(liveDebug.state?.speechProfileMode ?? "desktop_default")}
                         </div>
                       </div>
                     </div>
@@ -4556,6 +4604,10 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
                           Manual Silence (ms)
                         </span>
                         <span>{Math.round(liveDebug.state?.speechSilenceMs ?? 0)}</span>
+                        <span className="text-[10px] uppercase tracking-[0.18em]" style={{ color: "var(--app-on-dark-muted)" }}>
+                          End Silence Target (ms)
+                        </span>
+                        <span>{Math.round(liveDebug.state?.speechEndSilenceTargetMs ?? 0)}</span>
                         <span className="text-[10px] uppercase tracking-[0.18em]" style={{ color: "var(--app-on-dark-muted)" }}>
                           Speech Window
                         </span>

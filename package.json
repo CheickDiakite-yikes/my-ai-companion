@@ -39,6 +39,7 @@
     "test:google-context:smoke": "tsx script/google-personal-context-smoke.ts",
     "test:google-context:ui": "bash script/google-personal-context-playwright-e2e.sh",
     "test:voice:language": "tsx script/live-language-smoke.ts",
+    "test:voice:mobile": "tsx script/live-mobile-audio-smoke.ts",
     "test:voice:smoke": "tsx script/live-voice-smoke.ts",
     "test:voice:ui": "bash script/live-voice-playwright-e2e.sh",
     "backfill:message-purpose": "tsx script/backfill-agent-ui-message-purpose.ts",

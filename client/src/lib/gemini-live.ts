@@ -13,6 +13,12 @@ import {
   shouldFlagTranscriptLanguageMismatch,
   type TranscriptScriptFamily,
 } from "@shared/live-language";
+import {
+  resolveLiveAudioCompatibilityProfile as resolveSharedLiveAudioCompatibilityProfile,
+  resolveLiveSpeechDetectionProfile,
+  type LiveAudioCompatibilityProfile,
+  type LiveSpeechDetectionProfile,
+} from "@shared/live-audio-compatibility";
 
 type TranscriptSender = "user" | "assistant";
 type CameraFacingMode = "user" | "environment";
@@ -48,9 +54,13 @@ export interface LiveVoiceDebugState {
   ambientRms: number;
   activeThreshold: number;
   candidateThreshold: number;
+  speechCandidateFrames: number;
+  speechCandidatePeakRms: number;
   speechCandidateMs: number;
   speechCandidateSilenceMs: number;
+  speechCandidateClearTargetMs: number;
   speechSilenceMs: number;
+  speechEndSilenceTargetMs: number;
   activeUserSpeechWindowId: number | null;
   pendingTranscriptWindows: number;
   manualActivityActive: boolean;
@@ -69,6 +79,11 @@ export interface LiveVoiceDebugState {
   sessionResumptionUpdatedAt: number | null;
   goAwayTimeLeft: string | null;
   goAwayReceivedAt: number | null;
+  compatibilityPlatform: "desktop" | "android" | "ios";
+  compatibilityIsMobile: boolean;
+  compatibilityIsStandalonePwa: boolean;
+  speechProfileMode: "desktop_default" | "mobile_relaxed";
+  speechProfileThresholdScale: number;
 }
 
 export interface LiveSessionResumptionEvent {
@@ -152,14 +167,6 @@ function parseClientBoundedNumber(
   return Math.min(Math.max(parsed, min), max);
 }
 
-type LiveAudioCompatibilityProfile = {
-  isAndroid: boolean;
-  androidMajor: number | null;
-  isLegacyAndroid: boolean;
-  microphonePermissionTimeoutMs: number;
-  connectionTimeoutMs: number;
-};
-
 type MicCaptureAttemptFailure = {
   attempt: number;
   label: string;
@@ -167,40 +174,47 @@ type MicCaptureAttemptFailure = {
   errorMessage: string;
 };
 
-function resolveAndroidMajorVersion(userAgent: string): number | null {
-  const match = userAgent.match(/Android\s+(\d+)/i);
-  if (!match) return null;
-  const parsed = Number.parseInt(match[1], 10);
-  return Number.isFinite(parsed) ? parsed : null;
-}
+const liveClientEnv = (import.meta.env as Record<string, unknown>) ?? {};
 
 function resolveLiveAudioCompatibilityProfile(): LiveAudioCompatibilityProfile {
   const userAgent =
     typeof navigator !== "undefined" && typeof navigator.userAgent === "string"
       ? navigator.userAgent
       : "";
-  const isAndroid = /android/i.test(userAgent);
-  const androidMajor = isAndroid ? resolveAndroidMajorVersion(userAgent) : null;
-  const isLegacyAndroid =
-    isAndroid && typeof androidMajor === "number" && androidMajor <= 10;
-  const microphonePermissionTimeoutMs = parseClientPositiveInt(
-    liveClientEnv.VITE_LIVE_MICROPHONE_PERMISSION_TIMEOUT_MS,
-    isLegacyAndroid ? 25000 : isAndroid ? 18000 : 12000,
-  );
-  const connectionTimeoutMs = parseClientPositiveInt(
-    liveClientEnv.VITE_LIVE_CONNECTION_TIMEOUT_MS,
-    isLegacyAndroid ? 30000 : isAndroid ? 22000 : 15000,
-  );
+  const maxTouchPoints =
+    typeof navigator !== "undefined" &&
+    typeof navigator.maxTouchPoints === "number"
+      ? navigator.maxTouchPoints
+      : 0;
+  const isStandalonePwa =
+    (typeof window !== "undefined" &&
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(display-mode: standalone)").matches) ||
+    (typeof navigator !== "undefined" &&
+      Boolean((navigator as Navigator & { standalone?: boolean }).standalone));
+
+  const baseline = resolveSharedLiveAudioCompatibilityProfile({
+    userAgent,
+    maxTouchPoints,
+    isStandalonePwa,
+    legacyAndroidMaxMajor: parseClientPositiveInt(
+      liveClientEnv.VITE_LIVE_ANDROID_LEGACY_MAX_MAJOR,
+      10,
+    ),
+  });
+
   return {
-    isAndroid,
-    androidMajor,
-    isLegacyAndroid,
-    microphonePermissionTimeoutMs,
-    connectionTimeoutMs,
+    ...baseline,
+    microphonePermissionTimeoutMs: parseClientPositiveInt(
+      liveClientEnv.VITE_LIVE_MICROPHONE_PERMISSION_TIMEOUT_MS,
+      baseline.microphonePermissionTimeoutMs,
+    ),
+    connectionTimeoutMs: parseClientPositiveInt(
+      liveClientEnv.VITE_LIVE_CONNECTION_TIMEOUT_MS,
+      baseline.connectionTimeoutMs,
+    ),
   };
 }
-
-const liveClientEnv = (import.meta.env as Record<string, unknown>) ?? {};
 const PROCESSOR_BUFFER_SIZE = (() => {
   const parsed = parseClientPositiveInt(
     liveClientEnv.VITE_LIVE_AUDIO_PROCESSOR_BUFFER_SIZE,
@@ -412,6 +426,68 @@ const MANUAL_INTERRUPT_IDLE_TIMEOUT_MS = parseClientPositiveInt(
 const USER_SPEECH_TRANSCRIPT_EXPECTATION_TIMEOUT_MS = parseClientPositiveInt(
   liveClientEnv.VITE_LIVE_AUDIO_TRANSCRIPT_EXPECTATION_TIMEOUT_MS,
   2200,
+);
+const MOBILE_USER_SPEECH_THRESHOLD_SCALE = parseClientBoundedNumber(
+  liveClientEnv.VITE_LIVE_AUDIO_MOBILE_THRESHOLD_SCALE,
+  0.84,
+  0.5,
+  1,
+);
+const MOBILE_USER_SPEECH_ASSISTANT_THRESHOLD_SCALE = parseClientBoundedNumber(
+  liveClientEnv.VITE_LIVE_AUDIO_MOBILE_ASSISTANT_THRESHOLD_SCALE,
+  0.88,
+  0.5,
+  1.2,
+);
+const MOBILE_USER_SPEECH_AMBIENT_MULTIPLIER_SCALE = parseClientBoundedNumber(
+  liveClientEnv.VITE_LIVE_AUDIO_MOBILE_AMBIENT_MULTIPLIER_SCALE,
+  0.82,
+  0.5,
+  1.5,
+);
+const MOBILE_USER_SPEECH_IDLE_MAX_RMS_CAP = parseClientBoundedNumber(
+  liveClientEnv.VITE_LIVE_AUDIO_MOBILE_IDLE_MAX_RMS_CAP,
+  0.02,
+  0.006,
+  0.08,
+);
+const MOBILE_USER_SPEECH_ASSISTANT_MAX_RMS_CAP = parseClientBoundedNumber(
+  liveClientEnv.VITE_LIVE_AUDIO_MOBILE_ASSISTANT_MAX_RMS_CAP,
+  0.03,
+  0.01,
+  0.09,
+);
+const MOBILE_USER_SPEECH_START_MIN_DURATION_MULTIPLIER = parseClientBoundedNumber(
+  liveClientEnv.VITE_LIVE_AUDIO_MOBILE_START_MIN_DURATION_MULTIPLIER,
+  0.85,
+  0.5,
+  1.5,
+);
+const MOBILE_USER_SPEECH_ASSISTANT_MIN_DURATION_MULTIPLIER = parseClientBoundedNumber(
+  liveClientEnv.VITE_LIVE_AUDIO_MOBILE_ASSISTANT_MIN_DURATION_MULTIPLIER,
+  0.88,
+  0.5,
+  1.5,
+);
+const MOBILE_USER_SPEECH_END_SILENCE_MULTIPLIER = parseClientBoundedNumber(
+  liveClientEnv.VITE_LIVE_AUDIO_MOBILE_END_SILENCE_MULTIPLIER,
+  1.35,
+  1,
+  3,
+);
+const MOBILE_USER_SPEECH_CANDIDATE_CLEAR_MULTIPLIER = parseClientBoundedNumber(
+  liveClientEnv.VITE_LIVE_AUDIO_MOBILE_CANDIDATE_CLEAR_MULTIPLIER,
+  2.1,
+  1,
+  4,
+);
+const MOBILE_USER_SPEECH_MIN_CANDIDATE_CLEAR_MS = parseClientPositiveInt(
+  liveClientEnv.VITE_LIVE_AUDIO_MOBILE_MIN_CANDIDATE_CLEAR_MS,
+  96,
+);
+const MOBILE_USER_SPEECH_MIN_END_SILENCE_MS = parseClientPositiveInt(
+  liveClientEnv.VITE_LIVE_AUDIO_MOBILE_MIN_END_SILENCE_MS,
+  760,
 );
 const LIVE_DEBUG_STATE_EMIT_MIN_INTERVAL_MS = parseClientPositiveInt(
   liveClientEnv.VITE_LIVE_DEBUG_STATE_EMIT_MIN_INTERVAL_MS,
@@ -844,6 +920,7 @@ async function getMicrophonePermissionState():
 }
 
 export async function collectMediaCaptureDebugContext(): Promise<Record<string, unknown>> {
+  const compatibility = resolveLiveAudioCompatibilityProfile();
   const permissionState = await getMicrophonePermissionState();
   let audioInputDeviceCount: number | null = null;
   let mediaDeviceCount: number | null = null;
@@ -871,6 +948,7 @@ export async function collectMediaCaptureDebugContext(): Promise<Record<string, 
     microphonePermissionState: permissionState,
     mediaDeviceCount,
     audioInputDeviceCount,
+    liveAudioCompatibility: compatibility,
   };
 }
 
@@ -879,36 +957,79 @@ export async function getMicrophoneStreamWithFallback(): Promise<MediaStream> {
   const attemptConstraints: Array<{
     label: string;
     constraints: MediaStreamConstraints;
-  }> = [
-    {
-      label: "processed_mono",
-      constraints: {
-        audio: {
-          channelCount: 1,
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
+  }> = compatibility.isMobile
+    ? [
+        {
+          label: "mobile_voice_safe",
+          constraints: {
+            audio: {
+              channelCount: 1,
+              echoCancellation: true,
+              noiseSuppression: false,
+              autoGainControl: false,
+            },
+            video: false,
+          },
         },
-        video: false,
-      },
-    },
-    {
-      label: "mono_only",
-      constraints: {
-        audio: {
-          channelCount: 1,
+        {
+          label: "mobile_processed_mono",
+          constraints: {
+            audio: {
+              channelCount: 1,
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: true,
+            },
+            video: false,
+          },
         },
-        video: false,
-      },
-    },
-    {
-      label: "basic_audio",
-      constraints: {
-        audio: true,
-        video: false,
-      },
-    },
-  ];
+        {
+          label: "mono_only",
+          constraints: {
+            audio: {
+              channelCount: 1,
+            },
+            video: false,
+          },
+        },
+        {
+          label: "basic_audio",
+          constraints: {
+            audio: true,
+            video: false,
+          },
+        },
+      ]
+    : [
+        {
+          label: "processed_mono",
+          constraints: {
+            audio: {
+              channelCount: 1,
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: true,
+            },
+            video: false,
+          },
+        },
+        {
+          label: "mono_only",
+          constraints: {
+            audio: {
+              channelCount: 1,
+            },
+            video: false,
+          },
+        },
+        {
+          label: "basic_audio",
+          constraints: {
+            audio: true,
+            video: false,
+          },
+        },
+      ];
 
   let lastError: unknown = null;
   const attemptFailures: MicCaptureAttemptFailure[] = [];
@@ -992,6 +1113,29 @@ export class GeminiLiveVoiceSession {
   private speechCandidateSilenceMs = 0;
   private speechSilenceMs = 0;
   private speechCandidatePeakRms = 0;
+  private compatibilityProfile: LiveAudioCompatibilityProfile =
+    resolveSharedLiveAudioCompatibilityProfile();
+  private speechDetectionProfile: LiveSpeechDetectionProfile = {
+    mode: "desktop_default",
+    thresholdScale: 1,
+    assistantThresholdScale: 1,
+    ambientMultiplierScale: 1,
+    idleMaxRmsCap: null,
+    assistantMaxRmsCap: null,
+    startMinSpeechDurationMultiplier: 1,
+    assistantMinSpeechDurationMultiplier: 1,
+    endSilenceDurationMultiplier: 1,
+    candidateClearSilenceMultiplier: 1,
+    minimumCandidateClearSilenceMs: 0,
+    minimumEndSilenceMs: 0,
+  };
+  private speechCandidateClearTargetMs = USER_SPEECH_CANDIDATE_CLEAR_SILENCE_MS;
+  private speechEndSilenceTargetMs = USER_SPEECH_END_SILENCE_MIN_DURATION_MS;
+  private speechStartMinDurationMs = USER_SPEECH_START_MIN_DURATION_MS;
+  private speechAssistantMinDurationMs = USER_SPEECH_ASSISTANT_MIN_DURATION_MS;
+  private candidateClearBurstCount = 0;
+  private candidateClearBurstWindowStartAtMs = 0;
+  private candidateClearBurstLastAtMs = 0;
   private interruptPending = false;
   private interruptTrigger: LiveInterruptTrigger = "none";
   private lastInterruptReason: string | null = null;
@@ -1122,6 +1266,9 @@ export class GeminiLiveVoiceSession {
     this.speechCandidateSilenceMs = 0;
     this.speechSilenceMs = 0;
     this.speechCandidatePeakRms = 0;
+    this.candidateClearBurstCount = 0;
+    this.candidateClearBurstWindowStartAtMs = 0;
+    this.candidateClearBurstLastAtMs = 0;
     this.bufferedPrefixAudioFrames = [];
     this.activeUserSpeechWindow = null;
     this.clearPendingUserSpeechWindowTimeouts();
@@ -1135,6 +1282,46 @@ export class GeminiLiveVoiceSession {
     this.lastDebugStateEmittedAtMs = 0;
     this.lastDebugStateSnapshot = "";
     this.conversationId = params.conversationId;
+    this.compatibilityProfile = resolveLiveAudioCompatibilityProfile();
+    this.speechDetectionProfile = resolveLiveSpeechDetectionProfile({
+      compatibility: this.compatibilityProfile,
+      mobileThresholdScale: MOBILE_USER_SPEECH_THRESHOLD_SCALE,
+      mobileAssistantThresholdScale:
+        MOBILE_USER_SPEECH_ASSISTANT_THRESHOLD_SCALE,
+      mobileAmbientMultiplierScale:
+        MOBILE_USER_SPEECH_AMBIENT_MULTIPLIER_SCALE,
+      mobileIdleMaxRmsCap: MOBILE_USER_SPEECH_IDLE_MAX_RMS_CAP,
+      mobileAssistantMaxRmsCap: MOBILE_USER_SPEECH_ASSISTANT_MAX_RMS_CAP,
+      mobileStartMinDurationMultiplier:
+        MOBILE_USER_SPEECH_START_MIN_DURATION_MULTIPLIER,
+      mobileAssistantMinDurationMultiplier:
+        MOBILE_USER_SPEECH_ASSISTANT_MIN_DURATION_MULTIPLIER,
+      mobileEndSilenceMultiplier: MOBILE_USER_SPEECH_END_SILENCE_MULTIPLIER,
+      mobileCandidateClearMultiplier:
+        MOBILE_USER_SPEECH_CANDIDATE_CLEAR_MULTIPLIER,
+      mobileMinCandidateClearMs: MOBILE_USER_SPEECH_MIN_CANDIDATE_CLEAR_MS,
+      mobileMinEndSilenceMs: MOBILE_USER_SPEECH_MIN_END_SILENCE_MS,
+    });
+    this.speechCandidateClearTargetMs = Math.max(
+      USER_SPEECH_CANDIDATE_CLEAR_SILENCE_MS *
+        this.speechDetectionProfile.candidateClearSilenceMultiplier,
+      this.speechDetectionProfile.minimumCandidateClearSilenceMs,
+    );
+    this.speechEndSilenceTargetMs = Math.max(
+      USER_SPEECH_END_SILENCE_MIN_DURATION_MS *
+        this.speechDetectionProfile.endSilenceDurationMultiplier,
+      this.speechDetectionProfile.minimumEndSilenceMs,
+    );
+    this.speechStartMinDurationMs = Math.max(
+      USER_SPEECH_REFERENCE_FRAME_DURATION_MS,
+      USER_SPEECH_START_MIN_DURATION_MS *
+        this.speechDetectionProfile.startMinSpeechDurationMultiplier,
+    );
+    this.speechAssistantMinDurationMs = Math.max(
+      USER_SPEECH_REFERENCE_FRAME_DURATION_MS,
+      USER_SPEECH_ASSISTANT_MIN_DURATION_MS *
+        this.speechDetectionProfile.assistantMinSpeechDurationMultiplier,
+    );
     this.expectedLanguageHint = normalizeText(params.expectedLanguageHint ?? undefined)
       .toLowerCase();
     if (!this.expectedLanguageHint) {
@@ -1195,9 +1382,18 @@ export class GeminiLiveVoiceSession {
       });
     }
 
-    const compatibilityProfile = resolveLiveAudioCompatibilityProfile();
+    const compatibilityProfile = this.compatibilityProfile;
     const CONNECTION_TIMEOUT_MS = compatibilityProfile.connectionTimeoutMs;
-    this.debug("live.audio.compatibility_profile", compatibilityProfile);
+    this.debug("live.audio.compatibility_profile", {
+      ...compatibilityProfile,
+    });
+    this.debug("live.audio.speech_profile", {
+      ...this.speechDetectionProfile,
+      speechCandidateClearTargetMs: this.speechCandidateClearTargetMs,
+      speechEndSilenceTargetMs: this.speechEndSilenceTargetMs,
+      speechStartMinDurationMs: this.speechStartMinDurationMs,
+      speechAssistantMinDurationMs: this.speechAssistantMinDurationMs,
+    });
     let connectionOpened = false;
     let timedOut = false;
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
@@ -1269,6 +1465,9 @@ export class GeminiLiveVoiceSession {
           this.speechCandidateSilenceMs = 0;
           this.speechSilenceMs = 0;
           this.speechCandidatePeakRms = 0;
+          this.candidateClearBurstCount = 0;
+          this.candidateClearBurstWindowStartAtMs = 0;
+          this.candidateClearBurstLastAtMs = 0;
           this.activeUserSpeechWindow = null;
           this.clearPendingUserSpeechWindowTimeouts();
           this.syncSpeechStateFromActivity("session_error");
@@ -1294,6 +1493,9 @@ export class GeminiLiveVoiceSession {
           this.speechCandidateSilenceMs = 0;
           this.speechSilenceMs = 0;
           this.speechCandidatePeakRms = 0;
+          this.candidateClearBurstCount = 0;
+          this.candidateClearBurstWindowStartAtMs = 0;
+          this.candidateClearBurstLastAtMs = 0;
           this.activeUserSpeechWindow = null;
           this.clearPendingUserSpeechWindowTimeouts();
           this.session = null;
@@ -1372,6 +1574,8 @@ export class GeminiLiveVoiceSession {
         USER_SPEECH_CANDIDATE_MIN_RMS_THRESHOLD,
       userSpeechCandidateClearSilenceMs:
         USER_SPEECH_CANDIDATE_CLEAR_SILENCE_MS,
+      userSpeechCandidateClearSilenceTargetMs:
+        this.speechCandidateClearTargetMs,
       userSpeechAmbientFloorRiseSmoothing:
         USER_SPEECH_AMBIENT_FLOOR_RISE_SMOOTHING,
       userSpeechAmbientFloorFallSmoothing:
@@ -1380,9 +1584,12 @@ export class GeminiLiveVoiceSession {
         USER_SPEECH_AMBIENT_FLOOR_SPEECH_SPIKE_GUARD,
       userSpeechReferenceFrameDurationMs: USER_SPEECH_REFERENCE_FRAME_DURATION_MS,
       userSpeechStartMinDurationMs: USER_SPEECH_START_MIN_DURATION_MS,
+      userSpeechStartMinDurationTargetMs: this.speechStartMinDurationMs,
       userSpeechAssistantMinDurationMs: USER_SPEECH_ASSISTANT_MIN_DURATION_MS,
+      userSpeechAssistantMinDurationTargetMs: this.speechAssistantMinDurationMs,
       userSpeechEndSilenceMinDurationMs:
         USER_SPEECH_END_SILENCE_MIN_DURATION_MS,
+      userSpeechEndSilenceTargetMs: this.speechEndSilenceTargetMs,
       userSpeechPrefixFrames: USER_SPEECH_PREFIX_FRAMES,
       userSpeechCooldownMs: USER_SPEECH_COOLDOWN_MS,
       userSpeechTranscriptExpectationTimeoutMs:
@@ -1390,6 +1597,8 @@ export class GeminiLiveVoiceSession {
       manualInterruptIdleTimeoutMs: MANUAL_INTERRUPT_IDLE_TIMEOUT_MS,
       suppressUserTranscriptDuringAssistantSpeech:
         SUPPRESS_USER_TRANSCRIPT_DURING_ASSISTANT_SPEECH,
+      compatibilityProfile: this.compatibilityProfile,
+      speechDetectionProfile: this.speechDetectionProfile,
     });
 
     await this.startMicrophoneStream(params.preAcquiredMicStream);
@@ -1453,6 +1662,9 @@ export class GeminiLiveVoiceSession {
     this.speechCandidateSilenceMs = 0;
     this.speechSilenceMs = 0;
     this.speechCandidatePeakRms = 0;
+    this.candidateClearBurstCount = 0;
+    this.candidateClearBurstWindowStartAtMs = 0;
+    this.candidateClearBurstLastAtMs = 0;
     this.bufferedPrefixAudioFrames = [];
     this.activeUserSpeechWindow = null;
     this.clearPendingUserSpeechWindowTimeouts();
@@ -1479,6 +1691,25 @@ export class GeminiLiveVoiceSession {
     this.personalContextNudgeSentThisTurn = false;
     this.webSearchGroundedThisTurn = false;
     this.webSearchNudgeSentThisTurn = false;
+    this.compatibilityProfile = resolveSharedLiveAudioCompatibilityProfile();
+    this.speechDetectionProfile = {
+      mode: "desktop_default",
+      thresholdScale: 1,
+      assistantThresholdScale: 1,
+      ambientMultiplierScale: 1,
+      idleMaxRmsCap: null,
+      assistantMaxRmsCap: null,
+      startMinSpeechDurationMultiplier: 1,
+      assistantMinSpeechDurationMultiplier: 1,
+      endSilenceDurationMultiplier: 1,
+      candidateClearSilenceMultiplier: 1,
+      minimumCandidateClearSilenceMs: 0,
+      minimumEndSilenceMs: 0,
+    };
+    this.speechCandidateClearTargetMs = USER_SPEECH_CANDIDATE_CLEAR_SILENCE_MS;
+    this.speechEndSilenceTargetMs = USER_SPEECH_END_SILENCE_MIN_DURATION_MS;
+    this.speechStartMinDurationMs = USER_SPEECH_START_MIN_DURATION_MS;
+    this.speechAssistantMinDurationMs = USER_SPEECH_ASSISTANT_MIN_DURATION_MS;
     this.clearPlaybackQueue();
     this.stopAudioContextKeepAlive();
     document.removeEventListener("visibilitychange", this.handleVisibilityChange);
@@ -1698,9 +1929,13 @@ export class GeminiLiveVoiceSession {
       ambientRms: this.inputAmbientRms,
       activeThreshold: this.activeSpeechThreshold,
       candidateThreshold: this.candidateSpeechThreshold,
+      speechCandidateFrames: this.speechCandidateFrames,
+      speechCandidatePeakRms: this.speechCandidatePeakRms,
       speechCandidateMs: this.speechCandidateMs,
       speechCandidateSilenceMs: this.speechCandidateSilenceMs,
+      speechCandidateClearTargetMs: this.speechCandidateClearTargetMs,
       speechSilenceMs: this.speechSilenceMs,
+      speechEndSilenceTargetMs: this.speechEndSilenceTargetMs,
       activeUserSpeechWindowId: this.activeUserSpeechWindow?.id ?? null,
       pendingTranscriptWindows: this.pendingUserSpeechWindows.length,
       manualActivityActive: this.manualActivityActive,
@@ -1719,6 +1954,11 @@ export class GeminiLiveVoiceSession {
       sessionResumptionUpdatedAt: this.latestSessionResumptionUpdatedAt,
       goAwayTimeLeft: this.latestGoAwayTimeLeft,
       goAwayReceivedAt: this.latestGoAwayReceivedAt,
+      compatibilityPlatform: this.compatibilityProfile.platformClass,
+      compatibilityIsMobile: this.compatibilityProfile.isMobile,
+      compatibilityIsStandalonePwa: this.compatibilityProfile.isStandalonePwa,
+      speechProfileMode: this.speechDetectionProfile.mode,
+      speechProfileThresholdScale: this.speechDetectionProfile.thresholdScale,
     };
   }
 
@@ -2343,33 +2583,47 @@ export class GeminiLiveVoiceSession {
     threshold: number;
     minSpeechDurationMs: number;
   } {
+    const speechProfile = this.speechDetectionProfile;
     const baseThreshold = assistantWindowActive
       ? USER_SPEECH_ASSISTANT_RMS_THRESHOLD
       : USER_SPEECH_START_RMS_THRESHOLD;
-    const ambientMultiplier = assistantWindowActive
+    const ambientMultiplierBase = assistantWindowActive
       ? USER_SPEECH_ASSISTANT_AMBIENT_MULTIPLIER
       : USER_SPEECH_AMBIENT_MULTIPLIER;
-    const maxThreshold = assistantWindowActive
+    const ambientMultiplier =
+      ambientMultiplierBase * speechProfile.ambientMultiplierScale;
+    const baseMaxThreshold = assistantWindowActive
       ? USER_SPEECH_ASSISTANT_MAX_RMS_THRESHOLD
       : USER_SPEECH_IDLE_MAX_RMS_THRESHOLD;
-    const threshold = Math.min(
+    const profileMaxCap = assistantWindowActive
+      ? speechProfile.assistantMaxRmsCap
+      : speechProfile.idleMaxRmsCap;
+    const maxThreshold =
+      typeof profileMaxCap === "number"
+        ? Math.min(baseMaxThreshold, profileMaxCap)
+        : baseMaxThreshold;
+    const thresholdScale = assistantWindowActive
+      ? speechProfile.assistantThresholdScale
+      : speechProfile.thresholdScale;
+    const rawThreshold = Math.min(
       maxThreshold,
       Math.max(
         baseThreshold,
         this.inputAmbientRms > 0 ? this.inputAmbientRms * ambientMultiplier : 0,
       ),
     );
-    const assistantFrames = Math.max(
-      USER_SPEECH_ASSISTANT_CONSECUTIVE_FRAMES,
-      ASSISTANT_BARGE_IN_CONSECUTIVE_FRAMES,
+    const threshold = Math.min(
+      maxThreshold,
+      Math.max(
+        USER_SPEECH_CANDIDATE_MIN_RMS_THRESHOLD,
+        rawThreshold * thresholdScale,
+      ),
     );
     return {
       threshold,
-      minSpeechDurationMs:
-        (assistantWindowActive
-          ? assistantFrames
-          : USER_SPEECH_START_CONSECUTIVE_FRAMES) *
-        USER_SPEECH_REFERENCE_FRAME_DURATION_MS,
+      minSpeechDurationMs: assistantWindowActive
+        ? this.speechAssistantMinDurationMs
+        : this.speechStartMinDurationMs,
     };
   }
 
@@ -2433,7 +2687,7 @@ export class GeminiLiveVoiceSession {
       } else {
         this.speechSilenceFrames += 1;
         this.speechSilenceMs += effectiveFrameDurationMs;
-        if (this.speechSilenceMs >= USER_SPEECH_END_SILENCE_MIN_DURATION_MS) {
+        if (this.speechSilenceMs >= this.speechEndSilenceTargetMs) {
           this.endUserSpeech("user_silence_detected");
         }
       }
@@ -2471,7 +2725,7 @@ export class GeminiLiveVoiceSession {
       this.speechCandidateSilenceMs += effectiveFrameDurationMs;
       if (
         this.speechCandidateSilenceMs <
-        USER_SPEECH_CANDIDATE_CLEAR_SILENCE_MS
+        this.speechCandidateClearTargetMs
       ) {
         this.emitDebugState();
         return;
@@ -2488,16 +2742,45 @@ export class GeminiLiveVoiceSession {
     this.speechCandidateSilenceMs = 0;
     this.speechCandidatePeakRms = 0;
     if (wasCandidate) {
+      const now = Date.now();
+      if (now - this.candidateClearBurstLastAtMs > 3500) {
+        this.candidateClearBurstCount = 0;
+        this.candidateClearBurstWindowStartAtMs = now;
+      }
+      if (this.candidateClearBurstWindowStartAtMs === 0) {
+        this.candidateClearBurstWindowStartAtMs = now;
+      }
+      this.candidateClearBurstCount += 1;
+      this.candidateClearBurstLastAtMs = now;
       this.debug("live.audio.candidate_cleared", {
         candidateMs,
         candidateFrames,
         candidateSilenceMs,
+        candidateClearTargetMs: this.speechCandidateClearTargetMs,
         candidatePeakRms,
         currentRms: rms,
         threshold,
         candidateThreshold,
         assistantWindowActive,
+        speechProfileMode: this.speechDetectionProfile.mode,
       });
+      if (
+        this.speechDetectionProfile.mode === "mobile_relaxed" &&
+        this.candidateClearBurstCount >= 6
+      ) {
+        this.debug("live.audio.mobile_candidate_clear_burst", {
+          burstCount: this.candidateClearBurstCount,
+          burstWindowMs:
+            now - this.candidateClearBurstWindowStartAtMs,
+          latestThreshold: threshold,
+          latestCandidatePeakRms: candidatePeakRms,
+          latestCandidateMs: candidateMs,
+          latestCurrentRms: rms,
+          candidateClearTargetMs: this.speechCandidateClearTargetMs,
+          endSilenceTargetMs: this.speechEndSilenceTargetMs,
+          platform: this.compatibilityProfile.platformClass,
+        });
+      }
       this.syncSpeechStateFromActivity("candidate_cleared");
     } else {
       this.emitDebugState();

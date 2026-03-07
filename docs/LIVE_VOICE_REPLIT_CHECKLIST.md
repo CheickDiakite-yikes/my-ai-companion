@@ -111,11 +111,12 @@ skills/zeeme-live-voice-stability/scripts/live_trace_summary.sh /path/to/live-de
 
 ### Priority tuning knobs for normal-volume speech misses
 
-1. `VITE_LIVE_AUDIO_USER_SPEECH_CANDIDATE_HYSTERESIS_MULTIPLIER`
-2. `VITE_LIVE_AUDIO_USER_SPEECH_CANDIDATE_CLEAR_SILENCE_MS`
-3. `VITE_LIVE_AUDIO_USER_SPEECH_IDLE_MAX_RMS_THRESHOLD`
-4. `VITE_LIVE_AUDIO_USER_SPEECH_AMBIENT_FLOOR_SPEECH_SPIKE_GUARD`
-5. `VITE_LIVE_AUDIO_USER_SPEECH_END_SILENCE_FRAMES`
+1. `VITE_LIVE_AUDIO_MOBILE_THRESHOLD_SCALE` (mobile-only threshold pressure)
+2. `VITE_LIVE_AUDIO_MOBILE_IDLE_MAX_RMS_CAP` (mobile-only hard cap)
+3. `VITE_LIVE_AUDIO_MOBILE_CANDIDATE_CLEAR_MULTIPLIER` and `VITE_LIVE_AUDIO_MOBILE_MIN_CANDIDATE_CLEAR_MS`
+4. `VITE_LIVE_AUDIO_MOBILE_END_SILENCE_MULTIPLIER` and `VITE_LIVE_AUDIO_MOBILE_MIN_END_SILENCE_MS`
+5. `VITE_LIVE_AUDIO_USER_SPEECH_AMBIENT_FLOOR_SPEECH_SPIKE_GUARD`
+6. `VITE_LIVE_AUDIO_USER_SPEECH_CANDIDATE_HYSTERESIS_MULTIPLIER`
 
 ---
 
@@ -131,6 +132,7 @@ skills/zeeme-live-voice-stability/scripts/live_trace_summary.sh /path/to/live-de
 - `voice.transcript.persisted`
 - `live.audio.activity_window_transcription_received`
 - `live.audio.activity_window_no_input_transcription`
+- `live.audio.mobile_candidate_clear_burst` (mobile-only candidate churn pressure signal)
 
 ---
 

@@ -1071,6 +1071,8 @@ Use `http://10.0.2.2:5000` for Android emulator, and your LAN IP for physical de
 | `npm run security:secrets:staged` | Scan staged files for secrets |
 | `npm run hooks:install` | Install pre-commit secret scanning hook |
 | `npm run test:local:e2e` | Run isolated local integration tests |
+| `npm run test:voice:language` | Smoke-check language hint/script normalization |
+| `npm run test:voice:mobile` | Smoke-check mobile compatibility + speech profile defaults |
 | `npm run mobile:install` | Install dependencies for Expo wrapper (`mobile/`) |
 | `npm run mobile:start` | Start Expo dev server |
 | `npm run mobile:ios` | Run iOS native build via Expo |
@@ -1236,6 +1238,18 @@ Precedence notes:
 | `VITE_LIVE_AUDIO_USER_SPEECH_COOLDOWN_MS` | `220` | Cooldown before returning to idle |
 | `VITE_LIVE_AUDIO_MANUAL_INTERRUPT_IDLE_TIMEOUT_MS` | `1400` | Timeout for manual interrupt watchdog |
 | `VITE_LIVE_AUDIO_TRANSCRIPT_EXPECTATION_TIMEOUT_MS` | `2200` | Time window for transcript arrival after speech window ends |
+| `VITE_LIVE_ANDROID_LEGACY_MAX_MAJOR` | `10` | Android major-version cutoff for legacy timeout profile |
+| `VITE_LIVE_AUDIO_MOBILE_THRESHOLD_SCALE` | `0.84` | Mobile-only multiplier to reduce user speech threshold pressure |
+| `VITE_LIVE_AUDIO_MOBILE_ASSISTANT_THRESHOLD_SCALE` | `0.88` | Mobile-only multiplier for user threshold while assistant window is active |
+| `VITE_LIVE_AUDIO_MOBILE_AMBIENT_MULTIPLIER_SCALE` | `0.82` | Mobile-only scale for ambient threshold multipliers |
+| `VITE_LIVE_AUDIO_MOBILE_IDLE_MAX_RMS_CAP` | `0.02` | Mobile-only cap for idle speech threshold |
+| `VITE_LIVE_AUDIO_MOBILE_ASSISTANT_MAX_RMS_CAP` | `0.03` | Mobile-only cap for speech threshold during assistant window |
+| `VITE_LIVE_AUDIO_MOBILE_START_MIN_DURATION_MULTIPLIER` | `0.85` | Mobile-only multiplier for minimum detected speech duration (idle) |
+| `VITE_LIVE_AUDIO_MOBILE_ASSISTANT_MIN_DURATION_MULTIPLIER` | `0.88` | Mobile-only multiplier for minimum detected speech duration (assistant window) |
+| `VITE_LIVE_AUDIO_MOBILE_END_SILENCE_MULTIPLIER` | `1.35` | Mobile-only multiplier for end-of-speech silence window |
+| `VITE_LIVE_AUDIO_MOBILE_CANDIDATE_CLEAR_MULTIPLIER` | `2.1` | Mobile-only multiplier for candidate clear-grace silence |
+| `VITE_LIVE_AUDIO_MOBILE_MIN_CANDIDATE_CLEAR_MS` | `96` | Hard floor for mobile candidate clear-grace duration |
+| `VITE_LIVE_AUDIO_MOBILE_MIN_END_SILENCE_MS` | `760` | Hard floor for mobile end-of-speech silence duration |
 
 ### Memory controls
 
