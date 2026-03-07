@@ -489,6 +489,26 @@ const MOBILE_USER_SPEECH_MIN_END_SILENCE_MS = parseClientPositiveInt(
   liveClientEnv.VITE_LIVE_AUDIO_MOBILE_MIN_END_SILENCE_MS,
   760,
 );
+const MOBILE_ASSISTANT_BARGE_IN_MIN_DURATION_MS = parseClientPositiveInt(
+  liveClientEnv.VITE_LIVE_AUDIO_MOBILE_ASSISTANT_BARGE_IN_MIN_DURATION_MS,
+  220,
+);
+const MOBILE_ASSISTANT_BARGE_IN_MIN_PEAK_RMS = parseClientBoundedNumber(
+  liveClientEnv.VITE_LIVE_AUDIO_MOBILE_ASSISTANT_BARGE_IN_MIN_PEAK_RMS,
+  0.028,
+  0.01,
+  0.1,
+);
+const MOBILE_ASSISTANT_BARGE_IN_PEAK_THRESHOLD_MULTIPLIER = parseClientBoundedNumber(
+  liveClientEnv.VITE_LIVE_AUDIO_MOBILE_ASSISTANT_BARGE_IN_PEAK_THRESHOLD_MULTIPLIER,
+  1.4,
+  1,
+  3,
+);
+const MOBILE_ASSISTANT_CANDIDATE_CLEAR_TARGET_MS = parseClientPositiveInt(
+  liveClientEnv.VITE_LIVE_AUDIO_MOBILE_ASSISTANT_CANDIDATE_CLEAR_TARGET_MS,
+  72,
+);
 const LIVE_DEBUG_STATE_EMIT_MIN_INTERVAL_MS = parseClientPositiveInt(
   liveClientEnv.VITE_LIVE_DEBUG_STATE_EMIT_MIN_INTERVAL_MS,
   160,
@@ -1136,6 +1156,7 @@ export class GeminiLiveVoiceSession {
   private candidateClearBurstCount = 0;
   private candidateClearBurstWindowStartAtMs = 0;
   private candidateClearBurstLastAtMs = 0;
+  private lastMobileBargeInRejectedAtMs = 0;
   private interruptPending = false;
   private interruptTrigger: LiveInterruptTrigger = "none";
   private lastInterruptReason: string | null = null;
@@ -1269,6 +1290,7 @@ export class GeminiLiveVoiceSession {
     this.candidateClearBurstCount = 0;
     this.candidateClearBurstWindowStartAtMs = 0;
     this.candidateClearBurstLastAtMs = 0;
+    this.lastMobileBargeInRejectedAtMs = 0;
     this.bufferedPrefixAudioFrames = [];
     this.activeUserSpeechWindow = null;
     this.clearPendingUserSpeechWindowTimeouts();
@@ -1468,6 +1490,7 @@ export class GeminiLiveVoiceSession {
           this.candidateClearBurstCount = 0;
           this.candidateClearBurstWindowStartAtMs = 0;
           this.candidateClearBurstLastAtMs = 0;
+          this.lastMobileBargeInRejectedAtMs = 0;
           this.activeUserSpeechWindow = null;
           this.clearPendingUserSpeechWindowTimeouts();
           this.syncSpeechStateFromActivity("session_error");
@@ -1496,6 +1519,7 @@ export class GeminiLiveVoiceSession {
           this.candidateClearBurstCount = 0;
           this.candidateClearBurstWindowStartAtMs = 0;
           this.candidateClearBurstLastAtMs = 0;
+          this.lastMobileBargeInRejectedAtMs = 0;
           this.activeUserSpeechWindow = null;
           this.clearPendingUserSpeechWindowTimeouts();
           this.session = null;
@@ -1599,6 +1623,13 @@ export class GeminiLiveVoiceSession {
         SUPPRESS_USER_TRANSCRIPT_DURING_ASSISTANT_SPEECH,
       compatibilityProfile: this.compatibilityProfile,
       speechDetectionProfile: this.speechDetectionProfile,
+      mobileAssistantBargeInMinDurationMs:
+        MOBILE_ASSISTANT_BARGE_IN_MIN_DURATION_MS,
+      mobileAssistantBargeInMinPeakRms: MOBILE_ASSISTANT_BARGE_IN_MIN_PEAK_RMS,
+      mobileAssistantBargeInPeakThresholdMultiplier:
+        MOBILE_ASSISTANT_BARGE_IN_PEAK_THRESHOLD_MULTIPLIER,
+      mobileAssistantCandidateClearTargetMs:
+        MOBILE_ASSISTANT_CANDIDATE_CLEAR_TARGET_MS,
     });
 
     await this.startMicrophoneStream(params.preAcquiredMicStream);
@@ -1665,6 +1696,7 @@ export class GeminiLiveVoiceSession {
     this.candidateClearBurstCount = 0;
     this.candidateClearBurstWindowStartAtMs = 0;
     this.candidateClearBurstLastAtMs = 0;
+    this.lastMobileBargeInRejectedAtMs = 0;
     this.bufferedPrefixAudioFrames = [];
     this.activeUserSpeechWindow = null;
     this.clearPendingUserSpeechWindowTimeouts();
@@ -2502,6 +2534,10 @@ export class GeminiLiveVoiceSession {
     this.speechCandidateSilenceMs = 0;
     this.speechSilenceMs = 0;
     this.speechCandidatePeakRms = 0;
+    this.candidateClearBurstCount = 0;
+    this.candidateClearBurstWindowStartAtMs = 0;
+    this.candidateClearBurstLastAtMs = 0;
+    this.lastMobileBargeInRejectedAtMs = 0;
     if (!this.activeUserSpeechWindow) {
       this.activeUserSpeechWindow = this.startUserSpeechWindow(trigger, reason);
     }
@@ -2569,6 +2605,10 @@ export class GeminiLiveVoiceSession {
     this.speechCandidateSilenceMs = 0;
     this.speechSilenceMs = 0;
     this.speechCandidatePeakRms = 0;
+    this.candidateClearBurstCount = 0;
+    this.candidateClearBurstWindowStartAtMs = 0;
+    this.candidateClearBurstLastAtMs = 0;
+    this.lastMobileBargeInRejectedAtMs = 0;
     if (this.activeUserSpeechWindow) {
       this.activeUserSpeechWindow.endedAtMs = Date.now();
       this.activeUserSpeechWindow.endReason = reason;
@@ -2615,7 +2655,9 @@ export class GeminiLiveVoiceSession {
     const threshold = Math.min(
       maxThreshold,
       Math.max(
-        USER_SPEECH_CANDIDATE_MIN_RMS_THRESHOLD,
+        assistantWindowActive
+          ? baseThreshold
+          : USER_SPEECH_CANDIDATE_MIN_RMS_THRESHOLD,
         rawThreshold * thresholdScale,
       ),
     );
@@ -2639,6 +2681,13 @@ export class GeminiLiveVoiceSession {
     const assistantWindowActive = this.isAssistantSpeechWindowActive();
     const { threshold, minSpeechDurationMs } =
       this.computeSpeechThreshold(assistantWindowActive);
+    const candidateClearTargetMs =
+      assistantWindowActive && this.speechDetectionProfile.mode === "mobile_relaxed"
+        ? Math.min(
+            this.speechCandidateClearTargetMs,
+            MOBILE_ASSISTANT_CANDIDATE_CLEAR_TARGET_MS,
+          )
+        : this.speechCandidateClearTargetMs;
     const candidateThreshold =
       this.speechState === "candidate_user_speech"
         ? Math.max(
@@ -2708,6 +2757,43 @@ export class GeminiLiveVoiceSession {
         });
       }
       if (this.speechCandidateMs >= minSpeechDurationMs) {
+        if (
+          assistantWindowActive &&
+          this.speechDetectionProfile.mode === "mobile_relaxed"
+        ) {
+          const minPeakRms = Math.max(
+            MOBILE_ASSISTANT_BARGE_IN_MIN_PEAK_RMS,
+            threshold * MOBILE_ASSISTANT_BARGE_IN_PEAK_THRESHOLD_MULTIPLIER,
+          );
+          const minBargeInDurationMs = Math.max(
+            minSpeechDurationMs,
+            MOBILE_ASSISTANT_BARGE_IN_MIN_DURATION_MS,
+          );
+          if (
+            this.speechCandidateMs < minBargeInDurationMs ||
+            this.speechCandidatePeakRms < minPeakRms
+          ) {
+            const now = Date.now();
+            if (now - this.lastMobileBargeInRejectedAtMs >= 250) {
+              this.lastMobileBargeInRejectedAtMs = now;
+              this.debug("live.audio.mobile_barge_in_rejected", {
+                candidateMs: this.speechCandidateMs,
+                candidatePeakRms: this.speechCandidatePeakRms,
+                threshold,
+                candidateThreshold,
+                minBargeInDurationMs,
+                minPeakRms,
+                currentRms: rms,
+                reason:
+                  this.speechCandidateMs < minBargeInDurationMs
+                    ? "candidate_duration_below_mobile_barge_in_min"
+                    : "candidate_peak_below_mobile_barge_in_min",
+              });
+            }
+            this.emitDebugState();
+            return;
+          }
+        }
         this.beginUserSpeech(
           assistantWindowActive
             ? "detected_user_barge_in"
@@ -2725,7 +2811,7 @@ export class GeminiLiveVoiceSession {
       this.speechCandidateSilenceMs += effectiveFrameDurationMs;
       if (
         this.speechCandidateSilenceMs <
-        this.speechCandidateClearTargetMs
+        candidateClearTargetMs
       ) {
         this.emitDebugState();
         return;
@@ -2756,7 +2842,7 @@ export class GeminiLiveVoiceSession {
         candidateMs,
         candidateFrames,
         candidateSilenceMs,
-        candidateClearTargetMs: this.speechCandidateClearTargetMs,
+        candidateClearTargetMs,
         candidatePeakRms,
         currentRms: rms,
         threshold,
@@ -2776,7 +2862,7 @@ export class GeminiLiveVoiceSession {
           latestCandidatePeakRms: candidatePeakRms,
           latestCandidateMs: candidateMs,
           latestCurrentRms: rms,
-          candidateClearTargetMs: this.speechCandidateClearTargetMs,
+          candidateClearTargetMs,
           endSilenceTargetMs: this.speechEndSilenceTargetMs,
           platform: this.compatibilityProfile.platformClass,
         });

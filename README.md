@@ -1250,6 +1250,10 @@ Precedence notes:
 | `VITE_LIVE_AUDIO_MOBILE_CANDIDATE_CLEAR_MULTIPLIER` | `2.1` | Mobile-only multiplier for candidate clear-grace silence |
 | `VITE_LIVE_AUDIO_MOBILE_MIN_CANDIDATE_CLEAR_MS` | `96` | Hard floor for mobile candidate clear-grace duration |
 | `VITE_LIVE_AUDIO_MOBILE_MIN_END_SILENCE_MS` | `760` | Hard floor for mobile end-of-speech silence duration |
+| `VITE_LIVE_AUDIO_MOBILE_ASSISTANT_BARGE_IN_MIN_DURATION_MS` | `220` | Mobile-only minimum candidate duration before auto-barge-in while assistant is speaking |
+| `VITE_LIVE_AUDIO_MOBILE_ASSISTANT_BARGE_IN_MIN_PEAK_RMS` | `0.028` | Mobile-only absolute peak RMS floor for auto-barge-in while assistant is speaking |
+| `VITE_LIVE_AUDIO_MOBILE_ASSISTANT_BARGE_IN_PEAK_THRESHOLD_MULTIPLIER` | `1.4` | Mobile-only relative peak threshold multiplier for auto-barge-in |
+| `VITE_LIVE_AUDIO_MOBILE_ASSISTANT_CANDIDATE_CLEAR_TARGET_MS` | `72` | Mobile-only candidate clear target used while assistant output is active |
 
 ### Memory controls
 

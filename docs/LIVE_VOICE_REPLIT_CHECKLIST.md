@@ -98,6 +98,7 @@ skills/zeeme-live-voice-stability/scripts/live_trace_summary.sh /path/to/live-de
 | `socket send skipped (not open) > 0` | Send attempted after socket close/closing | Fix lifecycle ordering; do not tune VAD until this is zero |
 | `language mismatch observed` frequent for same-language speaking | Transcript language/script drift | Validate language hints sent to token route; inspect low-signal transcript discard behavior |
 | Interrupt button pressed but no `activityStart sent` | UI interrupt not reaching live session | Debug interrupt path before touching audio thresholds |
+| Assistant cuts off on phone from handling/tap noise | Auto-barge-in too permissive during assistant window | Tighten mobile assistant barge-in min duration/peak and lower assistant candidate clear target |
 
 ---
 
@@ -113,10 +114,10 @@ skills/zeeme-live-voice-stability/scripts/live_trace_summary.sh /path/to/live-de
 
 1. `VITE_LIVE_AUDIO_MOBILE_THRESHOLD_SCALE` (mobile-only threshold pressure)
 2. `VITE_LIVE_AUDIO_MOBILE_IDLE_MAX_RMS_CAP` (mobile-only hard cap)
-3. `VITE_LIVE_AUDIO_MOBILE_CANDIDATE_CLEAR_MULTIPLIER` and `VITE_LIVE_AUDIO_MOBILE_MIN_CANDIDATE_CLEAR_MS`
-4. `VITE_LIVE_AUDIO_MOBILE_END_SILENCE_MULTIPLIER` and `VITE_LIVE_AUDIO_MOBILE_MIN_END_SILENCE_MS`
-5. `VITE_LIVE_AUDIO_USER_SPEECH_AMBIENT_FLOOR_SPEECH_SPIKE_GUARD`
-6. `VITE_LIVE_AUDIO_USER_SPEECH_CANDIDATE_HYSTERESIS_MULTIPLIER`
+3. `VITE_LIVE_AUDIO_MOBILE_ASSISTANT_BARGE_IN_MIN_DURATION_MS` and `VITE_LIVE_AUDIO_MOBILE_ASSISTANT_BARGE_IN_MIN_PEAK_RMS`
+4. `VITE_LIVE_AUDIO_MOBILE_ASSISTANT_BARGE_IN_PEAK_THRESHOLD_MULTIPLIER` and `VITE_LIVE_AUDIO_MOBILE_ASSISTANT_CANDIDATE_CLEAR_TARGET_MS`
+5. `VITE_LIVE_AUDIO_MOBILE_CANDIDATE_CLEAR_MULTIPLIER` and `VITE_LIVE_AUDIO_MOBILE_MIN_CANDIDATE_CLEAR_MS`
+6. `VITE_LIVE_AUDIO_MOBILE_END_SILENCE_MULTIPLIER` and `VITE_LIVE_AUDIO_MOBILE_MIN_END_SILENCE_MS`
 
 ---
 
