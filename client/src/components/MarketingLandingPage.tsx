@@ -336,7 +336,7 @@ const BLOG_POSTS: BlogPost[] = [
     blocks: [
       {
         type: "image",
-        src: "/blog/og/zeeme-archive-og.png",
+        src: "/blog/meet-zee-cover.jpg",
         alt: "Meet Zee product cover.",
         caption: "Meet Zee: one companion, across voice and text.",
       },
@@ -359,6 +359,12 @@ const BLOG_POSTS: BlogPost[] = [
         ],
       },
       { type: "heading", text: "How Zee fits into your day" },
+      {
+        type: "image",
+        src: "/blog/meet-zee-day-map.jpg",
+        alt: "Illustrated journey map showing how Zee supports morning reset, commute, noisy-to-text switch, and evening reflection.",
+        caption: "A day with Zee: one continuous thread across changing moments.",
+      },
       {
         type: "table",
         caption: "From quick check-ins to deep conversations.",
@@ -395,6 +401,12 @@ const BLOG_POSTS: BlogPost[] = [
       {
         type: "paragraph",
         text: "ZeeMe engineering now includes mobile-specific voice controls for false barge-in prevention, transcript observability, and deterministic session diagnostics. That means the companion is tuned for both calm rooms and messy real-world conditions, including phone handling noise and unstable network moments.",
+      },
+      {
+        type: "image",
+        src: "/blog/meet-zee-lifestyle.jpg",
+        alt: "Lifestyle scene of a user seamlessly continuing a companion conversation on phone in a warm evening setting.",
+        caption: "Seamless mode-shifting in real life, not just in ideal demo conditions.",
       },
       {
         type: "metrics",

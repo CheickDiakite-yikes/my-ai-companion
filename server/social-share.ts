@@ -18,6 +18,7 @@ type BlogShareEntry = {
   description: string;
   imagePath: string;
   imageAlt: string;
+  imageType?: string;
 };
 
 const DEFAULT_TITLE = "Zeeme — Your AI Companion, Always Here for You";
@@ -62,8 +63,9 @@ const BLOG_POST_SHARE: Record<string, BlogShareEntry> = {
     title: "Meet Zee: Your Companion for Real Life",
     description:
       "Meet Zee, the companion built for everyday life: voice + text continuity, warm conversation, and reliability that holds up in real environments.",
-    imagePath: "/blog/og/zeeme-archive-og.png",
+    imagePath: "/blog/og/meet-zee-og.jpg",
     imageAlt: "Meet Zee product story cover.",
+    imageType: "image/jpeg",
   },
   "zeeme-google-data-handling-security-paper-2026": {
     title: "Security Paper: Google Data Handling by Design",
@@ -242,7 +244,7 @@ export function resolveShareMetaForPath(
         canonicalUrl,
         ogType: "article",
         imageUrl: joinUrl(origin, blogMeta.imagePath),
-        imageType: "image/png",
+        imageType: blogMeta.imageType ?? "image/png",
         imageWidth: 1536,
         imageHeight: 1024,
         imageAlt: blogMeta.imageAlt,
