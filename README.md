@@ -175,6 +175,9 @@ Client starts voice call
   -> POST /api/live/token
      -> requires conversationId (ownership enforced)
      -> quota gate (voice remaining > 0)
+     -> accepts optional browser language hints:
+        - clientLanguage
+        - clientLanguages[]
      -> build live memory context:
         - [LIVE TIME ANCHOR] with current timestamp
         - active thread turns (recent raw)
@@ -183,11 +186,29 @@ Client starts voice call
         - durable memory items
         - profile facts + style preferences
      -> compose system instruction with persona + memory
-     -> optionally include tools: [{ googleSearch: {} }]
+     -> language policy in prompt:
+        - spoken-language continuity
+        - english fallback when audio is unclear
+        - transcript text treated as fallible
+     -> optional tools:
+        - googleSearch
+        - get_user_emails / get_calendar_events (gate-controlled)
      -> create ephemeral Gemini Live token with constrained config
-  -> browser opens Gemini Live session (v1alpha)
+        - automaticActivityDetection.disabled=true
+        - sessionResumption enabled
+        - contextWindowCompression enabled
+        - inputAudioTranscription enabled
+        - outputAudioTranscription enabled
+        - speechConfig.languageCode intentionally unset for native audio
+  -> browser opens Gemini Live session via @google/genai
   -> mic PCM stream -> sendRealtimeInput(audio)
   -> optional camera frames -> sendRealtimeInput(video) @ ~1 FPS
+  -> client-side speech detector state machine:
+       idle -> candidate_user_speech -> user_speaking -> cooldown -> idle
+     (with candidate hysteresis + clear-grace window)
+  -> client sends manual activity signals:
+       activityStart on detected speech / interrupt
+       activityEnd on detected silence
   -> transcript-based search-intent detector can send grounding nudge
   -> model may emit function calls:
        - get_user_emails / get_calendar_events
@@ -200,9 +221,53 @@ Client starts voice call
        - webSearchEvents[] (searching/grounded/idle labels)
   -> client returns functionResponses back into Live session
   -> model audio playback + transcript capture
+  -> user transcript persistence filter:
+       - drop punctuation-only / low-signal fragments
+       - retain valid speech for text-mode continuity
   -> transcript segments persisted to shared messages table
   -> POST /api/voice-sessions on end
      -> consume voice + camera seconds quotas
+```
+
+### Live voice reliability architecture (March 2026)
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant UI as Browser UI (Voice View)
+    participant API as Express API
+    participant G as Gemini Live
+    participant DB as PostgreSQL
+
+    UI->>API: POST /api/live/token (conversationId, clientLanguage(s), tz)
+    API->>DB: Verify ownership + quota + build memory context
+    API->>G: authTokens.create(liveConnectConstraints)
+    G-->>API: Ephemeral token + constrained config
+    API-->>UI: token + configSummary + memoryMeta
+
+    UI->>G: live.connect(token)
+    UI->>G: sendRealtimeInput(audio pcm chunks)
+    UI->>G: sendRealtimeInput(activityStart/activityEnd) (manual mode)
+    G-->>UI: serverContent, inputTranscription, outputTranscription, toolCall
+
+    UI->>API: POST /api/live/tool-response (functionCalls)
+    API->>DB: Resolve integration + auth context
+    API-->>UI: functionResponses + digests + webSearchEvents
+    UI->>G: sendToolResponse(functionResponses)
+
+    UI->>DB: Persist transcript-derived user/assistant messages
+    UI->>API: POST /api/voice-sessions (durations)
+    API->>DB: Record quota usage events
+```
+
+```mermaid
+stateDiagram-v2
+    [*] --> idle
+    idle --> candidate_user_speech: rms >= candidateThreshold
+    candidate_user_speech --> user_speaking: candidateMs >= minSpeechDurationMs
+    candidate_user_speech --> idle: candidateSilenceMs >= clearGraceMs
+    user_speaking --> cooldown: silenceMs >= endSilenceMinDurationMs
+    cooldown --> idle: cooldownMs elapsed
 ```
 
 ### Google personal context flow (text + live voice)
@@ -661,12 +726,28 @@ Operational guardrails:
 
 ### Live voice behavior
 
-- Server issues **ephemeral live tokens** with constrained configuration baked in
-- VAD (Voice Activity Detection) sensitivity, interruption handling, and duplex-suppression are fully configurable via environment variables
-- Client streams mic audio as PCM and optional camera frames to Gemini Live
-- Final transcript segments are persisted into the shared conversation `messages` table
-- Live memory context includes a time anchor, recent turns, compressed history, cross-chat context, and profile facts
-- Interruption behavior defaults to `NO_INTERRUPTION` for stability on mobile browsers
+- Server issues **ephemeral live tokens** with constrained configuration baked in and returns `configSummary` for diagnostics.
+- Live token setup hard-locks the realtime behavior:
+  - `automaticActivityDetectionDisabled=true`
+  - `sessionResumptionEnabled=true`
+  - `contextWindowCompressionEnabled=true`
+  - `effectiveInterruptMode=client_manual_activity`
+  - `inputAudioTranscription` + `outputAudioTranscription` enabled
+- Native audio language is auto-detected by provider path (`nativeAudioLanguageMode=auto_detect`); `speechConfig.languageCode` is intentionally not forced.
+- Client sends optional language hints (`clientLanguage`, `clientLanguages`) to improve prompt policy and observability, not to hard-force recognition.
+- Client streams mic audio as PCM and optional camera frames to Gemini Live.
+- Client speech detector includes:
+  - candidate hysteresis thresholding
+  - candidate clear-grace window
+  - spike-resistant ambient-floor estimation
+  - assistant/idle threshold caps
+- Transcript pipeline includes script-family observability and mismatch events:
+  - `live.transcript.received`
+  - `live.transcript.language_mismatch_observed`
+  - `live.audio.activity_window_transcription_received`
+  - `live.audio.activity_window_no_input_transcription`
+- Final validated transcript segments are persisted into the shared conversation `messages` table for text/voice continuity.
+- Live memory context includes a time anchor, recent turns, compressed history, cross-chat context, and profile facts.
 
 ---
 
@@ -1092,17 +1173,28 @@ Precedence notes:
 
 | Variable | Default | Description |
 |---|---|---|
-| `GEMINI_LIVE_ACTIVITY_HANDLING` | `NO_INTERRUPTION` | Interruption behavior |
+| `GEMINI_LIVE_ACTIVITY_HANDLING` | `START_OF_ACTIVITY_INTERRUPTS` | Desired interruption behavior flag (current server runtime enforces `START_OF_ACTIVITY_INTERRUPTS`) |
 | `GEMINI_LIVE_LOW_LATENCY_MODE` | `true` | Low latency audio mode |
 | `GEMINI_LIVE_VAD_START_SENSITIVITY` | `LOW` | VAD start sensitivity |
 | `GEMINI_LIVE_VAD_END_SENSITIVITY` | `HIGH` | VAD end sensitivity |
 | `GEMINI_LIVE_VAD_PREFIX_PADDING_MS` | `60` | VAD prefix padding |
 | `GEMINI_LIVE_VAD_SILENCE_MS` | `220` | VAD silence threshold |
+| `GEMINI_LIVE_MIN_VAD_PREFIX_PADDING_MS` | `50` | Minimum enforced VAD prefix padding in token setup |
+| `GEMINI_LIVE_MIN_VAD_SILENCE_MS` | `180` | Minimum enforced VAD silence in token setup |
+| `GEMINI_LIVE_TURN_COVERAGE` | `TURN_INCLUDES_ONLY_ACTIVITY` | Turn coverage mode for realtime input |
+| `GEMINI_LIVE_ENABLE_AFFECTIVE_DIALOG` | `true` | Enables affective dialog in audio mode |
 | `GEMINI_LIVE_PROACTIVE_AUDIO` | `false` | Proactive audio generation |
+| `GEMINI_LIVE_FORCE_ALWAYS_RESPOND` | `true` | When `true`, prevents proactive silent skips |
+| `GEMINI_LIVE_ALLOW_ZERO_THINKING_BUDGET` | `false` | Allows zero thinking budget only when explicitly enabled |
 | `GEMINI_LIVE_TEMPERATURE` | `0.45` | Live model temperature |
+| `GEMINI_LIVE_TOP_P` | `0.85` | Live nucleus sampling |
+| `GEMINI_LIVE_TOP_K` | `24` | Live top-k sampling |
 | `GEMINI_LIVE_MAX_OUTPUT_TOKENS` | `1000` | Max live output tokens |
 | `GEMINI_LIVE_USE_THINKING_CONFIG` | `true` | Enable thinking tokens |
-| `GEMINI_LIVE_THINKING_BUDGET` | `64` | Thinking token budget |
+| `GEMINI_LIVE_MIN_THINKING_BUDGET` | `128` | Minimum enforced thinking budget when zero is disallowed |
+| `GEMINI_LIVE_THINKING_BUDGET` | `128` (effective floor) | Requested thinking budget (enforced to at least min budget unless zero allowed) |
+| `GEMINI_LIVE_INCLUDE_THOUGHTS` | `false` | Include thought text in responses (usually keep disabled) |
+| `ENABLE_GEMINI_LIVE_GOOGLE_SEARCH_GROUNDING` | `true` | Enables live grounding attempt with fallback to non-grounded token when unsupported |
 
 ### Client live audio capture (`VITE_*` — build-time)
 
@@ -1112,12 +1204,38 @@ Precedence notes:
 | `VITE_GOOGLE_OAUTH_CONNECT_REDIRECT_URI` | — | Optional dev-only callback override sent to `/api/integrations/google/connect-url` (must end with `/api/integrations/google/callback`) |
 | `VITE_LIVE_AUDIO_PROCESSOR_BUFFER_SIZE` | `512` | Audio processor buffer |
 | `VITE_LIVE_AUDIO_NOISE_GATE_ENABLED` | `false` | Client-side noise gate |
+| `VITE_LIVE_AUDIO_NOISE_GATE_RMS_THRESHOLD` | `0.006` | Base RMS floor for noise gate |
+| `VITE_LIVE_AUDIO_NOISE_GATE_HANGOVER_FRAMES` | `3` | Gate hangover frames after speech |
+| `VITE_LIVE_AUDIO_NOISE_GATE_FAILOPEN_ENABLED` | `false` | Fail-open mode when too many drops occur |
+| `VITE_LIVE_AUDIO_NOISE_GATE_ASSISTANT_SPEECH_MULTIPLIER` | `1.45` | Raises noise gate threshold during assistant speech |
+| `VITE_LIVE_AUDIO_NOISE_GATE_FAILOPEN_AFTER_DROPS` | `120` | Consecutive drop count before fail-open |
+| `VITE_LIVE_AUDIO_NOISE_GATE_FAILOPEN_FRAMES` | `60` | Frames to stay fail-open |
 | `VITE_LIVE_AUDIO_SUPPRESS_INPUT_WHILE_ASSISTANT_SPEAKING` | `true` | Duplex suppression |
 | `VITE_LIVE_AUDIO_SUPPRESS_INPUT_COOLDOWN_MS` | `240` | Suppression cooldown |
+| `VITE_LIVE_AUDIO_SUPPRESS_USER_TRANSCRIPT_DURING_ASSISTANT_SPEECH` | `true` | Drop user transcript capture while assistant speaking (unless manual activity active) |
+| `VITE_LIVE_AUDIO_BARGE_IN_RMS_THRESHOLD` | `0.02` | RMS threshold for assistant interruption/barge-in |
+| `VITE_LIVE_AUDIO_BARGE_IN_CONSECUTIVE_FRAMES` | `5` | Consecutive frames required for barge-in |
+| `VITE_LIVE_AUDIO_BARGE_IN_AMBIENT_MULTIPLIER` | `2.2` | Ambient multiplier for barge-in threshold |
+| `VITE_LIVE_AUDIO_BARGE_IN_MAX_RMS_THRESHOLD` | `0.045` | Max cap for barge-in threshold |
+| `VITE_LIVE_AUDIO_ASSISTANT_IDLE_RELEASE_USER_SPEECH_RMS_THRESHOLD` | `0.007` | User speech RMS to release stalled assistant window |
+| `VITE_LIVE_AUDIO_ASSISTANT_IDLE_RELEASE_AMBIENT_MULTIPLIER` | `1.2` | Ambient multiplier for idle release speech test |
+| `VITE_LIVE_AUDIO_USER_SPEECH_RMS_THRESHOLD` | `0.008` | Base RMS threshold for user speech start |
+| `VITE_LIVE_AUDIO_USER_SPEECH_AMBIENT_MULTIPLIER` | `1.6` | Ambient multiplier while assistant is not speaking |
+| `VITE_LIVE_AUDIO_USER_SPEECH_ASSISTANT_AMBIENT_MULTIPLIER` | `2.2` | Ambient multiplier while assistant is speaking |
+| `VITE_LIVE_AUDIO_USER_SPEECH_ASSISTANT_MAX_RMS_THRESHOLD` | `0.04` | Max speech threshold during assistant speech |
+| `VITE_LIVE_AUDIO_USER_SPEECH_IDLE_MAX_RMS_THRESHOLD` | `0.024` | Max speech threshold while idle |
+| `VITE_LIVE_AUDIO_USER_SPEECH_CANDIDATE_HYSTERESIS_MULTIPLIER` | `0.66` | Lowers threshold after candidate starts |
+| `VITE_LIVE_AUDIO_USER_SPEECH_CANDIDATE_MIN_RMS_THRESHOLD` | `0.0055` | Floor for candidate threshold |
+| `VITE_LIVE_AUDIO_USER_SPEECH_CANDIDATE_CLEAR_SILENCE_MS` | `48` | Silence grace before candidate resets |
+| `VITE_LIVE_AUDIO_USER_SPEECH_AMBIENT_FLOOR_RISE_SMOOTHING` | `0.02` | Ambient floor smoothing when rising |
+| `VITE_LIVE_AUDIO_USER_SPEECH_AMBIENT_FLOOR_FALL_SMOOTHING` | `0.12` | Ambient floor smoothing when falling |
+| `VITE_LIVE_AUDIO_USER_SPEECH_AMBIENT_FLOOR_SPEECH_SPIKE_GUARD` | `1.35` | Prevents speech spikes from inflating ambient floor |
 | `VITE_LIVE_AUDIO_USER_SPEECH_START_CONSECUTIVE_FRAMES` | `3` | Frames required before user speech starts |
 | `VITE_LIVE_AUDIO_USER_SPEECH_ASSISTANT_CONSECUTIVE_FRAMES` | `5` | Frames required while assistant is speaking |
-| `VITE_LIVE_AUDIO_USER_SPEECH_END_SILENCE_FRAMES` | `8` | Silence frames before ending user speech |
+| `VITE_LIVE_AUDIO_USER_SPEECH_END_SILENCE_FRAMES` | `18` | Silence frames before ending user speech |
 | `VITE_LIVE_AUDIO_USER_SPEECH_COOLDOWN_MS` | `220` | Cooldown before returning to idle |
+| `VITE_LIVE_AUDIO_MANUAL_INTERRUPT_IDLE_TIMEOUT_MS` | `1400` | Timeout for manual interrupt watchdog |
+| `VITE_LIVE_AUDIO_TRANSCRIPT_EXPECTATION_TIMEOUT_MS` | `2200` | Time window for transcript arrival after speech window ends |
 
 ### Memory controls
 
@@ -1164,6 +1282,31 @@ See `.env.example` for the full list of quota variables covering default, power,
 
 ```bash
 npm run check
+```
+
+### Voice reliability regression matrix
+
+Run these after any live voice capture, transcript, token-config, or prompt-policy change:
+
+```bash
+# language hint normalization + transcript script handling
+npm run test:voice:language
+
+# token + optional trace-json contract smoke
+npm run test:voice:smoke -- --token-json /tmp/live-token-smoke.json
+
+# browser-level voice regression (synthetic mic + interrupt behavior)
+npm run test:voice:ui
+```
+
+One-command local workflow options:
+
+```bash
+# full preflight then run app (db push + typecheck + voice tests + dev server)
+npm run dev:all
+
+# quick local run (db push + dev server)
+npm run dev:quick
 ```
 
 ### Google personal context tests
@@ -1260,6 +1403,10 @@ START_SERVER=0 TEST_HOST=127.0.0.1 TEST_PORT=5599 npm run test:local:e2e
 - Run command: `node ./dist/index.cjs`
 - Internal app port: `5000`
 - Object storage: Configured via Replit Object Storage integration
+- Live voice ops references:
+  - [docs/LIVE_VOICE_REPLIT_CHECKLIST.md](docs/LIVE_VOICE_REPLIT_CHECKLIST.md)
+  - `bash script/live-voice-profile.sh stable`
+  - `skills/zeeme-live-voice-stability/scripts/live_trace_summary.sh`
 
 ### Voice personal-context rollout controls
 
@@ -1408,13 +1555,36 @@ Design note:
 
 ### Voice call quality issues
 
-- Check VAD sensitivity settings (`GEMINI_LIVE_VAD_*`)
-- Verify `GEMINI_LIVE_ACTIVITY_HANDLING` is set to `NO_INTERRUPTION` for stability
-- Inspect live trace diagnostics in server logs for interruption vs completion classification
-- Check client noise gate settings (`VITE_LIVE_AUDIO_NOISE_GATE_*`)
-- For startup failures, inspect client + server diagnostics:
-  - browser console: `[LiveTrace] live.mic.permission_failed` and `live.start.catch`
-  - server logs: `live.client.error` with `microphonePermissionState`, `secureContext`, `audioInputDeviceCount`
+Use this exact order so you do not tune blindly:
+
+1. Confirm token baseline from `POST /api/live/token` response `configSummary`:
+   - `automaticActivityDetectionDisabled=true`
+   - `sessionResumptionEnabled=true`
+   - `contextWindowCompressionEnabled=true`
+   - `effectiveInterruptMode=client_manual_activity`
+   - `nativeAudioLanguageMode=auto_detect`
+2. Open the app with `?liveDebug=1`, reproduce, export JSON.
+3. Run:
+
+```bash
+skills/zeeme-live-voice-stability/scripts/live_trace_summary.sh /path/to/live-debug.json
+```
+
+4. Classify by signature:
+
+| Signature | Likely issue | Corrective action |
+|---|---|---|
+| `speech candidate starts` very high, `speech user_speaking transitions` very low | Candidate churn (threshold pressure too high) | Tune candidate hysteresis / clear grace / ambient floor guard before touching server VAD |
+| `activityStart sent > 0` and `activity windows without transcription > 0` | Audio captured but no usable transcription for some windows | Check mic constraints, noise gate, and speech thresholds; verify browser mic permission and track settings |
+| Trace has only close events (example: `live.stop.completed`, `live.session.closed`, `live.session.closed_ignored_stale`) | Session closed before active media exchange | Check startup lifecycle and user action timing; verify socket open and no immediate teardown |
+| `socket send skipped (not open) > 0` | Send attempted after socket closed/closing | Fix lifecycle ordering before tuning thresholds |
+| `language mismatch observed` spikes while user stays in one language | Transcript drift | Verify language hint payload and low-signal transcript filtering; avoid forcing languageCode in native audio |
+
+5. For startup failures, inspect client + server diagnostics:
+   - Browser console: `[LiveTrace] live.mic.permission_failed`, `live.start.catch`
+   - Server logs: `live.client.error` with `microphonePermissionState`, `secureContext`, `audioInputDeviceCount`
+
+See full runbook: [docs/LIVE_VOICE_REPLIT_CHECKLIST.md](docs/LIVE_VOICE_REPLIT_CHECKLIST.md)
 
 ### Google personal context returns fallback or wrong error
 

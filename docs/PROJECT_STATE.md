@@ -1,6 +1,6 @@
 # Project State: ZeeMe
 
-Last Updated: 2026-02-16
+Last Updated: 2026-03-06
 
 ## How To Resume Any Session
 1. Run `npm run dev:context`.
@@ -13,6 +13,9 @@ Last Updated: 2026-02-16
 Ship a production-grade multimodal AI companion where voice and text share one memory thread, with reliable personalization, image/camera context, quota safety, and App Store-ready UX quality.
 
 ## Current Focus
+- Keep live voice speech detection stable at normal speaking volume across iPhone Safari, Android Chrome, and desktop browsers.
+- Maintain trace-first incident response so transcript/mic failures can be diagnosed from exported live-debug JSON in minutes.
+- Keep Replit deployment profiles and local defaults aligned so production behavior is reproducible locally.
 - Stabilize build-intent reliability so explicit requests consistently route through offer/intent-session/task flow.
 - Keep doc, presentation, and web-build artifact quality high with strict publish checks and deterministic QA repair loops.
 - Expand forensic debugging so every failed task can be traced by stage, reason, and tool output quickly.
@@ -20,6 +23,17 @@ Ship a production-grade multimodal AI companion where voice and text share one m
 - Keep Replit and local schema/runtime behavior strictly synchronized.
 
 ## What Was Just Completed
+- Live voice speech detector hardening shipped:
+  - candidate hysteresis + clear-grace tracking
+  - spike-resistant ambient-floor estimation
+  - separate idle vs assistant threshold caps
+  - richer debug state in voice panel
+- Live trace report tooling upgraded:
+  - `skills/zeeme-live-voice-stability/scripts/live_trace_summary.sh` now parses exported `live-debug-*.json` directly
+  - summary now reports candidate churn, transcript windows, and lifecycle signatures
+- Replit voice ops documentation expanded:
+  - updated README live architecture + troubleshooting sections
+  - expanded `docs/LIVE_VOICE_REPLIT_CHECKLIST.md` with deployment safety and incident signatures
 - Offer-gated agent routing is now first-class in chat (`ENABLE_AGENT_OFFERS_V2=true`):
   - explicit and proactive offers persist in `agent_offers`
   - accept/decline flows are supported in both stream and non-stream chat paths
@@ -45,7 +59,7 @@ Ship a production-grade multimodal AI companion where voice and text share one m
   - optional backfill script added for legacy rows
   - timezone-aware calendar context injection added for text + live prompts
 - Live voice reliability baseline remained in place:
-  - `NO_INTERRUPTION` default activity handling
+  - `START_OF_ACTIVITY_INTERRUPTS` activity handling with manual client activity signaling
   - conservative proactivity defaults
   - stronger turn/transcript diagnostics in `LiveTrace`
 
@@ -74,6 +88,7 @@ Ship a production-grade multimodal AI companion where voice and text share one m
   - legacy relabel/backfill tooling exists
 
 ## Known Gaps
+- Some runs can still terminate early with minimal close-only traces (session closes before meaningful media exchange); this needs a dedicated lifecycle/race audit.
 - Build-intent misroutes still occur in edge cases and need stronger deterministic test coverage.
 - Some task flows can still regress into plain chat verbosity instead of clean artifact-first delivery.
 - Presentation/document strict-publish and viewer constraints need tighter parity checks across all branches.
