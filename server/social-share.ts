@@ -19,6 +19,8 @@ type BlogShareEntry = {
   imagePath: string;
   imageAlt: string;
   imageType?: string;
+  imageWidth?: number;
+  imageHeight?: number;
 };
 
 const DEFAULT_TITLE = "Zeeme — Your AI Companion, Always Here for You";
@@ -64,8 +66,11 @@ const BLOG_POST_SHARE: Record<string, BlogShareEntry> = {
     description:
       "Meet Zee, the companion built for everyday life: voice + text continuity, warm conversation, and reliability that holds up in real environments.",
     imagePath: "/blog/og/meet-zee-og.jpg",
-    imageAlt: "Meet Zee product story cover.",
+    imageAlt:
+      "Diverse lifestyle scene showing voice and text continuity with Zee in a warm evening setting.",
     imageType: "image/jpeg",
+    imageWidth: 1200,
+    imageHeight: 630,
   },
   "zeeme-google-data-handling-security-paper-2026": {
     title: "Security Paper: Google Data Handling by Design",
@@ -245,8 +250,8 @@ export function resolveShareMetaForPath(
         ogType: "article",
         imageUrl: joinUrl(origin, blogMeta.imagePath),
         imageType: blogMeta.imageType ?? "image/png",
-        imageWidth: 1536,
-        imageHeight: 1024,
+        imageWidth: blogMeta.imageWidth ?? 1536,
+        imageHeight: blogMeta.imageHeight ?? 1024,
         imageAlt: blogMeta.imageAlt,
         twitterCard: "summary_large_image",
       };
