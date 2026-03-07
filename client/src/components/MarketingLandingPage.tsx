@@ -2,14 +2,12 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { motion, useInView, useScroll, useTransform } from "framer-motion";
 import {
   ArrowRight,
-  Brain,
-  Heart,
-  HeartHandshake,
+  CalendarDays,
+  Camera,
+  Mail,
   MessageSquareHeart,
-  Mic,
-  Shield,
+  Search,
   Share2,
-  Sparkles,
   Stars,
   X,
 } from "lucide-react";
@@ -100,6 +98,17 @@ interface BlogPost {
   readTime: string;
   tags: string[];
   blocks: BlogPostBlock[];
+}
+
+interface LandingUseCaseStory {
+  id: string;
+  label: string;
+  title: string;
+  description: string;
+  bullets: string[];
+  imageSrc: string;
+  imageAlt: string;
+  icon: React.ComponentType<{ className?: string }>;
 }
 
 const orbConfig = {
@@ -1799,6 +1808,208 @@ function FeatureCard({
   );
 }
 
+function UseCaseStoryCard({
+  story,
+  index,
+}: {
+  story: LandingUseCaseStory;
+  index: number;
+}) {
+  const cardRef = useRef<HTMLDivElement>(null);
+  const { scrollYProgress } = useScroll({
+    target: cardRef,
+    offset: ["start 90%", "center 45%"],
+  });
+  const y = useTransform(scrollYProgress, [0, 1], [40, 0]);
+  const opacity = useTransform(scrollYProgress, [0, 0.35, 1], [0, 0.55, 1]);
+  const scale = useTransform(scrollYProgress, [0, 1], [0.95, 1]);
+  const imageScale = useTransform(scrollYProgress, [0, 1], [1.07, 1]);
+  const imageY = useTransform(scrollYProgress, [0, 1], [18, 0]);
+
+  const Icon = story.icon;
+
+  return (
+    <motion.article
+      ref={cardRef}
+      className="relative rounded-none overflow-hidden border backdrop-blur-md"
+      style={{
+        y,
+        opacity,
+        scale,
+        borderColor: "rgba(255, 224, 190, 0.16)",
+        background:
+          "linear-gradient(165deg, rgba(255, 219, 183, 0.08), rgba(255, 188, 151, 0.05))",
+      }}
+      data-testid={`use-case-story-${story.id}`}
+    >
+      <div
+        className="absolute inset-x-10 top-0 h-px"
+        style={{
+          background:
+            "linear-gradient(90deg, transparent, rgba(255, 219, 183, 0.35), transparent)",
+        }}
+      />
+      <div className="relative overflow-hidden border-b" style={{ borderColor: "rgba(255, 224, 190, 0.14)" }}>
+        <motion.img
+          src={story.imageSrc}
+          alt={story.imageAlt}
+          style={{ scale: imageScale, y: imageY }}
+          className="w-full h-[220px] md:h-[260px] object-cover"
+          loading="lazy"
+        />
+        <div
+          className="absolute inset-0 pointer-events-none"
+          style={{
+            background:
+              "linear-gradient(180deg, rgba(24, 14, 14, 0.05) 0%, rgba(24, 14, 14, 0.44) 80%, rgba(24, 14, 14, 0.66) 100%)",
+          }}
+        />
+        <div className="absolute left-5 bottom-5 flex items-center gap-3">
+          <div
+            className="w-10 h-10 rounded-[0.8rem] flex items-center justify-center"
+            style={{
+              background: "rgba(255, 228, 199, 0.18)",
+              border: "1px solid rgba(255, 231, 203, 0.42)",
+              color: "#FFEBCF",
+            }}
+          >
+            <Icon className="w-5 h-5" />
+          </div>
+          <span
+            className="text-[10px] tracking-[0.28em] uppercase"
+            style={{ color: "rgba(255, 226, 198, 0.78)" }}
+          >
+            {story.label}
+          </span>
+        </div>
+      </div>
+
+      <div className="p-6 md:p-7">
+        <div className="flex items-start justify-between gap-4 mb-3">
+          <h3
+            className="text-[1.55rem] md:text-[1.8rem] leading-[1.1] font-semibold tracking-tight"
+            style={{ color: "#FFEED8", fontFamily: "'Fraunces', serif" }}
+          >
+            {story.title}
+          </h3>
+          <span
+            className="text-sm shrink-0 pt-1"
+            style={{ color: "rgba(255, 220, 187, 0.5)", fontFamily: "'Fraunces', serif" }}
+          >
+            0{index + 1}
+          </span>
+        </div>
+
+        <p className="text-[15px] leading-[1.8] mb-5" style={{ color: "rgba(255, 228, 202, 0.74)" }}>
+          {story.description}
+        </p>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+          {story.bullets.map((bullet) => (
+            <div
+              key={bullet}
+              className="rounded-none px-3.5 py-2.5 text-[13px] leading-[1.5]"
+              style={{
+                background: "rgba(255, 221, 188, 0.07)",
+                border: "1px solid rgba(255, 223, 186, 0.13)",
+                color: "rgba(255, 230, 206, 0.75)",
+              }}
+            >
+              {bullet}
+            </div>
+          ))}
+        </div>
+      </div>
+    </motion.article>
+  );
+}
+
+function UseCaseScrollySection({ stories }: { stories: LandingUseCaseStory[] }) {
+  const timelineRef = useRef<HTMLDivElement>(null);
+  const { scrollYProgress } = useScroll({
+    target: timelineRef,
+    offset: ["start 80%", "end 25%"],
+  });
+  const railScale = useTransform(scrollYProgress, [0, 1], [0, 1]);
+  const glowOpacity = useTransform(scrollYProgress, [0, 0.4, 1], [0.2, 0.6, 0.95]);
+
+  return (
+    <section className="px-6 py-28 relative overflow-hidden">
+      <div
+        className="absolute inset-0 pointer-events-none"
+        style={{
+          background:
+            "radial-gradient(ellipse at 20% 30%, rgba(161, 95, 63, 0.22), transparent 58%), radial-gradient(ellipse at 82% 52%, rgba(108, 66, 56, 0.2), transparent 62%)",
+        }}
+      />
+      <div className="max-w-6xl mx-auto relative">
+        <div className="grid grid-cols-1 lg:grid-cols-[0.9fr_1.1fr] gap-10 lg:gap-14">
+          <div className="lg:sticky lg:top-28 self-start">
+            <RevealSection>
+              <div className="flex items-center gap-3 mb-6">
+                <div className="w-12 h-px" style={{ background: "rgba(255, 217, 183, 0.28)" }} />
+                <span className="text-[11px] tracking-[0.35em] uppercase" style={{ color: "rgba(255, 214, 172, 0.45)" }}>
+                  III
+                </span>
+              </div>
+              <h2
+                className="text-3xl md:text-[3.1rem] leading-[1.05] font-semibold tracking-tight mb-4"
+                style={{ color: "#FFEFD8", fontFamily: "'Fraunces', serif" }}
+              >
+                Your bestie<br />
+                with benefits
+              </h2>
+              <p
+                className="text-[16px] leading-[1.9] max-w-md mb-6"
+                style={{ color: "rgba(255, 226, 198, 0.7)" }}
+              >
+                Zee now blends emotional presence with practical power: inbox and calendar context, grounded web help, and camera-aware guidance while keeping one private continuity thread.
+              </p>
+              <div className="flex flex-wrap gap-2.5 mb-6">
+                {["Gmail + Calendar", "Grounded Web Search", "Camera Assist", "Voice + Text Continuity"].map((chip) => (
+                  <span
+                    key={chip}
+                    className="px-3 py-1.5 text-[11px] tracking-[0.2em] uppercase"
+                    style={{
+                      color: "rgba(255, 226, 198, 0.65)",
+                      border: "1px solid rgba(255, 223, 186, 0.18)",
+                      background: "rgba(255, 221, 188, 0.06)",
+                    }}
+                  >
+                    {chip}
+                  </span>
+                ))}
+              </div>
+              <p
+                className="text-sm italic"
+                style={{ color: "rgba(255, 219, 189, 0.5)", fontFamily: "'Fraunces', serif" }}
+              >
+                Privacy-first by design. Useful like an executive assistant. Warm like your favorite person.
+              </p>
+            </RevealSection>
+          </div>
+
+          <div ref={timelineRef} className="relative pl-7 md:pl-9 space-y-8 md:space-y-10">
+            <div className="absolute left-0 top-2 bottom-2 w-px" style={{ background: "rgba(255, 214, 172, 0.1)" }} />
+            <motion.div
+              className="absolute left-0 top-2 bottom-2 w-px origin-top"
+              style={{
+                scaleY: railScale,
+                opacity: glowOpacity,
+                background:
+                  "linear-gradient(180deg, rgba(255, 214, 172, 0.65), rgba(255, 200, 151, 0.45), rgba(255, 214, 172, 0.08))",
+              }}
+            />
+            {stories.map((story, index) => (
+              <UseCaseStoryCard key={story.id} story={story} index={index} />
+            ))}
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function FloatingParticle({ delay, x, y, size }: { delay: number; x: string; y: string; size: number }) {
   return (
     <motion.div
@@ -3397,22 +3608,96 @@ export default function MarketingLandingPage({ onGetStarted, onSignIn }: Marketi
   const companionMoments = useMemo(
     () => [
       {
-        title: "When life feels heavy",
-        label: "Late-night check-in",
-        body: "You can unload, vent, or just sit in silence. Zee responds with empathy and steadiness, not generic scripts.",
-        icon: Heart,
+        title: "Morning plan in 30 seconds",
+        label: "Inbox + calendar pulse",
+        body: "Zee can summarize priority emails, surface upcoming meetings, and prep your day before your first coffee.",
+        icon: CalendarDays,
       },
       {
-        title: "When something good happens",
-        label: "Celebrate the small wins",
-        body: "Big milestones and tiny wins are remembered and celebrated, so joy compounds over time.",
-        icon: Sparkles,
+        title: "Between meetings, still moving",
+        label: "Grounded quick decisions",
+        body: "Ask for a fast answer with web grounding and context from your ongoing thread instead of jumping across tabs.",
+        icon: Search,
       },
       {
-        title: "When trust matters most",
-        label: "A private companion space",
-        body: "Privacy is core. Your conversations are yours, and the experience is built to protect that bond.",
-        icon: Shield,
+        title: "Out the door confidence check",
+        label: "Camera-aware assist",
+        body: "Need style feedback or visual help? Zee can see your context through camera and guide you quickly and naturally.",
+        icon: Camera,
+      },
+    ],
+    [],
+  );
+
+  const useCaseStories = useMemo<LandingUseCaseStory[]>(
+    () => [
+      {
+        id: "calendar-email",
+        label: "Executive Assist",
+        title: "Calendar and inbox, in your flow",
+        description:
+          "Zee keeps up with your schedule and inbox context so you can stay present while moving through your day.",
+        bullets: [
+          "Read-only Gmail + Calendar scopes",
+          "Fast recap before meetings",
+          "Private by default boundaries",
+          "No context reset when switching modes",
+        ],
+        imageSrc: "/landing/assistant-calendar-email.jpg",
+        imageAlt:
+          "Professional using Zee for schedule and email context in a warm evening cafe setting.",
+        icon: Mail,
+      },
+      {
+        id: "grounded-search",
+        label: "Grounded Answers",
+        title: "Web-aware help without tab chaos",
+        description:
+          "When you need real-world info, Zee can pull grounded web context and respond in the same trusted conversation thread.",
+        bullets: [
+          "Grounded lookup for current questions",
+          "Faster decisions in one place",
+          "Keeps emotional + practical continuity",
+          "Works in voice and text",
+        ],
+        imageSrc: "/landing/grounded-web-search.jpg",
+        imageAlt:
+          "User working with phone and laptop while Zee grounds answers with web context.",
+        icon: Search,
+      },
+      {
+        id: "camera-style",
+        label: "Camera Assist",
+        title: "Visual guidance in real moments",
+        description:
+          "From outfit checks to situational help, Zee can use camera context to support you with practical, friendly suggestions.",
+        bullets: [
+          "Camera-aware companion guidance",
+          "Great for fashion and everyday choices",
+          "Helpful without feeling robotic",
+          "Designed for real environments",
+        ],
+        imageSrc: "/landing/camera-fashion-guide.jpg",
+        imageAlt:
+          "Person using Zee camera mode for outfit guidance in a warm home setting.",
+        icon: Camera,
+      },
+      {
+        id: "continuity-switch",
+        label: "Voice + Text",
+        title: "Switch modes, keep the same bestie",
+        description:
+          "Talk when you can, text when you need to. Zee preserves context so the relationship feels continuous and alive.",
+        bullets: [
+          "Seamless voice-to-text handoff",
+          "Continuity across noisy environments",
+          "Memory that tracks what matters",
+          "Reliable day-to-night companion flow",
+        ],
+        imageSrc: "/landing/seamless-voice-text-continuity.jpg",
+        imageAlt:
+          "Scrollytelling visual of a person shifting from voice outdoors to text indoors with continuity.",
+        icon: MessageSquareHeart,
       },
     ],
     [],
@@ -3534,8 +3819,8 @@ export default function MarketingLandingPage({ onGetStarted, onSignIn }: Marketi
                 style={{ color: "#FFEFD8", fontFamily: "'Fraunces', serif" }}
                 data-testid="text-hero-title"
               >
-                Zee and Me<br />
-                A softer kind of AI companionship
+                Zee, your bestie<br />
+                with real-life superpowers
               </h1>
               <motion.div
                 initial={{ scaleX: 0 }}
@@ -3548,10 +3833,10 @@ export default function MarketingLandingPage({ onGetStarted, onSignIn }: Marketi
                 <div className="w-12 h-px" style={{ background: "linear-gradient(90deg, rgba(255, 214, 172, 0.35), transparent)" }} />
               </motion.div>
               <p className="text-lg md:text-xl leading-relaxed mb-2 italic" style={{ color: "rgba(255, 228, 202, 0.82)", fontFamily: "'Fraunces', serif" }} data-testid="text-hero-subtitle">
-                Thoughtful chat, expressive live voice, and memory that remembers what matters to you.
+                Voice and text continuity, plus Gmail, Calendar, grounded web search, and camera-aware support in one companion.
               </p>
               <p className="text-[15px]" style={{ color: "rgba(255, 228, 202, 0.55)" }}>
-                Warm, welcoming, and designed to feel like friendship.
+                Private by design, helpful like an executive assistant, warm like your favorite person.
               </p>
             </motion.div>
 
@@ -3610,7 +3895,7 @@ export default function MarketingLandingPage({ onGetStarted, onSignIn }: Marketi
                   </svg>
                 </div>
                 <h2 className="text-3xl md:text-[3.2rem] font-semibold mb-4 tracking-tight leading-[1.08]" style={{ color: "#FFEFD8", fontFamily: "'Fraunces', serif" }}>
-                  Beautifully calm, deeply personal
+                  Warm companion, practical power
                 </h2>
                 <div className="flex items-center justify-center gap-2 mb-5">
                   <div className="w-10 h-px" style={{ background: "linear-gradient(90deg, transparent, rgba(255, 214, 172, 0.3))" }} />
@@ -3618,38 +3903,40 @@ export default function MarketingLandingPage({ onGetStarted, onSignIn }: Marketi
                   <div className="w-10 h-px" style={{ background: "linear-gradient(90deg, rgba(255, 214, 172, 0.3), transparent)" }} />
                 </div>
                 <p className="text-base md:text-[17px] max-w-lg mx-auto italic leading-[1.8]" style={{ color: "rgba(255, 226, 198, 0.6)", fontFamily: "'Fraunces', serif" }}>
-                  Delight and trust, balanced with careful pacing and companion-first design.
+                  Zee combines emotional presence with everyday execution across schedule, email, search, and camera assistance.
                 </p>
               </RevealSection>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <FeatureCard
-                  icon={MessageSquareHeart}
-                  title="Conversations with emotional texture"
-                  description="Not just answers. Zee responds with rhythm, empathy, and tone that matches what you need in the moment."
+                  icon={Mail}
+                  title="Inbox + calendar in conversation"
+                  description="Ask for unread priorities or upcoming events without leaving chat. Zee stays context-aware while keeping your thread intact."
                   index={0}
                 />
                 <FeatureCard
-                  icon={Mic}
-                  title="Live voice that feels present"
-                  description="Natural interruptions, smooth pacing, and expressive responses make voice chats feel human and grounded."
+                  icon={Search}
+                  title="Grounded web help when needed"
+                  description="Zee can pull web context for current questions, then answer in the same voice or text flow without breaking continuity."
                   index={1}
                 />
                 <FeatureCard
-                  icon={Brain}
-                  title="Memory with continuity"
-                  description="Stories, goals, and details persist so each conversation feels connected rather than starting over."
+                  icon={Camera}
+                  title="Camera-aware everyday guidance"
+                  description="From fashion checks to visual context support, Zee can see what you see and offer practical, friendly assistance."
                   index={2}
                 />
                 <FeatureCard
-                  icon={HeartHandshake}
-                  title="Friendship-first experience"
-                  description="Every surface is designed for warmth and trust, from first interaction to long-term companionship."
+                  icon={MessageSquareHeart}
+                  title="One bestie across voice + text"
+                  description="Switch modes instantly in noisy real life. Your memory and momentum continue like one relationship, not separate sessions."
                   index={3}
                 />
               </div>
             </div>
           </section>
+
+          <UseCaseScrollySection stories={useCaseStories} />
 
           <section className="px-6 py-28 relative overflow-hidden">
             <motion.div className="absolute inset-0" style={{ y: storiesY, background: "radial-gradient(ellipse at 50% 45%, rgba(149, 88, 64, 0.22) 0%, transparent 70%)" }} />
@@ -3667,7 +3954,7 @@ export default function MarketingLandingPage({ onGetStarted, onSignIn }: Marketi
                   </svg>
                 </div>
                 <h2 className="text-3xl md:text-[3.2rem] font-semibold mb-4 tracking-tight leading-[1.08]" style={{ color: "#FFEFD8", fontFamily: "'Fraunces', serif" }}>
-                  Moments that feel like being understood
+                  Designed for the pace of real life
                 </h2>
                 <div className="flex items-center justify-center gap-2 mb-5">
                   <div className="w-10 h-px" style={{ background: "linear-gradient(90deg, transparent, rgba(255, 214, 172, 0.3))" }} />
@@ -3675,7 +3962,7 @@ export default function MarketingLandingPage({ onGetStarted, onSignIn }: Marketi
                   <div className="w-10 h-px" style={{ background: "linear-gradient(90deg, rgba(255, 214, 172, 0.3), transparent)" }} />
                 </div>
                 <p className="text-base md:text-[17px] max-w-lg mx-auto italic leading-[1.8]" style={{ color: "rgba(255, 226, 198, 0.6)", fontFamily: "'Fraunces', serif" }}>
-                  From daily check-ins to midnight thoughts, consistent warmth and continuity.
+                  From first meeting prep to late-night reflection, Zee keeps your context and emotional tone connected.
                 </p>
               </RevealSection>
 
