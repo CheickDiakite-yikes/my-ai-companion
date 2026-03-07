@@ -56,6 +56,7 @@ export interface LiveVoiceDebugState {
   candidateThreshold: number;
   speechCandidateFrames: number;
   speechCandidatePeakRms: number;
+  speechCandidateAverageRms: number;
   speechCandidateMs: number;
   speechCandidateSilenceMs: number;
   speechCandidateClearTargetMs: number;
@@ -491,19 +492,39 @@ const MOBILE_USER_SPEECH_MIN_END_SILENCE_MS = parseClientPositiveInt(
 );
 const MOBILE_ASSISTANT_BARGE_IN_MIN_DURATION_MS = parseClientPositiveInt(
   liveClientEnv.VITE_LIVE_AUDIO_MOBILE_ASSISTANT_BARGE_IN_MIN_DURATION_MS,
-  220,
+  320,
 );
 const MOBILE_ASSISTANT_BARGE_IN_MIN_PEAK_RMS = parseClientBoundedNumber(
   liveClientEnv.VITE_LIVE_AUDIO_MOBILE_ASSISTANT_BARGE_IN_MIN_PEAK_RMS,
-  0.028,
+  0.034,
   0.01,
   0.1,
 );
 const MOBILE_ASSISTANT_BARGE_IN_PEAK_THRESHOLD_MULTIPLIER = parseClientBoundedNumber(
   liveClientEnv.VITE_LIVE_AUDIO_MOBILE_ASSISTANT_BARGE_IN_PEAK_THRESHOLD_MULTIPLIER,
-  1.4,
+  1.65,
   1,
   3,
+);
+const MOBILE_ASSISTANT_BARGE_IN_MIN_AVG_RMS = parseClientBoundedNumber(
+  liveClientEnv.VITE_LIVE_AUDIO_MOBILE_ASSISTANT_BARGE_IN_MIN_AVG_RMS,
+  0.023,
+  0.008,
+  0.08,
+);
+const MOBILE_ASSISTANT_BARGE_IN_AVG_THRESHOLD_MULTIPLIER = parseClientBoundedNumber(
+  liveClientEnv.VITE_LIVE_AUDIO_MOBILE_ASSISTANT_BARGE_IN_AVG_THRESHOLD_MULTIPLIER,
+  1.15,
+  1,
+  3,
+);
+const MOBILE_ASSISTANT_BARGE_IN_REQUIRE_THRESHOLD_FRAME = parseClientBoolean(
+  liveClientEnv.VITE_LIVE_AUDIO_MOBILE_ASSISTANT_BARGE_IN_REQUIRE_THRESHOLD_FRAME,
+  true,
+);
+const MOBILE_ASSISTANT_BARGE_IN_DISABLE_HYSTERESIS = parseClientBoolean(
+  liveClientEnv.VITE_LIVE_AUDIO_MOBILE_ASSISTANT_BARGE_IN_DISABLE_HYSTERESIS,
+  true,
 );
 const MOBILE_ASSISTANT_CANDIDATE_CLEAR_TARGET_MS = parseClientPositiveInt(
   liveClientEnv.VITE_LIVE_AUDIO_MOBILE_ASSISTANT_CANDIDATE_CLEAR_TARGET_MS,
@@ -1133,6 +1154,7 @@ export class GeminiLiveVoiceSession {
   private speechCandidateSilenceMs = 0;
   private speechSilenceMs = 0;
   private speechCandidatePeakRms = 0;
+  private speechCandidateSumRms = 0;
   private compatibilityProfile: LiveAudioCompatibilityProfile =
     resolveSharedLiveAudioCompatibilityProfile();
   private speechDetectionProfile: LiveSpeechDetectionProfile = {
@@ -1287,6 +1309,7 @@ export class GeminiLiveVoiceSession {
     this.speechCandidateSilenceMs = 0;
     this.speechSilenceMs = 0;
     this.speechCandidatePeakRms = 0;
+    this.speechCandidateSumRms = 0;
     this.candidateClearBurstCount = 0;
     this.candidateClearBurstWindowStartAtMs = 0;
     this.candidateClearBurstLastAtMs = 0;
@@ -1487,6 +1510,7 @@ export class GeminiLiveVoiceSession {
           this.speechCandidateSilenceMs = 0;
           this.speechSilenceMs = 0;
           this.speechCandidatePeakRms = 0;
+          this.speechCandidateSumRms = 0;
           this.candidateClearBurstCount = 0;
           this.candidateClearBurstWindowStartAtMs = 0;
           this.candidateClearBurstLastAtMs = 0;
@@ -1516,6 +1540,7 @@ export class GeminiLiveVoiceSession {
           this.speechCandidateSilenceMs = 0;
           this.speechSilenceMs = 0;
           this.speechCandidatePeakRms = 0;
+          this.speechCandidateSumRms = 0;
           this.candidateClearBurstCount = 0;
           this.candidateClearBurstWindowStartAtMs = 0;
           this.candidateClearBurstLastAtMs = 0;
@@ -1628,6 +1653,13 @@ export class GeminiLiveVoiceSession {
       mobileAssistantBargeInMinPeakRms: MOBILE_ASSISTANT_BARGE_IN_MIN_PEAK_RMS,
       mobileAssistantBargeInPeakThresholdMultiplier:
         MOBILE_ASSISTANT_BARGE_IN_PEAK_THRESHOLD_MULTIPLIER,
+      mobileAssistantBargeInMinAvgRms: MOBILE_ASSISTANT_BARGE_IN_MIN_AVG_RMS,
+      mobileAssistantBargeInAvgThresholdMultiplier:
+        MOBILE_ASSISTANT_BARGE_IN_AVG_THRESHOLD_MULTIPLIER,
+      mobileAssistantBargeInRequireThresholdFrame:
+        MOBILE_ASSISTANT_BARGE_IN_REQUIRE_THRESHOLD_FRAME,
+      mobileAssistantBargeInDisableHysteresis:
+        MOBILE_ASSISTANT_BARGE_IN_DISABLE_HYSTERESIS,
       mobileAssistantCandidateClearTargetMs:
         MOBILE_ASSISTANT_CANDIDATE_CLEAR_TARGET_MS,
     });
@@ -1693,6 +1725,7 @@ export class GeminiLiveVoiceSession {
     this.speechCandidateSilenceMs = 0;
     this.speechSilenceMs = 0;
     this.speechCandidatePeakRms = 0;
+    this.speechCandidateSumRms = 0;
     this.candidateClearBurstCount = 0;
     this.candidateClearBurstWindowStartAtMs = 0;
     this.candidateClearBurstLastAtMs = 0;
@@ -1963,6 +1996,10 @@ export class GeminiLiveVoiceSession {
       candidateThreshold: this.candidateSpeechThreshold,
       speechCandidateFrames: this.speechCandidateFrames,
       speechCandidatePeakRms: this.speechCandidatePeakRms,
+      speechCandidateAverageRms:
+        this.speechCandidateFrames > 0
+          ? this.speechCandidateSumRms / this.speechCandidateFrames
+          : 0,
       speechCandidateMs: this.speechCandidateMs,
       speechCandidateSilenceMs: this.speechCandidateSilenceMs,
       speechCandidateClearTargetMs: this.speechCandidateClearTargetMs,
@@ -2534,6 +2571,7 @@ export class GeminiLiveVoiceSession {
     this.speechCandidateSilenceMs = 0;
     this.speechSilenceMs = 0;
     this.speechCandidatePeakRms = 0;
+    this.speechCandidateSumRms = 0;
     this.candidateClearBurstCount = 0;
     this.candidateClearBurstWindowStartAtMs = 0;
     this.candidateClearBurstLastAtMs = 0;
@@ -2605,6 +2643,7 @@ export class GeminiLiveVoiceSession {
     this.speechCandidateSilenceMs = 0;
     this.speechSilenceMs = 0;
     this.speechCandidatePeakRms = 0;
+    this.speechCandidateSumRms = 0;
     this.candidateClearBurstCount = 0;
     this.candidateClearBurstWindowStartAtMs = 0;
     this.candidateClearBurstLastAtMs = 0;
@@ -2681,18 +2720,25 @@ export class GeminiLiveVoiceSession {
     const assistantWindowActive = this.isAssistantSpeechWindowActive();
     const { threshold, minSpeechDurationMs } =
       this.computeSpeechThreshold(assistantWindowActive);
+    const isMobileAssistantWindow =
+      assistantWindowActive &&
+      this.speechDetectionProfile.mode === "mobile_relaxed";
     const candidateClearTargetMs =
-      assistantWindowActive && this.speechDetectionProfile.mode === "mobile_relaxed"
+      isMobileAssistantWindow
         ? Math.min(
             this.speechCandidateClearTargetMs,
             MOBILE_ASSISTANT_CANDIDATE_CLEAR_TARGET_MS,
           )
         : this.speechCandidateClearTargetMs;
+    const hysteresisMultiplier =
+      isMobileAssistantWindow && MOBILE_ASSISTANT_BARGE_IN_DISABLE_HYSTERESIS
+        ? 1
+        : USER_SPEECH_CANDIDATE_HYSTERESIS_MULTIPLIER;
     const candidateThreshold =
       this.speechState === "candidate_user_speech"
         ? Math.max(
             USER_SPEECH_CANDIDATE_MIN_RMS_THRESHOLD,
-            threshold * USER_SPEECH_CANDIDATE_HYSTERESIS_MULTIPLIER,
+            threshold * hysteresisMultiplier,
           )
         : threshold;
     this.activeSpeechThreshold = threshold;
@@ -2749,6 +2795,7 @@ export class GeminiLiveVoiceSession {
       this.speechCandidateFrames += 1;
       this.speechCandidateMs += effectiveFrameDurationMs;
       this.speechCandidatePeakRms = Math.max(this.speechCandidatePeakRms, rms);
+      this.speechCandidateSumRms += rms;
       if (this.speechState !== "candidate_user_speech") {
         this.setSpeechState("candidate_user_speech", {
           threshold,
@@ -2757,37 +2804,62 @@ export class GeminiLiveVoiceSession {
         });
       }
       if (this.speechCandidateMs >= minSpeechDurationMs) {
-        if (
-          assistantWindowActive &&
-          this.speechDetectionProfile.mode === "mobile_relaxed"
-        ) {
+        if (isMobileAssistantWindow) {
           const minPeakRms = Math.max(
             MOBILE_ASSISTANT_BARGE_IN_MIN_PEAK_RMS,
             threshold * MOBILE_ASSISTANT_BARGE_IN_PEAK_THRESHOLD_MULTIPLIER,
+          );
+          const minAvgRms = Math.max(
+            MOBILE_ASSISTANT_BARGE_IN_MIN_AVG_RMS,
+            threshold * MOBILE_ASSISTANT_BARGE_IN_AVG_THRESHOLD_MULTIPLIER,
           );
           const minBargeInDurationMs = Math.max(
             minSpeechDurationMs,
             MOBILE_ASSISTANT_BARGE_IN_MIN_DURATION_MS,
           );
+          const candidateAverageRms =
+            this.speechCandidateFrames > 0
+              ? this.speechCandidateSumRms / this.speechCandidateFrames
+              : 0;
+          const meetsDuration = this.speechCandidateMs >= minBargeInDurationMs;
+          const meetsPeak = this.speechCandidatePeakRms >= minPeakRms;
+          const meetsAverage = candidateAverageRms >= minAvgRms;
+          const meetsCurrentThreshold =
+            !MOBILE_ASSISTANT_BARGE_IN_REQUIRE_THRESHOLD_FRAME ||
+            rms >= threshold;
           if (
-            this.speechCandidateMs < minBargeInDurationMs ||
-            this.speechCandidatePeakRms < minPeakRms
+            !meetsDuration ||
+            !meetsPeak ||
+            !meetsAverage ||
+            !meetsCurrentThreshold
           ) {
             const now = Date.now();
             if (now - this.lastMobileBargeInRejectedAtMs >= 250) {
               this.lastMobileBargeInRejectedAtMs = now;
+              const rejectReasons: string[] = [];
+              if (!meetsDuration) {
+                rejectReasons.push("candidate_duration_below_mobile_barge_in_min");
+              }
+              if (!meetsPeak) {
+                rejectReasons.push("candidate_peak_below_mobile_barge_in_min");
+              }
+              if (!meetsAverage) {
+                rejectReasons.push("candidate_average_below_mobile_barge_in_min");
+              }
+              if (!meetsCurrentThreshold) {
+                rejectReasons.push("current_frame_below_active_threshold");
+              }
               this.debug("live.audio.mobile_barge_in_rejected", {
                 candidateMs: this.speechCandidateMs,
                 candidatePeakRms: this.speechCandidatePeakRms,
+                candidateAverageRms,
                 threshold,
                 candidateThreshold,
                 minBargeInDurationMs,
                 minPeakRms,
+                minAvgRms,
                 currentRms: rms,
-                reason:
-                  this.speechCandidateMs < minBargeInDurationMs
-                    ? "candidate_duration_below_mobile_barge_in_min"
-                    : "candidate_peak_below_mobile_barge_in_min",
+                rejectReasons,
               });
             }
             this.emitDebugState();
@@ -2823,10 +2895,15 @@ export class GeminiLiveVoiceSession {
     const candidateFrames = this.speechCandidateFrames;
     const candidateSilenceMs = this.speechCandidateSilenceMs;
     const candidatePeakRms = this.speechCandidatePeakRms;
+    const candidateAverageRms =
+      this.speechCandidateFrames > 0
+        ? this.speechCandidateSumRms / this.speechCandidateFrames
+        : 0;
     this.speechCandidateFrames = 0;
     this.speechCandidateMs = 0;
     this.speechCandidateSilenceMs = 0;
     this.speechCandidatePeakRms = 0;
+    this.speechCandidateSumRms = 0;
     if (wasCandidate) {
       const now = Date.now();
       if (now - this.candidateClearBurstLastAtMs > 3500) {
@@ -2844,6 +2921,7 @@ export class GeminiLiveVoiceSession {
         candidateSilenceMs,
         candidateClearTargetMs,
         candidatePeakRms,
+        candidateAverageRms,
         currentRms: rms,
         threshold,
         candidateThreshold,
