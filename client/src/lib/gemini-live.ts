@@ -47,6 +47,12 @@ export interface LiveVoiceDebugState {
   currentRms: number;
   ambientRms: number;
   activeThreshold: number;
+  candidateThreshold: number;
+  speechCandidateMs: number;
+  speechCandidateSilenceMs: number;
+  speechSilenceMs: number;
+  activeUserSpeechWindowId: number | null;
+  pendingTranscriptWindows: number;
   manualActivityActive: boolean;
   assistantTurnActive: boolean;
   interruptPending: boolean;
@@ -240,7 +246,7 @@ const SUPPRESS_INPUT_WHILE_ASSISTANT_SPEAKING = parseClientBoolean(
 );
 const SUPPRESS_INPUT_COOLDOWN_MS = parseClientPositiveInt(
   liveClientEnv.VITE_LIVE_AUDIO_SUPPRESS_INPUT_COOLDOWN_MS,
-  480,
+  260,
 );
 const ASSISTANT_TURN_RELEASE_GRACE_MS = parseClientPositiveInt(
   liveClientEnv.VITE_LIVE_ASSISTANT_TURN_RELEASE_GRACE_MS,
@@ -260,23 +266,23 @@ const ENABLE_ASSISTANT_BARGE_IN = parseClientBoolean(
 );
 const ASSISTANT_BARGE_IN_RMS_THRESHOLD = parseClientBoundedNumber(
   liveClientEnv.VITE_LIVE_AUDIO_BARGE_IN_RMS_THRESHOLD,
-  0.028,
+  0.02,
   0.008,
   0.08,
 );
 const ASSISTANT_BARGE_IN_CONSECUTIVE_FRAMES = parseClientPositiveInt(
   liveClientEnv.VITE_LIVE_AUDIO_BARGE_IN_CONSECUTIVE_FRAMES,
-  7,
+  5,
 );
 const ASSISTANT_BARGE_IN_AMBIENT_MULTIPLIER = parseClientBoundedNumber(
   liveClientEnv.VITE_LIVE_AUDIO_BARGE_IN_AMBIENT_MULTIPLIER,
-  3.5,
+  2.2,
   1.2,
   8,
 );
 const ASSISTANT_BARGE_IN_MAX_RMS_THRESHOLD = parseClientBoundedNumber(
   liveClientEnv.VITE_LIVE_AUDIO_BARGE_IN_MAX_RMS_THRESHOLD,
-  0.06,
+  0.045,
   0.012,
   0.12,
 );
@@ -286,13 +292,13 @@ const ASSISTANT_BARGE_IN_MIN_GAP_MS = parseClientPositiveInt(
 );
 const ASSISTANT_IDLE_RELEASE_USER_SPEECH_RMS_THRESHOLD = parseClientBoundedNumber(
   liveClientEnv.VITE_LIVE_AUDIO_ASSISTANT_IDLE_RELEASE_USER_SPEECH_RMS_THRESHOLD,
-  0.009,
+  0.007,
   0.004,
   0.05,
 );
 const ASSISTANT_IDLE_RELEASE_AMBIENT_MULTIPLIER = parseClientBoundedNumber(
   liveClientEnv.VITE_LIVE_AUDIO_ASSISTANT_IDLE_RELEASE_AMBIENT_MULTIPLIER,
-  1.35,
+  1.2,
   1,
   4,
 );
@@ -302,7 +308,7 @@ const SUPPRESS_USER_TRANSCRIPT_DURING_ASSISTANT_SPEECH = parseClientBoolean(
 );
 const USER_SPEECH_START_RMS_THRESHOLD = parseClientBoundedNumber(
   liveClientEnv.VITE_LIVE_AUDIO_USER_SPEECH_RMS_THRESHOLD,
-  0.01,
+  0.008,
   0.003,
   0.08,
 );
@@ -314,20 +320,26 @@ const USER_SPEECH_ASSISTANT_RMS_THRESHOLD = parseClientBoundedNumber(
 );
 const USER_SPEECH_AMBIENT_MULTIPLIER = parseClientBoundedNumber(
   liveClientEnv.VITE_LIVE_AUDIO_USER_SPEECH_AMBIENT_MULTIPLIER,
-  2.1,
+  1.6,
   1,
   6,
 );
 const USER_SPEECH_ASSISTANT_AMBIENT_MULTIPLIER = parseClientBoundedNumber(
   liveClientEnv.VITE_LIVE_AUDIO_USER_SPEECH_ASSISTANT_AMBIENT_MULTIPLIER,
-  Math.max(2.5, ASSISTANT_BARGE_IN_AMBIENT_MULTIPLIER),
+  Math.max(1.8, ASSISTANT_BARGE_IN_AMBIENT_MULTIPLIER),
   1,
   8,
 );
-const USER_SPEECH_MAX_RMS_THRESHOLD = parseClientBoundedNumber(
-  liveClientEnv.VITE_LIVE_AUDIO_USER_SPEECH_MAX_RMS_THRESHOLD,
-  ASSISTANT_BARGE_IN_MAX_RMS_THRESHOLD,
+const USER_SPEECH_ASSISTANT_MAX_RMS_THRESHOLD = parseClientBoundedNumber(
+  liveClientEnv.VITE_LIVE_AUDIO_USER_SPEECH_ASSISTANT_MAX_RMS_THRESHOLD,
+  Math.min(ASSISTANT_BARGE_IN_MAX_RMS_THRESHOLD, 0.04),
   0.01,
+  0.09,
+);
+const USER_SPEECH_IDLE_MAX_RMS_THRESHOLD = parseClientBoundedNumber(
+  liveClientEnv.VITE_LIVE_AUDIO_USER_SPEECH_IDLE_MAX_RMS_THRESHOLD,
+  Math.min(USER_SPEECH_ASSISTANT_MAX_RMS_THRESHOLD, 0.024),
+  0.006,
   0.09,
 );
 const USER_SPEECH_START_CONSECUTIVE_FRAMES = parseClientPositiveInt(
@@ -340,7 +352,7 @@ const USER_SPEECH_ASSISTANT_CONSECUTIVE_FRAMES = parseClientPositiveInt(
 );
 const USER_SPEECH_END_SILENCE_FRAMES = parseClientPositiveInt(
   liveClientEnv.VITE_LIVE_AUDIO_USER_SPEECH_END_SILENCE_FRAMES,
-  8,
+  18,
 );
 const USER_SPEECH_PREFIX_FRAMES = parseClientPositiveInt(
   liveClientEnv.VITE_LIVE_AUDIO_USER_SPEECH_PREFIX_FRAMES,
@@ -349,6 +361,40 @@ const USER_SPEECH_PREFIX_FRAMES = parseClientPositiveInt(
 const USER_SPEECH_COOLDOWN_MS = parseClientPositiveInt(
   liveClientEnv.VITE_LIVE_AUDIO_USER_SPEECH_COOLDOWN_MS,
   220,
+);
+const USER_SPEECH_CANDIDATE_HYSTERESIS_MULTIPLIER = parseClientBoundedNumber(
+  liveClientEnv.VITE_LIVE_AUDIO_USER_SPEECH_CANDIDATE_HYSTERESIS_MULTIPLIER,
+  0.72,
+  0.5,
+  1,
+);
+const USER_SPEECH_CANDIDATE_MIN_RMS_THRESHOLD = parseClientBoundedNumber(
+  liveClientEnv.VITE_LIVE_AUDIO_USER_SPEECH_CANDIDATE_MIN_RMS_THRESHOLD,
+  0.0055,
+  0.003,
+  0.02,
+);
+const USER_SPEECH_CANDIDATE_CLEAR_SILENCE_MS = parseClientPositiveInt(
+  liveClientEnv.VITE_LIVE_AUDIO_USER_SPEECH_CANDIDATE_CLEAR_SILENCE_MS,
+  48,
+);
+const USER_SPEECH_AMBIENT_FLOOR_RISE_SMOOTHING = parseClientBoundedNumber(
+  liveClientEnv.VITE_LIVE_AUDIO_USER_SPEECH_AMBIENT_FLOOR_RISE_SMOOTHING,
+  0.02,
+  0.001,
+  0.2,
+);
+const USER_SPEECH_AMBIENT_FLOOR_FALL_SMOOTHING = parseClientBoundedNumber(
+  liveClientEnv.VITE_LIVE_AUDIO_USER_SPEECH_AMBIENT_FLOOR_FALL_SMOOTHING,
+  0.12,
+  0.01,
+  0.4,
+);
+const USER_SPEECH_AMBIENT_FLOOR_SPEECH_SPIKE_GUARD = parseClientBoundedNumber(
+  liveClientEnv.VITE_LIVE_AUDIO_USER_SPEECH_AMBIENT_FLOOR_SPEECH_SPIKE_GUARD,
+  1.35,
+  1,
+  4,
 );
 const USER_SPEECH_REFERENCE_FRAME_DURATION_MS =
   (PROCESSOR_BUFFER_SIZE / INPUT_SAMPLE_RATE) * 1000;
@@ -362,6 +408,10 @@ const USER_SPEECH_END_SILENCE_MIN_DURATION_MS =
 const MANUAL_INTERRUPT_IDLE_TIMEOUT_MS = parseClientPositiveInt(
   liveClientEnv.VITE_LIVE_AUDIO_MANUAL_INTERRUPT_IDLE_TIMEOUT_MS,
   1400,
+);
+const USER_SPEECH_TRANSCRIPT_EXPECTATION_TIMEOUT_MS = parseClientPositiveInt(
+  liveClientEnv.VITE_LIVE_AUDIO_TRANSCRIPT_EXPECTATION_TIMEOUT_MS,
+  2200,
 );
 const LIVE_DEBUG_STATE_EMIT_MIN_INTERVAL_MS = parseClientPositiveInt(
   liveClientEnv.VITE_LIVE_DEBUG_STATE_EMIT_MIN_INTERVAL_MS,
@@ -559,6 +609,22 @@ function mergeTranscriptText(previous: string, incoming: string): string {
 type BufferedAudioFrame = {
   pcmBase64: string;
   at: number;
+};
+
+type UserSpeechWindowDiagnostics = {
+  id: number;
+  trigger: LiveInterruptTrigger;
+  reason: string;
+  startedAtMs: number;
+  endedAtMs: number | null;
+  endReason: string | null;
+  frameCount: number;
+  speechLikeFrameCount: number;
+  sumRms: number;
+  peakRms: number;
+  transcriptReceived: boolean;
+  transcriptCharCount: number;
+  transcriptReceivedAtMs: number | null;
 };
 
 function sanitizeMediaTrackInfo(input: unknown): Record<string, unknown> | null {
@@ -918,11 +984,14 @@ export class GeminiLiveVoiceSession {
   private lastAssistantActivityAtMs = 0;
   private latestInputRms = 0;
   private activeSpeechThreshold = USER_SPEECH_START_RMS_THRESHOLD;
+  private candidateSpeechThreshold = USER_SPEECH_START_RMS_THRESHOLD;
   private inputAmbientRms = 0;
   private speechCandidateFrames = 0;
   private speechSilenceFrames = 0;
   private speechCandidateMs = 0;
+  private speechCandidateSilenceMs = 0;
   private speechSilenceMs = 0;
+  private speechCandidatePeakRms = 0;
   private interruptPending = false;
   private interruptTrigger: LiveInterruptTrigger = "none";
   private lastInterruptReason: string | null = null;
@@ -932,6 +1001,10 @@ export class GeminiLiveVoiceSession {
   private manualInterruptWatchdogExpiresAt: number | null = null;
   private bufferedPrefixAudioFrames: BufferedAudioFrame[] = [];
   private analyzerKind: "audio_worklet" | "script_processor" = "script_processor";
+  private userSpeechWindowSequence = 0;
+  private activeUserSpeechWindow: UserSpeechWindowDiagnostics | null = null;
+  private pendingUserSpeechWindows: UserSpeechWindowDiagnostics[] = [];
+  private pendingUserSpeechWindowTimeouts = new Map<number, number>();
   private debugStateTrackSettings: Record<string, unknown> | null = null;
   private debugStateTrackCapabilities: Record<string, unknown> | null = null;
   private latestSessionResumptionHandle: string | null = null;
@@ -1041,12 +1114,17 @@ export class GeminiLiveVoiceSession {
     this.lastAssistantActivityAtMs = 0;
     this.latestInputRms = 0;
     this.activeSpeechThreshold = USER_SPEECH_START_RMS_THRESHOLD;
+    this.candidateSpeechThreshold = USER_SPEECH_START_RMS_THRESHOLD;
     this.inputAmbientRms = 0;
     this.speechCandidateFrames = 0;
     this.speechSilenceFrames = 0;
     this.speechCandidateMs = 0;
+    this.speechCandidateSilenceMs = 0;
     this.speechSilenceMs = 0;
+    this.speechCandidatePeakRms = 0;
     this.bufferedPrefixAudioFrames = [];
+    this.activeUserSpeechWindow = null;
+    this.clearPendingUserSpeechWindowTimeouts();
     this.analyzerKind = "script_processor";
     this.debugStateTrackSettings = null;
     this.debugStateTrackCapabilities = null;
@@ -1183,10 +1261,16 @@ export class GeminiLiveVoiceSession {
           this.interruptTrigger = "none";
           this.manualInterruptSpeechObserved = false;
           this.clearManualInterruptWatchdog();
+          this.activeSpeechThreshold = USER_SPEECH_START_RMS_THRESHOLD;
+          this.candidateSpeechThreshold = USER_SPEECH_START_RMS_THRESHOLD;
           this.speechCandidateFrames = 0;
           this.speechSilenceFrames = 0;
           this.speechCandidateMs = 0;
+          this.speechCandidateSilenceMs = 0;
           this.speechSilenceMs = 0;
+          this.speechCandidatePeakRms = 0;
+          this.activeUserSpeechWindow = null;
+          this.clearPendingUserSpeechWindowTimeouts();
           this.syncSpeechStateFromActivity("session_error");
           const error = new Error(event.message || "Gemini Live session error");
           this.emitError(error);
@@ -1202,10 +1286,16 @@ export class GeminiLiveVoiceSession {
           this.interruptTrigger = "none";
           this.manualInterruptSpeechObserved = false;
           this.clearManualInterruptWatchdog();
+          this.activeSpeechThreshold = USER_SPEECH_START_RMS_THRESHOLD;
+          this.candidateSpeechThreshold = USER_SPEECH_START_RMS_THRESHOLD;
           this.speechCandidateFrames = 0;
           this.speechSilenceFrames = 0;
           this.speechCandidateMs = 0;
+          this.speechCandidateSilenceMs = 0;
           this.speechSilenceMs = 0;
+          this.speechCandidatePeakRms = 0;
+          this.activeUserSpeechWindow = null;
+          this.clearPendingUserSpeechWindowTimeouts();
           this.session = null;
           this.syncSpeechStateFromActivity("session_closed");
           this.debug("live.session.closed", { reason: event.reason || "unknown" });
@@ -1269,12 +1359,25 @@ export class GeminiLiveVoiceSession {
       userSpeechAmbientMultiplier: USER_SPEECH_AMBIENT_MULTIPLIER,
       userSpeechAssistantAmbientMultiplier:
         USER_SPEECH_ASSISTANT_AMBIENT_MULTIPLIER,
-      userSpeechMaxRmsThreshold: USER_SPEECH_MAX_RMS_THRESHOLD,
+      userSpeechAssistantMaxRmsThreshold: USER_SPEECH_ASSISTANT_MAX_RMS_THRESHOLD,
+      userSpeechIdleMaxRmsThreshold: USER_SPEECH_IDLE_MAX_RMS_THRESHOLD,
       userSpeechStartConsecutiveFrames:
         USER_SPEECH_START_CONSECUTIVE_FRAMES,
       userSpeechAssistantConsecutiveFrames:
         USER_SPEECH_ASSISTANT_CONSECUTIVE_FRAMES,
       userSpeechEndSilenceFrames: USER_SPEECH_END_SILENCE_FRAMES,
+      userSpeechCandidateHysteresisMultiplier:
+        USER_SPEECH_CANDIDATE_HYSTERESIS_MULTIPLIER,
+      userSpeechCandidateMinRmsThreshold:
+        USER_SPEECH_CANDIDATE_MIN_RMS_THRESHOLD,
+      userSpeechCandidateClearSilenceMs:
+        USER_SPEECH_CANDIDATE_CLEAR_SILENCE_MS,
+      userSpeechAmbientFloorRiseSmoothing:
+        USER_SPEECH_AMBIENT_FLOOR_RISE_SMOOTHING,
+      userSpeechAmbientFloorFallSmoothing:
+        USER_SPEECH_AMBIENT_FLOOR_FALL_SMOOTHING,
+      userSpeechAmbientFloorSpeechSpikeGuard:
+        USER_SPEECH_AMBIENT_FLOOR_SPEECH_SPIKE_GUARD,
       userSpeechReferenceFrameDurationMs: USER_SPEECH_REFERENCE_FRAME_DURATION_MS,
       userSpeechStartMinDurationMs: USER_SPEECH_START_MIN_DURATION_MS,
       userSpeechAssistantMinDurationMs: USER_SPEECH_ASSISTANT_MIN_DURATION_MS,
@@ -1282,6 +1385,8 @@ export class GeminiLiveVoiceSession {
         USER_SPEECH_END_SILENCE_MIN_DURATION_MS,
       userSpeechPrefixFrames: USER_SPEECH_PREFIX_FRAMES,
       userSpeechCooldownMs: USER_SPEECH_COOLDOWN_MS,
+      userSpeechTranscriptExpectationTimeoutMs:
+        USER_SPEECH_TRANSCRIPT_EXPECTATION_TIMEOUT_MS,
       manualInterruptIdleTimeoutMs: MANUAL_INTERRUPT_IDLE_TIMEOUT_MS,
       suppressUserTranscriptDuringAssistantSpeech:
         SUPPRESS_USER_TRANSCRIPT_DURING_ASSISTANT_SPEECH,
@@ -1340,12 +1445,17 @@ export class GeminiLiveVoiceSession {
     this.lastAssistantActivityAtMs = 0;
     this.latestInputRms = 0;
     this.activeSpeechThreshold = USER_SPEECH_START_RMS_THRESHOLD;
+    this.candidateSpeechThreshold = USER_SPEECH_START_RMS_THRESHOLD;
     this.inputAmbientRms = 0;
     this.speechCandidateFrames = 0;
     this.speechSilenceFrames = 0;
     this.speechCandidateMs = 0;
+    this.speechCandidateSilenceMs = 0;
     this.speechSilenceMs = 0;
+    this.speechCandidatePeakRms = 0;
     this.bufferedPrefixAudioFrames = [];
+    this.activeUserSpeechWindow = null;
+    this.clearPendingUserSpeechWindowTimeouts();
     this.interruptPending = false;
     this.analyzerKind = "script_processor";
     this.debugStateTrackSettings = null;
@@ -1587,6 +1697,12 @@ export class GeminiLiveVoiceSession {
       currentRms: this.latestInputRms,
       ambientRms: this.inputAmbientRms,
       activeThreshold: this.activeSpeechThreshold,
+      candidateThreshold: this.candidateSpeechThreshold,
+      speechCandidateMs: this.speechCandidateMs,
+      speechCandidateSilenceMs: this.speechCandidateSilenceMs,
+      speechSilenceMs: this.speechSilenceMs,
+      activeUserSpeechWindowId: this.activeUserSpeechWindow?.id ?? null,
+      pendingTranscriptWindows: this.pendingUserSpeechWindows.length,
       manualActivityActive: this.manualActivityActive,
       assistantTurnActive: this.assistantTurnActive,
       interruptPending: this.interruptPending,
@@ -1646,6 +1762,94 @@ export class GeminiLiveVoiceSession {
     }
   }
 
+  private clearPendingUserSpeechWindowTimeouts(): void {
+    this.pendingUserSpeechWindowTimeouts.forEach((timeout) => {
+      window.clearTimeout(timeout);
+    });
+    this.pendingUserSpeechWindowTimeouts.clear();
+    this.pendingUserSpeechWindows = [];
+  }
+
+  private startUserSpeechWindow(
+    trigger: LiveInterruptTrigger,
+    reason: string,
+  ): UserSpeechWindowDiagnostics {
+    this.userSpeechWindowSequence += 1;
+    return {
+      id: this.userSpeechWindowSequence,
+      trigger,
+      reason,
+      startedAtMs: Date.now(),
+      endedAtMs: null,
+      endReason: null,
+      frameCount: 0,
+      speechLikeFrameCount: 0,
+      sumRms: 0,
+      peakRms: 0,
+      transcriptReceived: false,
+      transcriptCharCount: 0,
+      transcriptReceivedAtMs: null,
+    };
+  }
+
+  private finalizeUserSpeechWindow(windowDiag: UserSpeechWindowDiagnostics): void {
+    const timeout = window.setTimeout(() => {
+      this.pendingUserSpeechWindowTimeouts.delete(windowDiag.id);
+      const durationMs =
+        typeof windowDiag.endedAtMs === "number"
+          ? Math.max(0, windowDiag.endedAtMs - windowDiag.startedAtMs)
+          : 0;
+      const averageRms =
+        windowDiag.frameCount > 0 ? windowDiag.sumRms / windowDiag.frameCount : 0;
+      const transcriptLatencyMs =
+        typeof windowDiag.transcriptReceivedAtMs === "number"
+          ? Math.max(0, windowDiag.transcriptReceivedAtMs - windowDiag.startedAtMs)
+          : null;
+      this.debug(
+        windowDiag.transcriptReceived
+          ? "live.audio.activity_window_transcription_received"
+          : "live.audio.activity_window_no_input_transcription",
+        {
+          windowId: windowDiag.id,
+          trigger: windowDiag.trigger,
+          startReason: windowDiag.reason,
+          endReason: windowDiag.endReason,
+          durationMs,
+          frameCount: windowDiag.frameCount,
+          speechLikeFrameCount: windowDiag.speechLikeFrameCount,
+          peakRms: windowDiag.peakRms,
+          averageRms,
+          transcriptReceived: windowDiag.transcriptReceived,
+          transcriptCharCount: windowDiag.transcriptCharCount,
+          transcriptLatencyMs,
+        },
+      );
+      this.pendingUserSpeechWindows = this.pendingUserSpeechWindows.filter(
+        (item) => item.id !== windowDiag.id,
+      );
+      this.emitDebugState(true);
+    }, USER_SPEECH_TRANSCRIPT_EXPECTATION_TIMEOUT_MS);
+    this.pendingUserSpeechWindowTimeouts.set(windowDiag.id, timeout);
+  }
+
+  private markUserSpeechWindowTranscriptReceived(textLength: number): void {
+    if (this.activeUserSpeechWindow) {
+      this.activeUserSpeechWindow.transcriptReceived = true;
+      this.activeUserSpeechWindow.transcriptCharCount += textLength;
+      this.activeUserSpeechWindow.transcriptReceivedAtMs = Date.now();
+      return;
+    }
+    const pendingWindow = this.pendingUserSpeechWindows.find(
+      (item) => !item.transcriptReceived,
+    );
+    if (!pendingWindow) {
+      return;
+    }
+    pendingWindow.transcriptReceived = true;
+    pendingWindow.transcriptCharCount += textLength;
+    pendingWindow.transcriptReceivedAtMs = Date.now();
+  }
+
   private syncSpeechStateFromActivity(reason: string): void {
     if (this.manualActivityActive) {
       this.setSpeechState("user_speaking", { reason });
@@ -1656,6 +1860,7 @@ export class GeminiLiveVoiceSession {
       return;
     }
     if (this.speechState === "candidate_user_speech") {
+      this.setSpeechState("idle", { reason });
       return;
     }
     if (this.speechState === "cooldown") {
@@ -1799,6 +2004,8 @@ export class GeminiLiveVoiceSession {
         this.interruptTrigger = "none";
         this.manualInterruptSpeechObserved = false;
         this.clearManualInterruptWatchdog();
+        this.activeUserSpeechWindow = null;
+        this.clearPendingUserSpeechWindowTimeouts();
         this.session = null;
         this.syncSpeechStateFromActivity("socket_send_failed");
       }
@@ -1828,6 +2035,8 @@ export class GeminiLiveVoiceSession {
       this.interruptTrigger = "none";
       this.manualInterruptSpeechObserved = false;
       this.clearManualInterruptWatchdog();
+      this.activeUserSpeechWindow = null;
+      this.clearPendingUserSpeechWindowTimeouts();
       if (socketReadyState === WebSocket.CLOSING || socketReadyState === WebSocket.CLOSED) {
         this.session = null;
         this.syncSpeechStateFromActivity("socket_not_open");
@@ -1882,6 +2091,8 @@ export class GeminiLiveVoiceSession {
         this.interruptTrigger = "none";
         this.manualInterruptSpeechObserved = false;
         this.clearManualInterruptWatchdog();
+        this.activeUserSpeechWindow = null;
+        this.clearPendingUserSpeechWindowTimeouts();
         this.session = null;
         this.syncSpeechStateFromActivity("tool_response_socket_send_failed");
       }
@@ -1934,6 +2145,8 @@ export class GeminiLiveVoiceSession {
         this.interruptTrigger = "none";
         this.manualInterruptSpeechObserved = false;
         this.clearManualInterruptWatchdog();
+        this.activeUserSpeechWindow = null;
+        this.clearPendingUserSpeechWindowTimeouts();
         this.session = null;
         this.syncSpeechStateFromActivity("client_content_socket_send_failed");
       }
@@ -2046,7 +2259,12 @@ export class GeminiLiveVoiceSession {
     this.speechCandidateFrames = 0;
     this.speechSilenceFrames = 0;
     this.speechCandidateMs = 0;
+    this.speechCandidateSilenceMs = 0;
     this.speechSilenceMs = 0;
+    this.speechCandidatePeakRms = 0;
+    if (!this.activeUserSpeechWindow) {
+      this.activeUserSpeechWindow = this.startUserSpeechWindow(trigger, reason);
+    }
     this.flushBufferedPrefixAudioFrames();
     if (trigger === "button") {
       this.scheduleManualInterruptWatchdog(reason);
@@ -2108,7 +2326,16 @@ export class GeminiLiveVoiceSession {
     this.speechCandidateFrames = 0;
     this.speechSilenceFrames = 0;
     this.speechCandidateMs = 0;
+    this.speechCandidateSilenceMs = 0;
     this.speechSilenceMs = 0;
+    this.speechCandidatePeakRms = 0;
+    if (this.activeUserSpeechWindow) {
+      this.activeUserSpeechWindow.endedAtMs = Date.now();
+      this.activeUserSpeechWindow.endReason = reason;
+      this.pendingUserSpeechWindows.push(this.activeUserSpeechWindow);
+      this.finalizeUserSpeechWindow(this.activeUserSpeechWindow);
+      this.activeUserSpeechWindow = null;
+    }
     this.enterSpeechCooldown(reason);
   }
 
@@ -2122,8 +2349,11 @@ export class GeminiLiveVoiceSession {
     const ambientMultiplier = assistantWindowActive
       ? USER_SPEECH_ASSISTANT_AMBIENT_MULTIPLIER
       : USER_SPEECH_AMBIENT_MULTIPLIER;
+    const maxThreshold = assistantWindowActive
+      ? USER_SPEECH_ASSISTANT_MAX_RMS_THRESHOLD
+      : USER_SPEECH_IDLE_MAX_RMS_THRESHOLD;
     const threshold = Math.min(
-      USER_SPEECH_MAX_RMS_THRESHOLD,
+      maxThreshold,
       Math.max(
         baseThreshold,
         this.inputAmbientRms > 0 ? this.inputAmbientRms * ambientMultiplier : 0,
@@ -2151,17 +2381,37 @@ export class GeminiLiveVoiceSession {
         ? frameDurationMs
         : USER_SPEECH_REFERENCE_FRAME_DURATION_MS;
     this.latestInputRms = rms;
-    this.updateInputAmbientRms(rms);
 
     const assistantWindowActive = this.isAssistantSpeechWindowActive();
     const { threshold, minSpeechDurationMs } =
       this.computeSpeechThreshold(assistantWindowActive);
+    const candidateThreshold =
+      this.speechState === "candidate_user_speech"
+        ? Math.max(
+            USER_SPEECH_CANDIDATE_MIN_RMS_THRESHOLD,
+            threshold * USER_SPEECH_CANDIDATE_HYSTERESIS_MULTIPLIER,
+          )
+        : threshold;
     this.activeSpeechThreshold = threshold;
+    this.candidateSpeechThreshold = candidateThreshold;
 
-    const isSpeechLike = rms >= threshold;
+    const isSpeechLike = rms >= candidateThreshold;
+    this.updateInputAmbientRms(rms, threshold, isSpeechLike);
 
     if (this.manualActivityActive) {
+      if (this.activeUserSpeechWindow) {
+        this.activeUserSpeechWindow.frameCount += 1;
+        this.activeUserSpeechWindow.sumRms += rms;
+        this.activeUserSpeechWindow.peakRms = Math.max(
+          this.activeUserSpeechWindow.peakRms,
+          rms,
+        );
+        if (isSpeechLike) {
+          this.activeUserSpeechWindow.speechLikeFrameCount += 1;
+        }
+      }
       if (isSpeechLike) {
+        this.speechCandidateSilenceMs = 0;
         if (
           this.interruptTrigger === "button" &&
           !this.manualInterruptSpeechObserved
@@ -2192,11 +2442,14 @@ export class GeminiLiveVoiceSession {
     }
 
     if (isSpeechLike) {
+      this.speechCandidateSilenceMs = 0;
       this.speechCandidateFrames += 1;
       this.speechCandidateMs += effectiveFrameDurationMs;
+      this.speechCandidatePeakRms = Math.max(this.speechCandidatePeakRms, rms);
       if (this.speechState !== "candidate_user_speech") {
         this.setSpeechState("candidate_user_speech", {
           threshold,
+          candidateThreshold,
           assistantWindowActive,
         });
       }
@@ -2213,9 +2466,38 @@ export class GeminiLiveVoiceSession {
       return;
     }
 
+    const wasCandidate = this.speechState === "candidate_user_speech";
+    if (wasCandidate) {
+      this.speechCandidateSilenceMs += effectiveFrameDurationMs;
+      if (
+        this.speechCandidateSilenceMs <
+        USER_SPEECH_CANDIDATE_CLEAR_SILENCE_MS
+      ) {
+        this.emitDebugState();
+        return;
+      }
+    } else {
+      this.speechCandidateSilenceMs = 0;
+    }
+    const candidateMs = this.speechCandidateMs;
+    const candidateFrames = this.speechCandidateFrames;
+    const candidateSilenceMs = this.speechCandidateSilenceMs;
+    const candidatePeakRms = this.speechCandidatePeakRms;
     this.speechCandidateFrames = 0;
     this.speechCandidateMs = 0;
-    if (this.speechState === "candidate_user_speech") {
+    this.speechCandidateSilenceMs = 0;
+    this.speechCandidatePeakRms = 0;
+    if (wasCandidate) {
+      this.debug("live.audio.candidate_cleared", {
+        candidateMs,
+        candidateFrames,
+        candidateSilenceMs,
+        candidatePeakRms,
+        currentRms: rms,
+        threshold,
+        candidateThreshold,
+        assistantWindowActive,
+      });
       this.syncSpeechStateFromActivity("candidate_cleared");
     } else {
       this.emitDebugState();
@@ -2485,15 +2767,33 @@ export class GeminiLiveVoiceSession {
     return true;
   }
 
-  private updateInputAmbientRms(rms: number): void {
+  private updateInputAmbientRms(
+    rms: number,
+    speechThreshold: number,
+    isSpeechLike: boolean,
+  ): void {
     if (!Number.isFinite(rms) || rms <= 0) {
       return;
     }
+    const boundedBaseline = Math.max(
+      USER_SPEECH_CANDIDATE_MIN_RMS_THRESHOLD,
+      speechThreshold,
+    );
     if (this.inputAmbientRms <= 0) {
-      this.inputAmbientRms = rms;
+      this.inputAmbientRms = Math.min(rms, boundedBaseline);
       return;
     }
-    const smoothingFactor = rms <= this.inputAmbientRms ? 0.08 : 0.02;
+    const speechSpikeThreshold = Math.max(
+      boundedBaseline,
+      this.inputAmbientRms * USER_SPEECH_AMBIENT_FLOOR_SPEECH_SPIKE_GUARD,
+    );
+    if (isSpeechLike || rms >= speechSpikeThreshold) {
+      return;
+    }
+    const smoothingFactor =
+      rms > this.inputAmbientRms
+        ? USER_SPEECH_AMBIENT_FLOOR_RISE_SMOOTHING
+        : USER_SPEECH_AMBIENT_FLOOR_FALL_SMOOTHING;
     this.inputAmbientRms =
       this.inputAmbientRms * (1 - smoothingFactor) + rms * smoothingFactor;
   }
@@ -3015,6 +3315,9 @@ export class GeminiLiveVoiceSession {
 
     const text = normalizeText(transcript.text);
     if (!text) return;
+    if (sender === "user") {
+      this.markUserSpeechWindowTranscriptReceived(text.length);
+    }
     const personalContextIntent = classifyLivePersonalContextIntent(text);
 
     if (

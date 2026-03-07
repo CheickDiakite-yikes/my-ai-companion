@@ -4485,6 +4485,36 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
                           {(liveDebug.state?.activeThreshold ?? 0).toFixed(4)}
                         </div>
                       </div>
+                      <div className="rounded-2xl border px-3 py-2"
+                        style={{
+                          borderColor:
+                            "color-mix(in srgb, var(--app-soft-card-border) 72%, transparent)",
+                        }}
+                      >
+                        <div className="text-[10px] uppercase tracking-[0.18em]" style={{ color: "var(--app-on-dark-muted)" }}>
+                          Candidate Threshold
+                        </div>
+                        <div className="mt-1 font-medium">
+                          {(liveDebug.state?.candidateThreshold ?? 0).toFixed(4)}
+                        </div>
+                      </div>
+                      <div className="rounded-2xl border px-3 py-2"
+                        style={{
+                          borderColor:
+                            "color-mix(in srgb, var(--app-soft-card-border) 72%, transparent)",
+                        }}
+                      >
+                        <div className="text-[10px] uppercase tracking-[0.18em]" style={{ color: "var(--app-on-dark-muted)" }}>
+                          Candidate/Grace (ms)
+                        </div>
+                        <div className="mt-1 font-medium">
+                          {Math.round(liveDebug.state?.speechCandidateMs ?? 0)}
+                          {" / "}
+                          {Math.round(
+                            liveDebug.state?.speechCandidateSilenceMs ?? 0,
+                          )}
+                        </div>
+                      </div>
                     </div>
 
                     <div className="rounded-2xl border px-3 py-3"
@@ -4522,6 +4552,18 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
                           Interrupt Trigger
                         </span>
                         <span>{liveDebug.state?.interruptTrigger ?? "none"}</span>
+                        <span className="text-[10px] uppercase tracking-[0.18em]" style={{ color: "var(--app-on-dark-muted)" }}>
+                          Manual Silence (ms)
+                        </span>
+                        <span>{Math.round(liveDebug.state?.speechSilenceMs ?? 0)}</span>
+                        <span className="text-[10px] uppercase tracking-[0.18em]" style={{ color: "var(--app-on-dark-muted)" }}>
+                          Speech Window
+                        </span>
+                        <span>{liveDebug.state?.activeUserSpeechWindowId ?? "none"}</span>
+                        <span className="text-[10px] uppercase tracking-[0.18em]" style={{ color: "var(--app-on-dark-muted)" }}>
+                          Pending Transcript Windows
+                        </span>
+                        <span>{liveDebug.state?.pendingTranscriptWindows ?? 0}</span>
                       </div>
                       <div className="mt-2 text-[10px]" style={{ color: "var(--app-on-dark-muted)" }}>
                         Last interrupt:
@@ -7493,7 +7535,7 @@ function App() {
       event,
       metadata,
     };
-    const nextEntries = [...liveTraceEntriesRef.current, entry].slice(-200);
+    const nextEntries = [...liveTraceEntriesRef.current, entry].slice(-1200);
     liveTraceEntriesRef.current = nextEntries;
     if (liveDebugEnabled) {
       setLiveTraceEntries(nextEntries);
