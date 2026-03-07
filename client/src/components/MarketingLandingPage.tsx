@@ -337,8 +337,9 @@ const BLOG_POSTS: BlogPost[] = [
       {
         type: "image",
         src: "/blog/meet-zee-cover.jpg",
-        alt: "Meet Zee product cover.",
-        caption: "Meet Zee: one companion, across voice and text.",
+        alt: "Four diverse Zee companion personas gathered in a warm golden evening setting.",
+        caption:
+          "Meet Zee: four voices, one companion experience across voice and text.",
       },
       {
         type: "paragraph",
@@ -405,8 +406,9 @@ const BLOG_POSTS: BlogPost[] = [
       {
         type: "image",
         src: "/blog/meet-zee-lifestyle.jpg",
-        alt: "Lifestyle scene of a user seamlessly continuing a companion conversation on phone in a warm evening setting.",
-        caption: "Seamless mode-shifting in real life, not just in ideal demo conditions.",
+        alt: "Diverse evening lifestyle scene showing people shifting naturally between speaking and texting with Zee.",
+        caption:
+          "Seamless mode-shifting in real life, across different people and real environments.",
       },
       {
         type: "metrics",
