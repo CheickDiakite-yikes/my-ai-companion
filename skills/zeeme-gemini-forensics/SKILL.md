@@ -11,6 +11,28 @@ description: Diagnose ZeeMe Gemini integration failures using trace IDs, structu
 3. Classify failure path: `live.token`, `chat.respond`, `chat.stream`, `voice.transcript`, or `quota`.
 4. Identify the first failing guardrail (validation, auth, quota, storage, schema, model call).
 
+## Run Transcript + Language Drift Forensics
+1. Capture a voice run with `?liveDebug=1` and export JSON.
+2. Run `skills/zeeme-gemini-forensics/scripts/trace_report.sh <live-debug-json>`.
+3. Classify as one of:
+   - `transcript.language_drift` (script/language mismatch)
+   - `transcript.missing_after_speech_window`
+   - `transcript.fragmented_or_short`
+4. Confirm expected observability markers:
+   - `live.transcript.received`
+   - `live.transcript.language_mismatch_observed`
+   - `live.audio.activity_window_no_input_transcription`
+   - `live.audio.activity_window_transcription_received`
+
+## Run Speech-Captured-But-No-Transcript Forensics
+1. Confirm speech detector activity in trace:
+   - `live.audio.speech_state_changed` (`candidate_user_speech` / `user_speaking`)
+   - `live.audio.activity_start_sent`
+2. Confirm transcript path absence:
+   - missing or low-count `live.transcript.received` for user
+   - non-zero `live.audio.activity_window_no_input_transcription`
+3. Verify platform context (`deviceClass`, `platformClass`, `speechDetectionProfile.mode`) before changing thresholds.
+
 ## Run Cloud Run Gateway Forensics (Morning Brief)
 1. Resolve canonical URL:
    - `gcloud run services describe zeeme-morning-brief-gcp --region us-central1 --project <project-id> --format='value(status.url)'`
@@ -33,6 +55,7 @@ description: Diagnose ZeeMe Gemini integration failures using trace IDs, structu
 - Separate local environment failures from Replit deployment failures.
 - Verify schema parity before blaming model APIs.
 - Validate Cloud Run runtime IAM and Secret Manager bindings before treating errors as model instability.
+- Never log raw transcript payloads in public channels; log script/language metadata and event counts instead.
 
 ## Use References
 - Read `references/failure-patterns.md` to map recurring incidents to root causes and fixes.

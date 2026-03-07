@@ -39,6 +39,46 @@ Fix:
 Guardrail:
 - Add transcript integrity checks in voice session QA.
 
+## Transcript script/language drift (spoken English rendered in other script)
+Symptom:
+- User speaks in one language but transcript appears in another script/language family.
+- Example: predominantly Latin speech session producing Arabic/Kannada-script user chunks.
+
+Root cause:
+- Low-signal audio windows or fragmented capture causing unstable provider language inference.
+- Missing or weak language-hint continuity and insufficient mismatch observability.
+
+Fix:
+- Verify live token carries normalized `effectiveLanguageHint` and source.
+- Verify transcript mismatch telemetry is active:
+  - `live.transcript.language_mismatch_observed`
+  - script classification metadata on `live.transcript.received`.
+- Stabilize capture quality first (mobile false-barge-in and threshold churn can amplify drift).
+
+Guardrail:
+- Treat language drift as a capture + segmentation reliability issue before prompt/policy issue.
+- Do not suppress persistence; preserve transcript flow and debug with metadata.
+
+## Speech detected but no user transcript returned
+Symptom:
+- Trace shows speech detection/activity windows, but user transcript chunks are missing.
+
+Root cause:
+- Audio reached detector path but not stable enough for transcript finalization.
+- Over-aggressive interruption/candidate thresholds, especially on mobile handling noise.
+
+Fix:
+- Correlate:
+  - `live.audio.activity_start_sent`
+  - `live.audio.activity_window_no_input_transcription`
+  - `live.audio.speech_state_changed`
+  - `live.transcript.received`
+- If mobile: prioritize assistant-window barge-in hardening before general threshold tuning.
+- If desktop: validate mic constraints/granted settings and reduce threshold pressure for normal speaking volume.
+
+Guardrail:
+- Require platform-labeled validation matrix (iOS, Android, desktop) for any transcript-path hotfix.
+
 ## Quota blocks unexpected requests
 Symptom:
 - 429 responses for chat/live endpoints earlier than expected.

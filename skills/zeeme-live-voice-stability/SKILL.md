@@ -11,6 +11,8 @@ description: Stabilize and debug ZeeMe live voice sessions that feel clipped, in
 3. Classify the failure using `references/live-debug-patterns.md`.
 4. Generate a known-good settings profile with:
    - `skills/zeeme-live-voice-stability/scripts/build_live_secrets_profile.sh stable`
+   - `skills/zeeme-live-voice-stability/scripts/build_live_secrets_profile.sh stable-mobile`
+   - `skills/zeeme-live-voice-stability/scripts/build_live_secrets_profile.sh stable-desktop`
 5. Verify `/api/live/token` `configSummary` reports:
    - `automaticActivityDetectionDisabled=true`
    - `sessionResumptionEnabled=true`
@@ -18,6 +20,36 @@ description: Stabilize and debug ZeeMe live voice sessions that feel clipped, in
    - `effectiveInterruptMode=client_manual_activity`
 6. Apply secrets and redeploy if any `VITE_*` values changed.
 7. Re-run tests and compare trace signatures.
+
+## Platform Branching (Use One Skill, Not Separate Skills)
+- Keep phone vs laptop debugging inside this skill unless runtime architecture diverges.
+- Decide branch from trace metadata first:
+  - `deviceClass` (`mobile` vs `desktop`)
+  - `platformClass` (`ios`, `android`, `desktop`)
+  - `speechDetectionProfile.mode` (for example `mobile_relaxed`)
+- Run branch-specific diagnosis, then rejoin the same acceptance criteria and rollout gate.
+
+## Mobile Branch (iPhone/Samsung/Android Browser/PWA)
+- If assistant is cut off by subtle handling noise:
+  - confirm `live.server.content.interrupted=true` without intentional barge-in
+  - inspect `live.audio.barge_in_detected` RMS vs threshold
+  - inspect `live.audio.mobile_barge_in_rejected` cadence and reasons
+- If interruptions occur at low RMS, prioritize:
+  - `VITE_LIVE_AUDIO_MOBILE_ASSISTANT_BARGE_IN_MIN_DURATION_MS`
+  - `VITE_LIVE_AUDIO_MOBILE_ASSISTANT_BARGE_IN_MIN_PEAK_RMS`
+  - `VITE_LIVE_AUDIO_MOBILE_ASSISTANT_BARGE_IN_MIN_AVG_RMS`
+  - `VITE_LIVE_AUDIO_MOBILE_ASSISTANT_BARGE_IN_REQUIRE_THRESHOLD_FRAME`
+  - `VITE_LIVE_AUDIO_MOBILE_ASSISTANT_BARGE_IN_DISABLE_HYSTERESIS`
+- Tune at most 2 variables per iteration and preserve before/after trace exports.
+
+## Desktop/Laptop Branch (Normal Voice Not Captured)
+- If user must shout for transcript capture:
+  - confirm `live.audio.activity_window_no_input_transcription` events
+  - inspect `ambientRms`, `activeThreshold`, and candidate churn markers
+  - verify browser track constraints and granted mic settings
+- Prioritize stable speech capture over aggressive interruption speed:
+  - reduce threshold pressure before increasing interruption aggressiveness
+  - validate normal speaking volume in quiet and moderate-noise rooms
 
 ## Diagnose By Signature
 - `interrupted=true` before assistant finishes:
@@ -63,4 +95,4 @@ description: Stabilize and debug ZeeMe live voice sessions that feel clipped, in
 
 ## Use Scripts
 - `scripts/live_trace_summary.sh`: summarize LiveTrace interruption/turn-completion patterns.
-- `scripts/build_live_secrets_profile.sh`: emit copy-paste Replit secrets JSON for stable voice configs.
+- `scripts/build_live_secrets_profile.sh`: emit copy-paste Replit secrets JSON for `stable`, `stable-mobile`, and `stable-desktop` profiles.
