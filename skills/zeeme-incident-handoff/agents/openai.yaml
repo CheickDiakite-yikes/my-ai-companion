@@ -1,0 +1,4 @@
+interface:
+  display_name: "ZeeMe Incident Handoff"
+  short_description: "Generate deterministic handoff reports from traces"
+  default_prompt: "Use $zeeme-incident-handoff to create a complete incident handoff with evidence, hypotheses, and ranked next actions."

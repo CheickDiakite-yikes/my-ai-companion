@@ -1,0 +1,4 @@
+interface:
+  display_name: "ZeeMe Tooling Health"
+  short_description: "Preflight wrappers, env, and local CLI readiness"
+  default_prompt: "Use $zeeme-tooling-health to run deterministic preflight checks before debugging or release tasks."

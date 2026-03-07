@@ -1,0 +1,4 @@
+interface:
+  display_name: "ZeeMe Mobile Voice Qualification"
+  short_description: "Qualify iPhone/Android voice stability with traces"
+  default_prompt: "Use $zeeme-mobile-voice-qualification to run cross-device mobile voice acceptance checks and classify interruption/transcript failures."
