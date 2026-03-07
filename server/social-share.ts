@@ -28,7 +28,7 @@ const DEFAULT_IMAGE_PATH = "/zeeme-og.png?v=20260211";
 const BLOG_ARCHIVE_SHARE: BlogShareEntry = {
   title: "ZeeMe Research Archive",
   description:
-    "Peer-style technical monographs and engineering case studies on companion AI architecture, continuity, memory integrity, and reliability operations.",
+    "A curated mix of technical papers, field reports, and product stories on companion AI architecture, continuity, memory integrity, and reliability operations.",
   imagePath: "/blog/og/zeeme-archive-og.png",
   imageAlt: "ZeeMe Research Archive cover.",
 };
@@ -58,6 +58,13 @@ const PRIVACY_SHARE: BlogShareEntry = {
 };
 
 const BLOG_POST_SHARE: Record<string, BlogShareEntry> = {
+  "meet-zee-2026": {
+    title: "Meet Zee: Your Companion for Real Life",
+    description:
+      "Meet Zee, the companion built for everyday life: voice + text continuity, warm conversation, and reliability that holds up in real environments.",
+    imagePath: "/blog/og/zeeme-archive-og.png",
+    imageAlt: "Meet Zee product story cover.",
+  },
   "zeeme-google-data-handling-security-paper-2026": {
     title: "Security Paper: Google Data Handling by Design",
     description:

@@ -1259,6 +1259,22 @@ Precedence notes:
 | `VITE_LIVE_AUDIO_MOBILE_ASSISTANT_BARGE_IN_DISABLE_HYSTERESIS` | `true` | Disables candidate hysteresis during mobile assistant window to reduce low-RMS carryover false barge-ins |
 | `VITE_LIVE_AUDIO_MOBILE_ASSISTANT_CANDIDATE_CLEAR_TARGET_MS` | `72` | Mobile-only candidate clear target used while assistant output is active |
 
+#### Mobile Voice Tuning: False Barge-In On Phones
+
+Use this when assistant speech gets cut off by subtle phone handling sounds (touch taps, button clicks, floor creaks).
+
+1. Confirm profile mode in trace/export is `mobile_relaxed`.
+2. Confirm mobile barge-in gates are present in trace metadata:
+`mobileAssistantBargeInMinDurationMs`, `mobileAssistantBargeInMinPeakRms`, `mobileAssistantBargeInMinAvgRms`, `mobileAssistantBargeInRequireThresholdFrame`, `mobileAssistantBargeInDisableHysteresis`.
+3. Watch for `live.audio.mobile_barge_in_rejected` events:
+they should include `rejectReasons` (duration/peak/average/current-frame threshold failures).
+4. If false interruptions persist, tune only two variables per iteration and keep before/after exports:
+`VITE_LIVE_AUDIO_MOBILE_ASSISTANT_BARGE_IN_MIN_DURATION_MS`,
+`VITE_LIVE_AUDIO_MOBILE_ASSISTANT_BARGE_IN_MIN_PEAK_RMS`,
+`VITE_LIVE_AUDIO_MOBILE_ASSISTANT_BARGE_IN_MIN_AVG_RMS`,
+`VITE_LIVE_AUDIO_MOBILE_ASSISTANT_BARGE_IN_AVG_THRESHOLD_MULTIPLIER`.
+5. Any `VITE_*` change requires full frontend rebuild/redeploy (Replit restart alone is not enough).
+
 ### Memory controls
 
 | Variable | Default | Description |

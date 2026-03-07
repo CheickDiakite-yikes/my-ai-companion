@@ -273,7 +273,7 @@ const INFO_PAGE_CONTENT: Record<InfoPageId, InfoPageContent> = {
   blog: {
     title: "ZeeMe Research Archive",
     subtitle:
-      "Peer-style technical monographs and engineering case studies on companion AI architecture, continuity, memory integrity, and reliability operations.",
+      "A curated mix of technical papers, field reports, and product stories on companion AI architecture, continuity, memory integrity, and real-world reliability.",
     updatedAt: "March 2026",
     heroIcon: "📝",
     accentWord: "Papers",
@@ -282,7 +282,7 @@ const INFO_PAGE_CONTENT: Record<InfoPageId, InfoPageContent> = {
         heading: "Archive scope",
         icon: "📚",
         paragraphs: [
-          "This archive is intentionally curated as publication-grade monographs and case studies, not launch copy. Each piece records architecture decisions, incident classes, and concrete controls shipped in response.",
+          "This archive is intentionally curated as high-signal engineering writing: publication-grade monographs, field reports, and selected product narratives. Each piece records architecture decisions, incident classes, or concrete controls shipped in response.",
           "The objective is reproducibility: a senior engineer or full product team should be able to implement the same reliability behavior from these papers without needing hidden prompt internals.",
         ],
       },
@@ -298,8 +298,8 @@ const INFO_PAGE_CONTENT: Record<InfoPageId, InfoPageContent> = {
         heading: "Review standard",
         icon: "📏",
         paragraphs: [
-          "Each article is written like an engineering paper: abstract, method, findings, limitations, and references.",
-          "Narrative style is allowed, but claims must map to concrete controls or observed failure classes.",
+          "Most articles follow engineering paper structure: abstract, method, findings, limitations, and references.",
+          "When we publish product narratives, claims still map to concrete controls or observed failure classes.",
         ],
       },
       {
@@ -323,6 +323,115 @@ const INFO_PAGE_CONTENT: Record<InfoPageId, InfoPageContent> = {
 };
 
 const BLOG_POSTS: BlogPost[] = [
+  {
+    id: "meet-zee-2026",
+    title: "Meet Zee: Your Companion for Real Life, Not Just Chat",
+    subtitle:
+      "Voice when you want it, text when you need it, continuity always.",
+    excerpt:
+      "Zee is designed to feel present across your day: warm conversation, dependable continuity, and a voice/text experience that actually stays connected.",
+    publishedAt: "March 6, 2026",
+    readTime: "7 min read",
+    tags: ["Product", "Companion", "Voice + Text", "Launch"],
+    blocks: [
+      {
+        type: "image",
+        src: "/blog/og/zeeme-archive-og.png",
+        alt: "Meet Zee product cover.",
+        caption: "Meet Zee: one companion, across voice and text.",
+      },
+      {
+        type: "paragraph",
+        text: "Most AI products are impressive in demos and inconsistent in real life. Zee was built from the opposite direction: start with daily conversation, noisy environments, mode switching, and long-running context, then engineer for that reality.",
+      },
+      {
+        type: "quote",
+        text: "Zee is not a feature. Zee is a relationship interface designed to stay coherent while your day changes around you.",
+      },
+      { type: "heading", text: "Why Zee feels different" },
+      {
+        type: "list",
+        items: [
+          "One thread across modes: talk in voice, continue in text, keep the same context.",
+          "Designed for real environments: background noise, interruptions, and device changes are expected, not edge cases.",
+          "Warm by design: expressive personality without sacrificing reliability.",
+          "Trace-first reliability: when something breaks, we can see exactly where and fix it quickly.",
+        ],
+      },
+      { type: "heading", text: "How Zee fits into your day" },
+      {
+        type: "table",
+        caption: "From quick check-ins to deep conversations.",
+        columns: ["Moment", "How Zee helps", "Why it matters"],
+        rows: [
+          [
+            "Morning reset",
+            "Voice-first check-in on mood, priorities, and schedule context",
+            "Start the day grounded without opening five apps",
+          ],
+          [
+            "Busy commute",
+            "Hands-free conversation in voice mode",
+            "Keep momentum while moving",
+          ],
+          [
+            "Noisy or quiet space shift",
+            "Switch to text instantly, continue from the same thread",
+            "No context loss when conditions change",
+          ],
+          [
+            "Evening reflection",
+            "Long-form conversation with continuity from earlier moments",
+            "Feels like one companion, not separate sessions",
+          ],
+        ],
+      },
+      {
+        type: "callout",
+        title: "Continuity is the product",
+        text: "The core promise is simple: you should never have to re-explain yourself just because you changed devices, switched from voice to text, or came back later.",
+      },
+      { type: "heading", text: "Built to hold up under pressure" },
+      {
+        type: "paragraph",
+        text: "ZeeMe engineering now includes mobile-specific voice controls for false barge-in prevention, transcript observability, and deterministic session diagnostics. That means the companion is tuned for both calm rooms and messy real-world conditions, including phone handling noise and unstable network moments.",
+      },
+      {
+        type: "metrics",
+        items: [
+          {
+            label: "Interaction modes",
+            value: "Voice + Text",
+            detail: "Switch freely without losing context",
+          },
+          {
+            label: "Session posture",
+            value: "Stateful",
+            detail: "Conversations persist as a continuous relationship",
+          },
+          {
+            label: "Reliability model",
+            value: "Trace-first",
+            detail: "Every critical voice step has diagnosable telemetry",
+          },
+        ],
+      },
+      { type: "heading", text: "Start in under a minute" },
+      {
+        type: "list",
+        items: [
+          "Open Zee and say hi in voice mode.",
+          "Ask anything real, not a demo prompt.",
+          "If your environment changes, continue in text with full continuity.",
+          "Make Zee part of your routine, not a one-off novelty.",
+        ],
+      },
+      {
+        type: "paragraph",
+        text: "Meet Zee is the beginning, not the finish line. We are building toward the most reliable and emotionally present companion experience on the market, and we are shipping that standard iteration by iteration.",
+      },
+    ],
+  },
   {
     id: "zeeme-google-context-gcp-field-report-2026",
     title: "Field Report IV: Google Personal Context + GCP Reliability Expansion",
@@ -1558,7 +1667,10 @@ const BLOG_POSTS: BlogPost[] = [
   },
 ];
 
-const BLOG_PIN_ORDER = ["zeeme-continuity-benchmark-paper-v-2026"] as const;
+const BLOG_PIN_ORDER = [
+  "meet-zee-2026",
+  "zeeme-continuity-benchmark-paper-v-2026",
+] as const;
 function getBlogCoverBlock(post: BlogPost): Extract<BlogPostBlock, { type: "image" }> | null {
   const cover = post.blocks.find((block): block is Extract<BlogPostBlock, { type: "image" }> => block.type === "image");
   return cover ?? null;
