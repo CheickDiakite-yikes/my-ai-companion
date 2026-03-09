@@ -36,6 +36,8 @@ import {
   Info,
   Loader2,
   Mail,
+  CalendarDays,
+  MapPin,
   Terminal,
   Maximize2,
   Globe,
@@ -1356,14 +1358,69 @@ function formatGoogleEmailRecipientSummary(recipients: string[]): string {
   return `${recipients[0]} +${recipients.length - 1}`;
 }
 
+function extractEmailAddressFromRecipient(recipient: string | null | undefined): string | null {
+  if (!recipient) return null;
+  const trimmed = recipient.trim();
+  if (!trimmed) return null;
+  const bracketMatch = trimmed.match(/<([^>]+)>/);
+  const candidate = (bracketMatch?.[1] ?? trimmed).trim().toLowerCase();
+  return candidate.includes("@") ? candidate : null;
+}
+
+function formatGoogleEmailParticipantLabel(
+  participant:
+    | NonNullable<GoogleActionPreview["emailThread"]>["participants"][number]
+    | null
+    | undefined,
+): string | null {
+  const name = participant?.name?.trim();
+  if (name) return name;
+  const email = participant?.email?.trim();
+  if (email) return email;
+  const raw = participant?.raw?.trim();
+  return raw || null;
+}
+
+function resolveGoogleEmailReplyTargetLabel(preview: GoogleActionPreview): string {
+  const recipients = preview.proposedEmail?.to ?? [];
+  const participants = preview.emailThread?.participants ?? [];
+
+  for (const recipient of recipients) {
+    const recipientEmail = extractEmailAddressFromRecipient(recipient);
+    if (!recipientEmail) continue;
+    const matchingParticipant = participants.find((participant) => {
+      const participantEmail = participant.email?.trim().toLowerCase();
+      return (
+        participantEmail === recipientEmail ||
+        extractEmailAddressFromRecipient(participant.raw) === recipientEmail
+      );
+    });
+    const participantLabel = formatGoogleEmailParticipantLabel(matchingParticipant);
+    if (participantLabel) return participantLabel;
+  }
+
+  return formatGoogleEmailRecipientSummary(recipients);
+}
+
 function buildGoogleEmailCollapsedSummary(params: {
-  to: string[];
-  subject: string | null | undefined;
+  preview: GoogleActionPreview;
   statusLabel: string;
 }): string {
+  const proposedEmail = params.preview.proposedEmail;
+  const subject =
+    proposedEmail?.subject?.trim() ||
+    params.preview.emailThread?.subject?.trim() ||
+    "No subject";
+  if (params.preview.kind === "email_reply") {
+    return [
+      `Reply to ${resolveGoogleEmailReplyTargetLabel(params.preview)}`,
+      subject,
+      params.statusLabel,
+    ].join(" • ");
+  }
   return [
-    `To ${formatGoogleEmailRecipientSummary(params.to)}`,
-    params.subject?.trim() || "No subject",
+    `To ${formatGoogleEmailRecipientSummary(proposedEmail?.to ?? [])}`,
+    subject,
     params.statusLabel,
   ].join(" • ");
 }
@@ -1389,6 +1446,83 @@ function getGoogleEmailToneStyles(tone: "pending" | "ready" | "cancelled") {
       "color-mix(in srgb, var(--app-accent) 32%, rgba(255,255,255,0.9))",
     borderColor: "color-mix(in srgb, var(--app-accent) 34%, rgba(255,255,255,0.34))",
   };
+}
+
+function formatGoogleCalendarDateRange(
+  startTime: string | null | undefined,
+  endTime: string | null | undefined,
+): string {
+  if (!startTime) return "Time TBD";
+  const start = new Date(startTime);
+  if (Number.isNaN(start.getTime())) {
+    return startTime;
+  }
+  const end = endTime ? new Date(endTime) : null;
+  const sameDay =
+    end &&
+    !Number.isNaN(end.getTime()) &&
+    start.getFullYear() === end.getFullYear() &&
+    start.getMonth() === end.getMonth() &&
+    start.getDate() === end.getDate();
+
+  const startLabel = start.toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+
+  if (!end || Number.isNaN(end.getTime())) {
+    return startLabel;
+  }
+
+  if (sameDay) {
+    return `${startLabel} - ${end.toLocaleTimeString([], {
+      hour: "numeric",
+      minute: "2-digit",
+    })}`;
+  }
+
+  return `${startLabel} - ${end.toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  })}`;
+}
+
+function buildGoogleCalendarCollapsedSummary(params: {
+  preview: GoogleActionPreview;
+  statusLabel: string;
+}): string {
+  const proposedCalendar = params.preview.proposedCalendar;
+  const currentEvent = params.preview.calendarEvent;
+  const title =
+    proposedCalendar?.title?.trim() ||
+    currentEvent?.title?.trim() ||
+    "Calendar event";
+  const timeLabel = formatGoogleCalendarDateRange(
+    proposedCalendar?.startTime ?? currentEvent?.startTime,
+    proposedCalendar?.endTime ?? currentEvent?.endTime,
+  );
+  const prefix =
+    params.preview.kind === "calendar_update"
+      ? "Update"
+      : params.preview.kind === "calendar_detail"
+        ? "Event"
+        : "Create";
+
+  return [`${prefix}: ${title}`, timeLabel, params.statusLabel].join(" • ");
+}
+
+function getGoogleCalendarPreviewHelper(preview: GoogleActionPreview): string {
+  if (preview.kind === "calendar_detail") {
+    return "Calendar details are ready below.";
+  }
+  if (preview.kind === "calendar_update") {
+    return "Approve to apply this update to Google Calendar.";
+  }
+  return "Approve to create this on Google Calendar.";
 }
 
 function GoogleEmailComposerPreview(props: {
@@ -1636,6 +1770,260 @@ function GoogleEmailComposerPreview(props: {
   );
 }
 
+function GoogleCalendarPreview(props: {
+  title: string;
+  startTime: string | null | undefined;
+  endTime: string | null | undefined;
+  location: string | null | undefined;
+  descriptionPreview: string | null | undefined;
+  statusLabel: string;
+  helperText: string;
+  tone: "pending" | "ready" | "cancelled";
+  currentEventLabel?: string | null;
+  primaryAction?: {
+    label: string;
+    onClick: () => void;
+    disabled?: boolean;
+    testId?: string;
+  };
+  secondaryAction?: {
+    label: string;
+    onClick: () => void;
+    disabled?: boolean;
+    testId?: string;
+  };
+  testId?: string;
+}) {
+  const [isExpanded, setIsExpanded] = useState(false);
+  const statusIcon =
+    props.tone === "ready" ? (
+      <CheckCircle2 className="h-3 w-3" />
+    ) : props.tone === "cancelled" ? (
+      <AlertTriangle className="h-3 w-3" />
+    ) : (
+      <Clock3 className="h-3 w-3" />
+    );
+
+  const toneStyles = getGoogleEmailToneStyles(props.tone);
+  const descriptionPreview = props.descriptionPreview?.trim();
+  const shouldShowDescriptionToggle =
+    Boolean(descriptionPreview) &&
+    ((descriptionPreview?.length ?? 0) > 180 ||
+      (descriptionPreview?.split(/\n+/).length ?? 0) > 4);
+  const hasFooterActions = Boolean(props.primaryAction || props.secondaryAction);
+
+  return (
+    <div
+      className="relative overflow-hidden rounded-[1.45rem] border p-2.5 backdrop-blur-md"
+      style={{
+        borderColor: "rgba(255,255,255,0.22)",
+        background:
+          "radial-gradient(120% 140% at 12% 10%, color-mix(in srgb, var(--app-accent) 20%, rgba(255,255,255,0.08)) 0%, transparent 54%), linear-gradient(180deg, rgba(255,255,255,0.16), rgba(255,255,255,0.08))",
+        boxShadow:
+          "0 16px 34px rgba(0, 0, 0, 0.18), inset 0 1px 0 rgba(255,255,255,0.22)",
+        backdropFilter: "blur(18px)",
+      }}
+      data-testid={props.testId}
+    >
+      <div
+        className="pointer-events-none absolute inset-x-4 top-0 h-px"
+        style={{
+          background:
+            "linear-gradient(90deg, transparent, color-mix(in srgb, var(--app-accent) 46%, transparent), transparent)",
+        }}
+      />
+      <div className="relative space-y-2.5">
+        <div className="flex flex-wrap items-center gap-2">
+          <div
+            className="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-[0.14em]"
+            style={{
+              borderColor: "rgba(255,255,255,0.32)",
+              backgroundColor: "rgba(255,255,255,0.78)",
+              color: "#173b40",
+            }}
+          >
+            <CalendarDays className="h-3 w-3" />
+            Zee Calendar
+          </div>
+          <div
+            className="inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide"
+            style={{
+              borderColor: toneStyles.borderColor,
+              backgroundColor: toneStyles.backgroundColor,
+              color: toneStyles.textColor,
+            }}
+          >
+            {statusIcon}
+            {props.statusLabel}
+          </div>
+        </div>
+
+        <div
+          className="space-y-2 rounded-[1.2rem] border p-2.5 backdrop-blur-sm"
+          style={{
+            borderColor: "rgba(255,255,255,0.24)",
+            background:
+              "linear-gradient(135deg, color-mix(in srgb, var(--app-accent) 16%, rgba(255,255,255,0.7)), rgba(255,255,255,0.56))",
+            boxShadow: "inset 0 1px 0 rgba(255,255,255,0.18)",
+          }}
+        >
+          <div
+            className="rounded-[1rem] border px-3 py-3"
+            style={{
+              borderColor: "rgba(255,255,255,0.28)",
+              background:
+                "linear-gradient(180deg, rgba(255,255,255,0.66), rgba(247,247,247,0.52))",
+              backdropFilter: "blur(16px)",
+              color: "#18363c",
+            }}
+          >
+            <div className="flex items-start gap-3">
+              <div
+                className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full border"
+                style={{
+                  borderColor: "rgba(255,255,255,0.26)",
+                  backgroundColor: "rgba(255,255,255,0.54)",
+                  color: "#21454b",
+                }}
+              >
+                <CalendarDays className="h-4 w-4" />
+              </div>
+              <div className="min-w-0 space-y-1">
+                <p className="text-base font-semibold leading-5">{props.title}</p>
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-[#4d666b]">
+                  <span className="inline-flex items-center gap-1.5">
+                    <Clock3 className="h-3.5 w-3.5" />
+                    {formatGoogleCalendarDateRange(props.startTime, props.endTime)}
+                  </span>
+                  {props.location ? (
+                    <span className="inline-flex items-center gap-1.5">
+                      <MapPin className="h-3.5 w-3.5" />
+                      {props.location}
+                    </span>
+                  ) : null}
+                </div>
+                {props.currentEventLabel ? (
+                  <p className="text-[11px] font-medium text-[#6a7f83]">
+                    {props.currentEventLabel}
+                  </p>
+                ) : null}
+              </div>
+            </div>
+          </div>
+
+          {descriptionPreview ? (
+            <div
+              className="rounded-[1rem] border px-3 py-3"
+              style={{
+                borderColor: "rgba(255,255,255,0.28)",
+                backgroundColor: "rgba(255,255,255,0.5)",
+                backdropFilter: "blur(14px)",
+                color: "#234247",
+              }}
+            >
+              <div
+                className="relative pr-1"
+                style={{
+                  maxHeight: isExpanded ? "180px" : "92px",
+                  overflowY: isExpanded ? "auto" : "hidden",
+                }}
+              >
+                <p className="whitespace-pre-wrap text-sm leading-5">{descriptionPreview}</p>
+                {!isExpanded && shouldShowDescriptionToggle ? (
+                  <div
+                    className="pointer-events-none absolute inset-x-0 bottom-0 h-10"
+                    style={{
+                      background:
+                        "linear-gradient(180deg, rgba(255,255,255,0), rgba(250,250,250,0.96))",
+                    }}
+                  />
+                ) : null}
+              </div>
+              {shouldShowDescriptionToggle ? (
+                <div className="mt-2 flex justify-end">
+                  <button
+                    type="button"
+                    onClick={() => setIsExpanded((value) => !value)}
+                    className="rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide transition-colors hover:opacity-90"
+                    style={{
+                      borderColor: "rgba(255,255,255,0.32)",
+                      backgroundColor: "rgba(255,255,255,0.6)",
+                      color: "#38585d",
+                    }}
+                    data-testid={
+                      props.testId
+                        ? `${props.testId}-toggle-description`
+                        : "google-calendar-toggle-description"
+                    }
+                  >
+                    {isExpanded ? "Show less" : "Show more"}
+                  </button>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+
+          <div
+            className="rounded-[1rem] border px-3 py-2.5 text-[12px]"
+            style={{
+              borderColor: "rgba(255,255,255,0.28)",
+              backgroundColor: "rgba(255,255,255,0.52)",
+              backdropFilter: "blur(14px)",
+              color: "#5f7274",
+            }}
+          >
+            <div className="flex items-center gap-2">
+              <MessageSquare className="h-3.5 w-3.5 shrink-0 opacity-70" />
+              <p className="min-w-0 flex-1 leading-5">{props.helperText}</p>
+              {!hasFooterActions ? (
+                <ChevronRight className="h-4 w-4 shrink-0 opacity-45" />
+              ) : null}
+            </div>
+            {hasFooterActions ? (
+              <div className="mt-2 flex flex-wrap justify-end gap-2">
+                {props.secondaryAction ? (
+                  <button
+                    type="button"
+                    onClick={props.secondaryAction.onClick}
+                    disabled={props.secondaryAction.disabled}
+                    className="rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide transition-colors hover:opacity-90 disabled:opacity-55"
+                    style={{
+                      borderColor: "rgba(255,255,255,0.28)",
+                      backgroundColor: "rgba(255,255,255,0.44)",
+                      color: "#4c666a",
+                    }}
+                    data-testid={props.secondaryAction.testId}
+                  >
+                    {props.secondaryAction.label}
+                  </button>
+                ) : null}
+                {props.primaryAction ? (
+                  <button
+                    type="button"
+                    onClick={props.primaryAction.onClick}
+                    disabled={props.primaryAction.disabled}
+                    className="rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide transition-colors hover:opacity-90 disabled:opacity-55"
+                    style={{
+                      borderColor:
+                        "color-mix(in srgb, var(--app-accent) 42%, rgba(255,255,255,0.26))",
+                      backgroundColor:
+                        "color-mix(in srgb, var(--app-accent) 28%, rgba(255,255,255,0.72))",
+                      color: "var(--app-accent-text)",
+                    }}
+                    data-testid={props.primaryAction.testId}
+                  >
+                    {props.primaryAction.label}
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function GoogleEmailAssistantTaskCard(props: {
   card: UnifiedAgentTaskCardModel;
   googleActionPreview: GoogleActionPreview;
@@ -1688,8 +2076,7 @@ function GoogleEmailAssistantTaskCard(props: {
       : "pending";
   const statusToneStyles = getGoogleEmailToneStyles(statusTone);
   const collapsedSummary = buildGoogleEmailCollapsedSummary({
-    to: proposedEmail.to,
-    subject: proposedEmail.subject,
+    preview: props.googleActionPreview,
     statusLabel,
   });
 
@@ -1888,6 +2275,301 @@ function GoogleEmailAssistantTaskCard(props: {
                   : undefined
               }
               testId="google-email-preview-card"
+            />
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {props.failure ? (
+        <div
+          className="rounded-2xl border px-3 py-2 text-xs"
+          style={{
+            borderColor: "rgba(248, 113, 113, 0.35)",
+            backgroundColor: "rgba(127, 29, 29, 0.12)",
+            color: "#fecaca",
+          }}
+        >
+          {props.failure.reason}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function GoogleCalendarAssistantTaskCard(props: {
+  card: UnifiedAgentTaskCardModel;
+  googleActionPreview: GoogleActionPreview;
+  googleActionResult: GoogleActionResult | null;
+  approvalPending: boolean;
+  isResolvingApproval: boolean;
+  onApprove: () => void;
+  onDeny: () => void;
+  failure: TaskFailureSummary | null;
+}) {
+  const proposedCalendar = props.googleActionPreview.proposedCalendar;
+  const calendarEvent = props.googleActionPreview.calendarEvent;
+  const shouldDefaultCollapsed =
+    props.googleActionPreview.kind !== "calendar_detail" &&
+    Boolean(
+      props.googleActionResult ||
+        props.card.status === "completed" ||
+        props.card.status === "cancelled",
+    );
+  const [isCollapsed, setIsCollapsed] = useState(shouldDefaultCollapsed);
+
+  useEffect(() => {
+    setIsCollapsed(shouldDefaultCollapsed);
+  }, [props.card.taskId, shouldDefaultCollapsed]);
+
+  const statusLabel = props.failure
+    ? "Failed"
+    : props.googleActionResult?.status === "event_created"
+      ? "Event created"
+      : props.googleActionResult?.status === "event_updated"
+        ? "Event updated"
+        : props.approvalPending
+          ? "Needs approval"
+          : props.card.status === "in_progress"
+            ? props.googleActionPreview.kind === "calendar_update"
+              ? "Updating..."
+              : props.googleActionPreview.kind === "calendar_create"
+                ? "Creating..."
+                : "Loading..."
+            : props.googleActionPreview.kind === "calendar_detail"
+              ? "Details ready"
+              : "Event preview";
+
+  const summaryText =
+    props.failure?.reason ||
+    props.googleActionResult?.summary ||
+    props.googleActionPreview.summary ||
+    props.card.summaryText ||
+    "";
+  const statusTone: "pending" | "ready" | "cancelled" = props.failure
+    ? "cancelled"
+    : props.googleActionResult || props.googleActionPreview.kind === "calendar_detail"
+      ? "ready"
+      : "pending";
+  const statusToneStyles = getGoogleEmailToneStyles(statusTone);
+  const collapsedSummary = buildGoogleCalendarCollapsedSummary({
+    preview: props.googleActionPreview,
+    statusLabel,
+  });
+
+  return (
+    <div
+      className="space-y-3"
+      data-testid="agent-unified-task-card"
+      data-agent-task-id={props.card.taskId}
+      data-agent-task-status={props.card.status}
+      data-google-calendar-card="true"
+    >
+      <div className="flex items-start justify-between gap-3 px-1">
+        <div className="min-w-0">
+          <div className="flex items-center gap-1.5">
+            <CalendarDays
+              className="h-3.5 w-3.5"
+              style={{ color: "var(--app-on-dark-muted)" }}
+            />
+            <p
+              className="text-[11px] font-semibold uppercase tracking-[0.16em]"
+              style={{ color: "var(--app-on-dark-muted)" }}
+            >
+              Zee Calendar
+            </p>
+          </div>
+          <p className="mt-1.5 text-sm font-semibold" style={{ color: "var(--app-on-dark)" }}>
+            {props.googleActionPreview.title}
+          </p>
+          {summaryText ? (
+            <p
+              className="mt-1 text-xs leading-5"
+              style={{ color: "var(--app-on-dark-muted)" }}
+            >
+              {summaryText}
+            </p>
+          ) : null}
+          {calendarEvent && props.googleActionPreview.kind === "calendar_update" ? (
+            <p
+              className="mt-1 text-[11px] leading-5"
+              style={{ color: "var(--app-on-dark-muted)" }}
+            >
+              Updating: {calendarEvent.title}
+            </p>
+          ) : null}
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <span
+            className="rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide"
+            style={{
+              borderColor: statusToneStyles.borderColor,
+              backgroundColor: statusToneStyles.backgroundColor,
+              color: statusToneStyles.textColor,
+            }}
+          >
+            {statusLabel}
+          </span>
+          <button
+            type="button"
+            onClick={() => setIsCollapsed((value) => !value)}
+            className="rounded-full border p-2 transition-colors hover:opacity-90"
+            style={{
+              borderColor: "rgba(255,255,255,0.18)",
+              backgroundColor: "rgba(255,255,255,0.08)",
+              color: "var(--app-on-dark-muted)",
+            }}
+            data-testid="button-google-calendar-collapse"
+            aria-label={isCollapsed ? "Expand calendar card" : "Collapse calendar card"}
+          >
+            <motion.div
+              animate={{ rotate: isCollapsed ? 0 : 180 }}
+              transition={{ duration: 0.2 }}
+            >
+              <ChevronDown className="h-3.5 w-3.5" />
+            </motion.div>
+          </button>
+        </div>
+      </div>
+
+      <AnimatePresence initial={false} mode="wait">
+        {isCollapsed ? (
+          <motion.div
+            key="collapsed-calendar-card"
+            initial={{ opacity: 0, y: -4 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 4 }}
+            transition={{ duration: 0.18 }}
+            className="rounded-[1.35rem] border p-3 backdrop-blur-md"
+            style={{
+              borderColor: "rgba(255,255,255,0.18)",
+              background:
+                "linear-gradient(180deg, rgba(255,255,255,0.12), rgba(255,255,255,0.06))",
+              boxShadow:
+                "0 12px 24px rgba(0,0,0,0.14), inset 0 1px 0 rgba(255,255,255,0.16)",
+            }}
+            data-testid="google-calendar-collapsed-card"
+          >
+            <div className="grid gap-2">
+              <div
+                className="flex items-center gap-2 rounded-[1rem] border px-3 py-2.5"
+                style={{
+                  borderColor: "rgba(255,255,255,0.16)",
+                  backgroundColor: "rgba(255,255,255,0.08)",
+                }}
+              >
+                <CalendarDays
+                  className="h-4 w-4 shrink-0"
+                  style={{ color: "var(--app-on-dark-muted)" }}
+                />
+                <p
+                  className="min-w-0 flex-1 truncate text-sm font-medium"
+                  style={{ color: "var(--app-on-dark)" }}
+                >
+                  {collapsedSummary}
+                </p>
+              </div>
+
+              {props.approvalPending ? (
+                <div className="flex flex-wrap justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={props.onDeny}
+                    disabled={props.isResolvingApproval}
+                    className="rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide transition-colors hover:opacity-90 disabled:opacity-55"
+                    style={{
+                      borderColor: "rgba(255,255,255,0.22)",
+                      backgroundColor: "rgba(255,255,255,0.1)",
+                      color: "var(--app-on-dark-muted)",
+                    }}
+                    data-testid="button-google-calendar-secondary-action"
+                  >
+                    {getGoogleApprovalSecondaryLabel(props.googleActionPreview)}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={props.onApprove}
+                    disabled={props.isResolvingApproval}
+                    className="rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide transition-colors hover:opacity-90 disabled:opacity-55"
+                    style={{
+                      borderColor:
+                        "color-mix(in srgb, var(--app-accent) 42%, rgba(255,255,255,0.26))",
+                      backgroundColor:
+                        "color-mix(in srgb, var(--app-accent) 28%, rgba(255,255,255,0.72))",
+                      color: "var(--app-accent-text)",
+                    }}
+                    data-testid="button-google-calendar-primary-action"
+                  >
+                    {getGoogleApprovalPrimaryLabel(props.googleActionPreview)}
+                  </button>
+                </div>
+              ) : null}
+            </div>
+          </motion.div>
+        ) : (
+          <motion.div
+            key="expanded-calendar-card"
+            initial={{ opacity: 0, y: -4 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 4 }}
+            transition={{ duration: 0.18 }}
+          >
+            <GoogleCalendarPreview
+              title={
+                proposedCalendar?.title?.trim() ||
+                calendarEvent?.title?.trim() ||
+                "Calendar event"
+              }
+              startTime={proposedCalendar?.startTime ?? calendarEvent?.startTime}
+              endTime={proposedCalendar?.endTime ?? calendarEvent?.endTime}
+              location={proposedCalendar?.location ?? calendarEvent?.location}
+              descriptionPreview={
+                proposedCalendar?.descriptionPreview ?? calendarEvent?.description
+              }
+              statusLabel={statusLabel}
+              helperText={
+                props.googleActionResult?.status === "event_created"
+                  ? "This event was added to Google Calendar."
+                  : props.googleActionResult?.status === "event_updated"
+                    ? "This change was applied to Google Calendar."
+                    : getGoogleCalendarPreviewHelper(props.googleActionPreview)
+              }
+              tone={statusTone}
+              currentEventLabel={
+                props.googleActionPreview.kind === "calendar_update" &&
+                (proposedCalendar?.originalTitle || proposedCalendar?.originalStartTime)
+                  ? `Was ${
+                      proposedCalendar?.originalTitle?.trim() || calendarEvent?.title || "Untitled"
+                    }${
+                      proposedCalendar?.originalStartTime
+                        ? ` · ${formatGoogleCalendarDateRange(
+                            proposedCalendar.originalStartTime,
+                            proposedCalendar.originalEndTime,
+                          )}`
+                        : ""
+                    }`
+                  : null
+              }
+              primaryAction={
+                props.approvalPending
+                  ? {
+                      label: getGoogleApprovalPrimaryLabel(props.googleActionPreview),
+                      onClick: props.onApprove,
+                      disabled: props.isResolvingApproval,
+                      testId: "button-google-calendar-primary-action",
+                    }
+                  : undefined
+              }
+              secondaryAction={
+                props.approvalPending
+                  ? {
+                      label: getGoogleApprovalSecondaryLabel(props.googleActionPreview),
+                      onClick: props.onDeny,
+                      disabled: props.isResolvingApproval,
+                      testId: "button-google-calendar-secondary-action",
+                    }
+                  : undefined
+              }
+              testId="google-calendar-preview-card"
             />
           </motion.div>
         )}
@@ -6126,6 +6808,25 @@ const UnifiedAgentTaskCard = ({
   if (googleActionPreview?.proposedEmail) {
     return (
       <GoogleEmailAssistantTaskCard
+        card={card}
+        googleActionPreview={googleActionPreview}
+        googleActionResult={googleActionResult}
+        approvalPending={approvalPending}
+        isResolvingApproval={isResolvingApproval}
+        onApprove={() => void handleApproval(true)}
+        onDeny={() => void handleApproval(false)}
+        failure={failure}
+      />
+    );
+  }
+
+  if (
+    googleActionPreview &&
+    googleActionPreview.connector === "calendar" &&
+    (googleActionPreview.proposedCalendar || googleActionPreview.calendarEvent)
+  ) {
+    return (
+      <GoogleCalendarAssistantTaskCard
         card={card}
         googleActionPreview={googleActionPreview}
         googleActionResult={googleActionResult}
