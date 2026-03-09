@@ -1568,14 +1568,14 @@ function GoogleEmailComposerPreview(props: {
 
   return (
     <div
-      className="relative overflow-hidden rounded-[1.45rem] border p-2.5 backdrop-blur-md"
+      className="relative w-full min-w-0 max-w-full overflow-hidden rounded-[1.45rem] border p-2.5"
       style={{
         borderColor: "rgba(255,255,255,0.22)",
         background:
-          "radial-gradient(115% 130% at 10% 8%, color-mix(in srgb, var(--app-accent) 18%, rgba(255,255,255,0.08)) 0%, transparent 54%), linear-gradient(180deg, rgba(255,255,255,0.16), rgba(255,255,255,0.08))",
+          "linear-gradient(180deg, rgba(255,255,255,0.14), rgba(255,255,255,0.08))",
         boxShadow:
-          "0 16px 34px rgba(0, 0, 0, 0.18), inset 0 1px 0 rgba(255,255,255,0.22)",
-        backdropFilter: "blur(18px)",
+          "0 14px 28px rgba(0, 0, 0, 0.16), inset 0 1px 0 rgba(255,255,255,0.16)",
+        backdropFilter: "blur(10px) saturate(112%)",
       }}
       data-testid={props.testId}
     >
@@ -1616,17 +1616,15 @@ function GoogleEmailComposerPreview(props: {
           className="space-y-2 rounded-[1.2rem] border p-2.5 backdrop-blur-sm"
           style={{
             borderColor: "rgba(255,255,255,0.24)",
-            background:
-              "linear-gradient(135deg, color-mix(in srgb, #efe5c6 28%, rgba(255,255,255,0.66)), rgba(255,255,255,0.58))",
-            boxShadow: "inset 0 1px 0 rgba(255,255,255,0.18)",
+            backgroundColor: "rgba(255,255,255,0.16)",
+            boxShadow: "inset 0 1px 0 rgba(255,255,255,0.14)",
           }}
         >
           <div
             className="flex items-center gap-2 rounded-[0.95rem] border px-3 py-2"
             style={{
               borderColor: "rgba(255,255,255,0.28)",
-              backgroundColor: "rgba(255,255,255,0.52)",
-              backdropFilter: "blur(14px)",
+              backgroundColor: "rgba(255,255,255,0.78)",
               color: "#173b40",
             }}
           >
@@ -1639,8 +1637,7 @@ function GoogleEmailComposerPreview(props: {
             className="flex items-center gap-2 rounded-[0.95rem] border px-3 py-2"
             style={{
               borderColor: "rgba(255,255,255,0.28)",
-              backgroundColor: "rgba(255,255,255,0.52)",
-              backdropFilter: "blur(14px)",
+              backgroundColor: "rgba(255,255,255,0.78)",
               color: "#173b40",
             }}
           >
@@ -1654,9 +1651,7 @@ function GoogleEmailComposerPreview(props: {
             className="rounded-[1rem] border px-3 py-3"
             style={{
               borderColor: "rgba(255,255,255,0.28)",
-              background:
-                "linear-gradient(180deg, rgba(255,255,255,0.66), rgba(247,247,247,0.52))",
-              backdropFilter: "blur(16px)",
+              backgroundColor: "rgba(255,255,255,0.82)",
               color: "#18363c",
             }}
           >
@@ -1714,8 +1709,7 @@ function GoogleEmailComposerPreview(props: {
             className="rounded-[1rem] border px-3 py-2.5 text-[12px]"
             style={{
               borderColor: "rgba(255,255,255,0.28)",
-              backgroundColor: "rgba(255,255,255,0.52)",
-              backdropFilter: "blur(14px)",
+              backgroundColor: "rgba(255,255,255,0.72)",
               color: "#5f7274",
             }}
           >
@@ -1814,14 +1808,14 @@ function GoogleCalendarPreview(props: {
 
   return (
     <div
-      className="relative overflow-hidden rounded-[1.45rem] border p-2.5 backdrop-blur-md"
+      className="relative w-full min-w-0 max-w-full overflow-hidden rounded-[1.45rem] border p-2.5"
       style={{
         borderColor: "rgba(255,255,255,0.22)",
         background:
-          "radial-gradient(120% 140% at 12% 10%, color-mix(in srgb, var(--app-accent) 20%, rgba(255,255,255,0.08)) 0%, transparent 54%), linear-gradient(180deg, rgba(255,255,255,0.16), rgba(255,255,255,0.08))",
+          "linear-gradient(180deg, rgba(255,255,255,0.14), rgba(255,255,255,0.08))",
         boxShadow:
-          "0 16px 34px rgba(0, 0, 0, 0.18), inset 0 1px 0 rgba(255,255,255,0.22)",
-        backdropFilter: "blur(18px)",
+          "0 14px 28px rgba(0, 0, 0, 0.16), inset 0 1px 0 rgba(255,255,255,0.16)",
+        backdropFilter: "blur(10px) saturate(112%)",
       }}
       data-testid={props.testId}
     >
@@ -1862,18 +1856,15 @@ function GoogleCalendarPreview(props: {
           className="space-y-2 rounded-[1.2rem] border p-2.5 backdrop-blur-sm"
           style={{
             borderColor: "rgba(255,255,255,0.24)",
-            background:
-              "linear-gradient(135deg, color-mix(in srgb, var(--app-accent) 16%, rgba(255,255,255,0.7)), rgba(255,255,255,0.56))",
-            boxShadow: "inset 0 1px 0 rgba(255,255,255,0.18)",
+            backgroundColor: "rgba(255,255,255,0.16)",
+            boxShadow: "inset 0 1px 0 rgba(255,255,255,0.14)",
           }}
         >
           <div
             className="rounded-[1rem] border px-3 py-3"
             style={{
               borderColor: "rgba(255,255,255,0.28)",
-              background:
-                "linear-gradient(180deg, rgba(255,255,255,0.66), rgba(247,247,247,0.52))",
-              backdropFilter: "blur(16px)",
+              backgroundColor: "rgba(255,255,255,0.82)",
               color: "#18363c",
             }}
           >
@@ -1914,13 +1905,12 @@ function GoogleCalendarPreview(props: {
           {descriptionPreview ? (
             <div
               className="rounded-[1rem] border px-3 py-3"
-              style={{
-                borderColor: "rgba(255,255,255,0.28)",
-                backgroundColor: "rgba(255,255,255,0.5)",
-                backdropFilter: "blur(14px)",
-                color: "#234247",
-              }}
-            >
+            style={{
+              borderColor: "rgba(255,255,255,0.28)",
+              backgroundColor: "rgba(255,255,255,0.72)",
+              color: "#234247",
+            }}
+          >
               <div
                 className="relative pr-1"
                 style={{
@@ -1967,8 +1957,7 @@ function GoogleCalendarPreview(props: {
             className="rounded-[1rem] border px-3 py-2.5 text-[12px]"
             style={{
               borderColor: "rgba(255,255,255,0.28)",
-              backgroundColor: "rgba(255,255,255,0.52)",
-              backdropFilter: "blur(14px)",
+              backgroundColor: "rgba(255,255,255,0.72)",
               color: "#5f7274",
             }}
           >
@@ -2082,7 +2071,7 @@ function GoogleEmailAssistantTaskCard(props: {
 
   return (
     <div
-      className="space-y-3"
+      className="w-full min-w-0 max-w-full space-y-3"
       data-testid="agent-unified-task-card"
       data-agent-task-id={props.card.taskId}
       data-agent-task-status={props.card.status}
@@ -2160,22 +2149,21 @@ function GoogleEmailAssistantTaskCard(props: {
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 4 }}
             transition={{ duration: 0.18 }}
-            className="rounded-[1.35rem] border p-3 backdrop-blur-md"
+            className="w-full min-w-0 max-w-full rounded-[1.35rem] border p-3"
             style={{
               borderColor: "rgba(255,255,255,0.18)",
-              background:
-                "linear-gradient(180deg, rgba(255,255,255,0.12), rgba(255,255,255,0.06))",
+              backgroundColor: "rgba(255,255,255,0.1)",
               boxShadow:
-                "0 12px 24px rgba(0,0,0,0.14), inset 0 1px 0 rgba(255,255,255,0.16)",
+                "0 10px 20px rgba(0,0,0,0.12), inset 0 1px 0 rgba(255,255,255,0.12)",
             }}
             data-testid="google-email-collapsed-card"
           >
             <div className="grid gap-2">
               <div
-                className="flex items-center gap-2 rounded-[1rem] border px-3 py-2.5"
+                className="flex min-w-0 max-w-full items-center gap-2 rounded-[1rem] border px-3 py-2.5"
                 style={{
                   borderColor: "rgba(255,255,255,0.16)",
-                  backgroundColor: "rgba(255,255,255,0.08)",
+                  backgroundColor: "rgba(255,255,255,0.12)",
                 }}
               >
                 <Mail
@@ -2358,7 +2346,7 @@ function GoogleCalendarAssistantTaskCard(props: {
 
   return (
     <div
-      className="space-y-3"
+      className="w-full min-w-0 max-w-full space-y-3"
       data-testid="agent-unified-task-card"
       data-agent-task-id={props.card.taskId}
       data-agent-task-status={props.card.status}
@@ -2439,22 +2427,21 @@ function GoogleCalendarAssistantTaskCard(props: {
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 4 }}
             transition={{ duration: 0.18 }}
-            className="rounded-[1.35rem] border p-3 backdrop-blur-md"
+            className="w-full min-w-0 max-w-full rounded-[1.35rem] border p-3"
             style={{
               borderColor: "rgba(255,255,255,0.18)",
-              background:
-                "linear-gradient(180deg, rgba(255,255,255,0.12), rgba(255,255,255,0.06))",
+              backgroundColor: "rgba(255,255,255,0.1)",
               boxShadow:
-                "0 12px 24px rgba(0,0,0,0.14), inset 0 1px 0 rgba(255,255,255,0.16)",
+                "0 10px 20px rgba(0,0,0,0.12), inset 0 1px 0 rgba(255,255,255,0.12)",
             }}
             data-testid="google-calendar-collapsed-card"
           >
             <div className="grid gap-2">
               <div
-                className="flex items-center gap-2 rounded-[1rem] border px-3 py-2.5"
+                className="flex min-w-0 max-w-full items-center gap-2 rounded-[1rem] border px-3 py-2.5"
                 style={{
                   borderColor: "rgba(255,255,255,0.16)",
-                  backgroundColor: "rgba(255,255,255,0.08)",
+                  backgroundColor: "rgba(255,255,255,0.12)",
                 }}
               >
                 <CalendarDays
@@ -8042,7 +8029,9 @@ const TextView = ({
               <div
                 className={cn(
                   "flex items-end gap-2",
-                  isUnifiedTaskCard ? "max-w-[88%]" : "max-w-[80%]",
+                  isUnifiedTaskCard
+                    ? "w-full min-w-0 max-w-[calc(100%-2.5rem)] sm:max-w-[88%]"
+                    : "max-w-[80%]",
                 )}
               >
                 {msg.sender !== "user" && (
@@ -8056,7 +8045,7 @@ const TextView = ({
                 )}
                 <div
                   className={cn(
-                    "text-sm leading-relaxed",
+                    "min-w-0 text-sm leading-relaxed",
                     !isUnifiedTaskCard && "rounded-2xl shadow-sm",
                     !isUnifiedTaskCard &&
                       (msg.sender === "user"
