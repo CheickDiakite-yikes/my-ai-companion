@@ -406,6 +406,25 @@ export interface GoogleComposeSession {
   followUpPrompt: string;
 }
 
+export type GoogleCalendarSessionStatus =
+  | "awaiting_datetime"
+  | "awaiting_title"
+  | "resolved"
+  | "cancelled";
+
+export interface GoogleCalendarSession {
+  mode: "calendar_create";
+  status: GoogleCalendarSessionStatus;
+  title: string | null;
+  startTime: string | null;
+  endTime: string | null;
+  timeZone: string;
+  location: string | null;
+  descriptionPreview: string | null;
+  promptSeed: string;
+  followUpPrompt: string;
+}
+
 export interface GoogleEmailAmbiguityCandidate {
   taskId: string;
   recipientLabel: string;
@@ -527,6 +546,11 @@ export type AgentMessageUiPayload =
   | {
       kind: "agent_google_compose_session";
       session: GoogleComposeSession;
+      text: string;
+    }
+  | {
+      kind: "agent_google_calendar_session";
+      session: GoogleCalendarSession;
       text: string;
     }
   | {

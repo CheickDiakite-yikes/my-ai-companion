@@ -146,6 +146,14 @@ async function main(): Promise<void> {
     await upsertGoogleIntegrationFixture(args.email, "write");
     await prepareLiveGoogleAction(page, args.baseUrl, {
       conversationId,
+      functionName: "prepare_google_calendar_action",
+      request: "create a calendar event lunch with Alex",
+      timezone: "America/New_York",
+      expectedStatus: "clarification_needed",
+    });
+    await assertVoiceCalendarSessionSurface(page, readTraceBuffer);
+    await prepareLiveGoogleAction(page, args.baseUrl, {
+      conversationId,
       functionName: "prepare_google_email_action",
       request: "draft an email to voice-stage@example.com saying hello from voice mode",
     });
@@ -283,6 +291,7 @@ async function prepareLiveGoogleAction(
     functionName: "prepare_google_email_action" | "prepare_google_calendar_action";
     request: string;
     timezone?: string;
+    expectedStatus?: "approval_required" | "clarification_needed" | "upgrade_required";
   },
 ): Promise<void> {
   const functionId = randomUUID();
@@ -328,14 +337,47 @@ async function prepareLiveGoogleAction(
     (entry) => entry.id === functionId,
   );
   const resultStatus = functionResponse?.response?.result?.status ?? null;
+  const expectedStatus = params.expectedStatus ?? "approval_required";
   assert.equal(
     resultStatus,
-    "approval_required",
-    `Expected ${params.functionName} to create an approval-backed task, got ${resultStatus}`,
+    expectedStatus,
+    `Expected ${params.functionName} to return ${expectedStatus}, got ${resultStatus}`,
   );
-  assert.ok(
-    functionResponse?.response?.result?.taskId,
-    `Expected ${params.functionName} to return a task id`,
+  if (expectedStatus === "approval_required") {
+    assert.ok(
+      functionResponse?.response?.result?.taskId,
+      `Expected ${params.functionName} to return a task id`,
+    );
+  }
+}
+
+async function assertVoiceCalendarSessionSurface(
+  page: Page,
+  readTraceBuffer: () => Promise<LiveTraceEntry[]>,
+): Promise<void> {
+  try {
+    await page.waitForSelector('[data-testid="voice-task-stage"]', {
+      timeout: 12_000,
+    });
+  } catch (error) {
+    const trace = await readTraceBuffer();
+    throw new Error(
+      `Voice calendar clarification surface did not appear: ${error instanceof Error ? error.message : String(error)}\nRecent traces: ${JSON.stringify(trace.slice(-20), null, 2)}`,
+    );
+  }
+
+  const stage = page.getByTestId("voice-task-stage");
+  const stageText = (await stage.textContent()) ?? "";
+  assert.match(
+    stageText,
+    /(event in progress|zee calendar|when it should happen|time tbd|lunch with alex)/i,
+    "Expected the voice stage to render the calendar clarification surface",
+  );
+  await page.waitForSelector(
+    '[data-testid="voice-task-stage"] [data-testid="google-calendar-session-card"]',
+    {
+      timeout: 5_000,
+    },
   );
 }
 

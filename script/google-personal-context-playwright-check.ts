@@ -92,6 +92,8 @@ async function main(): Promise<void> {
     await verifyWriteEnabledGoogleAssistantState(page, args.outputDir);
     console.log("[google-context-check] approval card compose");
     await verifyApprovalCardComposeFlow(page, args.baseUrl, args.outputDir);
+    console.log("[google-context-check] calendar clarification card");
+    await verifyCalendarClarificationCardFlow(page, args.baseUrl, args.outputDir);
     console.log("[google-context-check] saved-draft revision follow-up");
     await verifySavedDraftRevisionFollowUpFlow(page, args.baseUrl, args.email, args.outputDir);
     console.log("[google-context-check] ambiguous-draft follow-up");
@@ -572,6 +574,84 @@ async function verifyApprovalCardComposeFlow(
     fullPage: true,
   });
   console.log("[google-context-check] approval flow complete");
+}
+
+async function verifyCalendarClarificationCardFlow(
+  page: Page,
+  baseUrl: string,
+  outputDir: string,
+): Promise<void> {
+  const conversationId = await resolveActiveConversationId(page, baseUrl);
+  const beforeMessages = await fetchConversationMessages(page, baseUrl, conversationId);
+  const beforeAssistantCount = beforeMessages.filter(
+    (message) => message.sender === "assistant",
+  ).length;
+
+  await page
+    .getByTestId("input-message")
+    .fill("can you add a calendar event lunch with alex on my calendar?");
+  await page.getByTestId("input-message").press("Enter");
+
+  const clarifyReply = await waitForLatestAssistantReply({
+    page,
+    baseUrl,
+    conversationId,
+    previousAssistantCount: beforeAssistantCount,
+    timeoutMs: 45_000,
+  });
+  assert.match(
+    clarifyReply,
+    /(when the event should happen|tomorrow at 1pm|what time)/i,
+    "Calendar create without a time should ask for timing details",
+  );
+
+  const sessionCard = page.locator('[data-testid="google-calendar-session-card"]').last();
+  await sessionCard.waitFor({ state: "visible", timeout: 20_000 });
+  assert.match(
+    await sessionCard.innerText(),
+    /lunch with alex|time tbd|waiting/i,
+    "Expected a dedicated calendar clarification card in text chat",
+  );
+
+  const afterClarifyMessages = await fetchConversationMessages(page, baseUrl, conversationId);
+  const afterClarifyAssistantCount = afterClarifyMessages.filter(
+    (message) => message.sender === "assistant",
+  ).length;
+
+  await page.getByTestId("input-message").fill("saturday at 1pm");
+  await page.getByTestId("input-message").press("Enter");
+
+  await waitForLatestAssistantReply({
+    page,
+    baseUrl,
+    conversationId,
+    previousAssistantCount: afterClarifyAssistantCount,
+    timeoutMs: 45_000,
+  });
+
+  const calendarCard = page.locator('[data-google-calendar-card="true"]').last();
+  await calendarCard.waitFor({ state: "visible", timeout: 20_000 });
+  const calendarCardText = await calendarCard.innerText();
+  assert.match(
+    calendarCardText,
+    /lunch with alex/i,
+    "Expected the time follow-up to produce a real calendar approval card",
+  );
+  assert.match(
+    calendarCardText,
+    /(needs approval|approve|sat|mar)/i,
+    "Expected the resolved calendar approval card to show its preview state",
+  );
+
+  await calendarCard
+    .getByTestId("button-google-calendar-primary-action")
+    .last()
+    .waitFor({ state: "visible", timeout: 10_000 });
+
+  await page.screenshot({
+    path: resolve(outputDir, "google-personal-context-calendar-clarification-card.png"),
+    fullPage: true,
+  });
 }
 
 async function verifySavedDraftSendFollowUpFlow(

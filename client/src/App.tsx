@@ -80,6 +80,7 @@ import type {
   AgentApprovalSummary,
   GoogleActionPreview,
   GoogleActionResult,
+  GoogleCalendarSession,
   GoogleComposeSession,
   ArtifactQualitySummary,
   AgentOfferSummary,
@@ -761,6 +762,13 @@ type VoiceStageSurface =
       card: UnifiedAgentTaskCardModel;
     }
   | {
+      kind: "calendar_session";
+      surfaceKey: string;
+      message: MessageData;
+      session: GoogleCalendarSession;
+      text: string;
+    }
+  | {
       kind: "compose_session";
       surfaceKey: string;
       message: MessageData;
@@ -781,7 +789,7 @@ type VoiceStageSurface =
 type VoiceStageCandidate = VoiceStageSurface & {
   activeRank: number;
   recencyRank: number;
-  source: "task" | "compose_session" | "email_ambiguity";
+  source: "task" | "calendar_session" | "compose_session" | "email_ambiguity";
   isTerminal: boolean;
 };
 
@@ -1012,6 +1020,12 @@ function isGoogleComposeSessionPayload(
   return Boolean(payload && payload.kind === "agent_google_compose_session");
 }
 
+function isGoogleCalendarSessionPayload(
+  payload: MessageData["uiPayload"],
+): payload is Extract<AgentMessageUiPayload, { kind: "agent_google_calendar_session" }> {
+  return Boolean(payload && payload.kind === "agent_google_calendar_session");
+}
+
 function isGoogleEmailAmbiguityPayload(
   payload: MessageData["uiPayload"],
 ): payload is Extract<AgentMessageUiPayload, { kind: "agent_google_email_ambiguity" }> {
@@ -1024,6 +1038,7 @@ function isAgentUiPayload(payload: MessageData["uiPayload"]): boolean {
     isAgentApprovalPayload(payload) ||
     isAgentArtifactPayload(payload) ||
     isAgentOfferPayload(payload) ||
+    isGoogleCalendarSessionPayload(payload) ||
     isGoogleComposeSessionPayload(payload) ||
     isGoogleEmailAmbiguityPayload(payload)
   );
@@ -1043,6 +1058,9 @@ function isGoogleAssistantUiPayload(payload: MessageData["uiPayload"]): boolean 
   }
   if (payload.kind === "agent_google_compose_session") {
     return payload.session.mode === "email_compose";
+  }
+  if (payload.kind === "agent_google_calendar_session") {
+    return payload.session.mode === "calendar_create";
   }
   if (payload.kind === "agent_google_email_ambiguity") {
     return payload.ambiguity.candidates.length > 0;
@@ -1458,6 +1476,39 @@ function getGoogleComposeStatusMeta(session: GoogleComposeSession): {
   };
 }
 
+function getGoogleCalendarSessionStatusMeta(session: GoogleCalendarSession): {
+  label: string;
+  helperText: string;
+  tone: "pending" | "ready" | "cancelled";
+} {
+  if (session.status === "awaiting_datetime") {
+    return {
+      label: "Waiting...",
+      helperText: "Tell Zee when it should happen, like Saturday at 1pm.",
+      tone: "pending",
+    };
+  }
+  if (session.status === "awaiting_title") {
+    return {
+      label: "Waiting...",
+      helperText: "Tell Zee what the event should be called.",
+      tone: "pending",
+    };
+  }
+  if (session.status === "cancelled") {
+    return {
+      label: "Cancelled",
+      helperText: "That calendar plan is closed. Start a new event whenever you want.",
+      tone: "cancelled",
+    };
+  }
+  return {
+    label: "Event ready",
+    helperText: "The event preview is ready below.",
+    tone: "ready",
+  };
+}
+
 function getGoogleEmailPreviewHelper(
   preview: NonNullable<GoogleActionPreview["proposedEmail"]>,
 ): string {
@@ -1645,6 +1696,22 @@ function getVoiceStageCandidateSummary(candidate: VoiceStageCandidate): {
   detail: string;
   connector: "gmail" | "calendar" | null;
 } {
+  if (candidate.kind === "calendar_session") {
+    const statusMeta = getGoogleCalendarSessionStatusMeta(candidate.session);
+    return {
+      title: "Event in progress",
+      detail: [
+        candidate.session.title?.trim() || "Title TBD",
+        formatGoogleCalendarDateRange(
+          candidate.session.startTime,
+          candidate.session.endTime,
+        ),
+        statusMeta.label,
+      ].join(" • "),
+      connector: "calendar",
+    };
+  }
+
   if (candidate.kind === "compose_session") {
     const statusMeta = getGoogleComposeStatusMeta(candidate.session);
     return {
@@ -2394,6 +2461,63 @@ function GoogleComposeSessionCard(props: {
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+function GoogleCalendarSessionCard(props: {
+  session: GoogleCalendarSession;
+  text: string;
+  displayMode?: "chat" | "voice_stage";
+}) {
+  const statusMeta = getGoogleCalendarSessionStatusMeta(props.session);
+  const toneStyles = getGoogleEmailToneStyles(statusMeta.tone);
+  const isVoiceStage = props.displayMode === "voice_stage";
+  const title = props.session.title?.trim() || "Waiting for title";
+
+  return (
+    <div
+      className={cn(
+        "w-full min-w-0 max-w-full",
+        isVoiceStage ? "space-y-2" : "space-y-2.5",
+      )}
+      data-testid="google-calendar-session-card"
+      data-calendar-session-status={props.session.status}
+    >
+      {!isVoiceStage ? (
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <CalendarDays className="h-4 w-4" />
+              <p className="text-sm font-semibold">Event in progress</p>
+            </div>
+            <p className="mt-2 text-xs leading-5 opacity-80">{props.text}</p>
+          </div>
+          <div
+            className="shrink-0 rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide"
+            style={{
+              borderColor: toneStyles.borderColor,
+              backgroundColor: toneStyles.backgroundColor,
+              color: toneStyles.textColor,
+            }}
+          >
+            {statusMeta.label}
+          </div>
+        </div>
+      ) : null}
+
+      <GoogleCalendarPreview
+        title={title}
+        startTime={props.session.startTime}
+        endTime={props.session.endTime}
+        location={props.session.location}
+        descriptionPreview={props.session.descriptionPreview}
+        statusLabel={statusMeta.label}
+        helperText={statusMeta.helperText}
+        tone={statusMeta.tone}
+        displayMode={isVoiceStage ? "voice_stage" : "default"}
+        testId="google-calendar-session-preview"
+      />
     </div>
   );
 }
@@ -4334,6 +4458,21 @@ function summarizeVoiceStageSurface(
     };
   }
 
+  if (surface.kind === "calendar_session") {
+    return {
+      kind: surface.kind,
+      surfaceKey: surface.surfaceKey,
+      sessionStatus: surface.session.status,
+      sessionMode: surface.session.mode,
+      title: surface.session.title ?? null,
+      startTime: surface.session.startTime ?? null,
+      source: "source" in surface ? surface.source : "calendar_session",
+      activeRank: "activeRank" in surface ? surface.activeRank : null,
+      recencyRank: "recencyRank" in surface ? surface.recencyRank : null,
+      isTerminal: "isTerminal" in surface ? surface.isTerminal : null,
+    };
+  }
+
   return {
     kind: surface.kind,
     surfaceKey: surface.surfaceKey,
@@ -4414,6 +4553,25 @@ function buildVoiceStageCandidates(
         source: "email_ambiguity",
         isTerminal: false,
         activeRank: 5,
+        recencyRank: index,
+      });
+      return;
+    }
+
+    if (isGoogleCalendarSessionPayload(item.message.uiPayload)) {
+      const status = item.message.uiPayload.session.status;
+      if ((status === "resolved" || status === "cancelled") && index < recencyFloor) {
+        return;
+      }
+      candidates.push({
+        kind: "calendar_session",
+        surfaceKey: `calendar-session:${item.message.id}:${status}`,
+        message: item.message,
+        session: item.message.uiPayload.session,
+        text: item.message.uiPayload.text,
+        source: "calendar_session",
+        isTerminal: status === "resolved" || status === "cancelled",
+        activeRank: status === "resolved" || status === "cancelled" ? 1 : 4,
         recencyRank: index,
       });
       return;
@@ -7712,6 +7870,8 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
         : voiceStageSurface.card.googleActionPreview?.connector === "calendar"
           ? "Zee Calendar"
           : "Zee Canvas"
+      : voiceStageSurface?.kind === "calendar_session"
+        ? "Event In Progress"
       : voiceStageSurface?.kind === "compose_session"
         ? "Draft In Progress"
         : voiceStageSurface?.kind === "email_ambiguity"
@@ -7721,6 +7881,8 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
   const voiceStageSubtitle =
     voiceStageSurface?.kind === "task"
       ? voiceStageSurface.card.title
+      : voiceStageSurface?.kind === "calendar_session"
+        ? "Zee is collecting the missing event details."
       : voiceStageSurface?.kind === "compose_session"
         ? "Zee is shaping a draft from your voice instructions."
         : voiceStageSurface?.kind === "email_ambiguity"
@@ -8450,6 +8612,12 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
                                 card={voiceStageSurface.card}
                                 onOpenArtifact={handleVoiceStageOpenArtifact}
                                 onResolveApproval={handleVoiceStageResolveApproval}
+                                displayMode="voice_stage"
+                              />
+                            ) : voiceStageSurface.kind === "calendar_session" ? (
+                              <GoogleCalendarSessionCard
+                                session={voiceStageSurface.session}
+                                text={voiceStageSurface.text}
                                 displayMode="voice_stage"
                               />
                             ) : voiceStageSurface.kind === "compose_session" ? (
@@ -10491,6 +10659,11 @@ const TextView = ({
                       </div>
                     ) : isGoogleComposeSessionPayload(msg.uiPayload) ? (
                       <GoogleComposeSessionCard
+                        session={msg.uiPayload.session}
+                        text={msg.uiPayload.text}
+                      />
+                    ) : isGoogleCalendarSessionPayload(msg.uiPayload) ? (
+                      <GoogleCalendarSessionCard
                         session={msg.uiPayload.session}
                         text={msg.uiPayload.text}
                       />

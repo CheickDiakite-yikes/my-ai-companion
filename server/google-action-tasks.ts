@@ -5,6 +5,7 @@ import type {
   AgentStepSummary,
   GoogleActionPreview,
   GoogleActionResult,
+  GoogleCalendarSession,
   GoogleCalendarEventDetail,
   GoogleComposeSession,
   GoogleEmailThreadDetail,
@@ -83,6 +84,7 @@ type GoogleActionTaskPreparation =
       kind: "clarify";
       message: string;
       composeSession?: GoogleComposeSession | null;
+      calendarSession?: GoogleCalendarSession | null;
       resolvedPrompt?: string | null;
     }
   | {
@@ -328,6 +330,85 @@ function buildComposeContinuationPrompt(params: {
       ? ` ${params.session.bodyPreview}`
       : "";
     return `draft an email to ${recipientEmail}${subjectPart}${bodyPart}`.trim();
+  }
+
+  return null;
+}
+
+function buildCalendarSession(input: {
+  status: GoogleCalendarSession["status"];
+  title: string | null;
+  startTime: string | null;
+  endTime: string | null;
+  timeZone: string;
+  location: string | null;
+  descriptionPreview: string | null;
+  promptSeed: string;
+  followUpPrompt: string;
+}): GoogleCalendarSession {
+  return {
+    mode: "calendar_create",
+    status: input.status,
+    title: input.title,
+    startTime: input.startTime,
+    endTime: input.endTime,
+    timeZone: input.timeZone,
+    location: input.location,
+    descriptionPreview: input.descriptionPreview,
+    promptSeed: input.promptSeed,
+    followUpPrompt: input.followUpPrompt,
+  };
+}
+
+function formatCalendarSessionPromptDateTime(session: GoogleCalendarSession): string | null {
+  if (!session.startTime) return null;
+  const parsed = new Date(session.startTime);
+  if (Number.isNaN(parsed.getTime())) return null;
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: session.timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  }).formatToParts(parsed);
+  const lookup = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((part) => part.type === type)?.value ?? "";
+  const year = lookup("year");
+  const month = lookup("month");
+  const day = lookup("day");
+  const hour = lookup("hour");
+  const minute = lookup("minute");
+  const dayPeriod = lookup("dayPeriod").toLowerCase();
+  if (!year || !month || !day || !hour || !minute) return null;
+  const minuteText = minute === "00" ? "" : `:${minute}`;
+  return `${year}-${month}-${day} at ${hour}${minuteText}${dayPeriod}`;
+}
+
+function buildCalendarContinuationPrompt(params: {
+  session: GoogleCalendarSession;
+  userText: string;
+}): string | null {
+  const followUpText = normalizeText(params.userText);
+  if (!followUpText) return null;
+  if (
+    /^(?:yes|yeah|yep|sure|ok|okay|approve|send|cancel|stop|never mind|nevermind|nope|nah)\b/i.test(
+      followUpText,
+    )
+  ) {
+    return null;
+  }
+
+  if (params.session.status === "awaiting_datetime") {
+    const titlePart = params.session.title?.trim();
+    return `create a calendar event${titlePart ? ` ${titlePart}` : ""} ${followUpText}`.trim();
+  }
+
+  if (params.session.status === "awaiting_title") {
+    const dateTimePrompt = formatCalendarSessionPromptDateTime(params.session);
+    if (!dateTimePrompt) return null;
+    return `create a calendar event ${followUpText} on ${dateTimePrompt}`.trim();
   }
 
   return null;
@@ -801,6 +882,29 @@ function parseDateTimeFromText(params: {
 }): { startTime: string; endTime: string; matchedText: string } | null {
   const referenceDate = params.referenceDate ?? new Date();
   const normalized = normalizeText(params.text).toLowerCase();
+  const monthNames = [
+    "january",
+    "february",
+    "march",
+    "april",
+    "may",
+    "june",
+    "july",
+    "august",
+    "september",
+    "october",
+    "november",
+    "december",
+  ];
+  const weekdayNames = [
+    "sunday",
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday",
+  ];
   const explicitDateMatch = normalized.match(
     /\bon\s+(\d{4}-\d{2}-\d{2})\s+at\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)/i,
   );
@@ -810,6 +914,34 @@ function parseDateTimeFromText(params: {
     ) ??
     normalized.match(
       /\bat\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)\s+(today|tomorrow)\b/i,
+    );
+  const weekdayPattern = weekdayNames.join("|");
+  const weekdayMatch =
+    normalized.match(
+      new RegExp(
+        `\\b(${weekdayPattern})\\b(?:\\s+at)?\\s+(\\d{1,2}(?::\\d{2})?\\s*(?:am|pm)?)`,
+        "i",
+      ),
+    ) ??
+    normalized.match(
+      new RegExp(
+        `\\bat\\s+(\\d{1,2}(?::\\d{2})?\\s*(?:am|pm)?)\\s+(?:on\\s+)?(${weekdayPattern})\\b`,
+        "i",
+      ),
+    );
+  const monthPattern = monthNames.join("|");
+  const monthDayMatch =
+    normalized.match(
+      new RegExp(
+        `\\b(?:on\\s+)?(${monthPattern})\\s+(\\d{1,2})(?:st|nd|rd|th)?(?:,\\s*(\\d{4}))?(?:\\s+at)?\\s+(\\d{1,2}(?::\\d{2})?\\s*(?:am|pm)?)`,
+        "i",
+      ),
+    ) ??
+    normalized.match(
+      new RegExp(
+        `\\bat\\s+(\\d{1,2}(?::\\d{2})?\\s*(?:am|pm)?)\\s+(?:on\\s+)?(${monthPattern})\\s+(\\d{1,2})(?:st|nd|rd|th)?(?:,\\s*(\\d{4}))?`,
+        "i",
+      ),
     );
 
   let year: number;
@@ -841,6 +973,54 @@ function parseDateTimeFromText(params: {
     month = shifted.getUTCMonth() + 1;
     day = shifted.getUTCDate();
     matchedText = relativeMatch[0];
+  } else if (weekdayMatch) {
+    const first = weekdayMatch[1];
+    const second = weekdayMatch[2];
+    const isWeekdayFirst = weekdayNames.includes(first.toLowerCase());
+    const weekdayToken = (isWeekdayFirst ? first : second).toLowerCase();
+    timeToken = isWeekdayFirst ? second : first;
+    let matchedDate: Date | null = null;
+    for (let offset = 0; offset < 8; offset += 1) {
+      const candidate = new Date(referenceDate.getTime() + offset * 24 * 60 * 60 * 1000);
+      const weekdayLabel = new Intl.DateTimeFormat("en-US", {
+        timeZone: params.timeZone,
+        weekday: "long",
+      })
+        .format(candidate)
+        .toLowerCase();
+      if (weekdayLabel === weekdayToken) {
+        matchedDate = candidate;
+        break;
+      }
+    }
+    if (!matchedDate) return null;
+    const dateParts = datePartsInTimeZone(matchedDate, params.timeZone);
+    year = dateParts.year;
+    month = dateParts.month;
+    day = dateParts.day;
+    matchedText = weekdayMatch[0];
+  } else if (monthDayMatch) {
+    const first = monthDayMatch[1];
+    const second = monthDayMatch[2];
+    const isMonthFirst = monthNames.includes(first.toLowerCase());
+    const monthToken = (isMonthFirst ? first : second).toLowerCase();
+    const dayToken = isMonthFirst ? monthDayMatch[2] : monthDayMatch[3];
+    const yearToken = isMonthFirst ? monthDayMatch[3] : monthDayMatch[4];
+    timeToken = isMonthFirst ? monthDayMatch[4] : monthDayMatch[1];
+    const referenceParts = datePartsInTimeZone(referenceDate, params.timeZone);
+    year = yearToken ? Number(yearToken) : referenceParts.year;
+    month = monthNames.indexOf(monthToken) + 1;
+    day = Number(dayToken);
+    if (!yearToken) {
+      const candidate = new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
+      const referenceMidday = new Date(
+        Date.UTC(referenceParts.year, referenceParts.month - 1, referenceParts.day, 12, 0, 0),
+      );
+      if (candidate.getTime() < referenceMidday.getTime() - 24 * 60 * 60 * 1000) {
+        year += 1;
+      }
+    }
+    matchedText = monthDayMatch[0];
   } else {
     return null;
   }
@@ -862,6 +1042,49 @@ function parseDateTimeFromText(params: {
     endTime: endDate.toISOString(),
     matchedText,
   };
+}
+
+function inferCalendarCreateTitle(
+  input: string,
+  matchedDateText?: string | null,
+): string | null {
+  const normalized = normalizeText(input);
+  if (!normalized) return null;
+  const weekdayPattern =
+    "monday|tuesday|wednesday|thursday|friday|saturday|sunday";
+  const monthPattern =
+    "january|february|march|april|may|june|july|august|september|october|november|december";
+  const title = normalized
+    .replace(/^\s*(?:can|could|would|will)\s+you\s+/i, "")
+    .replace(/^\s*please\s+/i, "")
+    .replace(/\b(schedule|create|add|put|book|block(?:\s+off)?|hold|mark)\b/gi, " ")
+    .replace(/\b(?:an?\s+)?(?:calendar|meeting|event|appointment)\b/gi, " ")
+    .replace(/\b(?:on|for|in)\s+my\s+calendar\b/gi, " ")
+    .replace(/\bmy\s+calendar\b/gi, " ")
+    .replace(/\b(?:called|named|titled)\b/gi, " ")
+    .replace(
+      new RegExp(
+        `\\b(?:on\\s+)?(?:${monthPattern})\\s+\\d{1,2}(?:st|nd|rd|th)?(?:,\\s*\\d{4})?(?:\\s+at\\s+\\d{1,2}(?::\\d{2})?\\s*(?:am|pm)?)?`,
+        "gi",
+      ),
+      " ",
+    )
+    .replace(
+      new RegExp(
+        `\\b(?:on\\s+)?(?:today|tomorrow|${weekdayPattern})(?:\\s+at\\s+\\d{1,2}(?::\\d{2})?\\s*(?:am|pm)?)?`,
+        "gi",
+      ),
+      " ",
+    )
+    .replace(/\bon\s+\d{4}-\d{2}-\d{2}(?:\s+at\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?)?/gi, " ")
+    .replace(/\bat\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)\b/gi, " ")
+    .replace(matchedDateText ? new RegExp(matchedDateText.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i") : /$^/, " ")
+    .replace(/\b(?:it|that|this|something|anything)\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!title) return null;
+  return title.length >= 2 ? title : null;
 }
 
 function matchReplyTarget(text: string): string | null {
@@ -983,6 +1206,7 @@ export async function prepareGoogleActionTask(params: {
   text: string;
   clientTimeZone?: string | null;
   composeSession?: GoogleComposeSession | null;
+  calendarSession?: GoogleCalendarSession | null;
   recentContext?: GoogleRecentActionContext | null;
 }): Promise<GoogleActionTaskPreparation> {
   let rawText = normalizeText(params.text);
@@ -995,8 +1219,20 @@ export async function prepareGoogleActionTask(params: {
           userText: rawText,
         })
       : null;
-  if (resolvedFromComposeSession) {
-    rawText = resolvedFromComposeSession;
+  const resolvedFromCalendarSession =
+    !resolvedFromComposeSession &&
+    params.calendarSession &&
+    (params.calendarSession.status === "awaiting_datetime" ||
+      params.calendarSession.status === "awaiting_title")
+      ? buildCalendarContinuationPrompt({
+          session: params.calendarSession,
+          userText: rawText,
+        })
+      : null;
+  const resolvedContinuationPrompt =
+    resolvedFromComposeSession ?? resolvedFromCalendarSession;
+  if (resolvedContinuationPrompt) {
+    rawText = resolvedContinuationPrompt;
   }
   if (!detectGoogleActionTaskIntent(rawText, params.recentContext ?? null)) {
     return { kind: "none" };
@@ -1013,7 +1249,7 @@ export async function prepareGoogleActionTask(params: {
         kind: "clarify",
         message:
           "Tell me which email to reply to and what you want the reply to say.",
-        resolvedPrompt: resolvedFromComposeSession,
+        resolvedPrompt: resolvedContinuationPrompt,
       };
     }
 
@@ -1034,7 +1270,7 @@ export async function prepareGoogleActionTask(params: {
           auth.code === "google_not_connected"
             ? "Connect Google in Profile before I can draft replies."
             : "Reconnect Google in Profile so I can reach your Gmail data.",
-        resolvedPrompt: resolvedFromComposeSession,
+        resolvedPrompt: resolvedContinuationPrompt,
       };
     }
 
@@ -1048,7 +1284,7 @@ export async function prepareGoogleActionTask(params: {
       return {
         kind: "clarify",
         message: `I couldn't find a recent email matching "${replyTarget}". Tell me the sender or subject more specifically.`,
-        resolvedPrompt: resolvedFromComposeSession,
+        resolvedPrompt: resolvedContinuationPrompt,
       };
     }
     const thread = await fetchGmailThreadDetail({
@@ -1069,7 +1305,7 @@ export async function prepareGoogleActionTask(params: {
       return {
         kind: "clarify",
         message: "I found the thread, but I couldn't determine who to reply to.",
-        resolvedPrompt: resolvedFromComposeSession,
+        resolvedPrompt: resolvedContinuationPrompt,
       };
     }
 
@@ -1086,7 +1322,7 @@ export async function prepareGoogleActionTask(params: {
         missingScopes: missingWriteScopes,
         message:
           "I found the right email thread, but I still need Gmail write access. Upgrade Google permissions in Profile, then ask again.",
-        resolvedPrompt: resolvedFromComposeSession,
+        resolvedPrompt: resolvedContinuationPrompt,
       };
     }
 
@@ -1117,7 +1353,7 @@ export async function prepareGoogleActionTask(params: {
           threadId: thread.threadId,
         },
       },
-      resolvedPrompt: resolvedFromComposeSession,
+      resolvedPrompt: resolvedContinuationPrompt,
     };
   }
 
@@ -1141,7 +1377,7 @@ export async function prepareGoogleActionTask(params: {
           promptSeed: rawText,
           followUpPrompt: "Who should I send it to? Share the email address.",
         }),
-        resolvedPrompt: resolvedFromComposeSession,
+        resolvedPrompt: resolvedContinuationPrompt,
       };
     }
 
@@ -1158,7 +1394,7 @@ export async function prepareGoogleActionTask(params: {
           promptSeed: rawText,
           followUpPrompt: `What should I say to ${recipientEmail}?`,
         }),
-        resolvedPrompt: resolvedFromComposeSession,
+        resolvedPrompt: resolvedContinuationPrompt,
       };
     }
     const auth = await resolveGoogleAccessTokenForUser({
@@ -1178,7 +1414,7 @@ export async function prepareGoogleActionTask(params: {
           auth.code === "google_not_connected"
             ? "Connect Google in Profile before I can prepare email drafts."
             : "Reconnect Google in Profile so I can use Gmail for drafts.",
-        resolvedPrompt: resolvedFromComposeSession,
+        resolvedPrompt: resolvedContinuationPrompt,
       };
     }
     const sendAfterApproval = /\bsend\b/i.test(rawText) && !/\bdraft\b/i.test(rawText);
@@ -1194,7 +1430,7 @@ export async function prepareGoogleActionTask(params: {
         missingScopes: missingWriteScopes,
         message:
           "I need Gmail write access before I can create or send drafts. Upgrade Google permissions in Profile, then try again.",
-        resolvedPrompt: resolvedFromComposeSession,
+        resolvedPrompt: resolvedContinuationPrompt,
       };
     }
     const draftContent = literalBodyText
@@ -1231,7 +1467,7 @@ export async function prepareGoogleActionTask(params: {
           bodyText,
         },
       },
-      resolvedPrompt: resolvedFromComposeSession,
+      resolvedPrompt: resolvedContinuationPrompt,
     };
   }
 
@@ -1243,26 +1479,49 @@ export async function prepareGoogleActionTask(params: {
       text: rawText,
       timeZone,
     });
+    const inferredTitle = inferCalendarCreateTitle(
+      rawText,
+      parsedDateTime?.matchedText ?? null,
+    );
     if (!parsedDateTime) {
       return {
         kind: "clarify",
         message:
           "Tell me when the event should happen using something explicit like tomorrow at 1pm.",
-        resolvedPrompt: resolvedFromComposeSession,
+        calendarSession: buildCalendarSession({
+          status: "awaiting_datetime",
+          title: inferredTitle,
+          startTime: null,
+          endTime: null,
+          timeZone,
+          location: null,
+          descriptionPreview: null,
+          promptSeed: rawText,
+          followUpPrompt:
+            inferredTitle && inferredTitle.length > 0
+              ? `When should ${inferredTitle} happen?`
+              : "When should the event happen?",
+        }),
+        resolvedPrompt: resolvedContinuationPrompt,
       };
     }
-    const title = normalizeText(
-      rawText
-        .replace(/\b(schedule|create|add|put|book|block(?:\s+off)?|hold|mark)\b/gi, " ")
-        .replace(/\b(?:an?\s+)?(?:calendar|meeting|event|appointment)\b/gi, " ")
-        .replace(parsedDateTime.matchedText, " ")
-        .replace(/\s+/g, " "),
-    );
+    const title = inferredTitle;
     if (!title) {
       return {
         kind: "clarify",
         message: "Tell me what the calendar event should be called.",
-        resolvedPrompt: resolvedFromComposeSession,
+        calendarSession: buildCalendarSession({
+          status: "awaiting_title",
+          title: null,
+          startTime: parsedDateTime.startTime,
+          endTime: parsedDateTime.endTime,
+          timeZone,
+          location: null,
+          descriptionPreview: null,
+          promptSeed: rawText,
+          followUpPrompt: "What should I call the event?",
+        }),
+        resolvedPrompt: resolvedContinuationPrompt,
       };
     }
     const auth = await resolveGoogleAccessTokenForUser({
@@ -1282,7 +1541,7 @@ export async function prepareGoogleActionTask(params: {
           auth.code === "google_not_connected"
             ? "Connect Google in Profile before I can create calendar events."
             : "Reconnect Google in Profile so I can use Calendar.",
-        resolvedPrompt: resolvedFromComposeSession,
+        resolvedPrompt: resolvedContinuationPrompt,
       };
     }
     const missingWriteScopes = getMissingScopes(auth.scopes, [
@@ -1296,7 +1555,7 @@ export async function prepareGoogleActionTask(params: {
         missingScopes: missingWriteScopes,
         message:
           "I need Calendar write access before I can create events. Upgrade Google permissions in Profile, then try again.",
-        resolvedPrompt: resolvedFromComposeSession,
+        resolvedPrompt: resolvedContinuationPrompt,
       };
     }
     const preview: GoogleActionPreview = {
@@ -1329,7 +1588,7 @@ export async function prepareGoogleActionTask(params: {
           description: null,
         },
       },
-      resolvedPrompt: resolvedFromComposeSession,
+      resolvedPrompt: resolvedContinuationPrompt,
     };
   }
 
@@ -1352,7 +1611,7 @@ export async function prepareGoogleActionTask(params: {
         kind: "clarify",
         message:
           "Tell me what to change on the event, for example move it to 4pm, add a location, or update the notes.",
-        resolvedPrompt: resolvedFromComposeSession,
+        resolvedPrompt: resolvedContinuationPrompt,
       };
     }
     const auth = await resolveGoogleAccessTokenForUser({
@@ -1372,7 +1631,7 @@ export async function prepareGoogleActionTask(params: {
           auth.code === "google_not_connected"
             ? "Connect Google in Profile before I can update calendar events."
             : "Reconnect Google in Profile so I can use Calendar.",
-        resolvedPrompt: resolvedFromComposeSession,
+        resolvedPrompt: resolvedContinuationPrompt,
       };
     }
     const searchQuery = buildCalendarSearchQuery(rawText);
@@ -1397,7 +1656,7 @@ export async function prepareGoogleActionTask(params: {
         return {
           kind: "clarify",
           message: `I couldn't find a calendar event matching "${searchQuery}". Tell me the event title more specifically.`,
-          resolvedPrompt: resolvedFromComposeSession,
+          resolvedPrompt: resolvedContinuationPrompt,
         };
       }
       existingDetail = await fetchGoogleCalendarEventDetail({
@@ -1411,7 +1670,7 @@ export async function prepareGoogleActionTask(params: {
         kind: "clarify",
         message:
           "Tell me which calendar event you want to update, for example the event title or who it's with.",
-        resolvedPrompt: resolvedFromComposeSession,
+        resolvedPrompt: resolvedContinuationPrompt,
       };
     }
     const missingWriteScopes = getMissingScopes(auth.scopes, [
@@ -1425,7 +1684,7 @@ export async function prepareGoogleActionTask(params: {
         missingScopes: missingWriteScopes,
         message:
           "I found the event, but I still need Calendar write access. Upgrade Google permissions in Profile, then ask again.",
-        resolvedPrompt: resolvedFromComposeSession,
+        resolvedPrompt: resolvedContinuationPrompt,
       };
     }
     const existingStart = new Date(existingDetail.startTime);
@@ -1439,7 +1698,7 @@ export async function prepareGoogleActionTask(params: {
         return {
           kind: "clarify",
           message: "Tell me the new time more explicitly, like 4pm or 4:30pm.",
-          resolvedPrompt: resolvedFromComposeSession,
+          resolvedPrompt: resolvedContinuationPrompt,
         };
       }
       const dateParts = datePartsInTimeZone(
@@ -1499,7 +1758,7 @@ export async function prepareGoogleActionTask(params: {
           description: descriptionUpdate,
         },
       },
-      resolvedPrompt: resolvedFromComposeSession,
+      resolvedPrompt: resolvedContinuationPrompt,
     };
   }
 

@@ -59,6 +59,7 @@ import type {
   GoogleDataFailureCode,
   GoogleActionPreview,
   GoogleActionResult,
+  GoogleCalendarSession,
   GoogleComposeSession,
   GoogleEmailAmbiguityCandidate,
   GoogleEmailAmbiguityPrompt,
@@ -6133,6 +6134,10 @@ type GoogleConversationState = {
     messageId: string;
     session: GoogleComposeSession;
   } | null;
+  calendarSession: {
+    messageId: string;
+    session: GoogleCalendarSession;
+  } | null;
   pendingTask: {
     taskId: string;
     preview: GoogleActionPreview | null;
@@ -6177,6 +6182,33 @@ function isGoogleComposeSessionPayload(value: unknown): value is GoogleComposeSe
     (session.recipientEmail === null || typeof session.recipientEmail === "string") &&
     (session.subject === null || typeof session.subject === "string") &&
     (session.bodyPreview === null || typeof session.bodyPreview === "string") &&
+    typeof session.promptSeed === "string" &&
+    typeof session.followUpPrompt === "string"
+  );
+}
+
+function isGoogleCalendarSessionPayload(value: unknown): value is GoogleCalendarSession {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const session = value as Record<string, unknown>;
+  if (session.mode !== "calendar_create") return false;
+  if (
+    session.status !== "awaiting_datetime" &&
+    session.status !== "awaiting_title" &&
+    session.status !== "resolved" &&
+    session.status !== "cancelled"
+  ) {
+    return false;
+  }
+  return (
+    (session.title === null || typeof session.title === "string") &&
+    (session.startTime === null || typeof session.startTime === "string") &&
+    (session.endTime === null || typeof session.endTime === "string") &&
+    typeof session.timeZone === "string" &&
+    (session.location === null || typeof session.location === "string") &&
+    (session.descriptionPreview === null ||
+      typeof session.descriptionPreview === "string") &&
     typeof session.promptSeed === "string" &&
     typeof session.followUpPrompt === "string"
   );
@@ -6527,6 +6559,7 @@ function resolveLatestGoogleEmailTaskTarget(
 function resolveLatestGoogleConversationState(messages: Message[]): GoogleConversationState {
   const state: GoogleConversationState = {
     composeSession: null,
+    calendarSession: null,
     pendingTask: null,
     recentEmailTask: null,
     recentCalendarTask: null,
@@ -6535,6 +6568,7 @@ function resolveLatestGoogleConversationState(messages: Message[]): GoogleConver
   };
   const seenGoogleTaskIds = new Set<string>();
   const seenEmailDraftTaskIds = new Set<string>();
+  let hasNewerGoogleActionState = false;
 
   for (let idx = messages.length - 1; idx >= 0; idx -= 1) {
     const message = messages[idx];
@@ -6549,6 +6583,8 @@ function resolveLatestGoogleConversationState(messages: Message[]): GoogleConver
         !state.pendingTask &&
         state.emailDraftCandidates.length === 0 &&
         !state.composeSession &&
+        !state.calendarSession &&
+        !hasNewerGoogleActionState &&
         isGoogleEmailAmbiguityPromptPayload(payload.ambiguity)
       ) {
         state.emailAmbiguity = {
@@ -6574,6 +6610,9 @@ function resolveLatestGoogleConversationState(messages: Message[]): GoogleConver
           messageIndex: idx,
         };
         seenGoogleTaskIds.add(payload.taskId);
+      }
+      if (preview) {
+        hasNewerGoogleActionState = true;
       }
       if (
         preview &&
@@ -6601,6 +6640,7 @@ function resolveLatestGoogleConversationState(messages: Message[]): GoogleConver
         Boolean(preview) ||
         Boolean(result);
       if (!isGoogleTask) continue;
+      hasNewerGoogleActionState = true;
       if (seenGoogleTaskIds.has(payload.task.id)) {
         continue;
       }
@@ -6666,14 +6706,36 @@ function resolveLatestGoogleConversationState(messages: Message[]): GoogleConver
     if (payload.kind === "agent_google_compose_session") {
       if (
         !state.composeSession &&
+        !state.calendarSession &&
         !state.pendingTask &&
         !state.recentEmailTask &&
         !state.recentCalendarTask &&
+        !hasNewerGoogleActionState &&
         isGoogleComposeSessionPayload(payload.session) &&
         (payload.session.status === "awaiting_body" ||
           payload.session.status === "awaiting_recipient")
       ) {
         state.composeSession = {
+          messageId: message.id,
+          session: payload.session,
+        };
+      }
+      continue;
+    }
+
+    if (payload.kind === "agent_google_calendar_session") {
+      if (
+        !state.calendarSession &&
+        !state.composeSession &&
+        !state.pendingTask &&
+        !state.recentEmailTask &&
+        !state.recentCalendarTask &&
+        !hasNewerGoogleActionState &&
+        isGoogleCalendarSessionPayload(payload.session) &&
+        (payload.session.status === "awaiting_datetime" ||
+          payload.session.status === "awaiting_title")
+      ) {
+        state.calendarSession = {
           messageId: message.id,
           session: payload.session,
         };
@@ -6741,6 +6803,9 @@ function shouldBypassGenericAgentTaskForGoogleAction(params: {
   if (state.composeSession) {
     return true;
   }
+  if (state.calendarSession) {
+    return true;
+  }
   if (
     state.pendingTask &&
     (isGoogleActionSendMessage(params.text) ||
@@ -6771,12 +6836,29 @@ function buildComposeSessionReminder(session: GoogleComposeSession): string {
     : "I still need what you want the email to say before I can draft it.";
 }
 
+function buildCalendarSessionReminder(session: GoogleCalendarSession): string {
+  return session.status === "awaiting_datetime"
+    ? "I still need when the event should happen before I can prepare it."
+    : "I still need what the event should be called before I can prepare it.";
+}
+
 function toGoogleComposeSessionUiPayload(
   session: GoogleComposeSession,
   text: string,
 ): Extract<AgentMessageUiPayload, { kind: "agent_google_compose_session" }> {
   return {
     kind: "agent_google_compose_session",
+    session,
+    text,
+  };
+}
+
+function toGoogleCalendarSessionUiPayload(
+  session: GoogleCalendarSession,
+  text: string,
+): Extract<AgentMessageUiPayload, { kind: "agent_google_calendar_session" }> {
+  return {
+    kind: "agent_google_calendar_session",
     session,
     text,
   };
@@ -6794,6 +6876,21 @@ async function createGoogleComposeSessionAssistantMessage(params: {
     text: params.text,
     partIndex: 0,
     uiPayload: toGoogleComposeSessionUiPayload(params.session, params.text),
+  });
+}
+
+async function createGoogleCalendarSessionAssistantMessage(params: {
+  storage: typeof storage;
+  conversationId: string;
+  session: GoogleCalendarSession;
+  text: string;
+}) {
+  return params.storage.createMessage({
+    conversationId: params.conversationId,
+    sender: "assistant",
+    text: params.text,
+    partIndex: 0,
+    uiPayload: toGoogleCalendarSessionUiPayload(params.session, params.text),
   });
 }
 
@@ -7585,12 +7682,66 @@ async function maybeHandleGoogleActionTask(params: {
     composeSession = googleConversationState.composeSession.session;
   }
 
+  let calendarSession: GoogleCalendarSession | null = null;
+  if (googleConversationState.calendarSession) {
+    if (isGoogleActionDeclineMessage(params.text)) {
+      const assistantMessage = await createGoogleCalendarSessionAssistantMessage({
+        storage: params.storage,
+        conversationId: params.conversationId,
+        text: "Okay, I dropped that calendar event idea.",
+        session: {
+          ...googleConversationState.calendarSession.session,
+          status: "cancelled",
+        },
+      });
+      const assistantMessages = [assistantMessage];
+      return {
+        handled: true as const,
+        kind: "clarify" as const,
+        assistantMessages,
+        legacyAssistantMessage: makeLegacyAssistantMessage(assistantMessages),
+        model: "google_action_calendar_clarification_v2",
+        decisionPath: "companion_reply" as const,
+        decisionPathReason: "companion" as const,
+        awaitingApproval: false,
+        task: null,
+      };
+    }
+
+    if (isGoogleActionApproveMessage(params.text) || isGoogleActionSendMessage(params.text)) {
+      const reminder = buildCalendarSessionReminder(
+        googleConversationState.calendarSession.session,
+      );
+      const assistantMessage = await createGoogleCalendarSessionAssistantMessage({
+        storage: params.storage,
+        conversationId: params.conversationId,
+        text: reminder,
+        session: googleConversationState.calendarSession.session,
+      });
+      const assistantMessages = [assistantMessage];
+      return {
+        handled: true as const,
+        kind: "clarify" as const,
+        assistantMessages,
+        legacyAssistantMessage: makeLegacyAssistantMessage(assistantMessages),
+        model: "google_action_calendar_clarification_v2",
+        decisionPath: "companion_reply" as const,
+        decisionPathReason: "companion" as const,
+        awaitingApproval: false,
+        task: null,
+      };
+    }
+
+    calendarSession = googleConversationState.calendarSession.session;
+  }
+
   const preparation = await prepareGoogleActionTask({
     storage: params.storage,
     userId: params.userId,
     text: params.text,
     clientTimeZone: params.clientTimeZone ?? null,
     composeSession,
+    calendarSession,
     recentContext: toGoogleRecentActionContext(googleConversationState),
   });
 
@@ -7609,6 +7760,15 @@ async function maybeHandleGoogleActionTask(params: {
               text: preparation.message,
             }),
           ]
+        : preparation.kind === "clarify" && preparation.calendarSession
+          ? [
+              await createGoogleCalendarSessionAssistantMessage({
+                storage: params.storage,
+                conversationId: params.conversationId,
+                session: preparation.calendarSession,
+                text: preparation.message,
+              }),
+            ]
         : await storage.createAssistantTurnParts({
             conversationId: params.conversationId,
             textParts: [preparation.message],
@@ -11757,6 +11917,9 @@ export async function registerRoutes(
               hasComposeSession: Boolean(googleConversationState.composeSession),
               composeSessionStatus:
                 googleConversationState.composeSession?.session.status ?? null,
+              hasCalendarSession: Boolean(googleConversationState.calendarSession),
+              calendarSessionStatus:
+                googleConversationState.calendarSession?.session.status ?? null,
               hasEmailAmbiguity: Boolean(googleConversationState.emailAmbiguity),
               ambiguityCandidateCount:
                 googleConversationState.emailAmbiguity?.prompt.candidates.length ??
