@@ -1349,6 +1349,29 @@ function getGoogleEmailPreviewHelper(
     : 'Approve to save this as a Gmail draft. Reply "let\'s send" to send instead.';
 }
 
+function getGoogleEmailToneStyles(tone: "pending" | "ready" | "cancelled") {
+  if (tone === "ready") {
+    return {
+      textColor: "#1f6a47",
+      backgroundColor: "rgba(227,255,238,0.9)",
+      borderColor: "rgba(104, 193, 141, 0.36)",
+    };
+  }
+  if (tone === "cancelled") {
+    return {
+      textColor: "#8a2f2f",
+      backgroundColor: "rgba(255,235,235,0.92)",
+      borderColor: "rgba(224, 126, 126, 0.34)",
+    };
+  }
+  return {
+    textColor: "var(--app-accent-text)",
+    backgroundColor:
+      "color-mix(in srgb, var(--app-accent) 32%, rgba(255,255,255,0.9))",
+    borderColor: "color-mix(in srgb, var(--app-accent) 34%, rgba(255,255,255,0.34))",
+  };
+}
+
 function GoogleEmailComposerPreview(props: {
   to: string[];
   subject: string | null | undefined;
@@ -1380,12 +1403,7 @@ function GoogleEmailComposerPreview(props: {
       <Clock3 className="h-3 w-3" />
     );
 
-  const statusColor =
-    props.tone === "ready"
-      ? "color-mix(in srgb, var(--app-accent) 80%, #22c55e)"
-      : props.tone === "cancelled"
-        ? "color-mix(in srgb, var(--app-accent) 35%, #ef4444)"
-        : "color-mix(in srgb, var(--app-accent) 82%, #f59e0b)";
+  const toneStyles = getGoogleEmailToneStyles(props.tone);
 
   const subject = props.subject?.trim() || "Zee will suggest a subject";
   const toLine = props.to.length > 0 ? props.to.join(", ") : "Waiting for recipient";
@@ -1431,12 +1449,9 @@ function GoogleEmailComposerPreview(props: {
           <div
             className="inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide"
             style={{
-              borderColor: "rgba(255,255,255,0.26)",
-              backgroundColor:
-                props.tone === "pending"
-                  ? "color-mix(in srgb, #ead59d 74%, rgba(255,255,255,0.78))"
-                  : "rgba(255,255,255,0.78)",
-              color: statusColor,
+              borderColor: toneStyles.borderColor,
+              backgroundColor: toneStyles.backgroundColor,
+              color: toneStyles.textColor,
             }}
           >
             {statusIcon}
@@ -1583,9 +1598,10 @@ function GoogleEmailComposerPreview(props: {
                     disabled={props.primaryAction.disabled}
                     className="rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide transition-colors hover:opacity-90 disabled:opacity-55"
                     style={{
-                      borderColor: "rgba(214, 170, 18, 0.42)",
-                      backgroundColor: "color-mix(in srgb, var(--app-accent) 20%, rgba(255,255,255,0.62))",
-                      color: "#7b5a00",
+                      borderColor: "color-mix(in srgb, var(--app-accent) 42%, rgba(255,255,255,0.26))",
+                      backgroundColor:
+                        "color-mix(in srgb, var(--app-accent) 28%, rgba(255,255,255,0.72))",
+                      color: "var(--app-accent-text)",
                     }}
                     data-testid={props.primaryAction.testId}
                   >
@@ -1613,6 +1629,16 @@ function GoogleEmailAssistantTaskCard(props: {
 }) {
   const proposedEmail = props.googleActionPreview.proposedEmail;
   if (!proposedEmail) return null;
+  const shouldDefaultCollapsed = Boolean(
+    props.googleActionResult ||
+      props.card.status === "completed" ||
+      props.card.status === "cancelled",
+  );
+  const [isCollapsed, setIsCollapsed] = useState(shouldDefaultCollapsed);
+
+  useEffect(() => {
+    setIsCollapsed(shouldDefaultCollapsed);
+  }, [props.card.taskId, shouldDefaultCollapsed]);
 
   const statusLabel = props.failure
     ? "Failed"
@@ -1636,6 +1662,13 @@ function GoogleEmailAssistantTaskCard(props: {
     props.googleActionPreview.summary ||
     props.card.summaryText ||
     "";
+  const statusTone: "pending" | "ready" | "cancelled" = props.failure
+    ? "cancelled"
+    : props.googleActionResult
+      ? "ready"
+      : "pending";
+  const statusToneStyles = getGoogleEmailToneStyles(statusTone);
+  const bodySnippet = (proposedEmail.bodyPreview ?? "").replace(/\s+/g, " ").trim();
 
   return (
     <div
@@ -1647,18 +1680,16 @@ function GoogleEmailAssistantTaskCard(props: {
     >
       <div className="flex items-start justify-between gap-3 px-1">
         <div className="min-w-0">
-          <div
-            className="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-[0.16em]"
-            style={{
-              borderColor: "rgba(255,255,255,0.18)",
-              backgroundColor: "rgba(255,255,255,0.08)",
-              color: "var(--app-on-dark-muted)",
-            }}
-          >
-            <Sparkles className="h-3 w-3" />
-            Zee Mail
+          <div className="flex items-center gap-1.5">
+            <Sparkles className="h-3.5 w-3.5" style={{ color: "var(--app-on-dark-muted)" }} />
+            <p
+              className="text-[11px] font-semibold uppercase tracking-[0.16em]"
+              style={{ color: "var(--app-on-dark-muted)" }}
+            >
+              Zee Mail
+            </p>
           </div>
-          <p className="mt-2 text-sm font-semibold" style={{ color: "var(--app-on-dark)" }}>
+          <p className="mt-1.5 text-sm font-semibold" style={{ color: "var(--app-on-dark)" }}>
             {props.googleActionPreview.title}
           </p>
           {summaryText ? (
@@ -1678,66 +1709,210 @@ function GoogleEmailAssistantTaskCard(props: {
             </p>
           ) : null}
         </div>
-        <span
-          className="shrink-0 rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide"
-          style={{
-            borderColor: "rgba(255,255,255,0.2)",
-            backgroundColor: "rgba(255,255,255,0.08)",
-            color:
-              props.failure
-                ? "#fca5a5"
-                : props.googleActionResult
-                  ? "#9fe6bc"
-                  : "var(--app-accent)",
-          }}
-        >
-          {statusLabel}
-        </span>
+        <div className="flex shrink-0 items-center gap-2">
+          <span
+            className="rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide"
+            style={{
+              borderColor: statusToneStyles.borderColor,
+              backgroundColor: statusToneStyles.backgroundColor,
+              color: statusToneStyles.textColor,
+            }}
+          >
+            {statusLabel}
+          </span>
+          <button
+            type="button"
+            onClick={() => setIsCollapsed((value) => !value)}
+            className="rounded-full border p-2 transition-colors hover:opacity-90"
+            style={{
+              borderColor: "rgba(255,255,255,0.18)",
+              backgroundColor: "rgba(255,255,255,0.08)",
+              color: "var(--app-on-dark-muted)",
+            }}
+            data-testid="button-google-email-collapse"
+            aria-label={isCollapsed ? "Expand email card" : "Collapse email card"}
+          >
+            <motion.div
+              animate={{ rotate: isCollapsed ? 0 : 180 }}
+              transition={{ duration: 0.2 }}
+            >
+              <ChevronDown className="h-3.5 w-3.5" />
+            </motion.div>
+          </button>
+        </div>
       </div>
 
-      <GoogleEmailComposerPreview
-        to={proposedEmail.to}
-        subject={proposedEmail.subject}
-        bodyPreview={proposedEmail.bodyPreview}
-        statusLabel={
-          props.googleActionResult?.status === "email_sent"
-            ? "Sent"
-            : props.googleActionResult?.status === "draft_created"
-              ? "Draft saved"
-              : proposedEmail.sendAfterApproval
-                ? "Ready to send"
-                : "Draft preview"
-        }
-        helperText={
-          props.googleActionResult?.status === "email_sent"
-            ? "This email was sent through Gmail."
-            : props.googleActionResult?.status === "draft_created"
-              ? "This draft was saved to Gmail."
-              : getGoogleEmailPreviewHelper(proposedEmail)
-        }
-        tone={props.googleActionResult ? "ready" : props.failure ? "cancelled" : "pending"}
-        primaryAction={
-          props.approvalPending
-            ? {
-                label: getGoogleApprovalPrimaryLabel(props.googleActionPreview),
-                onClick: props.onApprove,
-                disabled: props.isResolvingApproval,
-                testId: "button-google-email-primary-action",
+      <AnimatePresence initial={false} mode="wait">
+        {isCollapsed ? (
+          <motion.div
+            key="collapsed-email-card"
+            initial={{ opacity: 0, y: -4 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 4 }}
+            transition={{ duration: 0.18 }}
+            className="rounded-[1.35rem] border p-3 backdrop-blur-md"
+            style={{
+              borderColor: "rgba(255,255,255,0.18)",
+              background:
+                "linear-gradient(180deg, rgba(255,255,255,0.12), rgba(255,255,255,0.06))",
+              boxShadow:
+                "0 12px 24px rgba(0,0,0,0.14), inset 0 1px 0 rgba(255,255,255,0.16)",
+            }}
+            data-testid="google-email-collapsed-card"
+          >
+            <div className="grid gap-2">
+              <div
+                className="flex items-center gap-3 rounded-[1rem] border px-3 py-2.5"
+                style={{
+                  borderColor: "rgba(255,255,255,0.16)",
+                  backgroundColor: "rgba(255,255,255,0.08)",
+                }}
+              >
+                <div className="min-w-0 flex-1">
+                  <p
+                    className="text-[10px] font-semibold uppercase tracking-[0.18em]"
+                    style={{ color: "var(--app-on-dark-muted)" }}
+                  >
+                    To
+                  </p>
+                  <p
+                    className="truncate text-sm font-medium"
+                    style={{ color: "var(--app-on-dark)" }}
+                  >
+                    {proposedEmail.to.join(", ")}
+                  </p>
+                </div>
+                <div
+                  className="h-8 w-px"
+                  style={{ backgroundColor: "rgba(255,255,255,0.14)" }}
+                />
+                <div className="min-w-0 flex-1">
+                  <p
+                    className="text-[10px] font-semibold uppercase tracking-[0.18em]"
+                    style={{ color: "var(--app-on-dark-muted)" }}
+                  >
+                    Subject
+                  </p>
+                  <p
+                    className="truncate text-sm font-medium"
+                    style={{ color: "var(--app-on-dark)" }}
+                  >
+                    {proposedEmail.subject}
+                  </p>
+                </div>
+              </div>
+
+              {bodySnippet ? (
+                <div
+                  className="rounded-[1rem] border px-3 py-2.5 text-xs leading-5"
+                  style={{
+                    borderColor: "rgba(255,255,255,0.16)",
+                    backgroundColor: "rgba(255,255,255,0.08)",
+                    color: "var(--app-on-dark-muted)",
+                  }}
+                >
+                  <div
+                    style={{
+                      display: "-webkit-box",
+                      WebkitBoxOrient: "vertical",
+                      WebkitLineClamp: 2,
+                      overflow: "hidden",
+                    }}
+                  >
+                    {bodySnippet}
+                  </div>
+                </div>
+              ) : null}
+
+              {props.approvalPending ? (
+                <div className="flex flex-wrap justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={props.onDeny}
+                    disabled={props.isResolvingApproval}
+                    className="rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide transition-colors hover:opacity-90 disabled:opacity-55"
+                    style={{
+                      borderColor: "rgba(255,255,255,0.22)",
+                      backgroundColor: "rgba(255,255,255,0.1)",
+                      color: "var(--app-on-dark-muted)",
+                    }}
+                    data-testid="button-google-email-secondary-action"
+                  >
+                    {getGoogleApprovalSecondaryLabel(props.googleActionPreview)}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={props.onApprove}
+                    disabled={props.isResolvingApproval}
+                    className="rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide transition-colors hover:opacity-90 disabled:opacity-55"
+                    style={{
+                      borderColor: "color-mix(in srgb, var(--app-accent) 42%, rgba(255,255,255,0.26))",
+                      backgroundColor:
+                        "color-mix(in srgb, var(--app-accent) 28%, rgba(255,255,255,0.72))",
+                      color: "var(--app-accent-text)",
+                    }}
+                    data-testid="button-google-email-primary-action"
+                  >
+                    {getGoogleApprovalPrimaryLabel(props.googleActionPreview)}
+                  </button>
+                </div>
+              ) : null}
+            </div>
+          </motion.div>
+        ) : (
+          <motion.div
+            key="expanded-email-card"
+            initial={{ opacity: 0, y: -4 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 4 }}
+            transition={{ duration: 0.18 }}
+          >
+            <GoogleEmailComposerPreview
+              to={proposedEmail.to}
+              subject={proposedEmail.subject}
+              bodyPreview={proposedEmail.bodyPreview}
+              statusLabel={
+                props.googleActionResult?.status === "email_sent"
+                  ? "Sent"
+                  : props.googleActionResult?.status === "draft_created"
+                    ? "Draft saved"
+                    : proposedEmail.sendAfterApproval
+                      ? "Ready to send"
+                      : "Draft preview"
               }
-            : undefined
-        }
-        secondaryAction={
-          props.approvalPending
-            ? {
-                label: getGoogleApprovalSecondaryLabel(props.googleActionPreview),
-                onClick: props.onDeny,
-                disabled: props.isResolvingApproval,
-                testId: "button-google-email-secondary-action",
+              helperText={
+                props.googleActionResult?.status === "email_sent"
+                  ? "This email was sent through Gmail."
+                  : props.googleActionResult?.status === "draft_created"
+                    ? "This draft was saved to Gmail."
+                    : getGoogleEmailPreviewHelper(proposedEmail)
               }
-            : undefined
-        }
-        testId="google-email-preview-card"
-      />
+              tone={statusTone}
+              primaryAction={
+                props.approvalPending
+                  ? {
+                      label: getGoogleApprovalPrimaryLabel(props.googleActionPreview),
+                      onClick: props.onApprove,
+                      disabled: props.isResolvingApproval,
+                      testId: "button-google-email-primary-action",
+                    }
+                  : undefined
+              }
+              secondaryAction={
+                props.approvalPending
+                  ? {
+                      label: getGoogleApprovalSecondaryLabel(props.googleActionPreview),
+                      onClick: props.onDeny,
+                      disabled: props.isResolvingApproval,
+                      testId: "button-google-email-secondary-action",
+                    }
+                  : undefined
+              }
+              testId="google-email-preview-card"
+            />
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {props.failure ? (
         <div
