@@ -671,7 +671,7 @@ export function looksLikeGoogleEmailDraftRevisionInstruction(text: string): bool
 }
 
 function isLikelyGoogleActionRequest(text: string): boolean {
-  return /\b(reply|respond|draft|write|send|schedule|create|add|move|reschedule|change)\b/i.test(
+  return /\b(reply|respond|draft|write|send|schedule|create|add|put|book|block(?:\s+off)?|hold|mark|move|reschedule|change|update)\b/i.test(
     text,
   );
 }
@@ -970,7 +970,7 @@ export function detectGoogleActionTaskIntent(
 ): boolean {
   return (
     (isLikelyGoogleActionRequest(text) &&
-      /gmail|email|calendar|meeting|event|reply|draft|schedule|reschedule/i.test(
+      /gmail|email|calendar|meeting|event|appointment|reply|draft|schedule|reschedule/i.test(
         text,
       )) ||
     hasRecentGoogleActionFollowUpIntent(text, recentContext)
@@ -1235,7 +1235,10 @@ export async function prepareGoogleActionTask(params: {
     };
   }
 
-  if (/\b(schedule|create|add|put)\b/i.test(rawText) && /\b(calendar|meeting|event|appointment)\b/i.test(rawText)) {
+  if (
+    /\b(schedule|create|add|put|book|block(?:\s+off)?|hold|mark)\b/i.test(rawText) &&
+    /\b(calendar|meeting|event|appointment)\b/i.test(rawText)
+  ) {
     const parsedDateTime = parseDateTimeFromText({
       text: rawText,
       timeZone,
@@ -1250,7 +1253,7 @@ export async function prepareGoogleActionTask(params: {
     }
     const title = normalizeText(
       rawText
-        .replace(/\b(schedule|create|add|put)\b/gi, " ")
+        .replace(/\b(schedule|create|add|put|book|block(?:\s+off)?|hold|mark)\b/gi, " ")
         .replace(/\b(?:an?\s+)?(?:calendar|meeting|event|appointment)\b/gi, " ")
         .replace(parsedDateTime.matchedText, " ")
         .replace(/\s+/g, " "),

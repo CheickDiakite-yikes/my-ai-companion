@@ -5,8 +5,9 @@ import { resolve } from "node:path";
 import { eq } from "drizzle-orm";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { db } from "../server/db";
-import { storage } from "../server/storage";
+import { encryptGoogleToken } from "../server/google-integration-crypto";
 import { users } from "../shared/models/auth";
+import { googleIntegrations } from "../shared/schema";
 import {
   clearLiveTraceBuffer,
   installLiveVoiceFixtureMic,
@@ -28,6 +29,19 @@ type LiveTraceEntry = {
   event: string;
   metadata: Record<string, unknown>;
 };
+
+type GoogleFixtureScopeMode = "read" | "write";
+
+const GOOGLE_GMAIL_READONLY_SCOPE =
+  "https://www.googleapis.com/auth/gmail.readonly";
+const GOOGLE_GMAIL_COMPOSE_SCOPE =
+  "https://www.googleapis.com/auth/gmail.compose";
+const GOOGLE_GMAIL_SEND_SCOPE =
+  "https://www.googleapis.com/auth/gmail.send";
+const GOOGLE_CALENDAR_EVENTS_READONLY_SCOPE =
+  "https://www.googleapis.com/auth/calendar.events.readonly";
+const GOOGLE_CALENDAR_EVENTS_WRITE_SCOPE =
+  "https://www.googleapis.com/auth/calendar.events";
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
@@ -129,7 +143,19 @@ async function main(): Promise<void> {
 
     await clearTraceBuffer();
     const conversationId = await resolveActiveConversationId(page, args.baseUrl);
-    await seedVoiceStageFixtures(args.email, conversationId);
+    await upsertGoogleIntegrationFixture(args.email, "write");
+    await prepareLiveGoogleAction(page, args.baseUrl, {
+      conversationId,
+      functionName: "prepare_google_email_action",
+      request: "draft an email to voice-stage@example.com saying hello from voice mode",
+    });
+    await prepareLiveGoogleAction(page, args.baseUrl, {
+      conversationId,
+      functionName: "prepare_google_calendar_action",
+      request:
+        "create a calendar event called lunch with Alex tomorrow at 2pm at Blue Bottle",
+      timezone: "America/New_York",
+    });
     const voiceStageTrace = await assertVoiceStageSurface(page, readTraceBuffer);
 
     const combinedTrace = {
@@ -188,160 +214,129 @@ async function resolveActiveConversationId(
   return conversationId;
 }
 
-async function seedVoiceStageFixtures(
+function scopesForMode(mode: GoogleFixtureScopeMode): string[] {
+  const baseScopes = [
+    GOOGLE_GMAIL_READONLY_SCOPE,
+    GOOGLE_CALENDAR_EVENTS_READONLY_SCOPE,
+  ];
+  if (mode === "read") {
+    return baseScopes;
+  }
+  return [
+    ...baseScopes,
+    GOOGLE_GMAIL_COMPOSE_SCOPE,
+    GOOGLE_GMAIL_SEND_SCOPE,
+    GOOGLE_CALENDAR_EVENTS_WRITE_SCOPE,
+  ];
+}
+
+async function upsertGoogleIntegrationFixture(
   email: string,
-  conversationId: string,
+  mode: GoogleFixtureScopeMode,
 ): Promise<void> {
   const [user] = await db
-    .select({ id: users.id })
+    .select({ id: users.id, email: users.email })
     .from(users)
     .where(eq(users.email, email))
     .limit(1);
   assert.ok(user?.id, `Expected to find user for ${email}`);
 
-  const emailPrompt =
-    "draft an email to voice-stage@example.com saying hello from voice mode";
-  const emailPreview = {
-    kind: "email_compose" as const,
-    title: "Create email draft",
-    summary: "Create an email draft to voice-stage@example.com.",
-    connector: "gmail" as const,
-    requiresWriteAccess: true,
-    proposedEmail: {
-      to: ["voice-stage@example.com"],
-      cc: [],
-      subject: "Voice stage hello",
-      bodyPreview: "hello from voice mode",
-      sendAfterApproval: false,
-    },
-  };
-  const emailPlan = {
-    version: "google_action_v1" as const,
-    preview: emailPreview,
-    execution: {
-      kind: "email_compose" as const,
-      sendAfterApproval: false,
-      to: ["voice-stage@example.com"],
-      cc: [],
-      subject: "Voice stage hello",
-      bodyText: "hello from voice mode",
-    },
-  };
-  const emailTask = await storage.createAgentTask({
-    userId: user.id,
-    conversationId,
-    status: "completed",
-    riskLevel: "high",
-    taskKind: "google_action",
-    prompt: emailPrompt,
-    requestedByMessageId: randomUUID(),
-    plan: emailPlan,
-    completedAt: new Date(Date.now() - 1_000),
-  });
+  const encryptedAccessToken = encryptGoogleToken(`fixture-access-token-${mode}`);
+  const encryptedRefreshToken = encryptGoogleToken(`fixture-refresh-token-${mode}`);
+  const scopes = scopesForMode(mode);
 
-  await storage.createMessage({
-    conversationId,
-    sender: "assistant",
-    text: "Created a Gmail draft to voice-stage@example.com.",
-    partIndex: 0,
-    uiPayload: {
-      kind: "agent_task_status",
-      task: {
-        id: emailTask.id,
-        conversationId: emailTask.conversationId,
-        status: emailTask.status,
-        riskLevel: emailTask.riskLevel,
-        taskKind: emailTask.taskKind,
-        prompt: emailTask.prompt,
-        errorMessage: emailTask.errorMessage ?? null,
-        createdAt: emailTask.createdAt,
-        updatedAt: emailTask.updatedAt,
-        completedAt: emailTask.completedAt,
+  await db
+    .insert(googleIntegrations)
+    .values({
+      userId: user.id,
+      provider: "google",
+      googleSub: `fixture-google-sub-${mode}`,
+      email,
+      scopes,
+      refreshTokenEncrypted: encryptedRefreshToken,
+      accessTokenEncrypted: encryptedAccessToken,
+      expiry: new Date(Date.now() + 24 * 60 * 60 * 1000),
+      status: "connected",
+      lastError: null,
+    })
+    .onConflictDoUpdate({
+      target: googleIntegrations.userId,
+      set: {
+        googleSub: `fixture-google-sub-${mode}`,
+        email,
+        scopes,
+        refreshTokenEncrypted: encryptedRefreshToken,
+        accessTokenEncrypted: encryptedAccessToken,
+        expiry: new Date(Date.now() + 24 * 60 * 60 * 1000),
+        status: "connected",
+        lastError: null,
+        updatedAt: new Date(),
       },
-      text: "Completed",
-      googleActionPreview: emailPreview,
-      googleActionResult: {
-        kind: "email_compose",
-        connector: "gmail",
-        status: "draft_created",
-        summary: "Created a Gmail draft to voice-stage@example.com.",
-        draftId: `voice-stage-draft-${emailTask.id}`,
-        messageId: `voice-stage-message-${emailTask.id}`,
-        threadId: null,
-      },
-    },
-  });
+    });
+}
 
-  const calendarPrompt = "Book lunch with Alex for March 14th at 2:00 PM";
-  const calendarPreview = {
-    kind: "calendar_create" as const,
-    title: "Create calendar event",
-    summary: "Create a calendar event for lunch with Alex.",
-    connector: "calendar" as const,
-    requiresWriteAccess: true,
-    proposedCalendar: {
-      title: "Lunch with Alex",
-      startTime: "2026-03-14T18:00:00.000Z",
-      endTime: "2026-03-14T19:00:00.000Z",
-      location: "Blue Bottle",
-      descriptionPreview: "Talk through March 14 plans.",
-    },
-    calendarEvent: null,
-  };
-  const calendarPlan = {
-    version: "google_action_v1" as const,
-    preview: calendarPreview,
-    execution: {
-      kind: "calendar_create" as const,
-      title: "Lunch with Alex",
-      startTime: "2026-03-14T18:00:00.000Z",
-      endTime: "2026-03-14T19:00:00.000Z",
-      location: "Blue Bottle",
-      description: "Talk through March 14 plans.",
-    },
-  };
-  const calendarTask = await storage.createAgentTask({
-    userId: user.id,
-    conversationId,
-    status: "completed",
-    riskLevel: "high",
-    taskKind: "google_action",
-    prompt: calendarPrompt,
-    requestedByMessageId: randomUUID(),
-    plan: calendarPlan,
-    completedAt: new Date(),
-  });
-
-  await storage.createMessage({
-    conversationId,
-    sender: "assistant",
-    text: "Created a calendar event for lunch with Alex.",
-    partIndex: 0,
-    uiPayload: {
-      kind: "agent_task_status",
-      task: {
-        id: calendarTask.id,
-        conversationId: calendarTask.conversationId,
-        status: calendarTask.status,
-        riskLevel: calendarTask.riskLevel,
-        taskKind: calendarTask.taskKind,
-        prompt: calendarTask.prompt,
-        errorMessage: calendarTask.errorMessage ?? null,
-        createdAt: calendarTask.createdAt,
-        updatedAt: calendarTask.updatedAt,
-        completedAt: calendarTask.completedAt,
-      },
-      text: "Completed",
-      googleActionPreview: calendarPreview,
-      googleActionResult: {
-        kind: "calendar_create",
-        connector: "calendar",
-        status: "event_created",
-        summary: "Created a calendar event for lunch with Alex.",
-        eventId: `voice-stage-event-${calendarTask.id}`,
-      },
+async function prepareLiveGoogleAction(
+  page: Page,
+  baseUrl: string,
+  params: {
+    conversationId: string;
+    functionName: "prepare_google_email_action" | "prepare_google_calendar_action";
+    request: string;
+    timezone?: string;
+  },
+): Promise<void> {
+  const functionId = randomUUID();
+  const response = await page.request.post(`${baseUrl}/api/live/tool-response`, {
+    data: {
+      conversationId: params.conversationId,
+      clientTimeZone: params.timezone ?? "America/New_York",
+      functionCalls: [
+        {
+          id: functionId,
+          name: params.functionName,
+          args:
+            params.functionName === "prepare_google_calendar_action"
+              ? {
+                  request: params.request,
+                  timezone: params.timezone ?? "America/New_York",
+                }
+              : {
+                  request: params.request,
+                },
+        },
+      ],
     },
   });
+  assert.equal(
+    response.ok(),
+    true,
+    `Expected live tool-response to succeed for ${params.functionName}`,
+  );
+  const payload = (await response.json()) as {
+    functionResponses?: Array<{
+      id?: string;
+      response?: {
+        result?: {
+          status?: string;
+          message?: string;
+          taskId?: string | null;
+        };
+      };
+    }>;
+  };
+  const functionResponse = payload.functionResponses?.find(
+    (entry) => entry.id === functionId,
+  );
+  const resultStatus = functionResponse?.response?.result?.status ?? null;
+  assert.equal(
+    resultStatus,
+    "approval_required",
+    `Expected ${params.functionName} to create an approval-backed task, got ${resultStatus}`,
+  );
+  assert.ok(
+    functionResponse?.response?.result?.taskId,
+    `Expected ${params.functionName} to return a task id`,
+  );
 }
 
 async function assertVoiceStageSurface(

@@ -10849,7 +10849,6 @@ export async function registerRoutes(
           status: "searching" | "grounded" | "idle";
           label?: string;
         }> = [];
-        let latestConversationUserMessageId: string | null = null;
         const hasMorningBriefFunctionCalls = parsed.functionCalls.some(
           (call) =>
             call.name === "get_morning_brief" ||
@@ -11736,14 +11735,55 @@ export async function registerRoutes(
                 ? args.timezone
                 : parsed.clientTimeZone ?? null,
             );
-            const preparation = await prepareGoogleActionTask({
-              storage,
-              userId: req.session.userId,
-              text: requestText,
-              clientTimeZone: actionTimeZone,
+            const conversationMessages = await storage.getMessages(conversation.id);
+            const latestUserMessage =
+              [...conversationMessages]
+                .reverse()
+                .find((message) => message.sender === "user") ?? null;
+            const googleConversationState = resolveLatestGoogleConversationState(
+              conversationMessages,
+            );
+            const recentContext = toGoogleRecentActionContext(
+              googleConversationState,
+            );
+
+            trace(req, "live.tool.google_action.context", {
+              conversationId: conversation.id,
+              requestText,
+              functionName: functionCall.name,
+              timezone: actionTimeZone,
+              hasPendingTask: Boolean(googleConversationState.pendingTask),
+              pendingTaskId: googleConversationState.pendingTask?.taskId ?? null,
+              hasComposeSession: Boolean(googleConversationState.composeSession),
+              composeSessionStatus:
+                googleConversationState.composeSession?.session.status ?? null,
+              hasEmailAmbiguity: Boolean(googleConversationState.emailAmbiguity),
+              ambiguityCandidateCount:
+                googleConversationState.emailAmbiguity?.prompt.candidates.length ??
+                0,
+              recentEmailTaskId: recentContext.recentEmailTask?.taskId ?? null,
+              recentCalendarTaskId:
+                recentContext.recentCalendarTask?.taskId ?? null,
+              emailDraftCandidateCount:
+                googleConversationState.emailDraftCandidates.length,
             });
 
-            if (preparation.kind === "none") {
+            const googleActionOutcome = await maybeHandleGoogleActionTask({
+              storage,
+              userId: req.session.userId,
+              conversationId: conversation.id,
+              conversationMessages,
+              text: requestText,
+              clientTimeZone: actionTimeZone,
+              userMessage: {
+                id:
+                  latestUserMessage?.id ??
+                  `live-google-action-${randomUUID()}`,
+                createdAt: latestUserMessage?.createdAt ?? new Date(),
+              },
+            });
+
+            if (!googleActionOutcome.handled) {
               functionResponses.push({
                 id: functionCall.id,
                 name: functionCall.name,
@@ -11755,101 +11795,67 @@ export async function registerRoutes(
                   },
                 },
               });
-              continue;
-            }
-
-            if (preparation.kind === "clarify" || preparation.kind === "upgrade_required") {
-              if (preparation.kind === "upgrade_required") {
-                trace(req, "live.tool.google_action.upgrade_required", {
-                  conversationId: conversation.id,
-                  requestText,
-                  connector: preparation.connector ?? null,
-                  reasonCode: preparation.reasonCode ?? null,
-                  missingScopes: preparation.missingScopes ?? [],
-                  resolvedPrompt: preparation.resolvedPrompt ?? null,
-                  elapsedMs: elapsedMs(actionStartedAt),
-                });
-              }
-              functionResponses.push({
-                id: functionCall.id,
-                name: functionCall.name,
-                response: {
-                  result: {
-                    status:
-                      preparation.kind === "clarify"
-                        ? "clarification_needed"
-                        : "upgrade_required",
-                    message: preparation.message,
-                    connector:
-                      preparation.kind === "upgrade_required"
-                        ? preparation.connector ?? null
-                        : null,
-                    reasonCode:
-                      preparation.kind === "upgrade_required"
-                        ? preparation.reasonCode ?? null
-                        : null,
-                    missingScopes:
-                      preparation.kind === "upgrade_required"
-                        ? preparation.missingScopes ?? []
-                        : [],
-                  },
-                },
-              });
-              chatDigests.push({
-                sender: "assistant",
-                text: preparation.message,
-              });
-              webSearchEvents.push({
-                status: "grounded",
-                label:
-                  preparation.kind === "clarify"
-                    ? "Need one more detail"
-                    : "Google access upgrade required",
+              trace(req, "live.tool.google_action.unhandled", {
+                conversationId: conversation.id,
+                requestText,
+                functionName: functionCall.name,
+                timezone: actionTimeZone,
+                elapsedMs: elapsedMs(actionStartedAt),
               });
               continue;
             }
 
-            if (!latestConversationUserMessageId) {
-              const conversationMessages = await storage.getMessages(conversation.id);
-              latestConversationUserMessageId =
-                [...conversationMessages]
-                  .reverse()
-                  .find((message) => message.sender === "user")
-                  ?.id ?? null;
-            }
-
-            const run = await startGoogleActionTaskRun({
-              storage,
-              userId: req.session.userId,
-              conversationId: conversation.id,
-              prompt: requestText,
-              requestedByMessageId:
-                latestConversationUserMessageId ??
-                `live-google-action-${randomUUID()}`,
-              preview: preparation.preview,
-              plan: preparation.plan,
-            });
+            const responseStatus =
+              googleActionOutcome.kind === "clarify"
+                ? "clarification_needed"
+                : googleActionOutcome.kind === "upgrade_required"
+                  ? "upgrade_required"
+                  : googleActionOutcome.awaitingApproval
+                    ? "approval_required"
+                    : googleActionOutcome.task?.status === "completed"
+                      ? "completed"
+                      : googleActionOutcome.task?.status === "cancelled"
+                        ? "cancelled"
+                        : "in_progress";
+            const responseMessage = googleActionOutcome.legacyAssistantMessage.text;
             functionResponses.push({
               id: functionCall.id,
               name: functionCall.name,
               response: {
                 result: {
-                  status: "approval_required",
-                  message:
-                    "I prepared the Google action and added an approval card to the chat.",
-                  taskId: run.task.id,
-                  preview: preparation.preview,
+                  status: responseStatus,
+                  message: responseMessage,
+                  taskId: googleActionOutcome.task?.id ?? null,
                 },
               },
             });
+            chatDigests.push({
+              sender: "assistant",
+              text: responseMessage,
+            });
             webSearchEvents.push({
               status: "grounded",
-              label: "Approval card ready",
+              label:
+                googleActionOutcome.kind === "clarify"
+                  ? "Need one more detail"
+                  : googleActionOutcome.kind === "upgrade_required"
+                    ? "Google access upgrade required"
+                    : googleActionOutcome.awaitingApproval
+                      ? "Approval card ready"
+                      : "Google action updated",
             });
-            trace(req, "live.tool.google_action_prepared", {
+            trace(req, "live.tool.google_action.handled", {
               conversationId: conversation.id,
-              taskId: run.task.id,
-              actionKind: preparation.preview.kind,
+              requestText,
+              functionName: functionCall.name,
+              outcomeKind: googleActionOutcome.kind,
+              responseStatus,
+              taskId: googleActionOutcome.task?.id ?? null,
+              taskStatus: googleActionOutcome.task?.status ?? null,
+              awaitingApproval: googleActionOutcome.awaitingApproval,
+              assistantMessageCount: googleActionOutcome.assistantMessages.length,
+              model: googleActionOutcome.model,
+              decisionPath: googleActionOutcome.decisionPath,
               elapsedMs: elapsedMs(actionStartedAt),
             });
             continue;

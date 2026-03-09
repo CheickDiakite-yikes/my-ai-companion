@@ -1375,6 +1375,7 @@ function composeLiveSystemInstruction(params: {
         "- If the user asks for the details of a specific meeting or what changed in an invite, call get_calendar_event_detail before answering.",
         "- If the user asks you to draft/reply/send an email, call prepare_google_email_action instead of pretending it was sent.",
         "- If the user asks you to create/update/move a calendar event, call prepare_google_calendar_action instead of pretending it was updated.",
+        '- Treat follow-ups like "put that on my calendar", "book that time", "block that off", or "move it to 4" as calendar actions that still require prepare_google_calendar_action.',
         "- After detailed reads, prefer offering one grounded next step such as drafting a reply or updating the event.",
         "- If tools report google_not_connected or google_scope_missing, tell the user to connect/reconnect Google from Profile settings.",
         "- Never fabricate email or calendar information. Use only returned tool data.",

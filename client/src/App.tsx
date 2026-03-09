@@ -1745,8 +1745,10 @@ function GoogleEmailComposerPreview(props: {
     testId?: string;
   };
   testId?: string;
+  displayMode?: "default" | "voice_stage";
 }) {
   const [isExpanded, setIsExpanded] = useState(false);
+  const isVoiceStage = props.displayMode === "voice_stage";
   const statusIcon =
     props.tone === "ready" ? (
       <CheckCircle2 className="h-3 w-3" />
@@ -1768,14 +1770,19 @@ function GoogleEmailComposerPreview(props: {
 
   return (
     <div
-      className="relative w-full min-w-0 max-w-full overflow-hidden rounded-[1.45rem] border p-2.5"
+      className={cn(
+        "relative w-full min-w-0 max-w-full overflow-hidden border",
+        isVoiceStage ? "rounded-[1.2rem] p-2" : "rounded-[1.45rem] p-2.5",
+      )}
       style={{
         borderColor: "rgba(255,255,255,0.22)",
         background:
-          "linear-gradient(180deg, rgba(255,255,255,0.14), rgba(255,255,255,0.08))",
+          isVoiceStage
+            ? "linear-gradient(180deg, rgba(255,255,255,0.11), rgba(255,255,255,0.06))"
+            : "linear-gradient(180deg, rgba(255,255,255,0.14), rgba(255,255,255,0.08))",
         boxShadow:
           "0 14px 28px rgba(0, 0, 0, 0.16), inset 0 1px 0 rgba(255,255,255,0.16)",
-        backdropFilter: "blur(10px) saturate(112%)",
+        backdropFilter: isVoiceStage ? "blur(6px) saturate(108%)" : "blur(10px) saturate(112%)",
       }}
       data-testid={props.testId}
     >
@@ -1786,10 +1793,13 @@ function GoogleEmailComposerPreview(props: {
             "linear-gradient(90deg, transparent, color-mix(in srgb, var(--app-accent) 46%, transparent), transparent)",
         }}
       />
-      <div className="relative space-y-2.5">
-        <div className="flex flex-wrap items-center gap-2">
+      <div className={cn("relative", isVoiceStage ? "space-y-2" : "space-y-2.5")}>
+        <div className="flex flex-wrap items-center gap-1.5">
           <div
-            className="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-[0.14em]"
+            className={cn(
+              "inline-flex items-center gap-1.5 rounded-full border font-semibold tracking-[0.14em]",
+              isVoiceStage ? "px-2 py-0.5 text-[9px]" : "px-2.5 py-1 text-[10px]",
+            )}
             style={{
               borderColor: "rgba(255,255,255,0.32)",
               backgroundColor: "rgba(255,255,255,0.78)",
@@ -1800,7 +1810,10 @@ function GoogleEmailComposerPreview(props: {
             Zee Mail
           </div>
           <div
-            className="inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide"
+            className={cn(
+              "inline-flex items-center gap-1 rounded-full border font-semibold tracking-wide",
+              isVoiceStage ? "px-2 py-0.5 text-[9px]" : "px-2.5 py-1 text-[10px]",
+            )}
             style={{
               borderColor: toneStyles.borderColor,
               backgroundColor: toneStyles.backgroundColor,
@@ -1813,7 +1826,10 @@ function GoogleEmailComposerPreview(props: {
         </div>
 
         <div
-          className="space-y-2 rounded-[1.2rem] border p-2.5 backdrop-blur-sm"
+          className={cn(
+            "space-y-2 rounded-[1.2rem] border backdrop-blur-sm",
+            isVoiceStage ? "p-2" : "p-2.5",
+          )}
           style={{
             borderColor: "rgba(255,255,255,0.24)",
             backgroundColor: "rgba(255,255,255,0.16)",
@@ -1859,7 +1875,7 @@ function GoogleEmailComposerPreview(props: {
               <div
                 className="relative pr-1"
                 style={{
-                  maxHeight: isExpanded ? "380px" : "124px",
+                  maxHeight: isExpanded ? (isVoiceStage ? "240px" : "380px") : isVoiceStage ? "96px" : "124px",
                   overflowY: isExpanded ? "auto" : "hidden",
                 }}
               >
@@ -1889,7 +1905,10 @@ function GoogleEmailComposerPreview(props: {
                 <button
                   type="button"
                   onClick={() => setIsExpanded((value) => !value)}
-                  className="rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide transition-colors hover:opacity-90"
+                  className={cn(
+                    "rounded-full border font-semibold tracking-wide transition-colors hover:opacity-90",
+                    isVoiceStage ? "px-2 py-0.5 text-[9px]" : "px-2.5 py-1 text-[10px]",
+                  )}
                   style={{
                     borderColor: "rgba(255,255,255,0.32)",
                     backgroundColor: "rgba(255,255,255,0.6)",
@@ -1906,7 +1925,10 @@ function GoogleEmailComposerPreview(props: {
           </div>
 
           <div
-            className="rounded-[1rem] border px-3 py-2.5 text-[12px]"
+            className={cn(
+              "rounded-[1rem] border px-3 text-[12px]",
+              isVoiceStage ? "py-2" : "py-2.5",
+            )}
             style={{
               borderColor: "rgba(255,255,255,0.28)",
               backgroundColor: "rgba(255,255,255,0.72)",
@@ -1915,7 +1937,9 @@ function GoogleEmailComposerPreview(props: {
           >
             <div className="flex items-center gap-2">
               <MessageSquare className="h-3.5 w-3.5 shrink-0 opacity-70" />
-              <p className="min-w-0 flex-1 leading-5">{props.helperText}</p>
+              <p className={cn("min-w-0 flex-1", isVoiceStage ? "leading-[1.1rem]" : "leading-5")}>
+                {props.helperText}
+              </p>
               {!hasFooterActions ? (
                 <ChevronRight className="h-4 w-4 shrink-0 opacity-45" />
               ) : null}
@@ -1987,8 +2011,10 @@ function GoogleCalendarPreview(props: {
     testId?: string;
   };
   testId?: string;
+  displayMode?: "default" | "voice_stage";
 }) {
   const [isExpanded, setIsExpanded] = useState(false);
+  const isVoiceStage = props.displayMode === "voice_stage";
   const statusIcon =
     props.tone === "ready" ? (
       <CheckCircle2 className="h-3 w-3" />
@@ -2008,14 +2034,19 @@ function GoogleCalendarPreview(props: {
 
   return (
     <div
-      className="relative w-full min-w-0 max-w-full overflow-hidden rounded-[1.45rem] border p-2.5"
+      className={cn(
+        "relative w-full min-w-0 max-w-full overflow-hidden border",
+        isVoiceStage ? "rounded-[1.2rem] p-2" : "rounded-[1.45rem] p-2.5",
+      )}
       style={{
         borderColor: "rgba(255,255,255,0.22)",
         background:
-          "linear-gradient(180deg, rgba(255,255,255,0.14), rgba(255,255,255,0.08))",
+          isVoiceStage
+            ? "linear-gradient(180deg, rgba(255,255,255,0.11), rgba(255,255,255,0.06))"
+            : "linear-gradient(180deg, rgba(255,255,255,0.14), rgba(255,255,255,0.08))",
         boxShadow:
           "0 14px 28px rgba(0, 0, 0, 0.16), inset 0 1px 0 rgba(255,255,255,0.16)",
-        backdropFilter: "blur(10px) saturate(112%)",
+        backdropFilter: isVoiceStage ? "blur(6px) saturate(108%)" : "blur(10px) saturate(112%)",
       }}
       data-testid={props.testId}
     >
@@ -2026,10 +2057,13 @@ function GoogleCalendarPreview(props: {
             "linear-gradient(90deg, transparent, color-mix(in srgb, var(--app-accent) 46%, transparent), transparent)",
         }}
       />
-      <div className="relative space-y-2.5">
-        <div className="flex flex-wrap items-center gap-2">
+      <div className={cn("relative", isVoiceStage ? "space-y-2" : "space-y-2.5")}>
+        <div className="flex flex-wrap items-center gap-1.5">
           <div
-            className="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-[0.14em]"
+            className={cn(
+              "inline-flex items-center gap-1.5 rounded-full border font-semibold tracking-[0.14em]",
+              isVoiceStage ? "px-2 py-0.5 text-[9px]" : "px-2.5 py-1 text-[10px]",
+            )}
             style={{
               borderColor: "rgba(255,255,255,0.32)",
               backgroundColor: "rgba(255,255,255,0.78)",
@@ -2040,7 +2074,10 @@ function GoogleCalendarPreview(props: {
             Zee Calendar
           </div>
           <div
-            className="inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide"
+            className={cn(
+              "inline-flex items-center gap-1 rounded-full border font-semibold tracking-wide",
+              isVoiceStage ? "px-2 py-0.5 text-[9px]" : "px-2.5 py-1 text-[10px]",
+            )}
             style={{
               borderColor: toneStyles.borderColor,
               backgroundColor: toneStyles.backgroundColor,
@@ -2053,7 +2090,10 @@ function GoogleCalendarPreview(props: {
         </div>
 
         <div
-          className="space-y-2 rounded-[1.2rem] border p-2.5 backdrop-blur-sm"
+          className={cn(
+            "space-y-2 rounded-[1.2rem] border backdrop-blur-sm",
+            isVoiceStage ? "p-2" : "p-2.5",
+          )}
           style={{
             borderColor: "rgba(255,255,255,0.24)",
             backgroundColor: "rgba(255,255,255,0.16)",
@@ -2114,7 +2154,7 @@ function GoogleCalendarPreview(props: {
               <div
                 className="relative pr-1"
                 style={{
-                  maxHeight: isExpanded ? "180px" : "92px",
+                  maxHeight: isExpanded ? (isVoiceStage ? "160px" : "180px") : isVoiceStage ? "72px" : "92px",
                   overflowY: isExpanded ? "auto" : "hidden",
                 }}
               >
@@ -2132,9 +2172,12 @@ function GoogleCalendarPreview(props: {
               {shouldShowDescriptionToggle ? (
                 <div className="mt-2 flex justify-end">
                   <button
-                    type="button"
-                    onClick={() => setIsExpanded((value) => !value)}
-                    className="rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide transition-colors hover:opacity-90"
+                  type="button"
+                  onClick={() => setIsExpanded((value) => !value)}
+                  className={cn(
+                    "rounded-full border font-semibold tracking-wide transition-colors hover:opacity-90",
+                    isVoiceStage ? "px-2 py-0.5 text-[9px]" : "px-2.5 py-1 text-[10px]",
+                  )}
                     style={{
                       borderColor: "rgba(255,255,255,0.32)",
                       backgroundColor: "rgba(255,255,255,0.6)",
@@ -2154,7 +2197,10 @@ function GoogleCalendarPreview(props: {
           ) : null}
 
           <div
-            className="rounded-[1rem] border px-3 py-2.5 text-[12px]"
+            className={cn(
+              "rounded-[1rem] border px-3 text-[12px]",
+              isVoiceStage ? "py-2" : "py-2.5",
+            )}
             style={{
               borderColor: "rgba(255,255,255,0.28)",
               backgroundColor: "rgba(255,255,255,0.72)",
@@ -2163,7 +2209,9 @@ function GoogleCalendarPreview(props: {
           >
             <div className="flex items-center gap-2">
               <MessageSquare className="h-3.5 w-3.5 shrink-0 opacity-70" />
-              <p className="min-w-0 flex-1 leading-5">{props.helperText}</p>
+              <p className={cn("min-w-0 flex-1", isVoiceStage ? "leading-[1.1rem]" : "leading-5")}>
+                {props.helperText}
+              </p>
               {!hasFooterActions ? (
                 <ChevronRight className="h-4 w-4 shrink-0 opacity-45" />
               ) : null}
@@ -2216,41 +2264,51 @@ function GoogleCalendarPreview(props: {
 function GoogleComposeSessionCard(props: {
   session: GoogleComposeSession;
   text: string;
+  displayMode?: "chat" | "voice_stage";
 }) {
   const statusMeta = getGoogleComposeStatusMeta(props.session);
   const toneStyles = getGoogleEmailToneStyles(statusMeta.tone);
   const recipient = props.session.recipientEmail?.trim() || "Waiting for recipient";
   const subject = props.session.subject?.trim() || null;
   const bodyPreview = props.session.bodyPreview?.trim() || null;
+  const isVoiceStage = props.displayMode === "voice_stage";
 
   return (
     <div
-      className="w-full min-w-0 max-w-full space-y-2.5"
+      className={cn(
+        "w-full min-w-0 max-w-full",
+        isVoiceStage ? "space-y-2" : "space-y-2.5",
+      )}
       data-testid="google-compose-session-card"
       data-compose-status={props.session.status}
     >
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <Pencil className="h-4 w-4" />
-            <p className="text-sm font-semibold">Draft in progress</p>
+      {!isVoiceStage ? (
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <Pencil className="h-4 w-4" />
+              <p className="text-sm font-semibold">Draft in progress</p>
+            </div>
+            <p className="mt-2 text-xs leading-5 opacity-80">{props.text}</p>
           </div>
-          <p className="mt-2 text-xs leading-5 opacity-80">{props.text}</p>
+          <div
+            className="shrink-0 rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide"
+            style={{
+              borderColor: toneStyles.borderColor,
+              backgroundColor: toneStyles.backgroundColor,
+              color: toneStyles.textColor,
+            }}
+          >
+            {statusMeta.label}
+          </div>
         </div>
-        <div
-          className="shrink-0 rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide"
-          style={{
-            borderColor: toneStyles.borderColor,
-            backgroundColor: toneStyles.backgroundColor,
-            color: toneStyles.textColor,
-          }}
-        >
-          {statusMeta.label}
-        </div>
-      </div>
+      ) : null}
 
       <div
-        className="w-full min-w-0 max-w-full rounded-[1.35rem] border p-3"
+        className={cn(
+          "w-full min-w-0 max-w-full rounded-[1.35rem] border",
+          isVoiceStage ? "p-2.5" : "p-3",
+        )}
         style={{
           borderColor: "rgba(255,255,255,0.18)",
           backgroundColor: "rgba(255,255,255,0.12)",
@@ -2258,9 +2316,12 @@ function GoogleComposeSessionCard(props: {
         }}
         data-testid="google-compose-session-preview"
       >
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-1.5">
           <div
-            className="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-[0.14em]"
+            className={cn(
+              "inline-flex items-center gap-1.5 rounded-full border font-semibold tracking-[0.14em]",
+              isVoiceStage ? "px-2 py-0.5 text-[9px]" : "px-2.5 py-1 text-[10px]",
+            )}
             style={{
               borderColor: "rgba(255,255,255,0.28)",
               backgroundColor: "rgba(255,255,255,0.82)",
@@ -2271,7 +2332,10 @@ function GoogleComposeSessionCard(props: {
             Zee Mail
           </div>
           <div
-            className="inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide"
+            className={cn(
+              "inline-flex items-center gap-1 rounded-full border font-semibold tracking-wide",
+              isVoiceStage ? "px-2 py-0.5 text-[9px]" : "px-2.5 py-1 text-[10px]",
+            )}
             style={{
               borderColor: toneStyles.borderColor,
               backgroundColor: toneStyles.backgroundColor,
@@ -2283,7 +2347,7 @@ function GoogleComposeSessionCard(props: {
           </div>
         </div>
 
-        <div className="mt-3 grid gap-2">
+        <div className={cn("grid gap-2", isVoiceStage ? "mt-2.5" : "mt-3")}>
           <div
             className="flex items-center gap-2 rounded-[0.95rem] border px-3 py-2"
             style={{
@@ -2338,7 +2402,9 @@ function GoogleEmailAmbiguityCard(props: {
   ambiguity: Extract<AgentMessageUiPayload, { kind: "agent_google_email_ambiguity" }>["ambiguity"];
   text: string;
   onChoose: (selectionPrompt: string) => void;
+  displayMode?: "chat" | "voice_stage";
 }) {
+  const isVoiceStage = props.displayMode === "voice_stage";
   const actionLabel =
     props.ambiguity.action === "send" ? "Choose a draft to send" : "Choose a draft to update";
   const helperText =
@@ -2348,31 +2414,42 @@ function GoogleEmailAmbiguityCard(props: {
 
   return (
     <div
-      className="w-full min-w-0 max-w-full space-y-2.5"
+      className={cn(
+        "w-full min-w-0 max-w-full",
+        isVoiceStage ? "space-y-2" : "space-y-2.5",
+      )}
       data-testid="google-email-ambiguity-card"
       data-ambiguity-action={props.ambiguity.action}
     >
-      <div className="flex items-start gap-2">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <Mail className="h-4 w-4" />
-            <p className="text-sm font-semibold">Which email did you mean?</p>
+      {!isVoiceStage ? (
+        <div className="flex items-start gap-2">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <Mail className="h-4 w-4" />
+              <p className="text-sm font-semibold">Which email did you mean?</p>
+            </div>
+            <p className="mt-2 text-xs leading-5 opacity-80">{props.text}</p>
           </div>
-          <p className="mt-2 text-xs leading-5 opacity-80">{props.text}</p>
         </div>
-      </div>
+      ) : null}
 
       <div
-        className="w-full min-w-0 max-w-full rounded-[1.35rem] border p-3"
+        className={cn(
+          "w-full min-w-0 max-w-full rounded-[1.35rem] border",
+          isVoiceStage ? "p-2.5" : "p-3",
+        )}
         style={{
           borderColor: "rgba(255,255,255,0.18)",
           backgroundColor: "rgba(255,255,255,0.12)",
           boxShadow: "0 10px 20px rgba(0,0,0,0.1), inset 0 1px 0 rgba(255,255,255,0.1)",
         }}
       >
-        <div className="mb-3 flex flex-wrap items-center gap-2">
+        <div className={cn("flex flex-wrap items-center gap-1.5", isVoiceStage ? "mb-2" : "mb-3")}>
           <div
-            className="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-[0.14em]"
+            className={cn(
+              "inline-flex items-center gap-1.5 rounded-full border font-semibold tracking-[0.14em]",
+              isVoiceStage ? "px-2 py-0.5 text-[9px]" : "px-2.5 py-1 text-[10px]",
+            )}
             style={{
               borderColor: "rgba(255,255,255,0.28)",
               backgroundColor: "rgba(255,255,255,0.82)",
@@ -2383,7 +2460,10 @@ function GoogleEmailAmbiguityCard(props: {
             Zee Mail
           </div>
           <div
-            className="inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide"
+            className={cn(
+              "inline-flex items-center gap-1 rounded-full border font-semibold tracking-wide",
+              isVoiceStage ? "px-2 py-0.5 text-[9px]" : "px-2.5 py-1 text-[10px]",
+            )}
             style={{
               borderColor: "rgba(255,255,255,0.28)",
               backgroundColor: "rgba(255,255,255,0.72)",
@@ -2437,7 +2517,10 @@ function GoogleEmailAmbiguityCard(props: {
         </div>
 
         <div
-          className="mt-3 rounded-[1rem] border px-3 py-2.5 text-[12px]"
+          className={cn(
+            "rounded-[1rem] border px-3 text-[12px]",
+            isVoiceStage ? "mt-2 py-2" : "mt-3 py-2.5",
+          )}
           style={{
             borderColor: "rgba(255,255,255,0.2)",
             backgroundColor: "rgba(255,255,255,0.66)",
@@ -2460,6 +2543,7 @@ function GoogleEmailAssistantTaskCard(props: {
   onApprove: () => void;
   onDeny: () => void;
   failure: TaskFailureSummary | null;
+  displayMode?: "chat" | "voice_stage";
 }) {
   const proposedEmail = props.googleActionPreview.proposedEmail;
   if (!proposedEmail) return null;
@@ -2578,6 +2662,7 @@ function GoogleEmailAssistantTaskCard(props: {
     preview: props.googleActionPreview,
     statusLabel,
   });
+  const isVoiceStage = props.displayMode === "voice_stage";
 
   const handleOpenDraftDialog = (editMode = false) => {
     resetDraftDialog(editMode);
@@ -2612,43 +2697,55 @@ function GoogleEmailAssistantTaskCard(props: {
   return (
     <>
       <div
-        className="w-full min-w-0 max-w-full space-y-3"
+        className={cn(
+          "w-full min-w-0 max-w-full",
+          isVoiceStage ? "space-y-2" : "space-y-3",
+        )}
         data-testid="agent-unified-task-card"
         data-agent-task-id={props.card.taskId}
         data-agent-task-status={props.card.status}
         data-google-email-card="true"
       >
         <div className="flex items-start justify-between gap-3 px-1">
-          <div className="min-w-0">
-            <div className="flex items-center gap-1.5">
-              <Mail className="h-3.5 w-3.5" style={{ color: "var(--app-on-dark-muted)" }} />
-              <p
-                className="text-[11px] font-semibold uppercase tracking-[0.16em]"
-                style={{ color: "var(--app-on-dark-muted)" }}
-              >
-                Zee Mail
+          {!isVoiceStage ? (
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5">
+                <Mail className="h-3.5 w-3.5" style={{ color: "var(--app-on-dark-muted)" }} />
+                <p
+                  className="text-[11px] font-semibold uppercase tracking-[0.16em]"
+                  style={{ color: "var(--app-on-dark-muted)" }}
+                >
+                  Zee Mail
+                </p>
+              </div>
+              <p className="mt-1.5 text-sm font-semibold" style={{ color: "var(--app-on-dark)" }}>
+                {props.googleActionPreview.title}
               </p>
+              {summaryText ? (
+                <p
+                  className="mt-1 text-xs leading-5"
+                  style={{ color: "var(--app-on-dark-muted)" }}
+                >
+                  {summaryText}
+                </p>
+              ) : null}
+              {props.googleActionPreview.emailThread ? (
+                <p
+                  className="mt-1 text-[11px] leading-5"
+                  style={{ color: "var(--app-on-dark-muted)" }}
+                >
+                  Replying in: {props.googleActionPreview.emailThread.subject}
+                </p>
+              ) : null}
             </div>
-            <p className="mt-1.5 text-sm font-semibold" style={{ color: "var(--app-on-dark)" }}>
-              {props.googleActionPreview.title}
-            </p>
-            {summaryText ? (
-              <p
-                className="mt-1 text-xs leading-5"
-                style={{ color: "var(--app-on-dark-muted)" }}
-              >
-                {summaryText}
-              </p>
-            ) : null}
-            {props.googleActionPreview.emailThread ? (
-              <p
-                className="mt-1 text-[11px] leading-5"
-                style={{ color: "var(--app-on-dark-muted)" }}
-              >
-                Replying in: {props.googleActionPreview.emailThread.subject}
-              </p>
-            ) : null}
-          </div>
+          ) : (
+            <div
+              className="text-[10px] font-semibold uppercase tracking-[0.16em]"
+              style={{ color: "var(--app-on-dark-muted)" }}
+            >
+              Email task
+            </div>
+          )}
           <div className="flex shrink-0 items-center gap-2">
             {canOpenDraftDialog ? (
               <button
@@ -2821,6 +2918,7 @@ function GoogleEmailAssistantTaskCard(props: {
                       : getGoogleEmailPreviewHelper(proposedEmail)
                 }
                 tone={statusTone}
+                displayMode={isVoiceStage ? "voice_stage" : "default"}
                 primaryAction={
                   props.approvalPending
                     ? {
@@ -3128,6 +3226,7 @@ function GoogleCalendarAssistantTaskCard(props: {
   onApprove: () => void;
   onDeny: () => void;
   failure: TaskFailureSummary | null;
+  displayMode?: "chat" | "voice_stage";
 }) {
   const proposedCalendar = props.googleActionPreview.proposedCalendar;
   const calendarEvent = props.googleActionPreview.calendarEvent;
@@ -3272,6 +3371,7 @@ function GoogleCalendarAssistantTaskCard(props: {
     preview: props.googleActionPreview,
     statusLabel,
   });
+  const isVoiceStage = props.displayMode === "voice_stage";
 
   const handleOpenEventDialog = (editMode = false) => {
     resetEventDialog(editMode);
@@ -3319,46 +3419,58 @@ function GoogleCalendarAssistantTaskCard(props: {
   return (
     <>
       <div
-        className="w-full min-w-0 max-w-full space-y-3"
+        className={cn(
+          "w-full min-w-0 max-w-full",
+          isVoiceStage ? "space-y-2" : "space-y-3",
+        )}
         data-testid="agent-unified-task-card"
         data-agent-task-id={props.card.taskId}
         data-agent-task-status={props.card.status}
         data-google-calendar-card="true"
       >
         <div className="flex items-start justify-between gap-3 px-1">
-          <div className="min-w-0">
-            <div className="flex items-center gap-1.5">
-              <CalendarDays
-                className="h-3.5 w-3.5"
-                style={{ color: "var(--app-on-dark-muted)" }}
-              />
-              <p
-                className="text-[11px] font-semibold uppercase tracking-[0.16em]"
-                style={{ color: "var(--app-on-dark-muted)" }}
-              >
-                Zee Calendar
+          {!isVoiceStage ? (
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5">
+                <CalendarDays
+                  className="h-3.5 w-3.5"
+                  style={{ color: "var(--app-on-dark-muted)" }}
+                />
+                <p
+                  className="text-[11px] font-semibold uppercase tracking-[0.16em]"
+                  style={{ color: "var(--app-on-dark-muted)" }}
+                >
+                  Zee Calendar
+                </p>
+              </div>
+              <p className="mt-1.5 text-sm font-semibold" style={{ color: "var(--app-on-dark)" }}>
+                {props.googleActionPreview.title}
               </p>
+              {summaryText ? (
+                <p
+                  className="mt-1 text-xs leading-5"
+                  style={{ color: "var(--app-on-dark-muted)" }}
+                >
+                  {summaryText}
+                </p>
+              ) : null}
+              {calendarEvent && props.googleActionPreview.kind === "calendar_update" ? (
+                <p
+                  className="mt-1 text-[11px] leading-5"
+                  style={{ color: "var(--app-on-dark-muted)" }}
+                >
+                  Updating: {calendarEvent.title}
+                </p>
+              ) : null}
             </div>
-            <p className="mt-1.5 text-sm font-semibold" style={{ color: "var(--app-on-dark)" }}>
-              {props.googleActionPreview.title}
-            </p>
-            {summaryText ? (
-              <p
-                className="mt-1 text-xs leading-5"
-                style={{ color: "var(--app-on-dark-muted)" }}
-              >
-                {summaryText}
-              </p>
-            ) : null}
-            {calendarEvent && props.googleActionPreview.kind === "calendar_update" ? (
-              <p
-                className="mt-1 text-[11px] leading-5"
-                style={{ color: "var(--app-on-dark-muted)" }}
-              >
-                Updating: {calendarEvent.title}
-              </p>
-            ) : null}
-          </div>
+          ) : (
+            <div
+              className="text-[10px] font-semibold uppercase tracking-[0.16em]"
+              style={{ color: "var(--app-on-dark-muted)" }}
+            >
+              Calendar task
+            </div>
+          )}
           <div className="flex shrink-0 items-center gap-2">
             {canOpenEventDialog ? (
               <button
@@ -3526,6 +3638,7 @@ function GoogleCalendarAssistantTaskCard(props: {
                       : getGoogleCalendarPreviewHelper(props.googleActionPreview)
                 }
                 tone={statusTone}
+                displayMode={isVoiceStage ? "voice_stage" : "default"}
                 currentEventLabel={
                   props.googleActionPreview.kind === "calendar_update" &&
                   (proposedCalendar?.originalTitle || proposedCalendar?.originalStartTime)
@@ -8183,7 +8296,7 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
                     initial={{ opacity: 0, y: 12, scale: 0.98 }}
                     animate={{ opacity: 1, y: 0, scale: 1 }}
                     transition={{ duration: 0.2, ease: "easeOut" }}
-                    className="relative h-[56vh] max-h-[500px] w-full max-w-[360px] overflow-hidden rounded-[2rem] border shadow-2xl"
+                    className="relative h-[55vh] max-h-[500px] w-full max-w-[380px] overflow-hidden rounded-[2rem] border shadow-2xl"
                     style={{
                       borderColor:
                         "color-mix(in srgb, var(--app-soft-card-border) 78%, transparent)",
@@ -8202,7 +8315,7 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
                       }}
                     />
                     <div className="relative flex h-full flex-col">
-                      <div className="flex items-start justify-between gap-3 border-b px-4 pb-3 pt-4"
+                      <div className="flex items-start justify-between gap-3 border-b px-3 pb-2.5 pt-3"
                         style={{
                           borderColor:
                             "color-mix(in srgb, var(--app-soft-card-border) 72%, transparent)",
@@ -8222,7 +8335,7 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
                             {voiceStageTitle}
                           </div>
                           <div
-                            className="mt-1 text-[11px] leading-4"
+                            className="mt-0.5 text-[10px] leading-4"
                             style={{ color: "var(--app-on-dark-muted)" }}
                           >
                             {voiceStageSubtitle}
@@ -8233,7 +8346,7 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
                             <button
                               type="button"
                               onClick={dismissVoiceCanvas}
-                              className="rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide transition-colors hover:opacity-90"
+                              className="rounded-full border px-2 py-0.5 text-[9px] font-semibold tracking-wide transition-colors hover:opacity-90"
                               style={{
                                 borderColor:
                                   "color-mix(in srgb, var(--app-soft-card-border) 76%, transparent)",
@@ -8267,31 +8380,32 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
 
                       {voiceStageCandidates.length > 1 ? (
                         <div
-                          className="border-b px-4 py-2.5"
+                          className="border-b px-3 py-2"
                           style={{
                             borderColor:
                               "color-mix(in srgb, var(--app-soft-card-border) 72%, transparent)",
                           }}
                         >
                           <div
-                            className="mb-2 text-[10px] font-semibold uppercase tracking-[0.18em]"
+                            className="mb-1.5 text-[9px] font-semibold uppercase tracking-[0.18em]"
                             style={{ color: "var(--app-on-dark-muted)" }}
                           >
-                            Recent surfaces
+                            Recent
                           </div>
                           <div className="flex gap-2 overflow-x-auto pb-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                             {voiceStageCandidates.slice(0, 6).map((candidate, index) => {
                               const candidateSummary = getVoiceStageCandidateSummary(candidate);
                               const isSelected =
                                 candidate.surfaceKey === voiceStageSurface?.surfaceKey;
+                              const compactLabel = `${candidateSummary.title} • ${candidateSummary.detail}`;
                               return (
                                 <button
                                   key={candidate.surfaceKey}
                                   type="button"
                                   onClick={() => handleSelectVoiceStageSurface(candidate)}
-                                  className="min-w-0 shrink-0 rounded-[1rem] border px-3 py-2 text-left transition-colors hover:opacity-90"
+                                  className="min-w-0 shrink-0 rounded-full border px-3 py-1.5 text-left transition-colors hover:opacity-90"
                                   style={{
-                                    width: "min(16rem, 72vw)",
+                                    width: "min(13rem, 58vw)",
                                     borderColor: isSelected
                                       ? "color-mix(in srgb, var(--app-accent) 42%, rgba(255,255,255,0.28))"
                                       : "rgba(255,255,255,0.16)",
@@ -8314,16 +8428,11 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
                                         style={{ color: "var(--app-on-dark-muted)" }}
                                       />
                                     )}
-                                    <div className="min-w-0">
-                                      <div className="truncate text-[11px] font-semibold">
-                                        {candidateSummary.title}
-                                      </div>
-                                      <div
-                                        className="truncate text-[10px]"
-                                        style={{ color: "var(--app-on-dark-muted)" }}
-                                      >
-                                        {candidateSummary.detail}
-                                      </div>
+                                    <div
+                                      className="min-w-0 truncate text-[11px] font-medium"
+                                      style={{ color: isSelected ? "var(--app-on-dark)" : "var(--app-on-dark-muted)" }}
+                                    >
+                                      {compactLabel}
                                     </div>
                                   </div>
                                 </button>
@@ -8333,19 +8442,21 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
                         </div>
                       ) : null}
 
-                      <div className="relative flex-1 overflow-hidden px-3 pb-3 pt-3">
+                      <div className="relative flex-1 overflow-hidden px-2.5 pb-2.5 pt-2">
                         <ScrollArea className="h-full pr-2">
-                          <div className="space-y-3">
+                          <div className="space-y-2.5">
                             {voiceStageSurface.kind === "task" ? (
                               <UnifiedAgentTaskCard
                                 card={voiceStageSurface.card}
                                 onOpenArtifact={handleVoiceStageOpenArtifact}
                                 onResolveApproval={handleVoiceStageResolveApproval}
+                                displayMode="voice_stage"
                               />
                             ) : voiceStageSurface.kind === "compose_session" ? (
                               <GoogleComposeSessionCard
                                 session={voiceStageSurface.session}
                                 text={voiceStageSurface.text}
+                                displayMode="voice_stage"
                               />
                             ) : (
                               <GoogleEmailAmbiguityCard
@@ -8356,13 +8467,14 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
                                     ignoreAttachments: true,
                                   });
                                 }}
+                                displayMode="voice_stage"
                               />
                             )}
                           </div>
                         </ScrollArea>
                       </div>
 
-                      <div className="border-t px-4 py-3"
+                      <div className="border-t px-3 py-2.5"
                         style={{
                           borderColor:
                             "color-mix(in srgb, var(--app-soft-card-border) 72%, transparent)",
@@ -8818,6 +8930,7 @@ const UnifiedAgentTaskCard = ({
   card,
   onOpenArtifact,
   onResolveApproval,
+  displayMode = "chat",
 }: {
   card: UnifiedAgentTaskCardModel;
   onOpenArtifact: (artifactId: string) => void;
@@ -8826,6 +8939,7 @@ const UnifiedAgentTaskCard = ({
     approve: boolean,
     reason?: string,
   ) => Promise<void>;
+  displayMode?: "chat" | "voice_stage";
 }) => {
   const [activeTab, setActiveTab] = useState("output");
   const [isInfoOpen, setIsInfoOpen] = useState(false);
@@ -8968,6 +9082,7 @@ const UnifiedAgentTaskCard = ({
         onApprove={() => void handleApproval(true)}
         onDeny={() => void handleApproval(false)}
         failure={failure}
+        displayMode={displayMode}
       />
     );
   }
@@ -8987,6 +9102,7 @@ const UnifiedAgentTaskCard = ({
         onApprove={() => void handleApproval(true)}
         onDeny={() => void handleApproval(false)}
         failure={failure}
+        displayMode={displayMode}
       />
     );
   }

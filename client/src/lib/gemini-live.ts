@@ -543,7 +543,7 @@ const LIVE_EMAIL_DETAIL_PATTERN =
 const LIVE_CALENDAR_SIGNAL_PATTERN =
   /\b(calendar|meeting|meetings|schedule|event|events|appointment|appointments)\b/i;
 const LIVE_CALENDAR_ACTION_PATTERN =
-  /\b(schedule|create|add|move|reschedule|change|update)\b/i;
+  /\b(schedule|create|add|put|book|block(?:\s+off)?|hold|mark|move|reschedule|change|update)\b/i;
 const LIVE_CALENDAR_DETAIL_PATTERN =
   /\b(details?|detail|description|location|attendees|what changed|invite|read me)\b/i;
 const LIVE_CALENDAR_FOLLOWUP_TIME_PATTERN =
