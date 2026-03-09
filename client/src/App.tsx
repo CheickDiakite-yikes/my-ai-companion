@@ -1601,6 +1601,160 @@ function GoogleEmailComposerPreview(props: {
   );
 }
 
+function GoogleEmailAssistantTaskCard(props: {
+  card: UnifiedAgentTaskCardModel;
+  googleActionPreview: GoogleActionPreview;
+  googleActionResult: GoogleActionResult | null;
+  approvalPending: boolean;
+  isResolvingApproval: boolean;
+  onApprove: () => void;
+  onDeny: () => void;
+  failure: TaskFailureSummary | null;
+}) {
+  const proposedEmail = props.googleActionPreview.proposedEmail;
+  if (!proposedEmail) return null;
+
+  const statusLabel = props.failure
+    ? "Failed"
+    : props.googleActionResult?.status === "email_sent"
+      ? "Sent"
+      : props.googleActionResult?.status === "draft_created"
+        ? "Draft saved"
+        : props.approvalPending
+          ? proposedEmail.sendAfterApproval
+            ? "Needs send approval"
+            : "Needs draft approval"
+          : props.card.status === "in_progress"
+            ? proposedEmail.sendAfterApproval
+              ? "Sending..."
+              : "Saving draft..."
+            : "Draft preview";
+
+  const summaryText =
+    props.failure?.reason ||
+    props.googleActionResult?.summary ||
+    props.googleActionPreview.summary ||
+    props.card.summaryText ||
+    "";
+
+  return (
+    <div
+      className="space-y-3"
+      data-testid="agent-unified-task-card"
+      data-agent-task-id={props.card.taskId}
+      data-agent-task-status={props.card.status}
+      data-google-email-card="true"
+    >
+      <div className="flex items-start justify-between gap-3 px-1">
+        <div className="min-w-0">
+          <div
+            className="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-[0.16em]"
+            style={{
+              borderColor: "rgba(255,255,255,0.18)",
+              backgroundColor: "rgba(255,255,255,0.08)",
+              color: "var(--app-on-dark-muted)",
+            }}
+          >
+            <Sparkles className="h-3 w-3" />
+            Zee Mail
+          </div>
+          <p className="mt-2 text-sm font-semibold" style={{ color: "var(--app-on-dark)" }}>
+            {props.googleActionPreview.title}
+          </p>
+          {summaryText ? (
+            <p
+              className="mt-1 text-xs leading-5"
+              style={{ color: "var(--app-on-dark-muted)" }}
+            >
+              {summaryText}
+            </p>
+          ) : null}
+          {props.googleActionPreview.emailThread ? (
+            <p
+              className="mt-1 text-[11px] leading-5"
+              style={{ color: "var(--app-on-dark-muted)" }}
+            >
+              Replying in: {props.googleActionPreview.emailThread.subject}
+            </p>
+          ) : null}
+        </div>
+        <span
+          className="shrink-0 rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide"
+          style={{
+            borderColor: "rgba(255,255,255,0.2)",
+            backgroundColor: "rgba(255,255,255,0.08)",
+            color:
+              props.failure
+                ? "#fca5a5"
+                : props.googleActionResult
+                  ? "#9fe6bc"
+                  : "var(--app-accent)",
+          }}
+        >
+          {statusLabel}
+        </span>
+      </div>
+
+      <GoogleEmailComposerPreview
+        to={proposedEmail.to}
+        subject={proposedEmail.subject}
+        bodyPreview={proposedEmail.bodyPreview}
+        statusLabel={
+          props.googleActionResult?.status === "email_sent"
+            ? "Sent"
+            : props.googleActionResult?.status === "draft_created"
+              ? "Draft saved"
+              : proposedEmail.sendAfterApproval
+                ? "Ready to send"
+                : "Draft preview"
+        }
+        helperText={
+          props.googleActionResult?.status === "email_sent"
+            ? "This email was sent through Gmail."
+            : props.googleActionResult?.status === "draft_created"
+              ? "This draft was saved to Gmail."
+              : getGoogleEmailPreviewHelper(proposedEmail)
+        }
+        tone={props.googleActionResult ? "ready" : props.failure ? "cancelled" : "pending"}
+        primaryAction={
+          props.approvalPending
+            ? {
+                label: getGoogleApprovalPrimaryLabel(props.googleActionPreview),
+                onClick: props.onApprove,
+                disabled: props.isResolvingApproval,
+                testId: "button-google-email-primary-action",
+              }
+            : undefined
+        }
+        secondaryAction={
+          props.approvalPending
+            ? {
+                label: getGoogleApprovalSecondaryLabel(props.googleActionPreview),
+                onClick: props.onDeny,
+                disabled: props.isResolvingApproval,
+                testId: "button-google-email-secondary-action",
+              }
+            : undefined
+        }
+        testId="google-email-preview-card"
+      />
+
+      {props.failure ? (
+        <div
+          className="rounded-2xl border px-3 py-2 text-xs"
+          style={{
+            borderColor: "rgba(248, 113, 113, 0.35)",
+            backgroundColor: "rgba(127, 29, 29, 0.12)",
+            color: "#fecaca",
+          }}
+        >
+          {props.failure.reason}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function shouldRenderAgentUiPayload(payload: MessageData["uiPayload"]): boolean {
   if (!payload) return false;
   if (ENABLE_AGENTIC_CREATIONS) {
@@ -5792,9 +5946,6 @@ const UnifiedAgentTaskCard = ({
   const googleActionPreview = card.googleActionPreview ?? null;
   const googleActionResult = card.googleActionResult ?? null;
   const hasGoogleActionOutput = Boolean(googleActionPreview || googleActionResult);
-  const hasInlineGoogleEmailApprovalActions = Boolean(
-    approvalPending && googleActionPreview?.proposedEmail,
-  );
 
   const statusTone =
     card.status === "failed"
@@ -5817,6 +5968,21 @@ const UnifiedAgentTaskCard = ({
       setIsResolvingApproval(false);
     }
   };
+
+  if (googleActionPreview?.proposedEmail) {
+    return (
+      <GoogleEmailAssistantTaskCard
+        card={card}
+        googleActionPreview={googleActionPreview}
+        googleActionResult={googleActionResult}
+        approvalPending={approvalPending}
+        isResolvingApproval={isResolvingApproval}
+        onApprove={() => void handleApproval(true)}
+        onDeny={() => void handleApproval(false)}
+        failure={failure}
+      />
+    );
+  }
 
   const canRenderInlineHtml =
     hasArtifact &&
@@ -6358,30 +6524,6 @@ const UnifiedAgentTaskCard = ({
                                   )
                           }
                           tone={googleActionResult ? "ready" : "pending"}
-                          primaryAction={
-                            hasInlineGoogleEmailApprovalActions
-                              ? {
-                                  label: getGoogleApprovalPrimaryLabel(
-                                    googleActionPreview,
-                                  ),
-                                  onClick: () => void handleApproval(true),
-                                  disabled: isResolvingApproval,
-                                  testId: "button-google-email-primary-action",
-                                }
-                              : undefined
-                          }
-                          secondaryAction={
-                            hasInlineGoogleEmailApprovalActions
-                              ? {
-                                  label: getGoogleApprovalSecondaryLabel(
-                                    googleActionPreview,
-                                  ),
-                                  onClick: () => void handleApproval(false),
-                                  disabled: isResolvingApproval,
-                                  testId: "button-google-email-secondary-action",
-                                }
-                              : undefined
-                          }
                           testId="google-email-preview-card"
                         />
                       )}
@@ -6499,7 +6641,7 @@ const UnifiedAgentTaskCard = ({
                   </div>
                 )}
 
-                {approvalPending && card.approval && !hasInlineGoogleEmailApprovalActions && (
+                {approvalPending && card.approval && (
                   <div
                     className="mt-3 space-y-2 rounded-xl border p-3"
                     style={{
