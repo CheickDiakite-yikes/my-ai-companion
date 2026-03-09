@@ -102,6 +102,8 @@ async function main(): Promise<void> {
     await verifyRecentCalendarFollowUpFlow(page, args.baseUrl, args.email, args.outputDir);
     console.log("[google-context-check] manual draft editor");
     await verifyManualDraftEditorFlow(page, args.baseUrl, args.email, args.outputDir);
+    console.log("[google-context-check] manual calendar editor");
+    await verifyManualCalendarEditorFlow(page, args.baseUrl, args.email, args.outputDir);
 
     console.log("google-personal-context Playwright checks passed");
     await page.close();
@@ -1007,6 +1009,10 @@ async function verifyManualDraftEditorFlow(
     (button as HTMLButtonElement).click();
   });
 
+  const toInput = page.getByTestId("input-google-email-draft-to");
+  await toInput.waitFor({ state: "visible", timeout: 20_000 });
+  await toInput.fill("contact@cheickdiakite.com");
+
   const subjectInput = page.getByTestId("input-google-email-draft-subject");
   await subjectInput.waitFor({ state: "visible", timeout: 20_000 });
   await subjectInput.fill("March 12 hangout?");
@@ -1040,6 +1046,11 @@ async function verifyManualDraftEditorFlow(
   const revisedCardText = await revisedCard.innerText();
   assert.match(
     revisedCardText,
+    /contact@cheickdiakite\.com/i,
+    "Expected the manually edited recipient to appear in the updated Gmail card",
+  );
+  assert.match(
+    revisedCardText,
     /march 12 hangout\?/i,
     "Expected the manually edited subject to appear in the updated Gmail card",
   );
@@ -1051,6 +1062,103 @@ async function verifyManualDraftEditorFlow(
 
   await page.screenshot({
     path: resolve(outputDir, "google-personal-context-manual-draft-editor.png"),
+    fullPage: true,
+  });
+}
+
+async function verifyManualCalendarEditorFlow(
+  page: Page,
+  baseUrl: string,
+  email: string,
+  outputDir: string,
+): Promise<void> {
+  const conversationId = await resolveActiveConversationId(page, baseUrl);
+  await seedRecentCalendarTaskFixture(email, conversationId);
+  await page.reload({ waitUntil: "networkidle" });
+
+  const seededCard = page.locator('[data-google-calendar-card="true"]').last();
+  await seededCard.waitFor({ state: "visible", timeout: 20_000 });
+  assert.match(
+    await seededCard.innerText(),
+    /lunch with alex/i,
+    "Expected a recent calendar card before opening the manual editor",
+  );
+
+  const beforeMessages = await fetchConversationMessages(page, baseUrl, conversationId);
+  const previousAssistantCount = beforeMessages.filter(
+    (message) => message.sender === "assistant",
+  ).length;
+
+  const openEventButton = page.getByTestId("button-google-calendar-open-event").last();
+  await openEventButton.waitFor({ state: "visible", timeout: 20_000 });
+  await openEventButton.evaluate((button) => {
+    (button as HTMLButtonElement).click();
+  });
+
+  const eventDialog = page.getByTestId("google-calendar-event-dialog");
+  await eventDialog.waitFor({ state: "visible", timeout: 20_000 });
+  assert.match(
+    await eventDialog.innerText(),
+    /lunch with alex/i,
+    "Expected the calendar dialog to show the existing event title",
+  );
+
+  const editButton = page.getByTestId("button-google-calendar-edit-event");
+  await editButton.waitFor({ state: "visible", timeout: 20_000 });
+  await editButton.evaluate((button) => {
+    (button as HTMLButtonElement).click();
+  });
+
+  const titleInput = page.getByTestId("input-google-calendar-title");
+  await titleInput.waitFor({ state: "visible", timeout: 20_000 });
+  await titleInput.fill("Lunch with Alex at Blue Bottle");
+
+  const locationInput = page.getByTestId("input-google-calendar-location");
+  await locationInput.fill("Blue Bottle");
+
+  const descriptionInput = page.getByTestId("textarea-google-calendar-description");
+  await descriptionInput.fill("Talk about launch plans and next week's schedule.");
+
+  const saveButton = page.getByTestId("button-google-calendar-save-event-edit");
+  await saveButton.waitFor({ state: "visible", timeout: 20_000 });
+  await saveButton.evaluate((button) => {
+    (button as HTMLButtonElement).click();
+  });
+
+  const saveReply = await waitForLatestAssistantReply({
+    page,
+    baseUrl,
+    conversationId,
+    previousAssistantCount,
+    timeoutMs: 45_000,
+  });
+  assert.match(
+    saveReply,
+    /saved your event edits|saved your edits into a fresh calendar preview|review it and approve/i,
+    "Saving manual calendar edits should surface an updated approval preview",
+  );
+
+  const revisedCard = page.locator('[data-google-calendar-card="true"]').last();
+  await revisedCard.waitFor({ state: "visible", timeout: 20_000 });
+  const revisedCardText = await revisedCard.innerText();
+  assert.match(
+    revisedCardText,
+    /lunch with alex at blue bottle/i,
+    "Expected the manually edited event title to appear in the updated calendar card",
+  );
+  assert.match(
+    revisedCardText,
+    /blue bottle/i,
+    "Expected the manually edited event location to appear in the updated calendar card",
+  );
+  assert.match(
+    revisedCardText,
+    /launch plans|needs approval|event preview/i,
+    "Expected the manually edited event notes to flow into the updated calendar preview",
+  );
+
+  await page.screenshot({
+    path: resolve(outputDir, "google-personal-context-manual-calendar-editor.png"),
     fullPage: true,
   });
 }

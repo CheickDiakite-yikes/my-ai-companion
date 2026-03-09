@@ -1299,6 +1299,26 @@ function formatGoogleActionDateTime(value: string | null | undefined): string | 
   });
 }
 
+function toDateTimeLocalInputValue(value: string | null | undefined): string {
+  if (!value) return "";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "";
+  const year = parsed.getFullYear();
+  const month = `${parsed.getMonth() + 1}`.padStart(2, "0");
+  const day = `${parsed.getDate()}`.padStart(2, "0");
+  const hours = `${parsed.getHours()}`.padStart(2, "0");
+  const minutes = `${parsed.getMinutes()}`.padStart(2, "0");
+  return `${year}-${month}-${day}T${hours}:${minutes}`;
+}
+
+function fromDateTimeLocalInputValue(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const parsed = new Date(trimmed);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed.toISOString();
+}
+
 function getGoogleApprovalPrimaryLabel(
   preview: GoogleActionPreview | null | undefined,
 ): string {
@@ -2284,6 +2304,7 @@ function GoogleEmailAssistantTaskCard(props: {
   const [isCollapsed, setIsCollapsed] = useState(shouldDefaultCollapsed);
   const [isDraftDialogOpen, setIsDraftDialogOpen] = useState(false);
   const [isDraftEditorMode, setIsDraftEditorMode] = useState(false);
+  const [draftToInput, setDraftToInput] = useState(proposedEmail.to.join(", "));
   const [draftSubjectInput, setDraftSubjectInput] = useState(
     proposedEmail.subject ?? "",
   );
@@ -2298,6 +2319,7 @@ function GoogleEmailAssistantTaskCard(props: {
 
   const currentSubject = proposedEmail.subject ?? "";
   const currentBody = proposedEmail.bodyPreview ?? "";
+  const currentTo = proposedEmail.to.join(", ");
   const canOpenDraftDialog = Boolean(
     proposedEmail.to.length > 0 || currentSubject.trim() || currentBody.trim(),
   );
@@ -2307,29 +2329,39 @@ function GoogleEmailAssistantTaskCard(props: {
       props.googleActionResult?.status !== "email_sent",
   );
   const hasManualDraftChanges =
+    draftToInput.trim() !== currentTo.trim() ||
     draftSubjectInput.trim() !== currentSubject.trim() ||
     draftBodyInput.trim() !== currentBody.trim();
 
   const resetDraftDialog = useCallback(
     (editMode = false) => {
+      setDraftToInput(currentTo);
       setDraftSubjectInput(currentSubject);
       setDraftBodyInput(currentBody);
       setDraftEditError(null);
       setIsDraftEditorMode(editMode && canEditDraft);
     },
-    [canEditDraft, currentBody, currentSubject],
+    [canEditDraft, currentBody, currentSubject, currentTo],
   );
 
   useEffect(() => {
     if (!isDraftDialogOpen || !isDraftEditorMode) {
+      setDraftToInput(currentTo);
       setDraftSubjectInput(currentSubject);
       setDraftBodyInput(currentBody);
       setDraftEditError(null);
     }
-  }, [currentBody, currentSubject, isDraftDialogOpen, isDraftEditorMode, props.card.taskId]);
+  }, [
+    currentBody,
+    currentSubject,
+    currentTo,
+    isDraftDialogOpen,
+    isDraftEditorMode,
+    props.card.taskId,
+  ]);
 
   const saveDraftEditMutation = useMutation({
-    mutationFn: async (payload: { subject: string; bodyText: string }) => {
+    mutationFn: async (payload: { to: string; subject: string; bodyText: string }) => {
       const response = await apiRequest(
         "POST",
         `/api/agent/tasks/${props.card.taskId}/google-email-edit`,
@@ -2394,6 +2426,11 @@ function GoogleEmailAssistantTaskCard(props: {
 
   const handleSaveDraftEdit = async () => {
     const nextBody = draftBodyInput.trim();
+    const nextTo = draftToInput.trim();
+    if (!nextTo) {
+      setDraftEditError("Recipient email is required.");
+      return;
+    }
     if (!nextBody) {
       setDraftEditError("Draft body is required.");
       return;
@@ -2401,6 +2438,7 @@ function GoogleEmailAssistantTaskCard(props: {
     setDraftEditError(null);
     try {
       await saveDraftEditMutation.mutateAsync({
+        to: draftToInput,
         subject: draftSubjectInput,
         bodyText: draftBodyInput,
       });
@@ -2725,17 +2763,40 @@ function GoogleEmailAssistantTaskCard(props: {
                 >
                   To
                 </p>
-                <div
-                  className="rounded-[1rem] border px-3 py-2.5 text-sm"
-                  style={{
-                    borderColor: "rgba(255,255,255,0.22)",
-                    backgroundColor: "rgba(255,255,255,0.78)",
-                    color: "#173b40",
-                  }}
-                  data-testid="google-email-draft-dialog-recipient"
-                >
-                  {proposedEmail.to.join(", ") || "No recipient"}
-                </div>
+                {isDraftEditorMode ? (
+                  <Input
+                    value={draftToInput}
+                    onChange={(event) => setDraftToInput(event.target.value)}
+                    placeholder="name@example.com, teammate@example.com"
+                    className="h-11 rounded-[1rem] border px-3 text-sm shadow-none"
+                    style={{
+                      borderColor: "rgba(255,255,255,0.22)",
+                      backgroundColor: "rgba(255,255,255,0.82)",
+                      color: "#173b40",
+                    }}
+                    data-testid="input-google-email-draft-to"
+                  />
+                ) : (
+                  <div
+                    className="rounded-[1rem] border px-3 py-2.5 text-sm"
+                    style={{
+                      borderColor: "rgba(255,255,255,0.22)",
+                      backgroundColor: "rgba(255,255,255,0.78)",
+                      color: "#173b40",
+                    }}
+                    data-testid="google-email-draft-dialog-recipient"
+                  >
+                    {proposedEmail.to.join(", ") || "No recipient"}
+                  </div>
+                )}
+                {isDraftEditorMode ? (
+                  <p
+                    className="text-[11px] leading-4"
+                    style={{ color: "var(--app-on-dark-muted)" }}
+                  >
+                    Use commas to separate multiple email addresses.
+                  </p>
+                ) : null}
               </div>
 
               <div className="space-y-1.5">
@@ -2892,6 +2953,7 @@ function GoogleCalendarAssistantTaskCard(props: {
 }) {
   const proposedCalendar = props.googleActionPreview.proposedCalendar;
   const calendarEvent = props.googleActionPreview.calendarEvent;
+  if (!proposedCalendar && !calendarEvent) return null;
   const shouldDefaultCollapsed =
     props.googleActionPreview.kind !== "calendar_detail" &&
     Boolean(
@@ -2899,11 +2961,114 @@ function GoogleCalendarAssistantTaskCard(props: {
         props.card.status === "completed" ||
         props.card.status === "cancelled",
     );
+  const queryClient = useQueryClient();
   const [isCollapsed, setIsCollapsed] = useState(shouldDefaultCollapsed);
+  const [isEventDialogOpen, setIsEventDialogOpen] = useState(false);
+  const [isEventEditorMode, setIsEventEditorMode] = useState(false);
+  const currentTitle =
+    proposedCalendar?.title?.trim() || calendarEvent?.title?.trim() || "";
+  const currentStartTime = proposedCalendar?.startTime ?? calendarEvent?.startTime ?? "";
+  const currentEndTime = proposedCalendar?.endTime ?? calendarEvent?.endTime ?? "";
+  const currentLocation = proposedCalendar?.location ?? calendarEvent?.location ?? "";
+  const currentDescription =
+    proposedCalendar?.descriptionPreview ?? calendarEvent?.description ?? "";
+  const [eventTitleInput, setEventTitleInput] = useState(currentTitle);
+  const [eventStartInput, setEventStartInput] = useState(
+    toDateTimeLocalInputValue(currentStartTime),
+  );
+  const [eventEndInput, setEventEndInput] = useState(toDateTimeLocalInputValue(currentEndTime));
+  const [eventLocationInput, setEventLocationInput] = useState(currentLocation);
+  const [eventDescriptionInput, setEventDescriptionInput] = useState(currentDescription);
+  const [eventEditError, setEventEditError] = useState<string | null>(null);
 
   useEffect(() => {
     setIsCollapsed(shouldDefaultCollapsed);
   }, [props.card.taskId, shouldDefaultCollapsed]);
+
+  const canOpenEventDialog = Boolean(
+    currentTitle.trim() ||
+      currentStartTime ||
+      currentEndTime ||
+      currentLocation.trim() ||
+      currentDescription.trim(),
+  );
+  const canEditEvent = Boolean(
+    !props.failure &&
+      props.card.status !== "cancelled" &&
+      props.googleActionPreview.kind !== "calendar_detail",
+  );
+  const hasManualEventChanges =
+    eventTitleInput.trim() !== currentTitle.trim() ||
+    eventStartInput !== toDateTimeLocalInputValue(currentStartTime) ||
+    eventEndInput !== toDateTimeLocalInputValue(currentEndTime) ||
+    eventLocationInput.trim() !== currentLocation.trim() ||
+    eventDescriptionInput.trim() !== currentDescription.trim();
+
+  const resetEventDialog = useCallback(
+    (editMode = false) => {
+      setEventTitleInput(currentTitle);
+      setEventStartInput(toDateTimeLocalInputValue(currentStartTime));
+      setEventEndInput(toDateTimeLocalInputValue(currentEndTime));
+      setEventLocationInput(currentLocation);
+      setEventDescriptionInput(currentDescription);
+      setEventEditError(null);
+      setIsEventEditorMode(editMode && canEditEvent);
+    },
+    [canEditEvent, currentDescription, currentEndTime, currentLocation, currentStartTime, currentTitle],
+  );
+
+  useEffect(() => {
+    if (!isEventDialogOpen || !isEventEditorMode) {
+      setEventTitleInput(currentTitle);
+      setEventStartInput(toDateTimeLocalInputValue(currentStartTime));
+      setEventEndInput(toDateTimeLocalInputValue(currentEndTime));
+      setEventLocationInput(currentLocation);
+      setEventDescriptionInput(currentDescription);
+      setEventEditError(null);
+    }
+  }, [
+    currentDescription,
+    currentEndTime,
+    currentLocation,
+    currentStartTime,
+    currentTitle,
+    isEventDialogOpen,
+    isEventEditorMode,
+    props.card.taskId,
+  ]);
+
+  const saveCalendarEditMutation = useMutation({
+    mutationFn: async (payload: {
+      title: string;
+      startTime: string;
+      endTime: string;
+      location: string | null;
+      description: string | null;
+      resultEventId: string | null;
+    }) => {
+      const response = await apiRequest(
+        "POST",
+        `/api/agent/tasks/${props.card.taskId}/google-calendar-edit`,
+        payload,
+      );
+      return response.json();
+    },
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({
+          predicate: (query) => {
+            const key = Array.isArray(query.queryKey) ? query.queryKey[0] : query.queryKey;
+            return (
+              typeof key === "string" &&
+              (key === "/api/conversations" ||
+                key.startsWith("/api/conversations/") ||
+                key.startsWith("/api/agent/tasks/"))
+            );
+          },
+        }),
+      ]);
+    },
+  });
 
   const statusLabel = props.failure
     ? "Failed"
@@ -2940,237 +3105,615 @@ function GoogleCalendarAssistantTaskCard(props: {
     statusLabel,
   });
 
+  const handleOpenEventDialog = (editMode = false) => {
+    resetEventDialog(editMode);
+    setIsEventDialogOpen(true);
+  };
+
+  const handleSaveCalendarEdit = async () => {
+    const title = eventTitleInput.trim();
+    if (!title) {
+      setEventEditError("Event title is required.");
+      return;
+    }
+    const startTime = fromDateTimeLocalInputValue(eventStartInput);
+    if (!startTime) {
+      setEventEditError("Start time is required.");
+      return;
+    }
+    const endTime = fromDateTimeLocalInputValue(eventEndInput);
+    if (!endTime) {
+      setEventEditError("End time is required.");
+      return;
+    }
+    if (new Date(endTime) <= new Date(startTime)) {
+      setEventEditError("End time must be after start time.");
+      return;
+    }
+
+    setEventEditError(null);
+    try {
+      await saveCalendarEditMutation.mutateAsync({
+        title,
+        startTime,
+        endTime,
+        location: eventLocationInput.trim() || null,
+        description: eventDescriptionInput.trim() || null,
+        resultEventId: props.googleActionResult?.eventId ?? null,
+      });
+      setIsEventDialogOpen(false);
+      setIsEventEditorMode(false);
+    } catch (error) {
+      setEventEditError(getErrorMessage(error));
+    }
+  };
+
   return (
-    <div
-      className="w-full min-w-0 max-w-full space-y-3"
-      data-testid="agent-unified-task-card"
-      data-agent-task-id={props.card.taskId}
-      data-agent-task-status={props.card.status}
-      data-google-calendar-card="true"
-    >
-      <div className="flex items-start justify-between gap-3 px-1">
-        <div className="min-w-0">
-          <div className="flex items-center gap-1.5">
-            <CalendarDays
-              className="h-3.5 w-3.5"
-              style={{ color: "var(--app-on-dark-muted)" }}
-            />
-            <p
-              className="text-[11px] font-semibold uppercase tracking-[0.16em]"
-              style={{ color: "var(--app-on-dark-muted)" }}
-            >
-              Zee Calendar
-            </p>
-          </div>
-          <p className="mt-1.5 text-sm font-semibold" style={{ color: "var(--app-on-dark)" }}>
-            {props.googleActionPreview.title}
-          </p>
-          {summaryText ? (
-            <p
-              className="mt-1 text-xs leading-5"
-              style={{ color: "var(--app-on-dark-muted)" }}
-            >
-              {summaryText}
-            </p>
-          ) : null}
-          {calendarEvent && props.googleActionPreview.kind === "calendar_update" ? (
-            <p
-              className="mt-1 text-[11px] leading-5"
-              style={{ color: "var(--app-on-dark-muted)" }}
-            >
-              Updating: {calendarEvent.title}
-            </p>
-          ) : null}
-        </div>
-        <div className="flex shrink-0 items-center gap-2">
-          <span
-            className="rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide"
-            style={{
-              borderColor: statusToneStyles.borderColor,
-              backgroundColor: statusToneStyles.backgroundColor,
-              color: statusToneStyles.textColor,
-            }}
-          >
-            {statusLabel}
-          </span>
-          <button
-            type="button"
-            onClick={() => setIsCollapsed((value) => !value)}
-            className="rounded-full border p-2 transition-colors hover:opacity-90"
-            style={{
-              borderColor: "rgba(255,255,255,0.18)",
-              backgroundColor: "rgba(255,255,255,0.08)",
-              color: "var(--app-on-dark-muted)",
-            }}
-            data-testid="button-google-calendar-collapse"
-            aria-label={isCollapsed ? "Expand calendar card" : "Collapse calendar card"}
-          >
-            <motion.div
-              animate={{ rotate: isCollapsed ? 0 : 180 }}
-              transition={{ duration: 0.2 }}
-            >
-              <ChevronDown className="h-3.5 w-3.5" />
-            </motion.div>
-          </button>
-        </div>
-      </div>
-
-      <AnimatePresence initial={false} mode="wait">
-        {isCollapsed ? (
-          <motion.div
-            key="collapsed-calendar-card"
-            initial={{ opacity: 0, y: -4 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: 4 }}
-            transition={{ duration: 0.18 }}
-            className="w-full min-w-0 max-w-full rounded-[1.35rem] border p-3"
-            style={{
-              borderColor: "rgba(255,255,255,0.18)",
-              backgroundColor: "rgba(255,255,255,0.1)",
-              boxShadow:
-                "0 10px 20px rgba(0,0,0,0.12), inset 0 1px 0 rgba(255,255,255,0.12)",
-            }}
-            data-testid="google-calendar-collapsed-card"
-          >
-            <div className="grid gap-2">
-              <div
-                className="flex min-w-0 max-w-full items-center gap-2 rounded-[1rem] border px-3 py-2.5"
-                style={{
-                  borderColor: "rgba(255,255,255,0.16)",
-                  backgroundColor: "rgba(255,255,255,0.12)",
-                }}
+    <>
+      <div
+        className="w-full min-w-0 max-w-full space-y-3"
+        data-testid="agent-unified-task-card"
+        data-agent-task-id={props.card.taskId}
+        data-agent-task-status={props.card.status}
+        data-google-calendar-card="true"
+      >
+        <div className="flex items-start justify-between gap-3 px-1">
+          <div className="min-w-0">
+            <div className="flex items-center gap-1.5">
+              <CalendarDays
+                className="h-3.5 w-3.5"
+                style={{ color: "var(--app-on-dark-muted)" }}
+              />
+              <p
+                className="text-[11px] font-semibold uppercase tracking-[0.16em]"
+                style={{ color: "var(--app-on-dark-muted)" }}
               >
-                <CalendarDays
-                  className="h-4 w-4 shrink-0"
-                  style={{ color: "var(--app-on-dark-muted)" }}
-                />
-                <p
-                  className="min-w-0 flex-1 truncate text-sm font-medium"
-                  style={{ color: "var(--app-on-dark)" }}
-                >
-                  {collapsedSummary}
-                </p>
-              </div>
+                Zee Calendar
+              </p>
+            </div>
+            <p className="mt-1.5 text-sm font-semibold" style={{ color: "var(--app-on-dark)" }}>
+              {props.googleActionPreview.title}
+            </p>
+            {summaryText ? (
+              <p
+                className="mt-1 text-xs leading-5"
+                style={{ color: "var(--app-on-dark-muted)" }}
+              >
+                {summaryText}
+              </p>
+            ) : null}
+            {calendarEvent && props.googleActionPreview.kind === "calendar_update" ? (
+              <p
+                className="mt-1 text-[11px] leading-5"
+                style={{ color: "var(--app-on-dark-muted)" }}
+              >
+                Updating: {calendarEvent.title}
+              </p>
+            ) : null}
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <span
+              className="rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide"
+              style={{
+                borderColor: statusToneStyles.borderColor,
+                backgroundColor: statusToneStyles.backgroundColor,
+                color: statusToneStyles.textColor,
+              }}
+            >
+              {statusLabel}
+            </span>
+            <button
+              type="button"
+              onClick={() => setIsCollapsed((value) => !value)}
+              className="rounded-full border p-2 transition-colors hover:opacity-90"
+              style={{
+                borderColor: "rgba(255,255,255,0.18)",
+                backgroundColor: "rgba(255,255,255,0.08)",
+                color: "var(--app-on-dark-muted)",
+              }}
+              data-testid="button-google-calendar-collapse"
+              aria-label={isCollapsed ? "Expand calendar card" : "Collapse calendar card"}
+            >
+              <motion.div
+                animate={{ rotate: isCollapsed ? 0 : 180 }}
+                transition={{ duration: 0.2 }}
+              >
+                <ChevronDown className="h-3.5 w-3.5" />
+              </motion.div>
+            </button>
+          </div>
+        </div>
 
-              {props.approvalPending ? (
-                <div className="flex flex-wrap justify-end gap-2">
+        <AnimatePresence initial={false} mode="wait">
+          {isCollapsed ? (
+            <motion.div
+              key="collapsed-calendar-card"
+              initial={{ opacity: 0, y: -4 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 4 }}
+              transition={{ duration: 0.18 }}
+              className="w-full min-w-0 max-w-full rounded-[1.35rem] border p-3"
+              style={{
+                borderColor: "rgba(255,255,255,0.18)",
+                backgroundColor: "rgba(255,255,255,0.1)",
+                boxShadow:
+                  "0 10px 20px rgba(0,0,0,0.12), inset 0 1px 0 rgba(255,255,255,0.12)",
+              }}
+              data-testid="google-calendar-collapsed-card"
+            >
+              <div className="grid gap-2">
+                <div
+                  className="flex min-w-0 max-w-full items-center gap-2 rounded-[1rem] border px-3 py-2.5"
+                  style={{
+                    borderColor: "rgba(255,255,255,0.16)",
+                    backgroundColor: "rgba(255,255,255,0.12)",
+                  }}
+                >
+                  <CalendarDays
+                    className="h-4 w-4 shrink-0"
+                    style={{ color: "var(--app-on-dark-muted)" }}
+                  />
+                  <p
+                    className="min-w-0 flex-1 truncate text-sm font-medium"
+                    style={{ color: "var(--app-on-dark)" }}
+                  >
+                    {collapsedSummary}
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  {canOpenEventDialog ? (
+                    <button
+                      type="button"
+                      onClick={() => handleOpenEventDialog(false)}
+                      className="rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide transition-colors hover:opacity-90"
+                      style={{
+                        borderColor: "rgba(255,255,255,0.22)",
+                        backgroundColor: "rgba(255,255,255,0.1)",
+                        color: "var(--app-on-dark-muted)",
+                      }}
+                      data-testid="button-google-calendar-open-event"
+                    >
+                      Open event
+                    </button>
+                  ) : (
+                    <span />
+                  )}
+
+                  {props.approvalPending ? (
+                    <div className="flex flex-wrap justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={props.onDeny}
+                        disabled={props.isResolvingApproval}
+                        className="rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide transition-colors hover:opacity-90 disabled:opacity-55"
+                        style={{
+                          borderColor: "rgba(255,255,255,0.22)",
+                          backgroundColor: "rgba(255,255,255,0.1)",
+                          color: "var(--app-on-dark-muted)",
+                        }}
+                        data-testid="button-google-calendar-secondary-action"
+                      >
+                        {getGoogleApprovalSecondaryLabel(props.googleActionPreview)}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={props.onApprove}
+                        disabled={props.isResolvingApproval}
+                        className="rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide transition-colors hover:opacity-90 disabled:opacity-55"
+                        style={{
+                          borderColor:
+                            "color-mix(in srgb, var(--app-accent) 42%, rgba(255,255,255,0.26))",
+                          backgroundColor:
+                            "color-mix(in srgb, var(--app-accent) 28%, rgba(255,255,255,0.72))",
+                          color: "var(--app-accent-text)",
+                        }}
+                        data-testid="button-google-calendar-primary-action"
+                      >
+                        {getGoogleApprovalPrimaryLabel(props.googleActionPreview)}
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            </motion.div>
+          ) : (
+            <motion.div
+              key="expanded-calendar-card"
+              initial={{ opacity: 0, y: -4 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 4 }}
+              transition={{ duration: 0.18 }}
+            >
+              <GoogleCalendarPreview
+                title={currentTitle || "Calendar event"}
+                startTime={currentStartTime}
+                endTime={currentEndTime}
+                location={currentLocation}
+                descriptionPreview={currentDescription}
+                statusLabel={statusLabel}
+                helperText={
+                  props.googleActionResult?.status === "event_created"
+                    ? "This event was added to Google Calendar."
+                    : props.googleActionResult?.status === "event_updated"
+                      ? "This change was applied to Google Calendar."
+                      : getGoogleCalendarPreviewHelper(props.googleActionPreview)
+                }
+                tone={statusTone}
+                currentEventLabel={
+                  props.googleActionPreview.kind === "calendar_update" &&
+                  (proposedCalendar?.originalTitle || proposedCalendar?.originalStartTime)
+                    ? `Was ${
+                        proposedCalendar?.originalTitle?.trim() || calendarEvent?.title || "Untitled"
+                      }${
+                        proposedCalendar?.originalStartTime
+                          ? ` · ${formatGoogleCalendarDateRange(
+                              proposedCalendar.originalStartTime,
+                              proposedCalendar.originalEndTime,
+                            )}`
+                          : ""
+                      }`
+                    : null
+                }
+                primaryAction={
+                  props.approvalPending
+                    ? {
+                        label: getGoogleApprovalPrimaryLabel(props.googleActionPreview),
+                        onClick: props.onApprove,
+                        disabled: props.isResolvingApproval,
+                        testId: "button-google-calendar-primary-action",
+                      }
+                    : undefined
+                }
+                secondaryAction={
+                  props.approvalPending
+                    ? {
+                        label: getGoogleApprovalSecondaryLabel(props.googleActionPreview),
+                        onClick: props.onDeny,
+                        disabled: props.isResolvingApproval,
+                        testId: "button-google-calendar-secondary-action",
+                      }
+                    : undefined
+                }
+                testId="google-calendar-preview-card"
+              />
+              {canOpenEventDialog ? (
+                <div className="mt-2 flex justify-end px-1">
                   <button
                     type="button"
-                    onClick={props.onDeny}
-                    disabled={props.isResolvingApproval}
-                    className="rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide transition-colors hover:opacity-90 disabled:opacity-55"
+                    onClick={() => handleOpenEventDialog(false)}
+                    className="rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide transition-colors hover:opacity-90"
                     style={{
                       borderColor: "rgba(255,255,255,0.22)",
                       backgroundColor: "rgba(255,255,255,0.1)",
                       color: "var(--app-on-dark-muted)",
                     }}
-                    data-testid="button-google-calendar-secondary-action"
+                    data-testid="button-google-calendar-open-event"
                   >
-                    {getGoogleApprovalSecondaryLabel(props.googleActionPreview)}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={props.onApprove}
-                    disabled={props.isResolvingApproval}
-                    className="rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide transition-colors hover:opacity-90 disabled:opacity-55"
-                    style={{
-                      borderColor:
-                        "color-mix(in srgb, var(--app-accent) 42%, rgba(255,255,255,0.26))",
-                      backgroundColor:
-                        "color-mix(in srgb, var(--app-accent) 28%, rgba(255,255,255,0.72))",
-                      color: "var(--app-accent-text)",
-                    }}
-                    data-testid="button-google-calendar-primary-action"
-                  >
-                    {getGoogleApprovalPrimaryLabel(props.googleActionPreview)}
+                    Open event
                   </button>
                 </div>
               ) : null}
-            </div>
-          </motion.div>
-        ) : (
-          <motion.div
-            key="expanded-calendar-card"
-            initial={{ opacity: 0, y: -4 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: 4 }}
-            transition={{ duration: 0.18 }}
-          >
-            <GoogleCalendarPreview
-              title={
-                proposedCalendar?.title?.trim() ||
-                calendarEvent?.title?.trim() ||
-                "Calendar event"
-              }
-              startTime={proposedCalendar?.startTime ?? calendarEvent?.startTime}
-              endTime={proposedCalendar?.endTime ?? calendarEvent?.endTime}
-              location={proposedCalendar?.location ?? calendarEvent?.location}
-              descriptionPreview={
-                proposedCalendar?.descriptionPreview ?? calendarEvent?.description
-              }
-              statusLabel={statusLabel}
-              helperText={
-                props.googleActionResult?.status === "event_created"
-                  ? "This event was added to Google Calendar."
-                  : props.googleActionResult?.status === "event_updated"
-                    ? "This change was applied to Google Calendar."
-                    : getGoogleCalendarPreviewHelper(props.googleActionPreview)
-              }
-              tone={statusTone}
-              currentEventLabel={
-                props.googleActionPreview.kind === "calendar_update" &&
-                (proposedCalendar?.originalTitle || proposedCalendar?.originalStartTime)
-                  ? `Was ${
-                      proposedCalendar?.originalTitle?.trim() || calendarEvent?.title || "Untitled"
-                    }${
-                      proposedCalendar?.originalStartTime
-                        ? ` · ${formatGoogleCalendarDateRange(
-                            proposedCalendar.originalStartTime,
-                            proposedCalendar.originalEndTime,
-                          )}`
-                        : ""
-                    }`
-                  : null
-              }
-              primaryAction={
-                props.approvalPending
-                  ? {
-                      label: getGoogleApprovalPrimaryLabel(props.googleActionPreview),
-                      onClick: props.onApprove,
-                      disabled: props.isResolvingApproval,
-                      testId: "button-google-calendar-primary-action",
-                    }
-                  : undefined
-              }
-              secondaryAction={
-                props.approvalPending
-                  ? {
-                      label: getGoogleApprovalSecondaryLabel(props.googleActionPreview),
-                      onClick: props.onDeny,
-                      disabled: props.isResolvingApproval,
-                      testId: "button-google-calendar-secondary-action",
-                    }
-                  : undefined
-              }
-              testId="google-calendar-preview-card"
-            />
-          </motion.div>
-        )}
-      </AnimatePresence>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
-      {props.failure ? (
-        <div
-          className="rounded-2xl border px-3 py-2 text-xs"
+        {props.failure ? (
+          <div
+            className="rounded-2xl border px-3 py-2 text-xs"
+            style={{
+              borderColor: "rgba(248, 113, 113, 0.35)",
+              backgroundColor: "rgba(127, 29, 29, 0.12)",
+              color: "#fecaca",
+            }}
+          >
+            {props.failure.reason}
+          </div>
+        ) : null}
+      </div>
+
+      <Dialog
+        open={isEventDialogOpen}
+        onOpenChange={(open) => {
+          setIsEventDialogOpen(open);
+          if (!open) {
+            resetEventDialog(false);
+          }
+        }}
+      >
+        <DialogContent
+          className="fixed left-1/2 top-1/2 w-[calc(100%-1.25rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 rounded-[1.6rem] border p-0"
           style={{
-            borderColor: "rgba(248, 113, 113, 0.35)",
-            backgroundColor: "rgba(127, 29, 29, 0.12)",
-            color: "#fecaca",
+            borderColor: "rgba(255,255,255,0.22)",
+            background:
+              "linear-gradient(180deg, color-mix(in srgb, var(--app-soft-card-bg) 84%, rgba(255,255,255,0.12)), color-mix(in srgb, var(--app-panel-bg) 92%, rgba(255,255,255,0.08)))",
+            color: "var(--app-on-dark)",
+            boxShadow:
+              "0 26px 52px rgba(0,0,0,0.28), inset 0 1px 0 rgba(255,255,255,0.12)",
           }}
+          data-testid="google-calendar-event-dialog"
         >
-          {props.failure.reason}
-        </div>
-      ) : null}
-    </div>
+          <div
+            className="border-b px-4 pb-3 pt-4"
+            style={{ borderColor: "color-mix(in srgb, var(--app-soft-card-border) 70%, transparent)" }}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <DialogHeader className="space-y-1 text-left">
+                <DialogTitle
+                  className="flex items-center gap-2 text-sm font-semibold"
+                  style={{ color: "var(--app-on-dark)" }}
+                >
+                  <CalendarDays className="h-4 w-4" />
+                  {isEventEditorMode ? "Edit Zee Calendar event" : "Zee Calendar event"}
+                </DialogTitle>
+                <DialogDescription
+                  className="text-xs leading-5"
+                  style={{ color: "var(--app-on-dark-muted)" }}
+                >
+                  Manual edits stay in Zee&apos;s current calendar context for follow-up approve and update actions.
+                </DialogDescription>
+              </DialogHeader>
+              <span
+                className="rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide"
+                style={{
+                  borderColor: statusToneStyles.borderColor,
+                  backgroundColor: statusToneStyles.backgroundColor,
+                  color: statusToneStyles.textColor,
+                }}
+              >
+                {statusLabel}
+              </span>
+            </div>
+          </div>
+
+          <div className="max-h-[70dvh] overflow-y-auto px-4 py-4">
+            <div className="space-y-3">
+              <div className="space-y-1.5">
+                <p
+                  className="text-[10px] font-semibold uppercase tracking-[0.18em]"
+                  style={{ color: "var(--app-on-dark-muted)" }}
+                >
+                  Event title
+                </p>
+                {isEventEditorMode ? (
+                  <Input
+                    value={eventTitleInput}
+                    onChange={(event) => setEventTitleInput(event.target.value)}
+                    placeholder="Lunch with Alex"
+                    className="h-11 rounded-[1rem] border px-3 text-sm shadow-none"
+                    style={{
+                      borderColor: "rgba(255,255,255,0.22)",
+                      backgroundColor: "rgba(255,255,255,0.82)",
+                      color: "#173b40",
+                    }}
+                    data-testid="input-google-calendar-title"
+                  />
+                ) : (
+                  <div
+                    className="rounded-[1rem] border px-3 py-2.5 text-sm"
+                    style={{
+                      borderColor: "rgba(255,255,255,0.22)",
+                      backgroundColor: "rgba(255,255,255,0.78)",
+                      color: "#173b40",
+                    }}
+                    data-testid="google-calendar-event-dialog-title"
+                  >
+                    {currentTitle || "Untitled event"}
+                  </div>
+                )}
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="space-y-1.5">
+                  <p
+                    className="text-[10px] font-semibold uppercase tracking-[0.18em]"
+                    style={{ color: "var(--app-on-dark-muted)" }}
+                  >
+                    Starts
+                  </p>
+                  {isEventEditorMode ? (
+                    <Input
+                      type="datetime-local"
+                      value={eventStartInput}
+                      onChange={(event) => setEventStartInput(event.target.value)}
+                      className="h-11 rounded-[1rem] border px-3 text-sm shadow-none"
+                      style={{
+                        borderColor: "rgba(255,255,255,0.22)",
+                        backgroundColor: "rgba(255,255,255,0.82)",
+                        color: "#173b40",
+                      }}
+                      data-testid="input-google-calendar-start"
+                    />
+                  ) : (
+                    <div
+                      className="rounded-[1rem] border px-3 py-2.5 text-sm"
+                      style={{
+                        borderColor: "rgba(255,255,255,0.22)",
+                        backgroundColor: "rgba(255,255,255,0.78)",
+                        color: "#173b40",
+                      }}
+                      data-testid="google-calendar-event-dialog-start"
+                    >
+                      {formatGoogleCalendarDateRange(currentStartTime, null)}
+                    </div>
+                  )}
+                </div>
+
+                <div className="space-y-1.5">
+                  <p
+                    className="text-[10px] font-semibold uppercase tracking-[0.18em]"
+                    style={{ color: "var(--app-on-dark-muted)" }}
+                  >
+                    Ends
+                  </p>
+                  {isEventEditorMode ? (
+                    <Input
+                      type="datetime-local"
+                      value={eventEndInput}
+                      onChange={(event) => setEventEndInput(event.target.value)}
+                      className="h-11 rounded-[1rem] border px-3 text-sm shadow-none"
+                      style={{
+                        borderColor: "rgba(255,255,255,0.22)",
+                        backgroundColor: "rgba(255,255,255,0.82)",
+                        color: "#173b40",
+                      }}
+                      data-testid="input-google-calendar-end"
+                    />
+                  ) : (
+                    <div
+                      className="rounded-[1rem] border px-3 py-2.5 text-sm"
+                      style={{
+                        borderColor: "rgba(255,255,255,0.22)",
+                        backgroundColor: "rgba(255,255,255,0.78)",
+                        color: "#173b40",
+                      }}
+                      data-testid="google-calendar-event-dialog-end"
+                    >
+                      {formatGoogleCalendarDateRange(currentEndTime, null)}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <p
+                  className="text-[10px] font-semibold uppercase tracking-[0.18em]"
+                  style={{ color: "var(--app-on-dark-muted)" }}
+                >
+                  Location
+                </p>
+                {isEventEditorMode ? (
+                  <Input
+                    value={eventLocationInput}
+                    onChange={(event) => setEventLocationInput(event.target.value)}
+                    placeholder="Blue Bottle"
+                    className="h-11 rounded-[1rem] border px-3 text-sm shadow-none"
+                    style={{
+                      borderColor: "rgba(255,255,255,0.22)",
+                      backgroundColor: "rgba(255,255,255,0.82)",
+                      color: "#173b40",
+                    }}
+                    data-testid="input-google-calendar-location"
+                  />
+                ) : (
+                  <div
+                    className="rounded-[1rem] border px-3 py-2.5 text-sm"
+                    style={{
+                      borderColor: "rgba(255,255,255,0.22)",
+                      backgroundColor: "rgba(255,255,255,0.78)",
+                      color: "#173b40",
+                    }}
+                    data-testid="google-calendar-event-dialog-location"
+                  >
+                    {currentLocation.trim() || "No location"}
+                  </div>
+                )}
+              </div>
+
+              <div className="space-y-1.5">
+                <p
+                  className="text-[10px] font-semibold uppercase tracking-[0.18em]"
+                  style={{ color: "var(--app-on-dark-muted)" }}
+                >
+                  Notes
+                </p>
+                {isEventEditorMode ? (
+                  <Textarea
+                    value={eventDescriptionInput}
+                    onChange={(event) => setEventDescriptionInput(event.target.value)}
+                    placeholder="Add notes for the event..."
+                    className="min-h-[220px] rounded-[1.15rem] border px-3 py-3 text-sm leading-6 shadow-none"
+                    style={{
+                      borderColor: "rgba(255,255,255,0.22)",
+                      backgroundColor: "rgba(255,255,255,0.82)",
+                      color: "#173b40",
+                    }}
+                    data-testid="textarea-google-calendar-description"
+                  />
+                ) : (
+                  <div
+                    className="rounded-[1.15rem] border px-3 py-3 text-sm leading-6"
+                    style={{
+                      borderColor: "rgba(255,255,255,0.22)",
+                      backgroundColor: "rgba(255,255,255,0.82)",
+                      color: "#173b40",
+                    }}
+                    data-testid="google-calendar-event-dialog-description"
+                  >
+                    <p className="whitespace-pre-wrap break-words">
+                      {currentDescription.trim() || "No notes yet."}
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              {eventEditError ? (
+                <div
+                  className="rounded-[1rem] border px-3 py-2 text-xs"
+                  style={{
+                    borderColor: "rgba(248, 113, 113, 0.35)",
+                    backgroundColor: "rgba(127, 29, 29, 0.12)",
+                    color: "#fecaca",
+                  }}
+                >
+                  {eventEditError}
+                </div>
+              ) : null}
+            </div>
+          </div>
+
+          <div
+            className="flex flex-wrap items-center justify-end gap-2 border-t px-4 py-3"
+            style={{ borderColor: "color-mix(in srgb, var(--app-soft-card-border) 70%, transparent)" }}
+          >
+            {isEventEditorMode ? (
+              <>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onClick={() => resetEventDialog(false)}
+                  disabled={saveCalendarEditMutation.isPending}
+                  data-testid="button-google-calendar-cancel-event-edit"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="button"
+                  onClick={() => void handleSaveCalendarEdit()}
+                  disabled={saveCalendarEditMutation.isPending || !hasManualEventChanges}
+                  data-testid="button-google-calendar-save-event-edit"
+                >
+                  {saveCalendarEditMutation.isPending ? "Saving..." : "Save changes"}
+                </Button>
+              </>
+            ) : (
+              <>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onClick={() => setIsEventDialogOpen(false)}
+                  data-testid="button-google-calendar-close-event"
+                >
+                  Done
+                </Button>
+                {canEditEvent ? (
+                  <Button
+                    type="button"
+                    onClick={() => {
+                      setEventEditError(null);
+                      setIsEventEditorMode(true);
+                    }}
+                    data-testid="button-google-calendar-edit-event"
+                  >
+                    Edit event
+                  </Button>
+                ) : null}
+              </>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
 

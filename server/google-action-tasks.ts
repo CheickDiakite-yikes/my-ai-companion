@@ -200,6 +200,14 @@ function extractEmailAddress(input: string): string | null {
   return match?.[0]?.trim().toLowerCase() ?? null;
 }
 
+function parseEmailRecipientList(input: string): string[] {
+  const recipients = input
+    .split(/[,;\n]+/)
+    .map((value) => extractEmailAddress(value) ?? value.trim().toLowerCase())
+    .filter((value) => value.includes("@"));
+  return Array.from(new Set(recipients));
+}
+
 function inferLiteralEmailBodyText(input: string): string | null {
   const normalized = normalizeText(input);
   const match =
@@ -546,6 +554,41 @@ function buildGoogleEmailPreview(params: {
   };
 }
 
+function buildGoogleCalendarPreview(params: {
+  kind: "calendar_create" | "calendar_update";
+  title: string;
+  startTime: string;
+  endTime: string;
+  location: string | null;
+  description: string | null;
+  originalEvent?: GoogleCalendarEventDetail | null;
+}): GoogleActionPreview {
+  const summary =
+    params.kind === "calendar_update"
+      ? `Update "${params.originalEvent?.title ?? params.title}" on your calendar.`
+      : `Create "${params.title}" on your calendar.`;
+
+  return {
+    kind: params.kind,
+    title: params.kind === "calendar_update" ? "Update calendar event" : "Create calendar event",
+    summary,
+    connector: "calendar",
+    requiresWriteAccess: true,
+    calendarEvent: params.originalEvent ?? null,
+    proposedCalendar: {
+      title: params.title,
+      startTime: params.startTime,
+      endTime: params.endTime,
+      location: params.location,
+      descriptionPreview: params.description,
+      originalEventId: params.originalEvent?.eventId ?? null,
+      originalTitle: params.originalEvent?.title ?? null,
+      originalStartTime: params.originalEvent?.startTime ?? null,
+      originalEndTime: params.originalEvent?.endTime ?? null,
+    },
+  };
+}
+
 function isEmailDraftRevisionCandidatePreview(
   preview: GoogleActionPreview | null | undefined,
 ): boolean {
@@ -555,6 +598,39 @@ function isEmailDraftRevisionCandidatePreview(
       preview.proposedEmail &&
       (preview.kind === "email_compose" || preview.kind === "email_reply"),
   );
+}
+
+function isCalendarRevisionCandidatePreview(
+  preview: GoogleActionPreview | null | undefined,
+): boolean {
+  return Boolean(
+    preview &&
+      preview.connector === "calendar" &&
+      preview.proposedCalendar &&
+      (preview.kind === "calendar_create" || preview.kind === "calendar_update"),
+  );
+}
+
+function buildSyntheticCalendarEventDetail(params: {
+  eventId: string;
+  title: string;
+  startTime: string;
+  endTime: string;
+  location: string | null;
+  description: string | null;
+}): GoogleCalendarEventDetail {
+  return {
+    eventId: params.eventId,
+    title: params.title,
+    startTime: params.startTime,
+    endTime: params.endTime,
+    isAllDay: false,
+    location: params.location,
+    description: params.description,
+    attendeesCount: 0,
+    status: "confirmed",
+    attendees: [],
+  };
 }
 
 export function looksLikeGoogleEmailDraftRevisionInstruction(text: string): boolean {
@@ -1592,6 +1668,7 @@ async function buildRevisedEmailVariantFromPlan(params: {
 
 function buildStructuredEmailVariantFromPlan(params: {
   plan: StoredGoogleActionPlan;
+  to: string;
   subject: string;
   bodyText: string;
 }): { preview: GoogleActionPreview; plan: StoredGoogleActionPlan } {
@@ -1602,8 +1679,12 @@ function buildStructuredEmailVariantFromPlan(params: {
     throw new Error("Task is not an email draft");
   }
 
+  const to = parseEmailRecipientList(params.to);
   const subject = params.subject.trim();
   const bodyText = params.bodyText.trim();
+  if (to.length === 0) {
+    throw new Error("At least one recipient email is required");
+  }
   if (!bodyText) {
     throw new Error("Draft body is required");
   }
@@ -1611,7 +1692,7 @@ function buildStructuredEmailVariantFromPlan(params: {
   const preview = buildGoogleEmailPreview({
     kind: params.plan.execution.kind,
     sendAfterApproval: params.plan.execution.sendAfterApproval,
-    to: params.plan.execution.to,
+    to,
     cc: params.plan.execution.cc,
     subject,
     bodyText,
@@ -1625,8 +1706,166 @@ function buildStructuredEmailVariantFromPlan(params: {
       preview,
       execution: {
         ...params.plan.execution,
+        to,
         subject,
         bodyText,
+      },
+    },
+  };
+}
+
+function buildStructuredCalendarVariantFromPlan(params: {
+  plan: StoredGoogleActionPlan;
+  title: string;
+  startTime: string;
+  endTime: string;
+  location: string | null;
+  description: string | null;
+  resultEventId?: string | null;
+}): { preview: GoogleActionPreview; plan: StoredGoogleActionPlan } {
+  const title = params.title.trim();
+  const location = params.location?.trim() || null;
+  const description = params.description?.trim() || null;
+  if (!title) {
+    throw new Error("Event title is required");
+  }
+
+  const start = new Date(params.startTime);
+  const end = new Date(params.endTime);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+    throw new Error("Calendar event time is invalid");
+  }
+  if (end <= start) {
+    throw new Error("Calendar event end time must be after start time");
+  }
+
+  if (params.plan.execution.kind === "calendar_create") {
+    if (params.resultEventId && params.resultEventId.trim()) {
+      const originalEvent = buildSyntheticCalendarEventDetail({
+        eventId: params.resultEventId.trim(),
+        title:
+          params.plan.preview.proposedCalendar?.title ??
+          params.plan.execution.title,
+        startTime:
+          params.plan.preview.proposedCalendar?.startTime ??
+          params.plan.execution.startTime,
+        endTime:
+          params.plan.preview.proposedCalendar?.endTime ??
+          params.plan.execution.endTime,
+        location:
+          params.plan.preview.proposedCalendar?.location ??
+          params.plan.execution.location,
+        description:
+          params.plan.preview.proposedCalendar?.descriptionPreview ??
+          params.plan.execution.description,
+      });
+      const preview = buildGoogleCalendarPreview({
+        kind: "calendar_update",
+        title,
+        startTime: params.startTime,
+        endTime: params.endTime,
+        location,
+        description,
+        originalEvent,
+      });
+      return {
+        preview,
+        plan: {
+          version: "google_action_v1",
+          preview,
+          execution: {
+            kind: "calendar_update",
+            timezone: params.plan.execution.timezone,
+            eventId: originalEvent.eventId,
+            title,
+            startTime: params.startTime,
+            endTime: params.endTime,
+            location,
+            description,
+          },
+        },
+      };
+    }
+
+    const preview = buildGoogleCalendarPreview({
+      kind: "calendar_create",
+      title,
+      startTime: params.startTime,
+      endTime: params.endTime,
+      location,
+      description,
+    });
+
+    return {
+      preview,
+      plan: {
+        ...params.plan,
+        preview,
+        execution: {
+          ...params.plan.execution,
+          title,
+          startTime: params.startTime,
+          endTime: params.endTime,
+          location,
+          description,
+        },
+      },
+    };
+  }
+
+  const originalEvent =
+    params.plan.preview.calendarEvent ??
+    buildSyntheticCalendarEventDetail({
+      eventId: params.plan.execution.eventId,
+      title:
+        params.plan.preview.proposedCalendar?.originalTitle ??
+        params.plan.preview.proposedCalendar?.title ??
+        params.plan.execution.title ??
+        title,
+      startTime:
+        params.plan.preview.proposedCalendar?.originalStartTime ??
+        params.plan.preview.proposedCalendar?.startTime ??
+        params.plan.execution.startTime ??
+        params.startTime,
+      endTime:
+        params.plan.preview.proposedCalendar?.originalEndTime ??
+        params.plan.preview.proposedCalendar?.endTime ??
+        params.plan.execution.endTime ??
+        params.endTime,
+      location:
+        params.plan.preview.calendarEvent?.location ??
+        params.plan.preview.proposedCalendar?.location ??
+        params.plan.execution.location ??
+        null,
+      description:
+        params.plan.preview.calendarEvent?.description ??
+        params.plan.preview.proposedCalendar?.descriptionPreview ??
+        params.plan.execution.description ??
+        null,
+    });
+
+  const preview = buildGoogleCalendarPreview({
+    kind: "calendar_update",
+    title,
+    startTime: params.startTime,
+    endTime: params.endTime,
+    location,
+    description,
+    originalEvent,
+  });
+
+  return {
+    preview,
+    plan: {
+      ...params.plan,
+      preview,
+      execution: {
+        ...params.plan.execution,
+        title,
+        startTime: params.startTime,
+        endTime: params.endTime,
+        location,
+        description,
       },
     },
   };
@@ -1791,6 +2030,7 @@ export async function applyStructuredGoogleEmailDraftEdit(params: {
   storage: IStorage;
   taskId: string;
   userId: string;
+  to: string;
   subject: string;
   bodyText: string;
   onEvent?: (event: AgentTaskEvent) => void;
@@ -1814,6 +2054,7 @@ export async function applyStructuredGoogleEmailDraftEdit(params: {
 
   const next = buildStructuredEmailVariantFromPlan({
     plan,
+    to: params.to,
     subject: params.subject,
     bodyText: params.bodyText,
   });
@@ -1870,6 +2111,113 @@ export async function applyStructuredGoogleEmailDraftEdit(params: {
       kind: "agent_task_status",
       task: run.task,
       text: "Saved edited draft preview",
+      googleActionPreview: next.preview,
+    },
+  });
+
+  return {
+    task: run.task,
+    preview: next.preview,
+    awaitingApproval: run.awaitingApproval,
+  };
+}
+
+export async function applyStructuredGoogleCalendarEventEdit(params: {
+  storage: IStorage;
+  taskId: string;
+  userId: string;
+  title: string;
+  startTime: string;
+  endTime: string;
+  location: string | null;
+  description: string | null;
+  resultEventId?: string | null;
+  onEvent?: (event: AgentTaskEvent) => void;
+}): Promise<{
+  task: AgentTaskSummary;
+  preview: GoogleActionPreview;
+  awaitingApproval: boolean;
+}> {
+  const task = await params.storage.getAgentTaskById(params.taskId);
+  if (!task || task.userId !== params.userId) {
+    throw new Error("Task not found");
+  }
+
+  const plan = taskPlanFromTask(task);
+  if (!isCalendarRevisionCandidatePreview(plan.preview)) {
+    throw new Error("Task is not a revisable calendar event");
+  }
+
+  const next = buildStructuredCalendarVariantFromPlan({
+    plan,
+    title: params.title,
+    startTime: params.startTime,
+    endTime: params.endTime,
+    location: params.location,
+    description: params.description,
+    resultEventId: params.resultEventId,
+  });
+
+  if (task.status === "approval_required") {
+    const pendingApproval = await params.storage.getPendingAgentApproval(task.id);
+    if (!pendingApproval) {
+      throw new Error("No pending approval for this task");
+    }
+
+    const updated =
+      (await params.storage.updateAgentTaskStatus({
+        taskId: task.id,
+        status: task.status,
+        plan: next.plan,
+      })) ?? task;
+    const taskSummary = toTaskSummary(updated);
+
+    await createAssistantUiMessage({
+      storage: params.storage,
+      conversationId: task.conversationId,
+      text: "I saved your event edits. Review it and approve when you're ready.",
+      uiPayload: {
+        kind: "agent_task_status",
+        task: taskSummary,
+        text: "Saved calendar edits",
+        googleActionPreview: next.preview,
+      },
+    });
+
+    return {
+      task: taskSummary,
+      preview: next.preview,
+      awaitingApproval: true,
+    };
+  }
+
+  if (
+    task.status === "completed" &&
+    plan.execution.kind === "calendar_create" &&
+    !params.resultEventId?.trim()
+  ) {
+    throw new Error("Result event id is required to revise this completed calendar event");
+  }
+
+  const run = await startGoogleActionTaskRun({
+    storage: params.storage,
+    userId: params.userId,
+    conversationId: task.conversationId,
+    prompt: `${task.prompt}\n\nManual edit: user updated the calendar event details.`,
+    requestedByMessageId: task.requestedByMessageId ?? task.id,
+    preview: next.preview,
+    plan: next.plan,
+    onEvent: params.onEvent,
+  });
+
+  await createAssistantUiMessage({
+    storage: params.storage,
+    conversationId: task.conversationId,
+    text: "I saved your edits into a fresh calendar preview. Review it and approve when you're ready.",
+    uiPayload: {
+      kind: "agent_task_status",
+      task: run.task,
+      text: "Saved edited calendar preview",
       googleActionPreview: next.preview,
     },
   });

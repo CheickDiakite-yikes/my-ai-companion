@@ -100,6 +100,7 @@ import {
   startAgentTaskRun,
 } from "./agent-runtime";
 import {
+  applyStructuredGoogleCalendarEventEdit,
   applyStructuredGoogleEmailDraftEdit,
   approveAndExecuteGoogleActionTask,
   detectGoogleActionTaskIntent,
@@ -216,9 +217,45 @@ const agentApprovalDecisionSchema = z.object({
 });
 
 const googleEmailDraftEditSchema = z.object({
+  to: z.string().trim().min(1).max(2000),
   subject: z.string().max(300),
   bodyText: z.string().trim().min(1).max(20000),
 });
+
+const googleCalendarEventEditSchema = z
+  .object({
+    title: z.string().trim().min(1).max(300),
+    startTime: z.string().trim().min(1).max(120),
+    endTime: z.string().trim().min(1).max(120),
+    location: z.string().trim().max(300).nullable().optional(),
+    description: z.string().trim().max(20000).nullable().optional(),
+    resultEventId: z.string().trim().max(500).nullable().optional(),
+  })
+  .superRefine((value, ctx) => {
+    const start = new Date(value.startTime);
+    if (Number.isNaN(start.getTime())) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Start time is invalid",
+        path: ["startTime"],
+      });
+    }
+    const end = new Date(value.endTime);
+    if (Number.isNaN(end.getTime())) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "End time is invalid",
+        path: ["endTime"],
+      });
+    }
+    if (!Number.isNaN(start.getTime()) && !Number.isNaN(end.getTime()) && end <= start) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "End time must be after start time",
+        path: ["endTime"],
+      });
+    }
+  });
 
 const agentOfferDecisionSchema = z.object({
   reason: z.string().trim().max(400).optional().nullable(),
@@ -9866,6 +9903,7 @@ export async function registerRoutes(
           storage,
           taskId: task.id,
           userId: req.session.userId,
+          to: parsed.to,
           subject: parsed.subject,
           bodyText: parsed.bodyText,
         });
@@ -9903,6 +9941,85 @@ export async function registerRoutes(
                 ? 400
                 : 500;
         traceError(req, "agent.task.google_email_edit.failed", error, {
+          taskId: req.params.taskId,
+          elapsedMs: elapsedMs(startedAt),
+        });
+        return res.status(status).json({
+          message,
+          traceId: getTraceId(req),
+        });
+      }
+    },
+  );
+
+  app.post(
+    "/api/agent/tasks/:taskId/google-calendar-edit",
+    isAuthenticated,
+    async (req: any, res) => {
+      const startedAt = Date.now();
+      try {
+        const parsed = googleCalendarEventEditSchema.parse(req.body ?? {});
+        const task = await storage.getAgentTaskById(req.params.taskId);
+        if (!task || task.userId !== req.session.userId) {
+          return res.status(404).json({
+            message: "Task not found",
+            traceId: getTraceId(req),
+          });
+        }
+        if (
+          task.taskKind !== "google_action" ||
+          !ENABLE_GOOGLE_PERSONAL_CONTEXT_WRITES
+        ) {
+          return res.status(410).json({
+            message: "Google assistant write actions are disabled in this environment.",
+            traceId: getTraceId(req),
+          });
+        }
+
+        const result = await applyStructuredGoogleCalendarEventEdit({
+          storage,
+          taskId: task.id,
+          userId: req.session.userId,
+          title: parsed.title,
+          startTime: parsed.startTime,
+          endTime: parsed.endTime,
+          location: parsed.location ?? null,
+          description: parsed.description ?? null,
+          resultEventId: parsed.resultEventId ?? null,
+        });
+
+        trace(req, "agent.task.google_calendar_edit.saved", {
+          taskId: result.task.id,
+          sourceTaskId: task.id,
+          status: result.task.status,
+          awaitingApproval: result.awaitingApproval,
+          elapsedMs: elapsedMs(startedAt),
+        });
+
+        return res.status(200).json({
+          traceId: getTraceId(req),
+          task: result.task,
+          preview: result.preview,
+          awaitingApproval: result.awaitingApproval,
+        });
+      } catch (error) {
+        if (error instanceof z.ZodError) {
+          return res.status(400).json({
+            message: error.issues[0]?.message ?? "Invalid calendar edit request",
+            traceId: getTraceId(req),
+          });
+        }
+        const message =
+          error instanceof Error ? error.message : "Failed to save calendar event edits";
+        const status =
+          message === "Task not found"
+            ? 404
+            : message === "Task is not a revisable calendar event" ||
+                message === "No pending approval for this task" ||
+                message === "Result event id is required to revise this completed calendar event"
+              ? 400
+              : 500;
+        traceError(req, "agent.task.google_calendar_edit.failed", error, {
           taskId: req.params.taskId,
           elapsedMs: elapsedMs(startedAt),
         });
