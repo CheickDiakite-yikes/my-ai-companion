@@ -100,6 +100,7 @@ import {
   startAgentTaskRun,
 } from "./agent-runtime";
 import {
+  applyStructuredGoogleEmailDraftEdit,
   approveAndExecuteGoogleActionTask,
   detectGoogleActionTaskIntent,
   type GoogleRecentActionContext,
@@ -212,6 +213,11 @@ const chatRespondSchema = z
 const agentApprovalDecisionSchema = z.object({
   approve: z.boolean(),
   reason: z.string().trim().max(400).optional().nullable(),
+});
+
+const googleEmailDraftEditSchema = z.object({
+  subject: z.string().max(300),
+  bodyText: z.string().trim().min(1).max(20000),
 });
 
 const agentOfferDecisionSchema = z.object({
@@ -9826,6 +9832,82 @@ export async function registerRoutes(
         });
         return res.status(500).json({
           message: "Failed to cancel intent session",
+          traceId: getTraceId(req),
+        });
+      }
+    },
+  );
+
+  app.post(
+    "/api/agent/tasks/:taskId/google-email-edit",
+    isAuthenticated,
+    async (req: any, res) => {
+      const startedAt = Date.now();
+      try {
+        const parsed = googleEmailDraftEditSchema.parse(req.body ?? {});
+        const task = await storage.getAgentTaskById(req.params.taskId);
+        if (!task || task.userId !== req.session.userId) {
+          return res.status(404).json({
+            message: "Task not found",
+            traceId: getTraceId(req),
+          });
+        }
+        if (
+          task.taskKind !== "google_action" ||
+          !ENABLE_GOOGLE_PERSONAL_CONTEXT_WRITES
+        ) {
+          return res.status(410).json({
+            message: "Google assistant write actions are disabled in this environment.",
+            traceId: getTraceId(req),
+          });
+        }
+
+        const result = await applyStructuredGoogleEmailDraftEdit({
+          storage,
+          taskId: task.id,
+          userId: req.session.userId,
+          subject: parsed.subject,
+          bodyText: parsed.bodyText,
+        });
+
+        trace(req, "agent.task.google_email_edit.saved", {
+          taskId: result.task.id,
+          sourceTaskId: task.id,
+          status: result.task.status,
+          awaitingApproval: result.awaitingApproval,
+          elapsedMs: elapsedMs(startedAt),
+        });
+
+        return res.status(200).json({
+          traceId: getTraceId(req),
+          task: result.task,
+          preview: result.preview,
+          awaitingApproval: result.awaitingApproval,
+        });
+      } catch (error) {
+        if (error instanceof z.ZodError) {
+          return res.status(400).json({
+            message: error.issues[0]?.message ?? "Invalid Gmail draft edit request",
+            traceId: getTraceId(req),
+          });
+        }
+        const message =
+          error instanceof Error ? error.message : "Failed to save Gmail draft edits";
+        const status =
+          message === "Task not found"
+            ? 404
+            : message === "Sent emails can't be edited"
+              ? 409
+              : message === "Task is not a revisable email draft" ||
+                  message === "No pending approval for this task"
+                ? 400
+                : 500;
+        traceError(req, "agent.task.google_email_edit.failed", error, {
+          taskId: req.params.taskId,
+          elapsedMs: elapsedMs(startedAt),
+        });
+        return res.status(status).json({
+          message,
           traceId: getTraceId(req),
         });
       }

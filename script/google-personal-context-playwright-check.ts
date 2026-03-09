@@ -100,6 +100,8 @@ async function main(): Promise<void> {
     await verifySavedDraftSendFollowUpFlow(page, args.baseUrl, args.email, args.outputDir);
     console.log("[google-context-check] recent-calendar follow-up");
     await verifyRecentCalendarFollowUpFlow(page, args.baseUrl, args.email, args.outputDir);
+    console.log("[google-context-check] manual draft editor");
+    await verifyManualDraftEditorFlow(page, args.baseUrl, args.email, args.outputDir);
 
     console.log("google-personal-context Playwright checks passed");
     await page.close();
@@ -958,6 +960,97 @@ async function verifyRecentCalendarFollowUpFlow(
 
   await page.screenshot({
     path: resolve(outputDir, "google-personal-context-calendar-follow-up.png"),
+    fullPage: true,
+  });
+}
+
+async function verifyManualDraftEditorFlow(
+  page: Page,
+  baseUrl: string,
+  email: string,
+  outputDir: string,
+): Promise<void> {
+  const conversationId = await resolveActiveConversationId(page, baseUrl);
+  await seedSavedDraftTaskFixture(email, conversationId);
+  await page.reload({ waitUntil: "networkidle" });
+
+  const seededCard = page.locator('[data-testid="agent-unified-task-card"]').last();
+  await seededCard.waitFor({ state: "visible", timeout: 20_000 });
+  assert.match(
+    await seededCard.innerText(),
+    /team@soulnests\.com/i,
+    "Expected a saved Gmail draft before opening the manual editor",
+  );
+
+  const beforeMessages = await fetchConversationMessages(page, baseUrl, conversationId);
+  const previousAssistantCount = beforeMessages.filter(
+    (message) => message.sender === "assistant",
+  ).length;
+
+  const openDraftButton = page.getByTestId("button-google-email-open-draft").last();
+  await openDraftButton.waitFor({ state: "visible", timeout: 20_000 });
+  await openDraftButton.evaluate((button) => {
+    (button as HTMLButtonElement).click();
+  });
+
+  const draftDialog = page.getByTestId("google-email-draft-dialog");
+  await draftDialog.waitFor({ state: "visible", timeout: 20_000 });
+  assert.match(
+    await draftDialog.innerText(),
+    /team@soulnests\.com/i,
+    "Expected the draft dialog to show the saved recipient",
+  );
+
+  const editButton = page.getByTestId("button-google-email-edit-draft");
+  await editButton.waitFor({ state: "visible", timeout: 20_000 });
+  await editButton.evaluate((button) => {
+    (button as HTMLButtonElement).click();
+  });
+
+  const subjectInput = page.getByTestId("input-google-email-draft-subject");
+  await subjectInput.waitFor({ state: "visible", timeout: 20_000 });
+  await subjectInput.fill("March 12 hangout?");
+
+  const bodyInput = page.getByTestId("textarea-google-email-draft-body");
+  await bodyInput.fill(
+    "Hi team,\n\nAre you free to hang out on March 12th? I would love to catch up.\n\nBest,\nZorro",
+  );
+
+  const saveButton = page.getByTestId("button-google-email-save-draft-edit");
+  await saveButton.waitFor({ state: "visible", timeout: 20_000 });
+  await saveButton.evaluate((button) => {
+    (button as HTMLButtonElement).click();
+  });
+
+  const saveReply = await waitForLatestAssistantReply({
+    page,
+    baseUrl,
+    conversationId,
+    previousAssistantCount,
+    timeoutMs: 45_000,
+  });
+  assert.match(
+    saveReply,
+    /saved your draft edits|saved your edits into a fresh draft preview|review it and approve/i,
+    "Saving manual Gmail edits should surface an updated approval preview",
+  );
+
+  const revisedCard = page.locator('[data-testid="agent-unified-task-card"]').last();
+  await revisedCard.waitFor({ state: "visible", timeout: 20_000 });
+  const revisedCardText = await revisedCard.innerText();
+  assert.match(
+    revisedCardText,
+    /march 12 hangout\?/i,
+    "Expected the manually edited subject to appear in the updated Gmail card",
+  );
+  assert.match(
+    revisedCardText,
+    /would love to catch up|march 12th/i,
+    "Expected the manually edited body to appear in the updated Gmail card",
+  );
+
+  await page.screenshot({
+    path: resolve(outputDir, "google-personal-context-manual-draft-editor.png"),
     fullPage: true,
   });
 }

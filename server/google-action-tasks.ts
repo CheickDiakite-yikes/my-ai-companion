@@ -1590,6 +1590,48 @@ async function buildRevisedEmailVariantFromPlan(params: {
   };
 }
 
+function buildStructuredEmailVariantFromPlan(params: {
+  plan: StoredGoogleActionPlan;
+  subject: string;
+  bodyText: string;
+}): { preview: GoogleActionPreview; plan: StoredGoogleActionPlan } {
+  if (
+    params.plan.execution.kind !== "email_compose" &&
+    params.plan.execution.kind !== "email_reply"
+  ) {
+    throw new Error("Task is not an email draft");
+  }
+
+  const subject = params.subject.trim();
+  const bodyText = params.bodyText.trim();
+  if (!bodyText) {
+    throw new Error("Draft body is required");
+  }
+
+  const preview = buildGoogleEmailPreview({
+    kind: params.plan.execution.kind,
+    sendAfterApproval: params.plan.execution.sendAfterApproval,
+    to: params.plan.execution.to,
+    cc: params.plan.execution.cc,
+    subject,
+    bodyText,
+    emailThread: params.plan.preview.emailThread ?? null,
+  });
+
+  return {
+    preview,
+    plan: {
+      ...params.plan,
+      preview,
+      execution: {
+        ...params.plan.execution,
+        subject,
+        bodyText,
+      },
+    },
+  };
+}
+
 export async function promotePendingGoogleEmailTaskToSend(params: {
   storage: IStorage;
   taskId: string;
@@ -1742,6 +1784,100 @@ export async function revisePendingGoogleEmailTask(params: {
   return {
     task: taskSummary,
     preview: next.preview,
+  };
+}
+
+export async function applyStructuredGoogleEmailDraftEdit(params: {
+  storage: IStorage;
+  taskId: string;
+  userId: string;
+  subject: string;
+  bodyText: string;
+  onEvent?: (event: AgentTaskEvent) => void;
+}): Promise<{
+  task: AgentTaskSummary;
+  preview: GoogleActionPreview;
+  awaitingApproval: boolean;
+}> {
+  const task = await params.storage.getAgentTaskById(params.taskId);
+  if (!task || task.userId !== params.userId) {
+    throw new Error("Task not found");
+  }
+
+  const plan = taskPlanFromTask(task);
+  if (!isEmailDraftRevisionCandidatePreview(plan.preview)) {
+    throw new Error("Task is not a revisable email draft");
+  }
+  if (task.status === "completed" && plan.execution.sendAfterApproval) {
+    throw new Error("Sent emails can't be edited");
+  }
+
+  const next = buildStructuredEmailVariantFromPlan({
+    plan,
+    subject: params.subject,
+    bodyText: params.bodyText,
+  });
+
+  if (task.status === "approval_required") {
+    const pendingApproval = await params.storage.getPendingAgentApproval(task.id);
+    if (!pendingApproval) {
+      throw new Error("No pending approval for this task");
+    }
+
+    const updated =
+      (await params.storage.updateAgentTaskStatus({
+        taskId: task.id,
+        status: task.status,
+        plan: next.plan,
+      })) ?? task;
+    const taskSummary = toTaskSummary(updated);
+
+    await createAssistantUiMessage({
+      storage: params.storage,
+      conversationId: task.conversationId,
+      text: "I saved your draft edits. Review it and approve when you're ready.",
+      uiPayload: {
+        kind: "agent_task_status",
+        task: taskSummary,
+        text: "Saved draft edits",
+        googleActionPreview: next.preview,
+      },
+    });
+
+    return {
+      task: taskSummary,
+      preview: next.preview,
+      awaitingApproval: true,
+    };
+  }
+
+  const run = await startGoogleActionTaskRun({
+    storage: params.storage,
+    userId: params.userId,
+    conversationId: task.conversationId,
+    prompt: `${task.prompt}\n\nManual edit: user updated the draft subject/body.`,
+    requestedByMessageId: task.requestedByMessageId ?? task.id,
+    preview: next.preview,
+    plan: next.plan,
+    onEvent: params.onEvent,
+  });
+
+  await createAssistantUiMessage({
+    storage: params.storage,
+    conversationId: task.conversationId,
+    text: "I saved your edits into a fresh draft preview. Review it and approve when you're ready.",
+    uiPayload: {
+      kind: "agent_task_status",
+      task: run.task,
+      text: "Saved edited draft preview",
+      googleActionPreview: next.preview,
+    },
+  });
+
+  return {
+    task: run.task,
+    preview: next.preview,
+    awaitingApproval: run.awaitingApproval,
   };
 }
 

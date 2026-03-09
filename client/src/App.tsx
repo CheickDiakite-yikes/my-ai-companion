@@ -46,8 +46,10 @@ import {
 } from "lucide-react";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
 import mayaAvatar from "@/assets/maya-avatar.png";
 import zarraAvatar from "@/assets/zarra-avatar.png";
 import zeeAvatar from "@/assets/zee-avatar.png";
@@ -2278,11 +2280,79 @@ function GoogleEmailAssistantTaskCard(props: {
       props.card.status === "completed" ||
       props.card.status === "cancelled",
   );
+  const queryClient = useQueryClient();
   const [isCollapsed, setIsCollapsed] = useState(shouldDefaultCollapsed);
+  const [isDraftDialogOpen, setIsDraftDialogOpen] = useState(false);
+  const [isDraftEditorMode, setIsDraftEditorMode] = useState(false);
+  const [draftSubjectInput, setDraftSubjectInput] = useState(
+    proposedEmail.subject ?? "",
+  );
+  const [draftBodyInput, setDraftBodyInput] = useState(
+    proposedEmail.bodyPreview ?? "",
+  );
+  const [draftEditError, setDraftEditError] = useState<string | null>(null);
 
   useEffect(() => {
     setIsCollapsed(shouldDefaultCollapsed);
   }, [props.card.taskId, shouldDefaultCollapsed]);
+
+  const currentSubject = proposedEmail.subject ?? "";
+  const currentBody = proposedEmail.bodyPreview ?? "";
+  const canOpenDraftDialog = Boolean(
+    proposedEmail.to.length > 0 || currentSubject.trim() || currentBody.trim(),
+  );
+  const canEditDraft = Boolean(
+    !props.failure &&
+      props.card.status !== "cancelled" &&
+      props.googleActionResult?.status !== "email_sent",
+  );
+  const hasManualDraftChanges =
+    draftSubjectInput.trim() !== currentSubject.trim() ||
+    draftBodyInput.trim() !== currentBody.trim();
+
+  const resetDraftDialog = useCallback(
+    (editMode = false) => {
+      setDraftSubjectInput(currentSubject);
+      setDraftBodyInput(currentBody);
+      setDraftEditError(null);
+      setIsDraftEditorMode(editMode && canEditDraft);
+    },
+    [canEditDraft, currentBody, currentSubject],
+  );
+
+  useEffect(() => {
+    if (!isDraftDialogOpen || !isDraftEditorMode) {
+      setDraftSubjectInput(currentSubject);
+      setDraftBodyInput(currentBody);
+      setDraftEditError(null);
+    }
+  }, [currentBody, currentSubject, isDraftDialogOpen, isDraftEditorMode, props.card.taskId]);
+
+  const saveDraftEditMutation = useMutation({
+    mutationFn: async (payload: { subject: string; bodyText: string }) => {
+      const response = await apiRequest(
+        "POST",
+        `/api/agent/tasks/${props.card.taskId}/google-email-edit`,
+        payload,
+      );
+      return response.json();
+    },
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({
+          predicate: (query) => {
+            const key = Array.isArray(query.queryKey) ? query.queryKey[0] : query.queryKey;
+            return (
+              typeof key === "string" &&
+              (key === "/api/conversations" ||
+                key.startsWith("/api/conversations/") ||
+                key.startsWith("/api/agent/tasks/"))
+            );
+          },
+        }),
+      ]);
+    },
+  });
 
   const statusLabel = props.failure
     ? "Failed"
@@ -2317,218 +2387,496 @@ function GoogleEmailAssistantTaskCard(props: {
     statusLabel,
   });
 
+  const handleOpenDraftDialog = (editMode = false) => {
+    resetDraftDialog(editMode);
+    setIsDraftDialogOpen(true);
+  };
+
+  const handleSaveDraftEdit = async () => {
+    const nextBody = draftBodyInput.trim();
+    if (!nextBody) {
+      setDraftEditError("Draft body is required.");
+      return;
+    }
+    setDraftEditError(null);
+    try {
+      await saveDraftEditMutation.mutateAsync({
+        subject: draftSubjectInput,
+        bodyText: draftBodyInput,
+      });
+      setIsDraftDialogOpen(false);
+      setIsDraftEditorMode(false);
+    } catch (error) {
+      setDraftEditError(getErrorMessage(error));
+    }
+  };
+
   return (
-    <div
-      className="w-full min-w-0 max-w-full space-y-3"
-      data-testid="agent-unified-task-card"
-      data-agent-task-id={props.card.taskId}
-      data-agent-task-status={props.card.status}
-      data-google-email-card="true"
-    >
-      <div className="flex items-start justify-between gap-3 px-1">
-        <div className="min-w-0">
-          <div className="flex items-center gap-1.5">
-            <Mail className="h-3.5 w-3.5" style={{ color: "var(--app-on-dark-muted)" }} />
-            <p
-              className="text-[11px] font-semibold uppercase tracking-[0.16em]"
-              style={{ color: "var(--app-on-dark-muted)" }}
-            >
-              Zee Mail
-            </p>
-          </div>
-          <p className="mt-1.5 text-sm font-semibold" style={{ color: "var(--app-on-dark)" }}>
-            {props.googleActionPreview.title}
-          </p>
-          {summaryText ? (
-            <p
-              className="mt-1 text-xs leading-5"
-              style={{ color: "var(--app-on-dark-muted)" }}
-            >
-              {summaryText}
-            </p>
-          ) : null}
-          {props.googleActionPreview.emailThread ? (
-            <p
-              className="mt-1 text-[11px] leading-5"
-              style={{ color: "var(--app-on-dark-muted)" }}
-            >
-              Replying in: {props.googleActionPreview.emailThread.subject}
-            </p>
-          ) : null}
-        </div>
-        <div className="flex shrink-0 items-center gap-2">
-          <span
-            className="rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide"
-            style={{
-              borderColor: statusToneStyles.borderColor,
-              backgroundColor: statusToneStyles.backgroundColor,
-              color: statusToneStyles.textColor,
-            }}
-          >
-            {statusLabel}
-          </span>
-          <button
-            type="button"
-            onClick={() => setIsCollapsed((value) => !value)}
-            className="rounded-full border p-2 transition-colors hover:opacity-90"
-            style={{
-              borderColor: "rgba(255,255,255,0.18)",
-              backgroundColor: "rgba(255,255,255,0.08)",
-              color: "var(--app-on-dark-muted)",
-            }}
-            data-testid="button-google-email-collapse"
-            aria-label={isCollapsed ? "Expand email card" : "Collapse email card"}
-          >
-            <motion.div
-              animate={{ rotate: isCollapsed ? 0 : 180 }}
-              transition={{ duration: 0.2 }}
-            >
-              <ChevronDown className="h-3.5 w-3.5" />
-            </motion.div>
-          </button>
-        </div>
-      </div>
-
-      <AnimatePresence initial={false} mode="wait">
-        {isCollapsed ? (
-          <motion.div
-            key="collapsed-email-card"
-            initial={{ opacity: 0, y: -4 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: 4 }}
-            transition={{ duration: 0.18 }}
-            className="w-full min-w-0 max-w-full rounded-[1.35rem] border p-3"
-            style={{
-              borderColor: "rgba(255,255,255,0.18)",
-              backgroundColor: "rgba(255,255,255,0.1)",
-              boxShadow:
-                "0 10px 20px rgba(0,0,0,0.12), inset 0 1px 0 rgba(255,255,255,0.12)",
-            }}
-            data-testid="google-email-collapsed-card"
-          >
-            <div className="grid gap-2">
-              <div
-                className="flex min-w-0 max-w-full items-center gap-2 rounded-[1rem] border px-3 py-2.5"
-                style={{
-                  borderColor: "rgba(255,255,255,0.16)",
-                  backgroundColor: "rgba(255,255,255,0.12)",
-                }}
+    <>
+      <div
+        className="w-full min-w-0 max-w-full space-y-3"
+        data-testid="agent-unified-task-card"
+        data-agent-task-id={props.card.taskId}
+        data-agent-task-status={props.card.status}
+        data-google-email-card="true"
+      >
+        <div className="flex items-start justify-between gap-3 px-1">
+          <div className="min-w-0">
+            <div className="flex items-center gap-1.5">
+              <Mail className="h-3.5 w-3.5" style={{ color: "var(--app-on-dark-muted)" }} />
+              <p
+                className="text-[11px] font-semibold uppercase tracking-[0.16em]"
+                style={{ color: "var(--app-on-dark-muted)" }}
               >
-                <Mail
-                  className="h-4 w-4 shrink-0"
-                  style={{ color: "var(--app-on-dark-muted)" }}
-                />
-                <p
-                  className="min-w-0 flex-1 truncate text-sm font-medium"
-                  style={{ color: "var(--app-on-dark)" }}
-                >
-                  {collapsedSummary}
-                </p>
-              </div>
+                Zee Mail
+              </p>
+            </div>
+            <p className="mt-1.5 text-sm font-semibold" style={{ color: "var(--app-on-dark)" }}>
+              {props.googleActionPreview.title}
+            </p>
+            {summaryText ? (
+              <p
+                className="mt-1 text-xs leading-5"
+                style={{ color: "var(--app-on-dark-muted)" }}
+              >
+                {summaryText}
+              </p>
+            ) : null}
+            {props.googleActionPreview.emailThread ? (
+              <p
+                className="mt-1 text-[11px] leading-5"
+                style={{ color: "var(--app-on-dark-muted)" }}
+              >
+                Replying in: {props.googleActionPreview.emailThread.subject}
+              </p>
+            ) : null}
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <span
+              className="rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide"
+              style={{
+                borderColor: statusToneStyles.borderColor,
+                backgroundColor: statusToneStyles.backgroundColor,
+                color: statusToneStyles.textColor,
+              }}
+            >
+              {statusLabel}
+            </span>
+            <button
+              type="button"
+              onClick={() => setIsCollapsed((value) => !value)}
+              className="rounded-full border p-2 transition-colors hover:opacity-90"
+              style={{
+                borderColor: "rgba(255,255,255,0.18)",
+                backgroundColor: "rgba(255,255,255,0.08)",
+                color: "var(--app-on-dark-muted)",
+              }}
+              data-testid="button-google-email-collapse"
+              aria-label={isCollapsed ? "Expand email card" : "Collapse email card"}
+            >
+              <motion.div
+                animate={{ rotate: isCollapsed ? 0 : 180 }}
+                transition={{ duration: 0.2 }}
+              >
+                <ChevronDown className="h-3.5 w-3.5" />
+              </motion.div>
+            </button>
+          </div>
+        </div>
 
-              {props.approvalPending ? (
-                <div className="flex flex-wrap justify-end gap-2">
+        <AnimatePresence initial={false} mode="wait">
+          {isCollapsed ? (
+            <motion.div
+              key="collapsed-email-card"
+              initial={{ opacity: 0, y: -4 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 4 }}
+              transition={{ duration: 0.18 }}
+              className="w-full min-w-0 max-w-full rounded-[1.35rem] border p-3"
+              style={{
+                borderColor: "rgba(255,255,255,0.18)",
+                backgroundColor: "rgba(255,255,255,0.1)",
+                boxShadow:
+                  "0 10px 20px rgba(0,0,0,0.12), inset 0 1px 0 rgba(255,255,255,0.12)",
+              }}
+              data-testid="google-email-collapsed-card"
+            >
+              <div className="grid gap-2">
+                <div
+                  className="flex min-w-0 max-w-full items-center gap-2 rounded-[1rem] border px-3 py-2.5"
+                  style={{
+                    borderColor: "rgba(255,255,255,0.16)",
+                    backgroundColor: "rgba(255,255,255,0.12)",
+                  }}
+                >
+                  <Mail
+                    className="h-4 w-4 shrink-0"
+                    style={{ color: "var(--app-on-dark-muted)" }}
+                  />
+                  <p
+                    className="min-w-0 flex-1 truncate text-sm font-medium"
+                    style={{ color: "var(--app-on-dark)" }}
+                  >
+                    {collapsedSummary}
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  {canOpenDraftDialog ? (
+                    <button
+                      type="button"
+                      onClick={() => handleOpenDraftDialog(false)}
+                      className="rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide transition-colors hover:opacity-90"
+                      style={{
+                        borderColor: "rgba(255,255,255,0.22)",
+                        backgroundColor: "rgba(255,255,255,0.1)",
+                        color: "var(--app-on-dark-muted)",
+                      }}
+                      data-testid="button-google-email-open-draft"
+                    >
+                      Open draft
+                    </button>
+                  ) : (
+                    <span />
+                  )}
+
+                  {props.approvalPending ? (
+                    <div className="flex flex-wrap justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={props.onDeny}
+                        disabled={props.isResolvingApproval}
+                        className="rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide transition-colors hover:opacity-90 disabled:opacity-55"
+                        style={{
+                          borderColor: "rgba(255,255,255,0.22)",
+                          backgroundColor: "rgba(255,255,255,0.1)",
+                          color: "var(--app-on-dark-muted)",
+                        }}
+                        data-testid="button-google-email-secondary-action"
+                      >
+                        {getGoogleApprovalSecondaryLabel(props.googleActionPreview)}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={props.onApprove}
+                        disabled={props.isResolvingApproval}
+                        className="rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide transition-colors hover:opacity-90 disabled:opacity-55"
+                        style={{
+                          borderColor: "color-mix(in srgb, var(--app-accent) 42%, rgba(255,255,255,0.26))",
+                          backgroundColor:
+                            "color-mix(in srgb, var(--app-accent) 28%, rgba(255,255,255,0.72))",
+                          color: "var(--app-accent-text)",
+                        }}
+                        data-testid="button-google-email-primary-action"
+                      >
+                        {getGoogleApprovalPrimaryLabel(props.googleActionPreview)}
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            </motion.div>
+          ) : (
+            <motion.div
+              key="expanded-email-card"
+              initial={{ opacity: 0, y: -4 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 4 }}
+              transition={{ duration: 0.18 }}
+            >
+              <GoogleEmailComposerPreview
+                to={proposedEmail.to}
+                subject={proposedEmail.subject}
+                bodyPreview={proposedEmail.bodyPreview}
+                statusLabel={
+                  props.googleActionResult?.status === "email_sent"
+                    ? "Sent"
+                    : props.googleActionResult?.status === "draft_created"
+                      ? "Draft saved"
+                      : proposedEmail.sendAfterApproval
+                        ? "Ready to send"
+                        : "Draft preview"
+                }
+                helperText={
+                  props.googleActionResult?.status === "email_sent"
+                    ? "This email was sent through Gmail."
+                    : props.googleActionResult?.status === "draft_created"
+                      ? "This draft was saved to Gmail."
+                      : getGoogleEmailPreviewHelper(proposedEmail)
+                }
+                tone={statusTone}
+                primaryAction={
+                  props.approvalPending
+                    ? {
+                        label: getGoogleApprovalPrimaryLabel(props.googleActionPreview),
+                        onClick: props.onApprove,
+                        disabled: props.isResolvingApproval,
+                        testId: "button-google-email-primary-action",
+                      }
+                    : undefined
+                }
+                secondaryAction={
+                  props.approvalPending
+                    ? {
+                        label: getGoogleApprovalSecondaryLabel(props.googleActionPreview),
+                        onClick: props.onDeny,
+                        disabled: props.isResolvingApproval,
+                        testId: "button-google-email-secondary-action",
+                      }
+                    : undefined
+                }
+                testId="google-email-preview-card"
+              />
+              {canOpenDraftDialog ? (
+                <div className="mt-2 flex justify-end px-1">
                   <button
                     type="button"
-                    onClick={props.onDeny}
-                    disabled={props.isResolvingApproval}
-                    className="rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide transition-colors hover:opacity-90 disabled:opacity-55"
+                    onClick={() => handleOpenDraftDialog(false)}
+                    className="rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide transition-colors hover:opacity-90"
                     style={{
                       borderColor: "rgba(255,255,255,0.22)",
                       backgroundColor: "rgba(255,255,255,0.1)",
                       color: "var(--app-on-dark-muted)",
                     }}
-                    data-testid="button-google-email-secondary-action"
+                    data-testid="button-google-email-open-draft"
                   >
-                    {getGoogleApprovalSecondaryLabel(props.googleActionPreview)}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={props.onApprove}
-                    disabled={props.isResolvingApproval}
-                    className="rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide transition-colors hover:opacity-90 disabled:opacity-55"
-                    style={{
-                      borderColor: "color-mix(in srgb, var(--app-accent) 42%, rgba(255,255,255,0.26))",
-                      backgroundColor:
-                        "color-mix(in srgb, var(--app-accent) 28%, rgba(255,255,255,0.72))",
-                      color: "var(--app-accent-text)",
-                    }}
-                    data-testid="button-google-email-primary-action"
-                  >
-                    {getGoogleApprovalPrimaryLabel(props.googleActionPreview)}
+                    Open draft
                   </button>
                 </div>
               ) : null}
-            </div>
-          </motion.div>
-        ) : (
-          <motion.div
-            key="expanded-email-card"
-            initial={{ opacity: 0, y: -4 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: 4 }}
-            transition={{ duration: 0.18 }}
-          >
-            <GoogleEmailComposerPreview
-              to={proposedEmail.to}
-              subject={proposedEmail.subject}
-              bodyPreview={proposedEmail.bodyPreview}
-              statusLabel={
-                props.googleActionResult?.status === "email_sent"
-                  ? "Sent"
-                  : props.googleActionResult?.status === "draft_created"
-                    ? "Draft saved"
-                    : proposedEmail.sendAfterApproval
-                      ? "Ready to send"
-                      : "Draft preview"
-              }
-              helperText={
-                props.googleActionResult?.status === "email_sent"
-                  ? "This email was sent through Gmail."
-                  : props.googleActionResult?.status === "draft_created"
-                    ? "This draft was saved to Gmail."
-                    : getGoogleEmailPreviewHelper(proposedEmail)
-              }
-              tone={statusTone}
-              primaryAction={
-                props.approvalPending
-                  ? {
-                      label: getGoogleApprovalPrimaryLabel(props.googleActionPreview),
-                      onClick: props.onApprove,
-                      disabled: props.isResolvingApproval,
-                      testId: "button-google-email-primary-action",
-                    }
-                  : undefined
-              }
-              secondaryAction={
-                props.approvalPending
-                  ? {
-                      label: getGoogleApprovalSecondaryLabel(props.googleActionPreview),
-                      onClick: props.onDeny,
-                      disabled: props.isResolvingApproval,
-                      testId: "button-google-email-secondary-action",
-                    }
-                  : undefined
-              }
-              testId="google-email-preview-card"
-            />
-          </motion.div>
-        )}
-      </AnimatePresence>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
-      {props.failure ? (
-        <div
-          className="rounded-2xl border px-3 py-2 text-xs"
+        {props.failure ? (
+          <div
+            className="rounded-2xl border px-3 py-2 text-xs"
+            style={{
+              borderColor: "rgba(248, 113, 113, 0.35)",
+              backgroundColor: "rgba(127, 29, 29, 0.12)",
+              color: "#fecaca",
+            }}
+          >
+            {props.failure.reason}
+          </div>
+        ) : null}
+      </div>
+
+      <Dialog
+        open={isDraftDialogOpen}
+        onOpenChange={(open) => {
+          setIsDraftDialogOpen(open);
+          if (!open) {
+            resetDraftDialog(false);
+          }
+        }}
+      >
+        <DialogContent
+          className="fixed left-1/2 top-1/2 w-[calc(100%-1.25rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 rounded-[1.6rem] border p-0"
           style={{
-            borderColor: "rgba(248, 113, 113, 0.35)",
-            backgroundColor: "rgba(127, 29, 29, 0.12)",
-            color: "#fecaca",
+            borderColor: "rgba(255,255,255,0.22)",
+            background:
+              "linear-gradient(180deg, color-mix(in srgb, var(--app-soft-card-bg) 84%, rgba(255,255,255,0.12)), color-mix(in srgb, var(--app-panel-bg) 92%, rgba(255,255,255,0.08)))",
+            color: "var(--app-on-dark)",
+            boxShadow:
+              "0 26px 52px rgba(0,0,0,0.28), inset 0 1px 0 rgba(255,255,255,0.12)",
           }}
+          data-testid="google-email-draft-dialog"
         >
-          {props.failure.reason}
-        </div>
-      ) : null}
-    </div>
+          <div
+            className="border-b px-4 pb-3 pt-4"
+            style={{ borderColor: "color-mix(in srgb, var(--app-soft-card-border) 70%, transparent)" }}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <DialogHeader className="space-y-1 text-left">
+                <DialogTitle
+                  className="flex items-center gap-2 text-sm font-semibold"
+                  style={{ color: "var(--app-on-dark)" }}
+                >
+                  <Mail className="h-4 w-4" />
+                  {isDraftEditorMode ? "Edit Zee Mail draft" : "Zee Mail draft"}
+                </DialogTitle>
+                <DialogDescription
+                  className="text-xs leading-5"
+                  style={{ color: "var(--app-on-dark-muted)" }}
+                >
+                  Manual edits stay in Zee's current draft context for follow-up send and revise actions.
+                </DialogDescription>
+              </DialogHeader>
+              <span
+                className="rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide"
+                style={{
+                  borderColor: statusToneStyles.borderColor,
+                  backgroundColor: statusToneStyles.backgroundColor,
+                  color: statusToneStyles.textColor,
+                }}
+              >
+                {statusLabel}
+              </span>
+            </div>
+          </div>
+
+          <div className="max-h-[70dvh] overflow-y-auto px-4 py-4">
+            <div className="space-y-3">
+              <div className="space-y-1.5">
+                <p
+                  className="text-[10px] font-semibold uppercase tracking-[0.18em]"
+                  style={{ color: "var(--app-on-dark-muted)" }}
+                >
+                  To
+                </p>
+                <div
+                  className="rounded-[1rem] border px-3 py-2.5 text-sm"
+                  style={{
+                    borderColor: "rgba(255,255,255,0.22)",
+                    backgroundColor: "rgba(255,255,255,0.78)",
+                    color: "#173b40",
+                  }}
+                  data-testid="google-email-draft-dialog-recipient"
+                >
+                  {proposedEmail.to.join(", ") || "No recipient"}
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <p
+                  className="text-[10px] font-semibold uppercase tracking-[0.18em]"
+                  style={{ color: "var(--app-on-dark-muted)" }}
+                >
+                  Subject
+                </p>
+                {isDraftEditorMode ? (
+                  <Input
+                    value={draftSubjectInput}
+                    onChange={(event) => setDraftSubjectInput(event.target.value)}
+                    placeholder="No subject"
+                    className="h-11 rounded-[1rem] border px-3 text-sm shadow-none"
+                    style={{
+                      borderColor: "rgba(255,255,255,0.22)",
+                      backgroundColor: "rgba(255,255,255,0.82)",
+                      color: "#173b40",
+                    }}
+                    data-testid="input-google-email-draft-subject"
+                  />
+                ) : (
+                  <div
+                    className="rounded-[1rem] border px-3 py-2.5 text-sm"
+                    style={{
+                      borderColor: "rgba(255,255,255,0.22)",
+                      backgroundColor: "rgba(255,255,255,0.78)",
+                      color: "#173b40",
+                    }}
+                    data-testid="google-email-draft-dialog-subject"
+                  >
+                    {currentSubject.trim() || "No subject"}
+                  </div>
+                )}
+              </div>
+
+              <div className="space-y-1.5">
+                <p
+                  className="text-[10px] font-semibold uppercase tracking-[0.18em]"
+                  style={{ color: "var(--app-on-dark-muted)" }}
+                >
+                  Body
+                </p>
+                {isDraftEditorMode ? (
+                  <Textarea
+                    value={draftBodyInput}
+                    onChange={(event) => setDraftBodyInput(event.target.value)}
+                    placeholder="Write the email body here..."
+                    className="min-h-[260px] rounded-[1.15rem] border px-3 py-3 text-sm leading-6 shadow-none"
+                    style={{
+                      borderColor: "rgba(255,255,255,0.22)",
+                      backgroundColor: "rgba(255,255,255,0.82)",
+                      color: "#173b40",
+                    }}
+                    data-testid="textarea-google-email-draft-body"
+                  />
+                ) : (
+                  <div
+                    className="rounded-[1.15rem] border px-3 py-3 text-sm leading-6"
+                    style={{
+                      borderColor: "rgba(255,255,255,0.22)",
+                      backgroundColor: "rgba(255,255,255,0.82)",
+                      color: "#173b40",
+                    }}
+                    data-testid="google-email-draft-dialog-body"
+                  >
+                    <p className="whitespace-pre-wrap break-words">
+                      {currentBody.trim() || "No draft body yet."}
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              {draftEditError ? (
+                <div
+                  className="rounded-[1rem] border px-3 py-2 text-xs"
+                  style={{
+                    borderColor: "rgba(248, 113, 113, 0.35)",
+                    backgroundColor: "rgba(127, 29, 29, 0.12)",
+                    color: "#fecaca",
+                  }}
+                >
+                  {draftEditError}
+                </div>
+              ) : null}
+            </div>
+          </div>
+
+          <div
+            className="flex flex-wrap items-center justify-end gap-2 border-t px-4 py-3"
+            style={{ borderColor: "color-mix(in srgb, var(--app-soft-card-border) 70%, transparent)" }}
+          >
+            {isDraftEditorMode ? (
+              <>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onClick={() => resetDraftDialog(false)}
+                  disabled={saveDraftEditMutation.isPending}
+                  data-testid="button-google-email-cancel-draft-edit"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="button"
+                  onClick={() => void handleSaveDraftEdit()}
+                  disabled={saveDraftEditMutation.isPending || !hasManualDraftChanges}
+                  data-testid="button-google-email-save-draft-edit"
+                >
+                  {saveDraftEditMutation.isPending ? "Saving..." : "Save changes"}
+                </Button>
+              </>
+            ) : (
+              <>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onClick={() => setIsDraftDialogOpen(false)}
+                  data-testid="button-google-email-close-draft"
+                >
+                  Done
+                </Button>
+                {canEditDraft ? (
+                  <Button
+                    type="button"
+                    onClick={() => {
+                      setDraftEditError(null);
+                      setIsDraftEditorMode(true);
+                    }}
+                    data-testid="button-google-email-edit-draft"
+                  >
+                    Edit draft
+                  </Button>
+                ) : null}
+              </>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
 
