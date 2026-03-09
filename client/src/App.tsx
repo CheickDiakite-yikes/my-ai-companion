@@ -978,13 +978,20 @@ function isGoogleComposeSessionPayload(
   return Boolean(payload && payload.kind === "agent_google_compose_session");
 }
 
+function isGoogleEmailAmbiguityPayload(
+  payload: MessageData["uiPayload"],
+): payload is Extract<AgentMessageUiPayload, { kind: "agent_google_email_ambiguity" }> {
+  return Boolean(payload && payload.kind === "agent_google_email_ambiguity");
+}
+
 function isAgentUiPayload(payload: MessageData["uiPayload"]): boolean {
   return (
     isAgentTaskStatusPayload(payload) ||
     isAgentApprovalPayload(payload) ||
     isAgentArtifactPayload(payload) ||
     isAgentOfferPayload(payload) ||
-    isGoogleComposeSessionPayload(payload)
+    isGoogleComposeSessionPayload(payload) ||
+    isGoogleEmailAmbiguityPayload(payload)
   );
 }
 
@@ -1002,6 +1009,9 @@ function isGoogleAssistantUiPayload(payload: MessageData["uiPayload"]): boolean 
   }
   if (payload.kind === "agent_google_compose_session") {
     return payload.session.mode === "email_compose";
+  }
+  if (payload.kind === "agent_google_email_ambiguity") {
+    return payload.ambiguity.candidates.length > 0;
   }
   return false;
 }
@@ -1563,7 +1573,7 @@ function GoogleEmailComposerPreview(props: {
   const bodyPreview = props.bodyPreview?.trim();
   const shouldShowBodyToggle =
     Boolean(bodyPreview) &&
-    ((bodyPreview?.length ?? 0) > 220 || (bodyPreview?.split(/\n+/).length ?? 0) > 5);
+    ((bodyPreview?.length ?? 0) > 80 || (bodyPreview?.split(/\n+/).length ?? 0) > 2);
   const hasFooterActions = Boolean(props.primaryAction || props.secondaryAction);
 
   return (
@@ -1659,7 +1669,7 @@ function GoogleEmailComposerPreview(props: {
               <div
                 className="relative pr-1"
                 style={{
-                  maxHeight: isExpanded ? "220px" : "108px",
+                  maxHeight: isExpanded ? "380px" : "124px",
                   overflowY: isExpanded ? "auto" : "hidden",
                 }}
               >
@@ -1699,7 +1709,7 @@ function GoogleEmailComposerPreview(props: {
                     props.testId ? `${props.testId}-toggle-body` : "google-email-toggle-body"
                   }
                 >
-                  {isExpanded ? "Show less" : "Show more"}
+                  {isExpanded ? "Show less" : "View full draft"}
                 </button>
               </div>
             ) : null}
@@ -2128,6 +2138,123 @@ function GoogleComposeSessionCard(props: {
               <p className="opacity-65">{statusMeta.helperText}</p>
             )}
           </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function GoogleEmailAmbiguityCard(props: {
+  ambiguity: Extract<AgentMessageUiPayload, { kind: "agent_google_email_ambiguity" }>["ambiguity"];
+  text: string;
+  onChoose: (selectionPrompt: string) => void;
+}) {
+  const actionLabel =
+    props.ambiguity.action === "send" ? "Choose a draft to send" : "Choose a draft to update";
+  const helperText =
+    props.ambiguity.action === "send"
+      ? "Tap the email you want Zee to send next."
+      : "Tap the email you want Zee to revise.";
+
+  return (
+    <div
+      className="w-full min-w-0 max-w-full space-y-2.5"
+      data-testid="google-email-ambiguity-card"
+      data-ambiguity-action={props.ambiguity.action}
+    >
+      <div className="flex items-start gap-2">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <Mail className="h-4 w-4" />
+            <p className="text-sm font-semibold">Which email did you mean?</p>
+          </div>
+          <p className="mt-2 text-xs leading-5 opacity-80">{props.text}</p>
+        </div>
+      </div>
+
+      <div
+        className="w-full min-w-0 max-w-full rounded-[1.35rem] border p-3"
+        style={{
+          borderColor: "rgba(255,255,255,0.18)",
+          backgroundColor: "rgba(255,255,255,0.12)",
+          boxShadow: "0 10px 20px rgba(0,0,0,0.1), inset 0 1px 0 rgba(255,255,255,0.1)",
+        }}
+      >
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          <div
+            className="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-[0.14em]"
+            style={{
+              borderColor: "rgba(255,255,255,0.28)",
+              backgroundColor: "rgba(255,255,255,0.82)",
+              color: "#173b40",
+            }}
+          >
+            <Mail className="h-3 w-3" />
+            Zee Mail
+          </div>
+          <div
+            className="inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide"
+            style={{
+              borderColor: "rgba(255,255,255,0.28)",
+              backgroundColor: "rgba(255,255,255,0.72)",
+              color: "#5f7274",
+            }}
+          >
+            <Info className="h-3 w-3" />
+            {actionLabel}
+          </div>
+        </div>
+
+        <div className="space-y-2">
+          {props.ambiguity.candidates.map((candidate) => (
+            <button
+              key={candidate.taskId}
+              type="button"
+              onClick={() => props.onChoose(candidate.selectionPrompt)}
+              className="w-full rounded-[1rem] border px-3 py-3 text-left transition-colors hover:opacity-90"
+              style={{
+                borderColor: "rgba(255,255,255,0.22)",
+                backgroundColor: "rgba(255,255,255,0.76)",
+                color: "#173b40",
+              }}
+              data-testid={`button-google-email-ambiguity-${candidate.taskId}`}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-semibold">{candidate.recipientLabel}</p>
+                  <p className="mt-1 truncate text-xs opacity-70">
+                    {candidate.subject?.trim() || "No subject"}
+                  </p>
+                  {candidate.bodySnippet ? (
+                    <p className="mt-2 line-clamp-2 text-xs leading-5 opacity-75">
+                      {candidate.bodySnippet}
+                    </p>
+                  ) : null}
+                </div>
+                <span
+                  className="shrink-0 rounded-full border px-2 py-1 text-[10px] font-semibold tracking-wide"
+                  style={{
+                    borderColor: "rgba(255,255,255,0.18)",
+                    backgroundColor: "rgba(255,255,255,0.64)",
+                    color: "#4c666a",
+                  }}
+                >
+                  {candidate.statusLabel}
+                </span>
+              </div>
+            </button>
+          ))}
+        </div>
+
+        <div
+          className="mt-3 rounded-[1rem] border px-3 py-2.5 text-[12px]"
+          style={{
+            borderColor: "rgba(255,255,255,0.2)",
+            backgroundColor: "rgba(255,255,255,0.66)",
+            color: "#5f7274",
+          }}
+        >
+          {helperText} You can also reply with the recipient or subject.
         </div>
       </div>
     </div>
@@ -7973,6 +8100,7 @@ const TextView = ({
   onOpenArtifact,
   onResolveApproval,
   onResolveOffer,
+  onSendMessage,
   liveTaskSnapshots,
 }: {
   messages: MessageData[];
@@ -7990,6 +8118,7 @@ const TextView = ({
     reason?: string,
   ) => Promise<void>;
   onResolveOffer: (offerId: string, accept: boolean) => Promise<void>;
+  onSendMessage: (text: string, options?: SendMessageOptions) => Promise<void>;
   liveTaskSnapshots: Record<string, LiveTaskSnapshot>;
 }) => {
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -8331,6 +8460,16 @@ const TextView = ({
                       <GoogleComposeSessionCard
                         session={msg.uiPayload.session}
                         text={msg.uiPayload.text}
+                      />
+                    ) : isGoogleEmailAmbiguityPayload(msg.uiPayload) ? (
+                      <GoogleEmailAmbiguityCard
+                        ambiguity={msg.uiPayload.ambiguity}
+                        text={msg.uiPayload.text}
+                        onChoose={(selectionPrompt) => {
+                          void onSendMessage(selectionPrompt, {
+                            ignoreAttachments: true,
+                          });
+                        }}
                       />
                     ) : isAgentTaskStatusPayload(msg.uiPayload) ? (
                       <div
@@ -12183,6 +12322,7 @@ function App() {
               onOpenArtifact={handleOpenArtifact}
               onResolveApproval={handleResolveTaskApproval}
               onResolveOffer={handleResolveAgentOffer}
+              onSendMessage={handleSendMessage}
               liveTaskSnapshots={liveTaskSnapshots}
             />
           </div>

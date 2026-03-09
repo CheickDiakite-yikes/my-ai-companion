@@ -406,6 +406,21 @@ export interface GoogleComposeSession {
   followUpPrompt: string;
 }
 
+export interface GoogleEmailAmbiguityCandidate {
+  taskId: string;
+  recipientLabel: string;
+  subject: string | null;
+  bodySnippet: string | null;
+  statusLabel: string;
+  selectionPrompt: string;
+}
+
+export interface GoogleEmailAmbiguityPrompt {
+  action: "send" | "revise";
+  instructionText: string;
+  candidates: GoogleEmailAmbiguityCandidate[];
+}
+
 export type ArtifactRenderEngine = "json_render";
 
 export interface ArtifactRenderElementV1 {
@@ -512,6 +527,11 @@ export type AgentMessageUiPayload =
   | {
       kind: "agent_google_compose_session";
       session: GoogleComposeSession;
+      text: string;
+    }
+  | {
+      kind: "agent_google_email_ambiguity";
+      ambiguity: GoogleEmailAmbiguityPrompt;
       text: string;
     }
   | {

@@ -60,6 +60,8 @@ import type {
   GoogleActionPreview,
   GoogleActionResult,
   GoogleComposeSession,
+  GoogleEmailAmbiguityCandidate,
+  GoogleEmailAmbiguityPrompt,
   GooglePersonalContextTimeRange,
   InboxDigestItem,
   MorningBriefFailureCode,
@@ -6078,6 +6080,11 @@ type GoogleConversationRecentTask = {
   messageIndex: number;
 };
 
+type GoogleConversationEmailAmbiguity = {
+  messageId: string;
+  prompt: GoogleEmailAmbiguityPrompt;
+};
+
 type GoogleConversationState = {
   composeSession: {
     messageId: string;
@@ -6090,6 +6097,8 @@ type GoogleConversationState = {
   } | null;
   recentEmailTask: GoogleConversationRecentTask | null;
   recentCalendarTask: GoogleConversationRecentTask | null;
+  emailDraftCandidates: GoogleEmailConversationTaskTarget[];
+  emailAmbiguity: GoogleConversationEmailAmbiguity | null;
 };
 
 type GoogleEmailConversationTaskTarget =
@@ -6127,6 +6136,40 @@ function isGoogleComposeSessionPayload(value: unknown): value is GoogleComposeSe
     (session.bodyPreview === null || typeof session.bodyPreview === "string") &&
     typeof session.promptSeed === "string" &&
     typeof session.followUpPrompt === "string"
+  );
+}
+
+function isGoogleEmailAmbiguityCandidatePayload(
+  value: unknown,
+): value is GoogleEmailAmbiguityCandidate {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.taskId === "string" &&
+    typeof candidate.recipientLabel === "string" &&
+    (candidate.subject === null || typeof candidate.subject === "string") &&
+    (candidate.bodySnippet === null || typeof candidate.bodySnippet === "string") &&
+    typeof candidate.statusLabel === "string" &&
+    typeof candidate.selectionPrompt === "string"
+  );
+}
+
+function isGoogleEmailAmbiguityPromptPayload(
+  value: unknown,
+): value is GoogleEmailAmbiguityPrompt {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const prompt = value as Record<string, unknown>;
+  return (
+    (prompt.action === "send" || prompt.action === "revise") &&
+    typeof prompt.instructionText === "string" &&
+    Array.isArray(prompt.candidates) &&
+    prompt.candidates.every((candidate) =>
+      isGoogleEmailAmbiguityCandidatePayload(candidate),
+    )
   );
 }
 
@@ -6173,6 +6216,18 @@ function isRecentGoogleEmailTask(
   );
 }
 
+function isActionableRecentGoogleEmailDraftTask(
+  preview: GoogleActionPreview | null,
+  result: GoogleActionResult | null,
+): preview is GoogleActionPreview {
+  return Boolean(
+    preview?.connector === "gmail" &&
+      preview.proposedEmail &&
+      (preview.kind === "email_compose" || preview.kind === "email_reply") &&
+      result?.status === "draft_created",
+  );
+}
+
 function isRecentGoogleCalendarTask(
   preview: GoogleActionPreview | null,
   result: GoogleActionResult | null,
@@ -6204,34 +6259,226 @@ function isGoogleEmailDraftPreview(
   );
 }
 
+function extractGoogleEmailAddressForMatching(input: string): string | null {
+  const match = input.match(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i);
+  return match?.[0]?.trim().toLowerCase() ?? null;
+}
+
+function formatGoogleEmailRecipientSummaryForDisambiguation(
+  recipients: string[] | null | undefined,
+): string {
+  const list = recipients?.filter((value) => value.trim().length > 0) ?? [];
+  if (list.length === 0) return "Untitled draft";
+  if (list.length === 1) return list[0];
+  return `${list[0]} +${list.length - 1}`;
+}
+
+function buildGoogleEmailCandidateStatusLabel(
+  candidate: GoogleEmailConversationTaskTarget,
+): string {
+  if (candidate.source === "pending") {
+    return candidate.preview.proposedEmail?.sendAfterApproval
+      ? "Ready to send"
+      : "Needs approval";
+  }
+  return "Draft saved";
+}
+
+function buildGoogleEmailAmbiguityOrdinalHint(index: number): string {
+  if (index === 0) return "latest";
+  if (index === 1) return "older";
+  return "third";
+}
+
+function buildGoogleEmailAmbiguityCandidateFromTarget(
+  candidate: GoogleEmailConversationTaskTarget,
+  index: number,
+): GoogleEmailAmbiguityCandidate {
+  const recipientLabel = formatGoogleEmailRecipientSummaryForDisambiguation(
+    candidate.preview.proposedEmail?.to,
+  );
+  const subject =
+    candidate.preview.proposedEmail?.subject?.trim() ||
+    candidate.preview.emailThread?.subject?.trim() ||
+    null;
+  const bodySnippetSource =
+    candidate.preview.proposedEmail?.bodyPreview?.trim() ||
+    candidate.preview.emailThread?.messages?.[
+      candidate.preview.emailThread.messages.length - 1
+    ]?.snippet?.trim() ||
+    candidate.preview.summary.trim() ||
+    null;
+  const bodySnippet = bodySnippetSource
+    ? bodySnippetSource.replace(/\s+/g, " ").slice(0, 160)
+    : null;
+  return {
+    taskId: candidate.taskId,
+    recipientLabel,
+    subject,
+    bodySnippet,
+    statusLabel: buildGoogleEmailCandidateStatusLabel(candidate),
+    selectionPrompt: subject
+      ? `Use the ${buildGoogleEmailAmbiguityOrdinalHint(index)} draft to ${recipientLabel} with subject ${subject}.`
+      : `Use the ${buildGoogleEmailAmbiguityOrdinalHint(index)} draft to ${recipientLabel}.`,
+  };
+}
+
+function normalizeGoogleEmailCandidateMatchText(value: string): string {
+  return normalizeGoogleActionControlText(value)
+    .replace(/[^a-z0-9@.\s]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function tokenizeGoogleEmailAddress(email: string): string[] {
+  return email
+    .toLowerCase()
+    .split(/[@._+-]+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 3);
+}
+
+function dedupeGoogleEmailCandidates(
+  candidates: GoogleEmailConversationTaskTarget[],
+): GoogleEmailConversationTaskTarget[] {
+  const seen = new Set<string>();
+  const deduped: GoogleEmailConversationTaskTarget[] = [];
+  for (const candidate of candidates) {
+    if (seen.has(candidate.taskId)) continue;
+    seen.add(candidate.taskId);
+    deduped.push(candidate);
+  }
+  return deduped;
+}
+
+function resolveGoogleEmailDraftCandidateFromText(params: {
+  text: string;
+  candidates: GoogleEmailConversationTaskTarget[];
+}):
+  | {
+      kind: "resolved";
+      candidate: GoogleEmailConversationTaskTarget;
+    }
+  | {
+      kind: "ambiguous";
+    }
+  | {
+      kind: "none";
+    } {
+  const candidates = dedupeGoogleEmailCandidates(params.candidates).slice(0, 4);
+  if (candidates.length === 0) {
+    return { kind: "none" };
+  }
+  if (candidates.length === 1) {
+    return { kind: "resolved", candidate: candidates[0] };
+  }
+
+  const normalized = normalizeGoogleEmailCandidateMatchText(params.text);
+  if (!normalized) {
+    return { kind: "ambiguous" };
+  }
+
+  const ordinalMatchers: Array<{ pattern: RegExp; index: number }> = [
+    { pattern: /\b(?:latest|newest|most recent|current|last one|this one)\b/i, index: 0 },
+    { pattern: /\b(?:older|previous|first one|other one|second one)\b/i, index: 1 },
+    { pattern: /\bthird one\b/i, index: 2 },
+  ];
+  for (const matcher of ordinalMatchers) {
+    if (matcher.pattern.test(normalized) && candidates[matcher.index]) {
+      return { kind: "resolved", candidate: candidates[matcher.index] };
+    }
+  }
+
+  const explicitEmail = extractGoogleEmailAddressForMatching(normalized);
+  if (explicitEmail) {
+    const matches = candidates.filter((candidate) =>
+      (candidate.preview.proposedEmail?.to ?? []).some(
+        (recipient) => recipient.trim().toLowerCase() === explicitEmail,
+      ),
+    );
+    if (matches.length === 1) {
+      return { kind: "resolved", candidate: matches[0] };
+    }
+    if (matches.length > 1) {
+      return { kind: "ambiguous" };
+    }
+  }
+
+  if (/\bpending|preview|needs approval|ready to send\b/i.test(normalized)) {
+    const matches = candidates.filter((candidate) => candidate.source === "pending");
+    if (matches.length === 1) {
+      return { kind: "resolved", candidate: matches[0] };
+    }
+    if (matches.length > 1) {
+      return { kind: "ambiguous" };
+    }
+  }
+
+  if (/\bsaved|draft saved\b/i.test(normalized)) {
+    const matches = candidates.filter((candidate) => candidate.source === "recent");
+    if (matches.length === 1) {
+      return { kind: "resolved", candidate: matches[0] };
+    }
+    if (matches.length > 1) {
+      return { kind: "ambiguous" };
+    }
+  }
+
+  const matches = candidates.filter((candidate) => {
+    const subject = normalizeGoogleEmailCandidateMatchText(
+      candidate.preview.proposedEmail?.subject?.trim() ||
+        candidate.preview.emailThread?.subject?.trim() ||
+        "",
+    );
+    if (subject && normalized.includes(subject)) {
+      return true;
+    }
+    const recipients = candidate.preview.proposedEmail?.to ?? [];
+    for (const recipient of recipients) {
+      const recipientLower = recipient.trim().toLowerCase();
+      if (recipientLower && normalized.includes(recipientLower)) {
+        return true;
+      }
+      const tokens = tokenizeGoogleEmailAddress(recipientLower);
+      if (tokens.some((token) => normalized.includes(token))) {
+        return true;
+      }
+    }
+    return false;
+  });
+
+  if (matches.length === 1) {
+    return { kind: "resolved", candidate: matches[0] };
+  }
+  if (matches.length > 1) {
+    return { kind: "ambiguous" };
+  }
+
+  return { kind: "ambiguous" };
+}
+
+function looksLikeGoogleEmailAmbiguitySelectionText(text: string): boolean {
+  const normalized = normalizeGoogleEmailCandidateMatchText(text);
+  if (!normalized) return false;
+  if (
+    /^(?:draft|write|send|reply|respond)\s+(?:an?\s+)?(?:email|message)\b/i.test(
+      normalized,
+    )
+  ) {
+    return false;
+  }
+  return (
+    Boolean(extractGoogleEmailAddressForMatching(normalized)) ||
+    /\b(?:latest|newest|most recent|current|older|previous|other|first|second|third|pending|saved|draft|preview|that one|this one)\b/i.test(
+      normalized,
+    )
+  );
+}
+
 function resolveLatestGoogleEmailTaskTarget(
   state: GoogleConversationState,
 ): GoogleEmailConversationTaskTarget | null {
-  const pendingEmailTask =
-    state.pendingTask && isGoogleEmailDraftPreview(state.pendingTask.preview)
-      ? {
-          source: "pending" as const,
-          taskId: state.pendingTask.taskId,
-          preview: state.pendingTask.preview,
-          messageIndex: state.pendingTask.messageIndex,
-        }
-      : null;
-  const recentEmailTask =
-    state.recentEmailTask && isGoogleEmailDraftPreview(state.recentEmailTask.preview)
-      ? {
-          source: "recent" as const,
-          taskId: state.recentEmailTask.taskId,
-          preview: state.recentEmailTask.preview,
-          result: state.recentEmailTask.result,
-          messageIndex: state.recentEmailTask.messageIndex,
-        }
-      : null;
-
-  if (!pendingEmailTask) return recentEmailTask;
-  if (!recentEmailTask) return pendingEmailTask;
-  return pendingEmailTask.messageIndex > recentEmailTask.messageIndex
-    ? pendingEmailTask
-    : recentEmailTask;
+  return state.emailDraftCandidates[0] ?? null;
 }
 
 function resolveLatestGoogleConversationState(messages: Message[]): GoogleConversationState {
@@ -6240,8 +6487,11 @@ function resolveLatestGoogleConversationState(messages: Message[]): GoogleConver
     pendingTask: null,
     recentEmailTask: null,
     recentCalendarTask: null,
+    emailDraftCandidates: [],
+    emailAmbiguity: null,
   };
   const seenGoogleTaskIds = new Set<string>();
+  const seenEmailDraftTaskIds = new Set<string>();
 
   for (let idx = messages.length - 1; idx >= 0; idx -= 1) {
     const message = messages[idx];
@@ -6250,11 +6500,28 @@ function resolveLatestGoogleConversationState(messages: Message[]): GoogleConver
     }
 
     const payload = message.uiPayload as AgentMessageUiPayload;
+    if (payload.kind === "agent_google_email_ambiguity") {
+      if (
+        !state.emailAmbiguity &&
+        !state.pendingTask &&
+        state.emailDraftCandidates.length === 0 &&
+        !state.composeSession &&
+        isGoogleEmailAmbiguityPromptPayload(payload.ambiguity)
+      ) {
+        state.emailAmbiguity = {
+          messageId: message.id,
+          prompt: payload.ambiguity,
+        };
+      }
+      continue;
+    }
+
     if (payload.kind === "agent_approval") {
       const preview = getGoogleActionPreviewOrNull(payload.googleActionPreview ?? null);
+      const isFreshGoogleTaskId = !seenGoogleTaskIds.has(payload.taskId);
       if (
         preview &&
-        !seenGoogleTaskIds.has(payload.taskId) &&
+        isFreshGoogleTaskId &&
         payload.approval.status === "pending" &&
         !state.pendingTask
       ) {
@@ -6264,6 +6531,21 @@ function resolveLatestGoogleConversationState(messages: Message[]): GoogleConver
           messageIndex: idx,
         };
         seenGoogleTaskIds.add(payload.taskId);
+      }
+      if (
+        preview &&
+        isFreshGoogleTaskId &&
+        payload.approval.status === "pending" &&
+        !seenEmailDraftTaskIds.has(payload.taskId) &&
+        isGoogleEmailDraftPreview(preview)
+      ) {
+        state.emailDraftCandidates.push({
+          source: "pending",
+          taskId: payload.taskId,
+          preview,
+          messageIndex: idx,
+        });
+        seenEmailDraftTaskIds.add(payload.taskId);
       }
       continue;
     }
@@ -6286,6 +6568,19 @@ function resolveLatestGoogleConversationState(messages: Message[]): GoogleConver
           preview,
           messageIndex: idx,
         };
+        if (
+          preview &&
+          !seenEmailDraftTaskIds.has(payload.task.id) &&
+          isGoogleEmailDraftPreview(preview)
+        ) {
+          state.emailDraftCandidates.push({
+            source: "pending",
+            taskId: payload.task.id,
+            preview,
+            messageIndex: idx,
+          });
+          seenEmailDraftTaskIds.add(payload.task.id);
+        }
         continue;
       }
       if (payload.task.status === "completed" && preview) {
@@ -6296,6 +6591,19 @@ function resolveLatestGoogleConversationState(messages: Message[]): GoogleConver
             result,
             messageIndex: idx,
           };
+        }
+        if (
+          !seenEmailDraftTaskIds.has(payload.task.id) &&
+          isActionableRecentGoogleEmailDraftTask(preview, result)
+        ) {
+          state.emailDraftCandidates.push({
+            source: "recent",
+            taskId: payload.task.id,
+            preview,
+            result,
+            messageIndex: idx,
+          });
+          seenEmailDraftTaskIds.add(payload.task.id);
         }
         if (
           !state.recentCalendarTask &&
@@ -6384,6 +6692,9 @@ function shouldBypassGenericAgentTaskForGoogleAction(params: {
 }): boolean {
   const state = resolveLatestGoogleConversationState(params.conversationMessages);
   const latestEmailTaskTarget = resolveLatestGoogleEmailTaskTarget(state);
+  if (state.emailAmbiguity) {
+    return true;
+  }
   if (state.composeSession) {
     return true;
   }
@@ -6440,6 +6751,32 @@ async function createGoogleComposeSessionAssistantMessage(params: {
     text: params.text,
     partIndex: 0,
     uiPayload: toGoogleComposeSessionUiPayload(params.session, params.text),
+  });
+}
+
+function toGoogleEmailAmbiguityUiPayload(
+  ambiguity: GoogleEmailAmbiguityPrompt,
+  text: string,
+): Extract<AgentMessageUiPayload, { kind: "agent_google_email_ambiguity" }> {
+  return {
+    kind: "agent_google_email_ambiguity",
+    ambiguity,
+    text,
+  };
+}
+
+async function createGoogleEmailAmbiguityAssistantMessage(params: {
+  storage: typeof storage;
+  conversationId: string;
+  ambiguity: GoogleEmailAmbiguityPrompt;
+  text: string;
+}) {
+  return params.storage.createMessage({
+    conversationId: params.conversationId,
+    sender: "assistant",
+    text: params.text,
+    partIndex: 0,
+    uiPayload: toGoogleEmailAmbiguityUiPayload(params.ambiguity, params.text),
   });
 }
 
@@ -6684,6 +7021,174 @@ async function maybePrepareGoogleDetailReadReply(params: {
   return null;
 }
 
+async function handleResolvedGoogleEmailFollowUp(params: {
+  storage: typeof storage;
+  userId: string;
+  conversationId: string;
+  requestedByMessageId: string;
+  userCreatedAt: Date | null;
+  action: "send" | "revise";
+  instructionText: string;
+  targetTaskId: string;
+  targetPreview?: GoogleActionPreview | null;
+  onEvent?: (event: AgentTaskEvent) => void;
+}) {
+  const task = await params.storage.getAgentTaskById(params.targetTaskId);
+  if (!task || task.userId !== params.userId) {
+    return { handled: false as const };
+  }
+
+  if (params.action === "send") {
+    if (task.status === "approval_required") {
+      const pendingApproval = await params.storage.getPendingAgentApproval(task.id);
+      if (!pendingApproval) {
+        return { handled: false as const };
+      }
+
+      await promotePendingGoogleEmailTaskToSend({
+        storage: params.storage,
+        taskId: task.id,
+        userId: params.userId,
+      });
+
+      const approvedTask = await approveAndExecuteGoogleActionTask({
+        storage: params.storage,
+        taskId: task.id,
+        userId: params.userId,
+        onEvent: params.onEvent,
+      });
+
+      const assistantMessages = await collectRecentAssistantTaskMessages({
+        conversationId: params.conversationId,
+        taskId: task.id,
+        userId: params.userId,
+        userCreatedAt: params.userCreatedAt,
+      });
+
+      const finalizedAssistantMessages =
+        assistantMessages.length > 0
+          ? assistantMessages
+          : [
+              {
+                id: `google-action-approved-${task.id}`,
+                conversationId: params.conversationId,
+                sender: "assistant",
+                turnId: randomUUID(),
+                partIndex: 0,
+                text: "Approval received. Applying it now.",
+                createdAt: new Date(),
+                attachments: [],
+                uiPayload: {
+                  kind: "agent_task_status",
+                  task: approvedTask,
+                  text: "Approved and running",
+                  googleActionPreview: params.targetPreview ?? null,
+                },
+              },
+            ];
+
+      return {
+        handled: true as const,
+        kind: "ready" as const,
+        assistantMessages: finalizedAssistantMessages,
+        legacyAssistantMessage: makeLegacyAssistantMessage(
+          finalizedAssistantMessages,
+        ),
+        model: "google_action_task_send_v1",
+        decisionPath: "agent_task" as const,
+        decisionPathReason: "task_started" as const,
+        awaitingApproval: false,
+        task: approvedTask,
+      };
+    }
+
+    const run = await startFollowUpGoogleEmailSendTask({
+      storage: params.storage,
+      taskId: task.id,
+      userId: params.userId,
+      conversationId: params.conversationId,
+      requestedByMessageId: params.requestedByMessageId,
+      onEvent: params.onEvent,
+    });
+
+    const assistantMessages = await collectRecentAssistantTaskMessages({
+      conversationId: params.conversationId,
+      taskId: run.task.id,
+      userId: params.userId,
+      userCreatedAt: params.userCreatedAt,
+    });
+
+    return {
+      handled: true as const,
+      kind: "ready" as const,
+      assistantMessages,
+      legacyAssistantMessage: makeLegacyAssistantMessage(assistantMessages),
+      model: "google_action_task_send_followup_v1",
+      decisionPath: "agent_task" as const,
+      decisionPathReason: "task_started" as const,
+      awaitingApproval: run.awaitingApproval,
+      task: run.task,
+    };
+  }
+
+  if (task.status === "approval_required") {
+    const revised = await revisePendingGoogleEmailTask({
+      storage: params.storage,
+      taskId: task.id,
+      userId: params.userId,
+      instructionText: params.instructionText,
+    });
+
+    const assistantMessages = await collectRecentAssistantTaskMessages({
+      conversationId: params.conversationId,
+      taskId: revised.task.id,
+      userId: params.userId,
+      userCreatedAt: params.userCreatedAt,
+    });
+
+    return {
+      handled: true as const,
+      kind: "ready" as const,
+      assistantMessages,
+      legacyAssistantMessage: makeLegacyAssistantMessage(assistantMessages),
+      model: "google_action_task_revised_v1",
+      decisionPath: "agent_task" as const,
+      decisionPathReason: "task_started" as const,
+      awaitingApproval: true,
+      task: revised.task,
+    };
+  }
+
+  const run = await startFollowUpGoogleEmailRevisionTask({
+    storage: params.storage,
+    taskId: task.id,
+    userId: params.userId,
+    conversationId: params.conversationId,
+    requestedByMessageId: params.requestedByMessageId,
+    instructionText: params.instructionText,
+    onEvent: params.onEvent,
+  });
+
+  const assistantMessages = await collectRecentAssistantTaskMessages({
+    conversationId: params.conversationId,
+    taskId: run.task.id,
+    userId: params.userId,
+    userCreatedAt: params.userCreatedAt,
+  });
+
+  return {
+    handled: true as const,
+    kind: "ready" as const,
+    assistantMessages,
+    legacyAssistantMessage: makeLegacyAssistantMessage(assistantMessages),
+    model: "google_action_task_saved_draft_revision_v1",
+    decisionPath: "agent_task" as const,
+    decisionPathReason: "task_started" as const,
+    awaitingApproval: run.awaitingApproval,
+    task: run.task,
+  };
+}
+
 async function maybeHandleGoogleActionTask(params: {
   storage: typeof storage;
   userId: string;
@@ -6720,71 +7225,106 @@ async function maybeHandleGoogleActionTask(params: {
     !isGoogleActionDeclineMessage(params.text) &&
     !hasOtherGoogleFollowUpIntent &&
     looksLikeGoogleEmailDraftRevisionInstruction(params.text);
+  const actionableEmailCandidates = googleConversationState.emailDraftCandidates;
+  const emailCandidateResolution = resolveGoogleEmailDraftCandidateFromText({
+    text: params.text,
+    candidates: actionableEmailCandidates,
+  });
+  const looksLikeAmbiguityReply =
+    looksLikeGoogleEmailAmbiguitySelectionText(params.text) ||
+    isGoogleActionSendMessage(params.text) ||
+    looksLikeGoogleEmailDraftRevisionInstruction(params.text);
 
-  if (
-    latestEmailTaskTarget?.source === "recent" &&
-    latestEmailTaskTarget.result?.status === "draft_created"
-  ) {
-    if (wantsEmailSendFollowUp) {
-      const run = await startFollowUpGoogleEmailSendTask({
+  if (googleConversationState.emailAmbiguity) {
+    if (looksLikeAmbiguityReply && emailCandidateResolution.kind === "resolved") {
+      return handleResolvedGoogleEmailFollowUp({
         storage: params.storage,
-        taskId: latestEmailTaskTarget.taskId,
         userId: params.userId,
         conversationId: params.conversationId,
         requestedByMessageId: params.userMessage.id,
+        userCreatedAt: params.userMessage.createdAt,
+        action: googleConversationState.emailAmbiguity.prompt.action,
+        instructionText: googleConversationState.emailAmbiguity.prompt.instructionText,
+        targetTaskId: emailCandidateResolution.candidate.taskId,
+        targetPreview: emailCandidateResolution.candidate.preview,
         onEvent: params.onEvent,
       });
-
-      const assistantMessages = await collectRecentAssistantTaskMessages({
-        conversationId: params.conversationId,
-        taskId: run.task.id,
-        userId: params.userId,
-        userCreatedAt: params.userMessage.createdAt,
-      });
-
-      return {
-        handled: true as const,
-        kind: "ready" as const,
-        assistantMessages,
-        legacyAssistantMessage: makeLegacyAssistantMessage(assistantMessages),
-        model: "google_action_task_send_followup_v1",
-        decisionPath: "agent_task" as const,
-        decisionPathReason: "task_started" as const,
-        awaitingApproval: run.awaitingApproval,
-        task: run.task,
-      };
     }
 
-    if (wantsEmailRevisionFollowUp) {
-      const run = await startFollowUpGoogleEmailRevisionTask({
+    if (looksLikeAmbiguityReply) {
+      const assistantMessage = await createGoogleEmailAmbiguityAssistantMessage({
         storage: params.storage,
-        taskId: latestEmailTaskTarget.taskId,
-        userId: params.userId,
         conversationId: params.conversationId,
-        requestedByMessageId: params.userMessage.id,
+        ambiguity: googleConversationState.emailAmbiguity.prompt,
+        text: "I found more than one recent draft. Which one did you mean?",
+      });
+      const assistantMessages = [assistantMessage];
+      return {
+        handled: true as const,
+        kind: "clarify" as const,
+        assistantMessages,
+        legacyAssistantMessage: makeLegacyAssistantMessage(assistantMessages),
+        model: "google_action_email_ambiguity_v1",
+        decisionPath: "companion_reply" as const,
+        decisionPathReason: "companion" as const,
+        awaitingApproval: false,
+        task: null,
+      };
+    }
+  }
+
+  if (latestEmailTaskTarget && (wantsEmailSendFollowUp || wantsEmailRevisionFollowUp)) {
+    if (
+      actionableEmailCandidates.length > 1 &&
+      emailCandidateResolution.kind !== "resolved"
+    ) {
+      const ambiguity: GoogleEmailAmbiguityPrompt = {
+        action: wantsEmailSendFollowUp ? "send" : "revise",
         instructionText: params.text,
-        onEvent: params.onEvent,
-      });
-
-      const assistantMessages = await collectRecentAssistantTaskMessages({
+        candidates: actionableEmailCandidates
+          .slice(0, 3)
+          .map((candidate, index) =>
+            buildGoogleEmailAmbiguityCandidateFromTarget(candidate, index),
+          ),
+      };
+      const assistantMessage = await createGoogleEmailAmbiguityAssistantMessage({
+        storage: params.storage,
         conversationId: params.conversationId,
-        taskId: run.task.id,
-        userId: params.userId,
-        userCreatedAt: params.userMessage.createdAt,
+        ambiguity,
+        text: wantsEmailSendFollowUp
+          ? "I found a couple of drafts I could send. Which email did you mean?"
+          : "I found a couple of recent drafts. Which email should I update?",
       });
-
+      const assistantMessages = [assistantMessage];
       return {
         handled: true as const,
-        kind: "ready" as const,
+        kind: "clarify" as const,
         assistantMessages,
         legacyAssistantMessage: makeLegacyAssistantMessage(assistantMessages),
-        model: "google_action_task_saved_draft_revision_v1",
-        decisionPath: "agent_task" as const,
-        decisionPathReason: "task_started" as const,
-        awaitingApproval: run.awaitingApproval,
-        task: run.task,
+        model: "google_action_email_ambiguity_v1",
+        decisionPath: "companion_reply" as const,
+        decisionPathReason: "companion" as const,
+        awaitingApproval: false,
+        task: null,
       };
     }
+
+    const resolvedTarget =
+      emailCandidateResolution.kind === "resolved"
+        ? emailCandidateResolution.candidate
+        : latestEmailTaskTarget;
+    return handleResolvedGoogleEmailFollowUp({
+      storage: params.storage,
+      userId: params.userId,
+      conversationId: params.conversationId,
+      requestedByMessageId: params.userMessage.id,
+      userCreatedAt: params.userMessage.createdAt,
+      action: wantsEmailSendFollowUp ? "send" : "revise",
+      instructionText: params.text,
+      targetTaskId: resolvedTarget.taskId,
+      targetPreview: resolvedTarget.preview,
+      onEvent: params.onEvent,
+    });
   }
 
   if (googleConversationState.pendingTask) {
@@ -6934,31 +7474,18 @@ async function maybeHandleGoogleActionTask(params: {
     }
 
     if (wantsDraftRevision) {
-      const revised = await revisePendingGoogleEmailTask({
+      return handleResolvedGoogleEmailFollowUp({
         storage: params.storage,
-        taskId: googleConversationState.pendingTask.taskId,
         userId: params.userId,
-        instructionText: params.text,
-      });
-
-      const assistantMessages = await collectRecentAssistantTaskMessages({
         conversationId: params.conversationId,
-        taskId: revised.task.id,
-        userId: params.userId,
+        requestedByMessageId: params.userMessage.id,
         userCreatedAt: params.userMessage.createdAt,
+        action: "revise",
+        instructionText: params.text,
+        targetTaskId: googleConversationState.pendingTask.taskId,
+        targetPreview: googleConversationState.pendingTask.preview,
+        onEvent: params.onEvent,
       });
-
-      return {
-        handled: true as const,
-        kind: "ready" as const,
-        assistantMessages,
-        legacyAssistantMessage: makeLegacyAssistantMessage(assistantMessages),
-        model: "google_action_task_revised_v1",
-        decisionPath: "agent_task" as const,
-        decisionPathReason: "task_started" as const,
-        awaitingApproval: true,
-        task: revised.task,
-      };
     }
   }
 
