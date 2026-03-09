@@ -20,6 +20,7 @@ interface CliArgs {
   email: string;
   password: string;
   outputDir: string;
+  skipAudioPreflight: boolean;
 }
 
 type LiveTraceEntry = {
@@ -72,57 +73,63 @@ async function main(): Promise<void> {
     await startVoiceSession(page, readTraceBuffer, clearTraceBuffer);
     await assertVoiceStageClosedByDefault(page);
 
-    await clearTraceBuffer();
-    await playLiveFixture(page, "noise_only");
-    await page.waitForTimeout(2400);
-    const noiseTrace = await readTraceBuffer();
-    if (noiseTrace.length > 0) {
-      assert.equal(
-        hasSpeechState(noiseTrace, "user_speaking"),
-        false,
-        "noise_only fixture should not trigger user_speaking",
-      );
-    }
+    let noiseTrace: LiveTraceEntry[] = [];
+    let speechTrace: LiveTraceEntry[] = [];
+    let interruptTrace: LiveTraceEntry[] = [];
 
-    await clearTraceBuffer();
-    await playLiveFixture(page, "speech_burst");
-    await page.waitForTimeout(2800);
-    const speechTrace = await readTraceBuffer();
-    if (speechTrace.length > 0) {
-      assert.equal(
-        hasSpeechState(speechTrace, "candidate_user_speech") ||
-          speechTrace.some((entry) => entry.event === "live.audio.activity_start_sent"),
-        true,
-        "speech_burst should trigger speech candidate or activity start",
-      );
-      assert.equal(
-        hasSpeechState(speechTrace, "user_speaking"),
-        true,
-        "speech_burst should enter user_speaking",
-      );
-    }
+    if (!args.skipAudioPreflight) {
+      await clearTraceBuffer();
+      await playLiveFixture(page, "noise_only");
+      await page.waitForTimeout(2400);
+      noiseTrace = await readTraceBuffer();
+      if (noiseTrace.length > 0) {
+        assert.equal(
+          hasSpeechState(noiseTrace, "user_speaking"),
+          false,
+          "noise_only fixture should not trigger user_speaking",
+        );
+      }
 
-    await clearTraceBuffer();
-    await page.getByTestId("button-interrupt-assistant").click();
-    await page.waitForTimeout(800);
-    const interruptTrace = await readTraceBuffer();
-    if (interruptTrace.length > 0) {
-      assert.equal(
-        interruptTrace.some((entry) =>
-          [
-            "live.assistant.interrupt_requested",
-            "live.assistant.interrupt_ignored_no_assistant_audio",
-            "live.assistant.interrupt_ignored",
-          ].includes(entry.event),
-        ),
-        true,
-        "manual interrupt button should either request interrupt or be explicitly ignored while assistant is idle",
-      );
+      await clearTraceBuffer();
+      await playLiveFixture(page, "speech_burst");
+      await page.waitForTimeout(2800);
+      speechTrace = await readTraceBuffer();
+      if (speechTrace.length > 0) {
+        assert.equal(
+          hasSpeechState(speechTrace, "candidate_user_speech") ||
+            speechTrace.some((entry) => entry.event === "live.audio.activity_start_sent"),
+          true,
+          "speech_burst should trigger speech candidate or activity start",
+        );
+        assert.equal(
+          hasSpeechState(speechTrace, "user_speaking"),
+          true,
+          "speech_burst should enter user_speaking",
+        );
+      }
+
+      await clearTraceBuffer();
+      await page.getByTestId("button-interrupt-assistant").click();
+      await page.waitForTimeout(800);
+      interruptTrace = await readTraceBuffer();
+      if (interruptTrace.length > 0) {
+        assert.equal(
+          interruptTrace.some((entry) =>
+            [
+              "live.assistant.interrupt_requested",
+              "live.assistant.interrupt_ignored_no_assistant_audio",
+              "live.assistant.interrupt_ignored",
+            ].includes(entry.event),
+          ),
+          true,
+          "manual interrupt button should either request interrupt or be explicitly ignored while assistant is idle",
+        );
+      }
     }
 
     await clearTraceBuffer();
     const conversationId = await resolveActiveConversationId(page, args.baseUrl);
-    await seedVoiceStageDraftFixture(args.email, conversationId);
+    await seedVoiceStageFixtures(args.email, conversationId);
     const voiceStageTrace = await assertVoiceStageSurface(page, readTraceBuffer);
 
     const combinedTrace = {
@@ -181,7 +188,7 @@ async function resolveActiveConversationId(
   return conversationId;
 }
 
-async function seedVoiceStageDraftFixture(
+async function seedVoiceStageFixtures(
   email: string,
   conversationId: string,
 ): Promise<void> {
@@ -192,8 +199,9 @@ async function seedVoiceStageDraftFixture(
     .limit(1);
   assert.ok(user?.id, `Expected to find user for ${email}`);
 
-  const prompt = "draft an email to voice-stage@example.com saying hello from voice mode";
-  const preview = {
+  const emailPrompt =
+    "draft an email to voice-stage@example.com saying hello from voice mode";
+  const emailPreview = {
     kind: "email_compose" as const,
     title: "Create email draft",
     summary: "Create an email draft to voice-stage@example.com.",
@@ -207,9 +215,9 @@ async function seedVoiceStageDraftFixture(
       sendAfterApproval: false,
     },
   };
-  const plan = {
+  const emailPlan = {
     version: "google_action_v1" as const,
-    preview,
+    preview: emailPreview,
     execution: {
       kind: "email_compose" as const,
       sendAfterApproval: false,
@@ -219,17 +227,16 @@ async function seedVoiceStageDraftFixture(
       bodyText: "hello from voice mode",
     },
   };
-  const completedAt = new Date();
-  const task = await storage.createAgentTask({
+  const emailTask = await storage.createAgentTask({
     userId: user.id,
     conversationId,
     status: "completed",
     riskLevel: "high",
     taskKind: "google_action",
-    prompt,
+    prompt: emailPrompt,
     requestedByMessageId: randomUUID(),
-    plan,
-    completedAt,
+    plan: emailPlan,
+    completedAt: new Date(Date.now() - 1_000),
   });
 
   await storage.createMessage({
@@ -240,27 +247,98 @@ async function seedVoiceStageDraftFixture(
     uiPayload: {
       kind: "agent_task_status",
       task: {
-        id: task.id,
-        conversationId: task.conversationId,
-        status: task.status,
-        riskLevel: task.riskLevel,
-        taskKind: task.taskKind,
-        prompt: task.prompt,
-        errorMessage: task.errorMessage ?? null,
-        createdAt: task.createdAt,
-        updatedAt: task.updatedAt,
-        completedAt: task.completedAt,
+        id: emailTask.id,
+        conversationId: emailTask.conversationId,
+        status: emailTask.status,
+        riskLevel: emailTask.riskLevel,
+        taskKind: emailTask.taskKind,
+        prompt: emailTask.prompt,
+        errorMessage: emailTask.errorMessage ?? null,
+        createdAt: emailTask.createdAt,
+        updatedAt: emailTask.updatedAt,
+        completedAt: emailTask.completedAt,
       },
       text: "Completed",
-      googleActionPreview: preview,
+      googleActionPreview: emailPreview,
       googleActionResult: {
         kind: "email_compose",
         connector: "gmail",
         status: "draft_created",
         summary: "Created a Gmail draft to voice-stage@example.com.",
-        draftId: `voice-stage-draft-${task.id}`,
-        messageId: `voice-stage-message-${task.id}`,
+        draftId: `voice-stage-draft-${emailTask.id}`,
+        messageId: `voice-stage-message-${emailTask.id}`,
         threadId: null,
+      },
+    },
+  });
+
+  const calendarPrompt = "Book lunch with Alex for March 14th at 2:00 PM";
+  const calendarPreview = {
+    kind: "calendar_create" as const,
+    title: "Create calendar event",
+    summary: "Create a calendar event for lunch with Alex.",
+    connector: "calendar" as const,
+    requiresWriteAccess: true,
+    proposedCalendar: {
+      title: "Lunch with Alex",
+      startTime: "2026-03-14T18:00:00.000Z",
+      endTime: "2026-03-14T19:00:00.000Z",
+      location: "Blue Bottle",
+      descriptionPreview: "Talk through March 14 plans.",
+    },
+    calendarEvent: null,
+  };
+  const calendarPlan = {
+    version: "google_action_v1" as const,
+    preview: calendarPreview,
+    execution: {
+      kind: "calendar_create" as const,
+      title: "Lunch with Alex",
+      startTime: "2026-03-14T18:00:00.000Z",
+      endTime: "2026-03-14T19:00:00.000Z",
+      location: "Blue Bottle",
+      description: "Talk through March 14 plans.",
+    },
+  };
+  const calendarTask = await storage.createAgentTask({
+    userId: user.id,
+    conversationId,
+    status: "completed",
+    riskLevel: "high",
+    taskKind: "google_action",
+    prompt: calendarPrompt,
+    requestedByMessageId: randomUUID(),
+    plan: calendarPlan,
+    completedAt: new Date(),
+  });
+
+  await storage.createMessage({
+    conversationId,
+    sender: "assistant",
+    text: "Created a calendar event for lunch with Alex.",
+    partIndex: 0,
+    uiPayload: {
+      kind: "agent_task_status",
+      task: {
+        id: calendarTask.id,
+        conversationId: calendarTask.conversationId,
+        status: calendarTask.status,
+        riskLevel: calendarTask.riskLevel,
+        taskKind: calendarTask.taskKind,
+        prompt: calendarTask.prompt,
+        errorMessage: calendarTask.errorMessage ?? null,
+        createdAt: calendarTask.createdAt,
+        updatedAt: calendarTask.updatedAt,
+        completedAt: calendarTask.completedAt,
+      },
+      text: "Completed",
+      googleActionPreview: calendarPreview,
+      googleActionResult: {
+        kind: "calendar_create",
+        connector: "calendar",
+        status: "event_created",
+        summary: "Created a calendar event for lunch with Alex.",
+        eventId: `voice-stage-event-${calendarTask.id}`,
       },
     },
   });
@@ -285,9 +363,38 @@ async function assertVoiceStageSurface(
   const stageText = (await stage.textContent()) ?? "";
   assert.match(
     stageText,
-    /(zee mail|create email draft|voice stage hello|voice-stage@example\.com)/i,
-    "Expected the voice task stage to render the seeded Gmail surface",
+    /(zee calendar|create calendar event|lunch with alex|blue bottle)/i,
+    "Expected the voice task stage to prefer the newest calendar surface",
   );
+  await page.waitForSelector('[data-testid="button-voice-stage-surface-1"]', {
+    timeout: 5_000,
+  });
+  await stage.getByTestId("button-google-calendar-quick-open-event").click();
+  await page.waitForSelector('[data-testid="google-calendar-event-dialog"]', {
+    timeout: 5_000,
+  });
+  await page.keyboard.press("Escape");
+  await page.getByTestId("button-voice-stage-surface-1").click();
+  await page.waitForSelector(
+    '[data-testid="voice-task-stage"] [data-testid="button-google-email-quick-open-draft"]',
+    {
+      timeout: 5_000,
+    },
+  );
+  await page.waitForSelector(
+    '[data-testid="voice-task-stage"] [data-testid="google-email-collapsed-card"], [data-testid="voice-task-stage"] [data-testid="google-email-preview-card"]',
+    {
+      timeout: 5_000,
+    },
+  );
+  await stage.getByTestId("button-google-email-quick-open-draft").click();
+  await page.waitForSelector('[data-testid="google-email-draft-dialog"]', {
+    timeout: 5_000,
+  });
+  await page.waitForSelector('[data-testid="input-google-email-draft-to"]', {
+    timeout: 5_000,
+  });
+  await page.keyboard.press("Escape");
 
   let trace = await readTraceBuffer();
   assert.equal(
@@ -304,6 +411,11 @@ async function assertVoiceStageSurface(
     trace.some((entry) => entry.event === "voice.stage.candidate_snapshot"),
     true,
     "Expected a voice.stage.candidate_snapshot trace after the task surface appeared",
+  );
+  assert.equal(
+    trace.some((entry) => entry.event === "voice.stage.surface_selected"),
+    true,
+    "Expected a voice.stage.surface_selected trace after switching surfaces",
   );
 
   await page.getByTestId("button-voice-stage-dismiss").click();
@@ -338,6 +450,7 @@ function parseArgs(argv: string[]): CliArgs {
   let email = "";
   let password = "";
   let outputDir = "";
+  let skipAudioPreflight = false;
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -360,6 +473,10 @@ function parseArgs(argv: string[]): CliArgs {
     if (arg === "--output-dir" && next) {
       outputDir = next;
       index += 1;
+      continue;
+    }
+    if (arg === "--skip-audio-preflight") {
+      skipAudioPreflight = true;
     }
   }
 
@@ -374,6 +491,7 @@ function parseArgs(argv: string[]): CliArgs {
     email,
     password,
     outputDir: resolve(outputDir),
+    skipAudioPreflight,
   };
 }
 

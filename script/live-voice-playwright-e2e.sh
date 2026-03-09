@@ -162,6 +162,7 @@ DATABASE_URL="$TEST_DB_URL" npx tsx script/live-voice-playwright-check.ts \
   --base-url "$BASE_URL" \
   --email "$EMAIL" \
   --password "$PASSWORD" \
-  --output-dir "$PLAYWRIGHT_OUTPUT_DIR"
+  --output-dir "$PLAYWRIGHT_OUTPUT_DIR" \
+  ${LIVE_VOICE_SKIP_AUDIO_PREFLIGHT:+--skip-audio-preflight}
 
 log "PASS"

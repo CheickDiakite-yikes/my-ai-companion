@@ -1374,6 +1374,57 @@ function getGoogleApprovalSecondaryLabel(
   return "Not now";
 }
 
+function getGoogleEmailTaskStatusLabel(params: {
+  failure: TaskFailureSummary | null;
+  googleActionResult: GoogleActionResult | null;
+  googleActionPreview: GoogleActionPreview;
+  approvalPending: boolean;
+  cardStatus: UnifiedAgentTaskCardModel["status"];
+}): string {
+  const proposedEmail = params.googleActionPreview.proposedEmail;
+  return params.failure
+    ? "Failed"
+    : params.googleActionResult?.status === "email_sent"
+      ? "Sent"
+      : params.googleActionResult?.status === "draft_created"
+        ? "Draft saved"
+        : params.approvalPending
+          ? proposedEmail?.sendAfterApproval
+            ? "Needs send approval"
+            : "Needs draft approval"
+          : params.cardStatus === "in_progress"
+            ? proposedEmail?.sendAfterApproval
+              ? "Sending..."
+              : "Saving draft..."
+            : "Draft preview";
+}
+
+function getGoogleCalendarTaskStatusLabel(params: {
+  failure: TaskFailureSummary | null;
+  googleActionResult: GoogleActionResult | null;
+  googleActionPreview: GoogleActionPreview;
+  approvalPending: boolean;
+  cardStatus: UnifiedAgentTaskCardModel["status"];
+}): string {
+  return params.failure
+    ? "Failed"
+    : params.googleActionResult?.status === "event_created"
+      ? "Event created"
+      : params.googleActionResult?.status === "event_updated"
+        ? "Event updated"
+        : params.approvalPending
+          ? "Needs approval"
+          : params.cardStatus === "in_progress"
+            ? params.googleActionPreview.kind === "calendar_update"
+              ? "Updating..."
+              : params.googleActionPreview.kind === "calendar_create"
+                ? "Creating..."
+                : "Loading..."
+            : params.googleActionPreview.kind === "calendar_detail"
+              ? "Details ready"
+              : "Event preview";
+}
+
 function getGoogleComposeStatusMeta(session: GoogleComposeSession): {
   label: string;
   helperText: string;
@@ -1587,6 +1638,91 @@ function getGoogleCalendarPreviewHelper(preview: GoogleActionPreview): string {
     return "Approve to apply this update to Google Calendar.";
   }
   return "Approve to create this on Google Calendar.";
+}
+
+function getVoiceStageCandidateSummary(candidate: VoiceStageCandidate): {
+  title: string;
+  detail: string;
+  connector: "gmail" | "calendar" | null;
+} {
+  if (candidate.kind === "compose_session") {
+    const statusMeta = getGoogleComposeStatusMeta(candidate.session);
+    return {
+      title: "Draft in progress",
+      detail: [
+        candidate.session.recipientEmail
+          ? `To ${candidate.session.recipientEmail}`
+          : "Waiting for recipient",
+        candidate.session.subject?.trim() || "Subject TBD",
+        statusMeta.label,
+      ].join(" • "),
+      connector: "gmail",
+    };
+  }
+
+  if (candidate.kind === "email_ambiguity") {
+    return {
+      title: "Which email?",
+      detail: `${candidate.ambiguity.candidates.length} drafts • ${
+        candidate.ambiguity.action === "send" ? "Choose one to send" : "Choose one to update"
+      }`,
+      connector: "gmail",
+    };
+  }
+
+  const preview = candidate.card.googleActionPreview;
+  const result = candidate.card.googleActionResult;
+  const failure = candidate.card.failure ?? null;
+  const approvalPending =
+    candidate.card.status === "approval_required" &&
+    candidate.card.approval?.status === "pending";
+
+  if (preview?.proposedEmail) {
+    const statusLabel = getGoogleEmailTaskStatusLabel({
+      failure,
+      googleActionResult: result,
+      googleActionPreview: preview,
+      approvalPending,
+      cardStatus: candidate.card.status,
+    });
+    return {
+      title: "Zee Mail",
+      detail: buildGoogleEmailCollapsedSummary({
+        preview,
+        statusLabel,
+      }),
+      connector: "gmail",
+    };
+  }
+
+  if (
+    preview &&
+    preview.connector === "calendar" &&
+    (preview.proposedCalendar || preview.calendarEvent)
+  ) {
+    const statusLabel = getGoogleCalendarTaskStatusLabel({
+      failure,
+      googleActionResult: result,
+      googleActionPreview: preview,
+      approvalPending,
+      cardStatus: candidate.card.status,
+    });
+    return {
+      title: "Zee Calendar",
+      detail: buildGoogleCalendarCollapsedSummary({
+        preview,
+        statusLabel,
+      }),
+      connector: "calendar",
+    };
+  }
+
+  return {
+    title: candidate.card.title,
+    detail: candidate.card.summaryText || candidate.card.prompt,
+    connector:
+      preview?.connector ?? result?.connector ?? null,
+  };
 }
 
 function GoogleEmailComposerPreview(props: {
@@ -2418,21 +2554,13 @@ function GoogleEmailAssistantTaskCard(props: {
     },
   });
 
-  const statusLabel = props.failure
-    ? "Failed"
-    : props.googleActionResult?.status === "email_sent"
-      ? "Sent"
-      : props.googleActionResult?.status === "draft_created"
-        ? "Draft saved"
-        : props.approvalPending
-          ? proposedEmail.sendAfterApproval
-            ? "Needs send approval"
-            : "Needs draft approval"
-          : props.card.status === "in_progress"
-            ? proposedEmail.sendAfterApproval
-              ? "Sending..."
-              : "Saving draft..."
-            : "Draft preview";
+  const statusLabel = getGoogleEmailTaskStatusLabel({
+    failure: props.failure,
+    googleActionResult: props.googleActionResult,
+    googleActionPreview: props.googleActionPreview,
+    approvalPending: props.approvalPending,
+    cardStatus: props.card.status,
+  });
 
   const summaryText =
     props.failure?.reason ||
@@ -2522,6 +2650,24 @@ function GoogleEmailAssistantTaskCard(props: {
             ) : null}
           </div>
           <div className="flex shrink-0 items-center gap-2">
+            {canOpenDraftDialog ? (
+              <button
+                type="button"
+                onClick={() => handleOpenDraftDialog(canEditDraft)}
+                className="rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide transition-colors hover:opacity-90"
+                style={{
+                  borderColor: "rgba(255,255,255,0.2)",
+                  backgroundColor: "rgba(255,255,255,0.1)",
+                  color: "var(--app-on-dark-muted)",
+                }}
+                data-testid="button-google-email-quick-open-draft"
+              >
+                <span className="inline-flex items-center gap-1">
+                  <Pencil className="h-3 w-3" />
+                  {canEditDraft ? "Edit" : "Open"}
+                </span>
+              </button>
+            ) : null}
             <span
               className="rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide"
               style={{
@@ -3102,23 +3248,13 @@ function GoogleCalendarAssistantTaskCard(props: {
     },
   });
 
-  const statusLabel = props.failure
-    ? "Failed"
-    : props.googleActionResult?.status === "event_created"
-      ? "Event created"
-      : props.googleActionResult?.status === "event_updated"
-        ? "Event updated"
-        : props.approvalPending
-          ? "Needs approval"
-          : props.card.status === "in_progress"
-            ? props.googleActionPreview.kind === "calendar_update"
-              ? "Updating..."
-              : props.googleActionPreview.kind === "calendar_create"
-                ? "Creating..."
-                : "Loading..."
-            : props.googleActionPreview.kind === "calendar_detail"
-              ? "Details ready"
-              : "Event preview";
+  const statusLabel = getGoogleCalendarTaskStatusLabel({
+    failure: props.failure,
+    googleActionResult: props.googleActionResult,
+    googleActionPreview: props.googleActionPreview,
+    approvalPending: props.approvalPending,
+    cardStatus: props.card.status,
+  });
 
   const summaryText =
     props.failure?.reason ||
@@ -3224,6 +3360,24 @@ function GoogleCalendarAssistantTaskCard(props: {
             ) : null}
           </div>
           <div className="flex shrink-0 items-center gap-2">
+            {canOpenEventDialog ? (
+              <button
+                type="button"
+                onClick={() => handleOpenEventDialog(canEditEvent)}
+                className="rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide transition-colors hover:opacity-90"
+                style={{
+                  borderColor: "rgba(255,255,255,0.2)",
+                  backgroundColor: "rgba(255,255,255,0.1)",
+                  color: "var(--app-on-dark-muted)",
+                }}
+                data-testid="button-google-calendar-quick-open-event"
+              >
+                <span className="inline-flex items-center gap-1">
+                  <Pencil className="h-3 w-3" />
+                  {canEditEvent ? "Edit" : "Open"}
+                </span>
+              </button>
+            ) : null}
             <span
               className="rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide"
               style={{
@@ -4172,10 +4326,16 @@ function buildVoiceStageCandidates(
   });
 
   candidates.sort((a, b) => {
+    if (a.recencyRank !== b.recencyRank) {
+      return b.recencyRank - a.recencyRank;
+    }
     if (a.activeRank !== b.activeRank) {
       return b.activeRank - a.activeRank;
     }
-    return b.recencyRank - a.recencyRank;
+    if (a.isTerminal !== b.isTerminal) {
+      return a.isTerminal ? 1 : -1;
+    }
+    return a.surfaceKey.localeCompare(b.surfaceKey);
   });
 
   return candidates;
@@ -7166,15 +7326,31 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
   const [dismissedStageSurfaceKey, setDismissedStageSurfaceKey] = useState<string | null>(
     null,
   );
+  const [pinnedVoiceStageSurfaceKey, setPinnedVoiceStageSurfaceKey] = useState<
+    string | null
+  >(null);
+  const [pinnedVoiceStageBaselineRecency, setPinnedVoiceStageBaselineRecency] =
+    useState<number | null>(null);
 
   const voiceStageCandidates = useMemo(
     () => buildVoiceStageCandidates(messages, liveTaskSnapshots),
     [messages, liveTaskSnapshots],
   );
-  const voiceStageSurface = useMemo(
+  const defaultVoiceStageSurface = useMemo(
     () => voiceStageCandidates[0] ?? null,
     [voiceStageCandidates],
   );
+  const voiceStageSurface = useMemo(() => {
+    if (pinnedVoiceStageSurfaceKey) {
+      const pinnedCandidate = voiceStageCandidates.find(
+        (candidate) => candidate.surfaceKey === pinnedVoiceStageSurfaceKey,
+      );
+      if (pinnedCandidate) {
+        return pinnedCandidate;
+      }
+    }
+    return defaultVoiceStageSurface;
+  }, [defaultVoiceStageSurface, pinnedVoiceStageSurfaceKey, voiceStageCandidates]);
   const voiceStageSurfaceKey = voiceStageSurface?.surfaceKey ?? null;
   const voiceStageCandidateTraceKey = useMemo(
     () =>
@@ -7216,6 +7392,8 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
     if (!isActive && wasActive) {
       wasVoiceCallActiveRef.current = false;
       setDismissedStageSurfaceKey(null);
+      setPinnedVoiceStageSurfaceKey(null);
+      setPinnedVoiceStageBaselineRecency(null);
       onTraceStageEvent("session_ended", {
         finalSurfaceKey: voiceStageSurfaceKey,
         finalSurface: summarizeVoiceStageSurface(voiceStageSurface),
@@ -7232,6 +7410,49 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
       setDismissedStageSurfaceKey(null);
     }
   }, [dismissedStageSurfaceKey, voiceStageSurfaceKey]);
+
+  useEffect(() => {
+    if (!pinnedVoiceStageSurfaceKey) return;
+    const pinnedStillVisible = voiceStageCandidates.some(
+      (candidate) => candidate.surfaceKey === pinnedVoiceStageSurfaceKey,
+    );
+    if (!pinnedStillVisible) {
+      setPinnedVoiceStageSurfaceKey(null);
+      setPinnedVoiceStageBaselineRecency(null);
+    }
+  }, [pinnedVoiceStageSurfaceKey, voiceStageCandidates]);
+
+  useEffect(() => {
+    if (
+      !pinnedVoiceStageSurfaceKey ||
+      !defaultVoiceStageSurface ||
+      pinnedVoiceStageBaselineRecency == null
+    ) {
+      return;
+    }
+    const pinnedCandidate = voiceStageCandidates.find(
+      (candidate) => candidate.surfaceKey === pinnedVoiceStageSurfaceKey,
+    );
+    if (!pinnedCandidate) return;
+    if (
+      defaultVoiceStageSurface.surfaceKey !== pinnedVoiceStageSurfaceKey &&
+      defaultVoiceStageSurface.recencyRank > pinnedVoiceStageBaselineRecency
+    ) {
+      setPinnedVoiceStageSurfaceKey(null);
+      setPinnedVoiceStageBaselineRecency(null);
+      onTraceStageEvent("surface_selection_cleared", {
+        reason: "newer_surface_available",
+        previousSurface: summarizeVoiceStageSurface(pinnedCandidate),
+        nextSurface: summarizeVoiceStageSurface(defaultVoiceStageSurface),
+      });
+    }
+  }, [
+    defaultVoiceStageSurface,
+    onTraceStageEvent,
+    pinnedVoiceStageBaselineRecency,
+    pinnedVoiceStageSurfaceKey,
+    voiceStageCandidates,
+  ]);
 
   useEffect(() => {
     if (lastTracedStageCandidateKeyRef.current === voiceStageCandidateTraceKey) {
@@ -7359,6 +7580,16 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
       });
       throw error;
     }
+  };
+
+  const handleSelectVoiceStageSurface = (candidate: VoiceStageCandidate) => {
+    setPinnedVoiceStageSurfaceKey(candidate.surfaceKey);
+    setPinnedVoiceStageBaselineRecency(defaultVoiceStageSurface?.recencyRank ?? candidate.recencyRank);
+    onTraceStageEvent("surface_selected", {
+      previousSurface: summarizeVoiceStageSurface(voiceStageSurface),
+      selectedSurface: summarizeVoiceStageSurface(candidate),
+      selectionMode: "manual",
+    });
   };
 
   const voiceStageTitle =
@@ -7761,6 +7992,7 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
                         {JSON.stringify(
                           {
                             dismissedSurfaceKey: dismissedStageSurfaceKey,
+                            pinnedSurfaceKey: pinnedVoiceStageSurfaceKey,
                             activeSurface: summarizeVoiceStageSurface(
                               voiceStageSurface,
                             ),
@@ -8032,6 +8264,74 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
                           </button>
                         </div>
                       </div>
+
+                      {voiceStageCandidates.length > 1 ? (
+                        <div
+                          className="border-b px-4 py-2.5"
+                          style={{
+                            borderColor:
+                              "color-mix(in srgb, var(--app-soft-card-border) 72%, transparent)",
+                          }}
+                        >
+                          <div
+                            className="mb-2 text-[10px] font-semibold uppercase tracking-[0.18em]"
+                            style={{ color: "var(--app-on-dark-muted)" }}
+                          >
+                            Recent surfaces
+                          </div>
+                          <div className="flex gap-2 overflow-x-auto pb-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                            {voiceStageCandidates.slice(0, 6).map((candidate, index) => {
+                              const candidateSummary = getVoiceStageCandidateSummary(candidate);
+                              const isSelected =
+                                candidate.surfaceKey === voiceStageSurface?.surfaceKey;
+                              return (
+                                <button
+                                  key={candidate.surfaceKey}
+                                  type="button"
+                                  onClick={() => handleSelectVoiceStageSurface(candidate)}
+                                  className="min-w-0 shrink-0 rounded-[1rem] border px-3 py-2 text-left transition-colors hover:opacity-90"
+                                  style={{
+                                    width: "min(16rem, 72vw)",
+                                    borderColor: isSelected
+                                      ? "color-mix(in srgb, var(--app-accent) 42%, rgba(255,255,255,0.28))"
+                                      : "rgba(255,255,255,0.16)",
+                                    backgroundColor: isSelected
+                                      ? "color-mix(in srgb, var(--app-accent) 16%, rgba(255,255,255,0.14))"
+                                      : "rgba(255,255,255,0.08)",
+                                    color: "var(--app-on-dark)",
+                                  }}
+                                  data-testid={`button-voice-stage-surface-${index}`}
+                                >
+                                  <div className="flex min-w-0 items-center gap-2">
+                                    {candidateSummary.connector === "calendar" ? (
+                                      <CalendarDays
+                                        className="h-3.5 w-3.5 shrink-0"
+                                        style={{ color: "var(--app-on-dark-muted)" }}
+                                      />
+                                    ) : (
+                                      <Mail
+                                        className="h-3.5 w-3.5 shrink-0"
+                                        style={{ color: "var(--app-on-dark-muted)" }}
+                                      />
+                                    )}
+                                    <div className="min-w-0">
+                                      <div className="truncate text-[11px] font-semibold">
+                                        {candidateSummary.title}
+                                      </div>
+                                      <div
+                                        className="truncate text-[10px]"
+                                        style={{ color: "var(--app-on-dark-muted)" }}
+                                      >
+                                        {candidateSummary.detail}
+                                      </div>
+                                    </div>
+                                  </div>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ) : null}
 
                       <div className="relative flex-1 overflow-hidden px-3 pb-3 pt-3">
                         <ScrollArea className="h-full pr-2">
