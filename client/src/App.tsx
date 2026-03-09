@@ -7897,6 +7897,53 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
                 </button>
               </div>
             ) : null}
+            {isVoiceCanvasVisible && isVideoEnabled ? (
+              <motion.div
+                initial={{ opacity: 0, y: -8, scale: 0.96 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                transition={{ duration: 0.18, ease: "easeOut" }}
+                className="absolute right-5 top-4 z-30 h-32 w-24 overflow-hidden rounded-[1.4rem] border shadow-2xl"
+                style={{
+                  borderColor:
+                    "color-mix(in srgb, var(--app-soft-card-border) 76%, transparent)",
+                  background:
+                    "linear-gradient(180deg, rgba(0,0,0,0.24), rgba(0,0,0,0.4))",
+                  boxShadow:
+                    "0 18px 36px rgba(0,0,0,0.28), inset 0 1px 0 rgba(255,255,255,0.12)",
+                }}
+                data-testid="voice-stage-camera-pip"
+              >
+                <video
+                  ref={stageVideoPreviewRef}
+                  autoPlay
+                  muted
+                  playsInline
+                  className="h-full w-full object-cover"
+                  style={
+                    cameraFacingMode === "user"
+                      ? { transform: "scaleX(-1)" }
+                      : undefined
+                  }
+                />
+                <div
+                  className="pointer-events-none absolute inset-x-0 bottom-0 h-10"
+                  style={{
+                    background:
+                      "linear-gradient(180deg, transparent, rgba(0,0,0,0.48))",
+                  }}
+                />
+                <button
+                  type="button"
+                  className="absolute right-2 top-2 flex h-8 w-8 items-center justify-center rounded-full bg-black/55 text-white/90 transition-colors hover:bg-black/70"
+                  onClick={onFlipCamera}
+                  disabled={isVideoTransitioning}
+                  aria-label="Switch camera"
+                  data-testid="button-flip-camera"
+                >
+                  <SwitchCamera className="h-4 w-4" />
+                </button>
+              </motion.div>
+            ) : null}
             {isActive ? (
               <div className="w-full h-full flex items-center justify-center px-8">
                 {isVoiceCanvasVisible && voiceStageSurface ? (
@@ -7964,7 +8011,7 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
                               }}
                               data-testid="button-voice-stage-show-camera"
                             >
-                              Show camera
+                              Focus camera
                             </button>
                           ) : null}
                           <button
@@ -7987,35 +8034,8 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
                       </div>
 
                       <div className="relative flex-1 overflow-hidden px-3 pb-3 pt-3">
-                        {isVideoEnabled ? (
-                          <div className="absolute right-4 top-4 z-10 h-28 w-20 overflow-hidden rounded-[1.2rem] border bg-black/40 shadow-lg">
-                            <video
-                              ref={stageVideoPreviewRef}
-                              autoPlay
-                              muted
-                              playsInline
-                              className="h-full w-full object-cover"
-                              style={
-                                cameraFacingMode === "user"
-                                  ? { transform: "scaleX(-1)" }
-                                  : undefined
-                              }
-                            />
-                            <button
-                              type="button"
-                              className="absolute right-1.5 top-1.5 flex h-7 w-7 items-center justify-center rounded-full bg-black/55 text-white/90 transition-colors hover:bg-black/70"
-                              onClick={onFlipCamera}
-                              disabled={isVideoTransitioning}
-                              aria-label="Switch camera"
-                              data-testid="button-flip-camera"
-                            >
-                              <SwitchCamera className="h-3.5 w-3.5" />
-                            </button>
-                          </div>
-                        ) : null}
-
                         <ScrollArea className="h-full pr-2">
-                          <div className={cn("space-y-3", isVideoEnabled ? "pr-24" : "")}>
+                          <div className="space-y-3">
                             {voiceStageSurface.kind === "task" ? (
                               <UnifiedAgentTaskCard
                                 card={voiceStageSurface.card}
