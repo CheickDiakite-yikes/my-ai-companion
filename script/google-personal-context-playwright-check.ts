@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
+import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { chromium, type Browser, type Page } from "playwright";
 import { db, pool } from "../server/db";
 import { encryptGoogleToken } from "../server/google-integration-crypto";
+import { storage } from "../server/storage";
 import { users } from "../shared/models/auth";
 import { googleIntegrations } from "../shared/schema";
 
@@ -90,6 +92,8 @@ async function main(): Promise<void> {
     await verifyWriteEnabledGoogleAssistantState(page, args.outputDir);
     console.log("[google-context-check] approval card compose");
     await verifyApprovalCardComposeFlow(page, args.baseUrl, args.outputDir);
+    console.log("[google-context-check] saved-draft send follow-up");
+    await verifySavedDraftSendFollowUpFlow(page, args.baseUrl, args.email, args.outputDir);
 
     console.log("google-personal-context Playwright checks passed");
     await page.close();
@@ -509,6 +513,165 @@ async function verifyApprovalCardComposeFlow(
     fullPage: true,
   });
   console.log("[google-context-check] approval flow complete");
+}
+
+async function verifySavedDraftSendFollowUpFlow(
+  page: Page,
+  baseUrl: string,
+  email: string,
+  outputDir: string,
+): Promise<void> {
+  const conversationId = await resolveActiveConversationId(page, baseUrl);
+  await seedSavedDraftTaskFixture(email, conversationId);
+  await page.reload({ waitUntil: "networkidle" });
+
+  const unifiedCard = page.locator('[data-testid="agent-unified-task-card"]').last();
+  await unifiedCard.waitFor({ state: "visible", timeout: 20_000 });
+  assert.match(
+    await unifiedCard.innerText(),
+    /team@soulnests\.com/i,
+    "Expected the seeded Gmail draft card to reflect the latest saved recipient",
+  );
+  assert.match(
+    await unifiedCard.innerText(),
+    /draft saved/i,
+    "Expected the seeded Gmail task to appear as a saved draft",
+  );
+
+  const beforeSendPromptMessages = await fetchConversationMessages(
+    page,
+    baseUrl,
+    conversationId,
+  );
+  const beforeSendPromptAssistantCount = beforeSendPromptMessages.filter(
+    (message) => message.sender === "assistant",
+  ).length;
+  const beforeSendComposeCardCount = await page
+    .locator('[data-testid="google-compose-session-card"]')
+    .count();
+
+  await page.getByTestId("input-message").fill("can we send the email please?");
+  await page.getByTestId("input-message").press("Enter");
+
+  const sendFollowUpReply = await waitForLatestAssistantReply({
+    page,
+    baseUrl,
+    conversationId,
+    previousAssistantCount: beforeSendPromptAssistantCount,
+    timeoutMs: 45_000,
+  });
+
+  assert.doesNotMatch(
+    sendFollowUpReply,
+    /who should i send it to/i,
+    "Saved draft follow-up should not fall back into a fresh recipient prompt",
+  );
+
+  const sendUnifiedCard = page.locator('[data-testid="agent-unified-task-card"]').last();
+  await sendUnifiedCard.waitFor({ state: "visible", timeout: 20_000 });
+  const sendButton = page.getByTestId("button-google-email-primary-action").last();
+  await sendButton.waitFor({ state: "visible", timeout: 20_000 });
+  assert.match(
+    (await sendButton.innerText()).trim(),
+    /send email/i,
+    "Expected follow-up send intent to surface a send approval action",
+  );
+  assert.equal(
+    await page.locator('[data-testid="google-compose-session-card"]').count(),
+    beforeSendComposeCardCount,
+    "Saved draft follow-up should not create a new compose-session card",
+  );
+
+  await page.screenshot({
+    path: resolve(outputDir, "google-personal-context-send-follow-up.png"),
+    fullPage: true,
+  });
+}
+
+async function seedSavedDraftTaskFixture(
+  email: string,
+  conversationId: string,
+): Promise<void> {
+  const [user] = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(eq(users.email, email))
+    .limit(1);
+  assert.ok(user?.id, `Expected to find user for ${email}`);
+
+  const prompt = "draft an email to team@soulnests.com saying hi team just wanted to say hello";
+  const preview = {
+    kind: "email_compose" as const,
+    title: "Create email draft",
+    summary: "Create an email draft to team@soulnests.com.",
+    connector: "gmail" as const,
+    requiresWriteAccess: true,
+    proposedEmail: {
+      to: ["team@soulnests.com"],
+      cc: [],
+      subject: "Quick note",
+      bodyPreview: "hi team just wanted to say hello",
+      sendAfterApproval: false,
+    },
+  };
+  const plan = {
+    version: "google_action_v1" as const,
+    preview,
+    execution: {
+      kind: "email_compose" as const,
+      sendAfterApproval: false,
+      to: ["team@soulnests.com"],
+      cc: [],
+      subject: "Quick note",
+      bodyText: "hi team just wanted to say hello",
+    },
+  };
+  const completedAt = new Date();
+
+  const task = await storage.createAgentTask({
+    userId: user.id,
+    conversationId,
+    status: "completed",
+    riskLevel: "high",
+    taskKind: "google_action",
+    prompt,
+    requestedByMessageId: randomUUID(),
+    plan,
+    completedAt,
+  });
+
+  await storage.createMessage({
+    conversationId,
+    sender: "assistant",
+    text: "Created a Gmail draft to team@soulnests.com.",
+    partIndex: 0,
+    uiPayload: {
+      kind: "agent_task_status",
+      task: {
+        id: task.id,
+        conversationId: task.conversationId,
+        status: task.status,
+        riskLevel: task.riskLevel,
+        taskKind: task.taskKind,
+        prompt: task.prompt,
+        errorMessage: task.errorMessage ?? null,
+        createdAt: task.createdAt,
+        updatedAt: task.updatedAt,
+        completedAt: task.completedAt,
+      },
+      text: "Completed",
+      googleActionPreview: preview,
+      googleActionResult: {
+        kind: "email_compose",
+        connector: "gmail",
+        status: "draft_created",
+        summary: "Created a Gmail draft to team@soulnests.com.",
+        draftId: `fixture-draft-${task.id}`,
+        messageId: `fixture-message-${task.id}`,
+        threadId: null,
+      },
+    },
+  });
 }
 
 function scopesForMode(mode: GoogleFixtureScopeMode): string[] {

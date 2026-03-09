@@ -1176,6 +1176,48 @@ function taskPlanFromTask(task: AgentTask): StoredGoogleActionPlan {
   return task.plan as StoredGoogleActionPlan;
 }
 
+function buildSendVariantFromPlan(
+  plan: StoredGoogleActionPlan,
+): { preview: GoogleActionPreview; plan: StoredGoogleActionPlan } {
+  if (
+    plan.execution.kind !== "email_compose" &&
+    plan.execution.kind !== "email_reply"
+  ) {
+    throw new Error("Task is not an email draft");
+  }
+
+  if (plan.execution.sendAfterApproval) {
+    return { preview: plan.preview, plan };
+  }
+
+  const preview: GoogleActionPreview = {
+    ...plan.preview,
+    title: plan.execution.kind === "email_reply" ? "Send email reply" : "Send email",
+    summary:
+      plan.execution.kind === "email_reply"
+        ? `Send a reply to ${plan.execution.to.join(", ")}.`
+        : `Send an email to ${plan.execution.to.join(", ")}.`,
+    proposedEmail: plan.preview.proposedEmail
+      ? {
+          ...plan.preview.proposedEmail,
+          sendAfterApproval: true,
+        }
+      : null,
+  };
+
+  return {
+    preview,
+    plan: {
+      ...plan,
+      preview,
+      execution: {
+        ...plan.execution,
+        sendAfterApproval: true,
+      },
+    },
+  };
+}
+
 export async function promotePendingGoogleEmailTaskToSend(params: {
   storage: IStorage;
   taskId: string;
@@ -1195,36 +1237,40 @@ export async function promotePendingGoogleEmailTaskToSend(params: {
     return toTaskSummary(task);
   }
 
-  const nextPreview: GoogleActionPreview = {
-    ...plan.preview,
-    title: plan.execution.kind === "email_reply" ? "Send email reply" : "Send email",
-    summary:
-      plan.execution.kind === "email_reply"
-        ? `Send a reply to ${plan.execution.to.join(", ")}.`
-        : `Send an email to ${plan.execution.to.join(", ")}.`,
-    proposedEmail: plan.preview.proposedEmail
-      ? {
-          ...plan.preview.proposedEmail,
-          sendAfterApproval: true,
-        }
-      : null,
-  };
-
-  const nextPlan: StoredGoogleActionPlan = {
-    ...plan,
-    preview: nextPreview,
-    execution: {
-      ...plan.execution,
-      sendAfterApproval: true,
-    },
-  };
+  const next = buildSendVariantFromPlan(plan);
 
   const updated = await params.storage.updateAgentTaskStatus({
     taskId: task.id,
     status: task.status,
-    plan: nextPlan,
+    plan: next.plan,
   });
   return toTaskSummary(updated ?? task);
+}
+
+export async function startFollowUpGoogleEmailSendTask(params: {
+  storage: IStorage;
+  taskId: string;
+  userId: string;
+  conversationId: string;
+  requestedByMessageId: string;
+  onEvent?: (event: AgentTaskEvent) => void;
+}): Promise<{ task: AgentTaskSummary; awaitingApproval: true }> {
+  const task = await params.storage.getAgentTaskById(params.taskId);
+  if (!task || task.userId !== params.userId) {
+    throw new Error("Task not found");
+  }
+
+  const next = buildSendVariantFromPlan(taskPlanFromTask(task));
+  return startGoogleActionTaskRun({
+    storage: params.storage,
+    userId: params.userId,
+    conversationId: params.conversationId,
+    prompt: task.prompt,
+    requestedByMessageId: params.requestedByMessageId,
+    preview: next.preview,
+    plan: next.plan,
+    onEvent: params.onEvent,
+  });
 }
 
 export async function approveAndExecuteGoogleActionTask(params: {

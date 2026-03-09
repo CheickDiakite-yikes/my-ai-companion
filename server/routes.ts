@@ -58,6 +58,7 @@ import type {
   CalendarEventItem,
   GoogleDataFailureCode,
   GoogleActionPreview,
+  GoogleActionResult,
   GoogleComposeSession,
   GooglePersonalContextTimeRange,
   InboxDigestItem,
@@ -101,6 +102,7 @@ import {
   detectGoogleActionTaskIntent,
   prepareGoogleActionTask,
   promotePendingGoogleEmailTaskToSend,
+  startFollowUpGoogleEmailSendTask,
   startGoogleActionTaskRun,
 } from "./google-action-tasks";
 import { elapsedMs, getTraceId, trace, traceError } from "./observability";
@@ -6078,6 +6080,12 @@ type GoogleConversationState =
       kind: "pending_task";
       taskId: string;
       preview: GoogleActionPreview | null;
+    }
+  | {
+      kind: "recent_email_task";
+      taskId: string;
+      preview: GoogleActionPreview;
+      result: GoogleActionResult | null;
     };
 
 function isGoogleComposeSessionPayload(value: unknown): value is GoogleComposeSession {
@@ -6119,6 +6127,22 @@ function getGoogleActionPreviewOrNull(value: unknown): GoogleActionPreview | nul
   return value as GoogleActionPreview;
 }
 
+function getGoogleActionResultOrNull(value: unknown): GoogleActionResult | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const result = value as Record<string, unknown>;
+  if (
+    typeof result.kind !== "string" ||
+    typeof result.summary !== "string" ||
+    (result.connector !== "gmail" && result.connector !== "calendar") ||
+    typeof result.status !== "string"
+  ) {
+    return null;
+  }
+  return value as GoogleActionResult;
+}
+
 function resolveLatestGoogleConversationState(messages: Message[]): GoogleConversationState {
   for (let idx = messages.length - 1; idx >= 0; idx -= 1) {
     const message = messages[idx];
@@ -6141,18 +6165,33 @@ function resolveLatestGoogleConversationState(messages: Message[]): GoogleConver
 
     if (payload.kind === "agent_task_status") {
       const preview = getGoogleActionPreviewOrNull(payload.googleActionPreview ?? null);
+      const result = getGoogleActionResultOrNull(payload.googleActionResult ?? null);
       const isGoogleTask =
         payload.task.taskKind === "google_action" ||
         Boolean(preview) ||
-        Boolean(payload.googleActionResult);
+        Boolean(result);
       if (!isGoogleTask) continue;
-      return payload.task.status === "approval_required"
-        ? {
-            kind: "pending_task",
-            taskId: payload.task.id,
-            preview,
-          }
-        : { kind: "none" };
+      if (payload.task.status === "approval_required") {
+        return {
+          kind: "pending_task",
+          taskId: payload.task.id,
+          preview,
+        };
+      }
+      if (
+        payload.task.status === "completed" &&
+        preview?.connector === "gmail" &&
+        Boolean(preview.proposedEmail) &&
+        result?.status === "draft_created"
+      ) {
+        return {
+          kind: "recent_email_task",
+          taskId: payload.task.id,
+          preview,
+          result,
+        };
+      }
+      return { kind: "none" };
     }
 
     if (payload.kind === "agent_google_compose_session") {
@@ -6643,6 +6682,39 @@ async function maybeHandleGoogleActionTask(params: {
         decisionPathReason: "task_started" as const,
         awaitingApproval: false,
         task: approvedTask,
+      };
+    }
+  }
+
+  if (googleConversationState.kind === "recent_email_task") {
+    const wantsSend = isGoogleActionSendMessage(params.text);
+    if (wantsSend) {
+      const run = await startFollowUpGoogleEmailSendTask({
+        storage: params.storage,
+        taskId: googleConversationState.taskId,
+        userId: params.userId,
+        conversationId: params.conversationId,
+        requestedByMessageId: params.userMessage.id,
+        onEvent: params.onEvent,
+      });
+
+      const assistantMessages = await collectRecentAssistantTaskMessages({
+        conversationId: params.conversationId,
+        taskId: run.task.id,
+        userId: params.userId,
+        userCreatedAt: params.userMessage.createdAt,
+      });
+
+      return {
+        handled: true as const,
+        kind: "ready" as const,
+        assistantMessages,
+        legacyAssistantMessage: makeLegacyAssistantMessage(assistantMessages),
+        model: "google_action_task_send_followup_v1",
+        decisionPath: "agent_task" as const,
+        decisionPathReason: "task_started" as const,
+        awaitingApproval: run.awaitingApproval,
+        task: run.task,
       };
     }
   }

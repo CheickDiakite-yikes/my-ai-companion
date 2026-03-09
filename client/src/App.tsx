@@ -2013,6 +2013,127 @@ function GoogleCalendarPreview(props: {
   );
 }
 
+function GoogleComposeSessionCard(props: {
+  session: GoogleComposeSession;
+  text: string;
+}) {
+  const statusMeta = getGoogleComposeStatusMeta(props.session);
+  const toneStyles = getGoogleEmailToneStyles(statusMeta.tone);
+  const recipient = props.session.recipientEmail?.trim() || "Waiting for recipient";
+  const subject = props.session.subject?.trim() || null;
+  const bodyPreview = props.session.bodyPreview?.trim() || null;
+
+  return (
+    <div
+      className="w-full min-w-0 max-w-full space-y-2.5"
+      data-testid="google-compose-session-card"
+      data-compose-status={props.session.status}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <Pencil className="h-4 w-4" />
+            <p className="text-sm font-semibold">Draft in progress</p>
+          </div>
+          <p className="mt-2 text-xs leading-5 opacity-80">{props.text}</p>
+        </div>
+        <div
+          className="shrink-0 rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide"
+          style={{
+            borderColor: toneStyles.borderColor,
+            backgroundColor: toneStyles.backgroundColor,
+            color: toneStyles.textColor,
+          }}
+        >
+          {statusMeta.label}
+        </div>
+      </div>
+
+      <div
+        className="w-full min-w-0 max-w-full rounded-[1.35rem] border p-3"
+        style={{
+          borderColor: "rgba(255,255,255,0.18)",
+          backgroundColor: "rgba(255,255,255,0.12)",
+          boxShadow: "0 10px 20px rgba(0,0,0,0.1), inset 0 1px 0 rgba(255,255,255,0.1)",
+        }}
+        data-testid="google-compose-session-preview"
+      >
+        <div className="flex flex-wrap items-center gap-2">
+          <div
+            className="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-[0.14em]"
+            style={{
+              borderColor: "rgba(255,255,255,0.28)",
+              backgroundColor: "rgba(255,255,255,0.82)",
+              color: "#173b40",
+            }}
+          >
+            <Mail className="h-3 w-3" />
+            Zee Mail
+          </div>
+          <div
+            className="inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide"
+            style={{
+              borderColor: toneStyles.borderColor,
+              backgroundColor: toneStyles.backgroundColor,
+              color: toneStyles.textColor,
+            }}
+          >
+            <Clock3 className="h-3 w-3" />
+            {statusMeta.label}
+          </div>
+        </div>
+
+        <div className="mt-3 grid gap-2">
+          <div
+            className="flex items-center gap-2 rounded-[0.95rem] border px-3 py-2"
+            style={{
+              borderColor: "rgba(255,255,255,0.24)",
+              backgroundColor: "rgba(255,255,255,0.8)",
+              color: "#173b40",
+            }}
+          >
+            <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.18em] opacity-55">
+              To
+            </span>
+            <span className="min-w-0 break-all text-sm">{recipient}</span>
+          </div>
+
+          {subject ? (
+            <div
+              className="flex items-center gap-2 rounded-[0.95rem] border px-3 py-2"
+              style={{
+                borderColor: "rgba(255,255,255,0.24)",
+                backgroundColor: "rgba(255,255,255,0.8)",
+                color: "#173b40",
+              }}
+            >
+              <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.18em] opacity-55">
+                Subject
+              </span>
+              <span className="min-w-0 text-sm">{subject}</span>
+            </div>
+          ) : null}
+
+          <div
+            className="rounded-[1rem] border px-3 py-2.5 text-sm leading-5"
+            style={{
+              borderColor: "rgba(255,255,255,0.24)",
+              backgroundColor: "rgba(255,255,255,0.72)",
+              color: "#234247",
+            }}
+          >
+            {bodyPreview ? (
+              <p className="line-clamp-3 whitespace-pre-wrap break-words">{bodyPreview}</p>
+            ) : (
+              <p className="opacity-65">{statusMeta.helperText}</p>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function GoogleEmailAssistantTaskCard(props: {
   card: UnifiedAgentTaskCardModel;
   googleActionPreview: GoogleActionPreview;
@@ -8207,34 +8328,10 @@ const TextView = ({
                         )}
                       </div>
                     ) : isGoogleComposeSessionPayload(msg.uiPayload) ? (
-                      <div
-                        className="space-y-3"
-                        data-testid="google-compose-session-card"
-                        data-compose-status={msg.uiPayload.session.status}
-                      >
-                        <div className="flex items-center gap-2">
-                          <Pencil className="h-4 w-4" />
-                          <p className="text-sm font-semibold">Draft in progress</p>
-                        </div>
-                        <p className="text-xs opacity-80">{msg.uiPayload.text}</p>
-                        <GoogleEmailComposerPreview
-                          to={
-                            msg.uiPayload.session.recipientEmail
-                              ? [msg.uiPayload.session.recipientEmail]
-                              : []
-                          }
-                          subject={msg.uiPayload.session.subject}
-                          bodyPreview={msg.uiPayload.session.bodyPreview}
-                          statusLabel={
-                            getGoogleComposeStatusMeta(msg.uiPayload.session).label
-                          }
-                          helperText={
-                            getGoogleComposeStatusMeta(msg.uiPayload.session).helperText
-                          }
-                          tone={getGoogleComposeStatusMeta(msg.uiPayload.session).tone}
-                          testId="google-compose-session-preview"
-                        />
-                      </div>
+                      <GoogleComposeSessionCard
+                        session={msg.uiPayload.session}
+                        text={msg.uiPayload.text}
+                      />
                     ) : isAgentTaskStatusPayload(msg.uiPayload) ? (
                       <div
                         className="space-y-2"
