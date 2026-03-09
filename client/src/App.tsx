@@ -1356,8 +1356,21 @@ function GoogleEmailComposerPreview(props: {
   statusLabel: string;
   helperText: string;
   tone: "pending" | "ready" | "cancelled";
+  primaryAction?: {
+    label: string;
+    onClick: () => void;
+    disabled?: boolean;
+    testId?: string;
+  };
+  secondaryAction?: {
+    label: string;
+    onClick: () => void;
+    disabled?: boolean;
+    testId?: string;
+  };
   testId?: string;
 }) {
+  const [isExpanded, setIsExpanded] = useState(false);
   const statusIcon =
     props.tone === "ready" ? (
       <CheckCircle2 className="h-3 w-3" />
@@ -1377,15 +1390,21 @@ function GoogleEmailComposerPreview(props: {
   const subject = props.subject?.trim() || "Zee will suggest a subject";
   const toLine = props.to.length > 0 ? props.to.join(", ") : "Waiting for recipient";
   const bodyPreview = props.bodyPreview?.trim();
+  const shouldShowBodyToggle =
+    Boolean(bodyPreview) &&
+    ((bodyPreview?.length ?? 0) > 220 || (bodyPreview?.split(/\n+/).length ?? 0) > 5);
+  const hasFooterActions = Boolean(props.primaryAction || props.secondaryAction);
 
   return (
     <div
-      className="relative overflow-hidden rounded-[1.45rem] border p-2.5"
+      className="relative overflow-hidden rounded-[1.45rem] border p-2.5 backdrop-blur-md"
       style={{
-        borderColor: "var(--app-soft-card-border)",
+        borderColor: "rgba(255,255,255,0.22)",
         background:
-          "radial-gradient(120% 120% at 12% 8%, color-mix(in srgb, var(--app-accent) 14%, transparent) 0%, transparent 58%), linear-gradient(180deg, color-mix(in srgb, var(--app-soft-card-bg) 96%, rgba(255,255,255,0.04)), color-mix(in srgb, var(--app-soft-card-bg) 84%, rgba(255,255,255,0.02)))",
-        boxShadow: "0 12px 24px rgba(0, 0, 0, 0.12)",
+          "radial-gradient(115% 130% at 10% 8%, color-mix(in srgb, var(--app-accent) 18%, rgba(255,255,255,0.08)) 0%, transparent 54%), linear-gradient(180deg, rgba(255,255,255,0.16), rgba(255,255,255,0.08))",
+        boxShadow:
+          "0 16px 34px rgba(0, 0, 0, 0.18), inset 0 1px 0 rgba(255,255,255,0.22)",
+        backdropFilter: "blur(18px)",
       }}
       data-testid={props.testId}
     >
@@ -1401,7 +1420,7 @@ function GoogleEmailComposerPreview(props: {
           <div
             className="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-[0.14em]"
             style={{
-              borderColor: "var(--app-soft-card-border)",
+              borderColor: "rgba(255,255,255,0.32)",
               backgroundColor: "rgba(255,255,255,0.78)",
               color: "#173b40",
             }}
@@ -1412,7 +1431,7 @@ function GoogleEmailComposerPreview(props: {
           <div
             className="inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide"
             style={{
-              borderColor: "color-mix(in srgb, var(--app-soft-card-border) 80%, transparent)",
+              borderColor: "rgba(255,255,255,0.26)",
               backgroundColor:
                 props.tone === "pending"
                   ? "color-mix(in srgb, #ead59d 74%, rgba(255,255,255,0.78))"
@@ -1426,18 +1445,20 @@ function GoogleEmailComposerPreview(props: {
         </div>
 
         <div
-          className="space-y-2 rounded-[1.2rem] border p-2.5"
+          className="space-y-2 rounded-[1.2rem] border p-2.5 backdrop-blur-sm"
           style={{
-            borderColor: "color-mix(in srgb, var(--app-soft-card-border) 92%, transparent)",
+            borderColor: "rgba(255,255,255,0.24)",
             background:
-              "linear-gradient(135deg, color-mix(in srgb, #efe5c6 36%, rgba(255,255,255,0.86)), rgba(255,255,255,0.86))",
+              "linear-gradient(135deg, color-mix(in srgb, #efe5c6 28%, rgba(255,255,255,0.66)), rgba(255,255,255,0.58))",
+            boxShadow: "inset 0 1px 0 rgba(255,255,255,0.18)",
           }}
         >
           <div
             className="flex items-center gap-2 rounded-[0.95rem] border px-3 py-2"
             style={{
-              borderColor: "var(--app-soft-card-border)",
-              backgroundColor: "rgba(255,255,255,0.82)",
+              borderColor: "rgba(255,255,255,0.28)",
+              backgroundColor: "rgba(255,255,255,0.52)",
+              backdropFilter: "blur(14px)",
               color: "#173b40",
             }}
           >
@@ -1449,8 +1470,9 @@ function GoogleEmailComposerPreview(props: {
           <div
             className="flex items-center gap-2 rounded-[0.95rem] border px-3 py-2"
             style={{
-              borderColor: "var(--app-soft-card-border)",
-              backgroundColor: "rgba(255,255,255,0.82)",
+              borderColor: "rgba(255,255,255,0.28)",
+              backgroundColor: "rgba(255,255,255,0.52)",
+              backdropFilter: "blur(14px)",
               color: "#173b40",
             }}
           >
@@ -1463,15 +1485,31 @@ function GoogleEmailComposerPreview(props: {
           <div
             className="rounded-[1rem] border px-3 py-3"
             style={{
-              borderColor: "color-mix(in srgb, var(--app-soft-card-border) 92%, transparent)",
+              borderColor: "rgba(255,255,255,0.28)",
               background:
-                "linear-gradient(180deg, rgba(255,255,255,0.92), rgba(247,247,247,0.9))",
+                "linear-gradient(180deg, rgba(255,255,255,0.66), rgba(247,247,247,0.52))",
+              backdropFilter: "blur(16px)",
               color: "#18363c",
             }}
           >
             {bodyPreview ? (
-              <div className="max-h-[124px] overflow-y-auto pr-1">
+              <div
+                className="relative pr-1"
+                style={{
+                  maxHeight: isExpanded ? "220px" : "108px",
+                  overflowY: isExpanded ? "auto" : "hidden",
+                }}
+              >
                 <p className="whitespace-pre-wrap text-sm leading-5">{bodyPreview}</p>
+                {!isExpanded && shouldShowBodyToggle ? (
+                  <div
+                    className="pointer-events-none absolute inset-x-0 bottom-0 h-10"
+                    style={{
+                      background:
+                        "linear-gradient(180deg, rgba(255,255,255,0), rgba(250,250,250,0.96))",
+                    }}
+                  />
+                ) : null}
               </div>
             ) : (
               <div className="space-y-2 py-1 text-sm opacity-55">
@@ -1483,19 +1521,79 @@ function GoogleEmailComposerPreview(props: {
                 </div>
               </div>
             )}
+            {shouldShowBodyToggle ? (
+              <div className="mt-2 flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => setIsExpanded((value) => !value)}
+                  className="rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide transition-colors hover:opacity-90"
+                  style={{
+                    borderColor: "rgba(255,255,255,0.32)",
+                    backgroundColor: "rgba(255,255,255,0.6)",
+                    color: "#38585d",
+                  }}
+                  data-testid={
+                    props.testId ? `${props.testId}-toggle-body` : "google-email-toggle-body"
+                  }
+                >
+                  {isExpanded ? "Show less" : "Show more"}
+                </button>
+              </div>
+            ) : null}
           </div>
 
           <div
-            className="flex items-center gap-2 rounded-[1rem] border px-3 py-2.5 text-[12px]"
+            className="rounded-[1rem] border px-3 py-2.5 text-[12px]"
             style={{
-              borderColor: "var(--app-soft-card-border)",
-              backgroundColor: "rgba(255,255,255,0.82)",
+              borderColor: "rgba(255,255,255,0.28)",
+              backgroundColor: "rgba(255,255,255,0.52)",
+              backdropFilter: "blur(14px)",
               color: "#5f7274",
             }}
           >
-            <MessageSquare className="h-3.5 w-3.5 shrink-0 opacity-70" />
-            <p className="min-w-0 flex-1 leading-5">{props.helperText}</p>
-            <ChevronRight className="h-4 w-4 shrink-0 opacity-45" />
+            <div className="flex items-center gap-2">
+              <MessageSquare className="h-3.5 w-3.5 shrink-0 opacity-70" />
+              <p className="min-w-0 flex-1 leading-5">{props.helperText}</p>
+              {!hasFooterActions ? (
+                <ChevronRight className="h-4 w-4 shrink-0 opacity-45" />
+              ) : null}
+            </div>
+            {hasFooterActions ? (
+              <div className="mt-2 flex flex-wrap justify-end gap-2">
+                {props.secondaryAction ? (
+                  <button
+                    type="button"
+                    onClick={props.secondaryAction.onClick}
+                    disabled={props.secondaryAction.disabled}
+                    className="rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide transition-colors hover:opacity-90 disabled:opacity-55"
+                    style={{
+                      borderColor: "rgba(255,255,255,0.28)",
+                      backgroundColor: "rgba(255,255,255,0.44)",
+                      color: "#4c666a",
+                    }}
+                    data-testid={props.secondaryAction.testId}
+                  >
+                    {props.secondaryAction.label}
+                  </button>
+                ) : null}
+                {props.primaryAction ? (
+                  <button
+                    type="button"
+                    onClick={props.primaryAction.onClick}
+                    disabled={props.primaryAction.disabled}
+                    className="rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide transition-colors hover:opacity-90 disabled:opacity-55"
+                    style={{
+                      borderColor: "rgba(214, 170, 18, 0.42)",
+                      backgroundColor: "color-mix(in srgb, var(--app-accent) 20%, rgba(255,255,255,0.62))",
+                      color: "#7b5a00",
+                    }}
+                    data-testid={props.primaryAction.testId}
+                  >
+                    {props.primaryAction.label}
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
           </div>
         </div>
       </div>
@@ -5694,6 +5792,9 @@ const UnifiedAgentTaskCard = ({
   const googleActionPreview = card.googleActionPreview ?? null;
   const googleActionResult = card.googleActionResult ?? null;
   const hasGoogleActionOutput = Boolean(googleActionPreview || googleActionResult);
+  const hasInlineGoogleEmailApprovalActions = Boolean(
+    approvalPending && googleActionPreview?.proposedEmail,
+  );
 
   const statusTone =
     card.status === "failed"
@@ -6257,6 +6358,30 @@ const UnifiedAgentTaskCard = ({
                                   )
                           }
                           tone={googleActionResult ? "ready" : "pending"}
+                          primaryAction={
+                            hasInlineGoogleEmailApprovalActions
+                              ? {
+                                  label: getGoogleApprovalPrimaryLabel(
+                                    googleActionPreview,
+                                  ),
+                                  onClick: () => void handleApproval(true),
+                                  disabled: isResolvingApproval,
+                                  testId: "button-google-email-primary-action",
+                                }
+                              : undefined
+                          }
+                          secondaryAction={
+                            hasInlineGoogleEmailApprovalActions
+                              ? {
+                                  label: getGoogleApprovalSecondaryLabel(
+                                    googleActionPreview,
+                                  ),
+                                  onClick: () => void handleApproval(false),
+                                  disabled: isResolvingApproval,
+                                  testId: "button-google-email-secondary-action",
+                                }
+                              : undefined
+                          }
                           testId="google-email-preview-card"
                         />
                       )}
@@ -6374,7 +6499,7 @@ const UnifiedAgentTaskCard = ({
                   </div>
                 )}
 
-                {approvalPending && card.approval && (
+                {approvalPending && card.approval && !hasInlineGoogleEmailApprovalActions && (
                   <div
                     className="mt-3 space-y-2 rounded-xl border p-3"
                     style={{
