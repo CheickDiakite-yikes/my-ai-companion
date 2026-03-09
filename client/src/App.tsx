@@ -1315,21 +1315,21 @@ function getGoogleComposeStatusMeta(session: GoogleComposeSession): {
 } {
   if (session.status === "awaiting_recipient") {
     return {
-      label: "Waiting for recipient",
-      helperText: "Reply with an email address so Zee knows who this draft is for.",
+      label: "Waiting...",
+      helperText: "Reply with an email address so Zee knows who this is for.",
       tone: "pending",
     };
   }
   if (session.status === "awaiting_body") {
     return {
-      label: "Waiting for message",
+      label: "Waiting...",
       helperText: "Tell Zee what you want to say and she will turn it into a send-ready draft.",
       tone: "pending",
     };
   }
   if (session.status === "cancelled") {
     return {
-      label: "Draft cancelled",
+      label: "Cancelled",
       helperText: "That compose flow is closed. Start a new draft whenever you want.",
       tone: "cancelled",
     };
@@ -1380,12 +1380,12 @@ function GoogleEmailComposerPreview(props: {
 
   return (
     <div
-      className="relative overflow-hidden rounded-[1.35rem] border p-3"
+      className="relative overflow-hidden rounded-[1.45rem] border p-2.5"
       style={{
         borderColor: "var(--app-soft-card-border)",
         background:
-          "radial-gradient(120% 120% at 12% 8%, color-mix(in srgb, var(--app-accent) 18%, transparent) 0%, transparent 58%), linear-gradient(180deg, color-mix(in srgb, var(--app-soft-card-bg) 96%, rgba(255,255,255,0.04)), color-mix(in srgb, var(--app-soft-card-bg) 82%, rgba(255,255,255,0.02)))",
-        boxShadow: "0 14px 28px rgba(0, 0, 0, 0.14)",
+          "radial-gradient(120% 120% at 12% 8%, color-mix(in srgb, var(--app-accent) 14%, transparent) 0%, transparent 58%), linear-gradient(180deg, color-mix(in srgb, var(--app-soft-card-bg) 96%, rgba(255,255,255,0.04)), color-mix(in srgb, var(--app-soft-card-bg) 84%, rgba(255,255,255,0.02)))",
+        boxShadow: "0 12px 24px rgba(0, 0, 0, 0.12)",
       }}
       data-testid={props.testId}
     >
@@ -1396,23 +1396,27 @@ function GoogleEmailComposerPreview(props: {
             "linear-gradient(90deg, transparent, color-mix(in srgb, var(--app-accent) 46%, transparent), transparent)",
         }}
       />
-      <div className="relative space-y-3">
-        <div className="flex items-center justify-between gap-2">
+      <div className="relative space-y-2.5">
+        <div className="flex flex-wrap items-center gap-2">
           <div
-            className="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em]"
+            className="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-[0.14em]"
             style={{
               borderColor: "var(--app-soft-card-border)",
-              backgroundColor: "color-mix(in srgb, var(--app-soft-card-bg) 76%, transparent)",
+              backgroundColor: "rgba(255,255,255,0.78)",
+              color: "#173b40",
             }}
           >
             <Sparkles className="h-3 w-3" />
             Zee Mail
           </div>
           <div
-            className="inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[10px] font-semibold uppercase tracking-wide"
+            className="inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide"
             style={{
               borderColor: "color-mix(in srgb, var(--app-soft-card-border) 80%, transparent)",
-              backgroundColor: "color-mix(in srgb, var(--app-soft-card-bg) 70%, transparent)",
+              backgroundColor:
+                props.tone === "pending"
+                  ? "color-mix(in srgb, #ead59d 74%, rgba(255,255,255,0.78))"
+                  : "rgba(255,255,255,0.78)",
               color: statusColor,
             }}
           >
@@ -1421,61 +1425,78 @@ function GoogleEmailComposerPreview(props: {
           </div>
         </div>
 
-        <div className="grid gap-2 text-[11px]">
-          <div
-            className="rounded-xl border px-3 py-2"
-            style={{
-              borderColor: "var(--app-soft-card-border)",
-              backgroundColor: "color-mix(in srgb, var(--app-soft-card-bg) 72%, transparent)",
-            }}
-          >
-            <p className="font-semibold uppercase tracking-wide opacity-65">To</p>
-            <p className="mt-1 break-words text-sm">{toLine}</p>
-          </div>
-          <div
-            className="rounded-xl border px-3 py-2"
-            style={{
-              borderColor: "var(--app-soft-card-border)",
-              backgroundColor: "color-mix(in srgb, var(--app-soft-card-bg) 72%, transparent)",
-            }}
-          >
-            <p className="font-semibold uppercase tracking-wide opacity-65">Subject</p>
-            <p className="mt-1 text-sm">{subject}</p>
-          </div>
-        </div>
-
         <div
-          className="rounded-[1.15rem] border p-3"
+          className="space-y-2 rounded-[1.2rem] border p-2.5"
           style={{
             borderColor: "color-mix(in srgb, var(--app-soft-card-border) 92%, transparent)",
             background:
-              "linear-gradient(180deg, rgba(255,255,255,0.96), rgba(248,248,248,0.92))",
-            color: "#18363c",
+              "linear-gradient(135deg, color-mix(in srgb, #efe5c6 36%, rgba(255,255,255,0.86)), rgba(255,255,255,0.86))",
           }}
         >
-          {bodyPreview ? (
-            <p className="whitespace-pre-wrap text-sm leading-6">{bodyPreview}</p>
-          ) : (
-            <div className="space-y-2 py-2 text-sm opacity-55">
-              <p>The draft body will appear here.</p>
-              <div className="space-y-1">
-                <div className="h-2 rounded-full bg-black/10" />
-                <div className="h-2 w-5/6 rounded-full bg-black/10" />
-                <div className="h-2 w-2/3 rounded-full bg-black/10" />
-              </div>
-            </div>
-          )}
-        </div>
+          <div
+            className="flex items-center gap-2 rounded-[0.95rem] border px-3 py-2"
+            style={{
+              borderColor: "var(--app-soft-card-border)",
+              backgroundColor: "rgba(255,255,255,0.82)",
+              color: "#173b40",
+            }}
+          >
+            <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.18em] opacity-55">
+              To
+            </span>
+            <span className="min-w-0 break-all text-sm">{toLine}</span>
+          </div>
+          <div
+            className="flex items-center gap-2 rounded-[0.95rem] border px-3 py-2"
+            style={{
+              borderColor: "var(--app-soft-card-border)",
+              backgroundColor: "rgba(255,255,255,0.82)",
+              color: "#173b40",
+            }}
+          >
+            <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.18em] opacity-55">
+              Subject
+            </span>
+            <span className="min-w-0 text-sm">{subject}</span>
+          </div>
 
-        <div
-          className="flex items-start gap-2 rounded-xl border px-3 py-2 text-[11px]"
-          style={{
-            borderColor: "var(--app-soft-card-border)",
-            backgroundColor: "color-mix(in srgb, var(--app-soft-card-bg) 75%, transparent)",
-          }}
-        >
-          <MessageSquare className="mt-0.5 h-3.5 w-3.5 shrink-0 opacity-70" />
-          <p className="leading-5 opacity-80">{props.helperText}</p>
+          <div
+            className="rounded-[1rem] border px-3 py-3"
+            style={{
+              borderColor: "color-mix(in srgb, var(--app-soft-card-border) 92%, transparent)",
+              background:
+                "linear-gradient(180deg, rgba(255,255,255,0.92), rgba(247,247,247,0.9))",
+              color: "#18363c",
+            }}
+          >
+            {bodyPreview ? (
+              <div className="max-h-[124px] overflow-y-auto pr-1">
+                <p className="whitespace-pre-wrap text-sm leading-5">{bodyPreview}</p>
+              </div>
+            ) : (
+              <div className="space-y-2 py-1 text-sm opacity-55">
+                <p>The draft body will appear here.</p>
+                <div className="space-y-1">
+                  <div className="h-2 rounded-full bg-black/10" />
+                  <div className="h-2 w-5/6 rounded-full bg-black/10" />
+                  <div className="h-2 w-2/3 rounded-full bg-black/10" />
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div
+            className="flex items-center gap-2 rounded-[1rem] border px-3 py-2.5 text-[12px]"
+            style={{
+              borderColor: "var(--app-soft-card-border)",
+              backgroundColor: "rgba(255,255,255,0.82)",
+              color: "#5f7274",
+            }}
+          >
+            <MessageSquare className="h-3.5 w-3.5 shrink-0 opacity-70" />
+            <p className="min-w-0 flex-1 leading-5">{props.helperText}</p>
+            <ChevronRight className="h-4 w-4 shrink-0 opacity-45" />
+          </div>
         </div>
       </div>
     </div>
