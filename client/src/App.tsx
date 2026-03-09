@@ -35,7 +35,7 @@ import {
   Clock3,
   Info,
   Loader2,
-  Sparkles,
+  Mail,
   Terminal,
   Maximize2,
   Globe,
@@ -1349,6 +1349,25 @@ function getGoogleEmailPreviewHelper(
     : 'Approve to save this as a Gmail draft. Reply "let\'s send" to send instead.';
 }
 
+function formatGoogleEmailRecipientSummary(recipients: string[]): string {
+  if (recipients.length <= 1) {
+    return recipients[0] ?? "No recipient";
+  }
+  return `${recipients[0]} +${recipients.length - 1}`;
+}
+
+function buildGoogleEmailCollapsedSummary(params: {
+  to: string[];
+  subject: string | null | undefined;
+  statusLabel: string;
+}): string {
+  return [
+    `To ${formatGoogleEmailRecipientSummary(params.to)}`,
+    params.subject?.trim() || "No subject",
+    params.statusLabel,
+  ].join(" • ");
+}
+
 function getGoogleEmailToneStyles(tone: "pending" | "ready" | "cancelled") {
   if (tone === "ready") {
     return {
@@ -1443,7 +1462,7 @@ function GoogleEmailComposerPreview(props: {
               color: "#173b40",
             }}
           >
-            <Sparkles className="h-3 w-3" />
+            <Mail className="h-3 w-3" />
             Zee Mail
           </div>
           <div
@@ -1668,7 +1687,11 @@ function GoogleEmailAssistantTaskCard(props: {
       ? "ready"
       : "pending";
   const statusToneStyles = getGoogleEmailToneStyles(statusTone);
-  const bodySnippet = (proposedEmail.bodyPreview ?? "").replace(/\s+/g, " ").trim();
+  const collapsedSummary = buildGoogleEmailCollapsedSummary({
+    to: proposedEmail.to,
+    subject: proposedEmail.subject,
+    statusLabel,
+  });
 
   return (
     <div
@@ -1681,7 +1704,7 @@ function GoogleEmailAssistantTaskCard(props: {
       <div className="flex items-start justify-between gap-3 px-1">
         <div className="min-w-0">
           <div className="flex items-center gap-1.5">
-            <Sparkles className="h-3.5 w-3.5" style={{ color: "var(--app-on-dark-muted)" }} />
+            <Mail className="h-3.5 w-3.5" style={{ color: "var(--app-on-dark-muted)" }} />
             <p
               className="text-[11px] font-semibold uppercase tracking-[0.16em]"
               style={{ color: "var(--app-on-dark-muted)" }}
@@ -1762,67 +1785,23 @@ function GoogleEmailAssistantTaskCard(props: {
           >
             <div className="grid gap-2">
               <div
-                className="flex items-center gap-3 rounded-[1rem] border px-3 py-2.5"
+                className="flex items-center gap-2 rounded-[1rem] border px-3 py-2.5"
                 style={{
                   borderColor: "rgba(255,255,255,0.16)",
                   backgroundColor: "rgba(255,255,255,0.08)",
                 }}
               >
-                <div className="min-w-0 flex-1">
-                  <p
-                    className="text-[10px] font-semibold uppercase tracking-[0.18em]"
-                    style={{ color: "var(--app-on-dark-muted)" }}
-                  >
-                    To
-                  </p>
-                  <p
-                    className="truncate text-sm font-medium"
-                    style={{ color: "var(--app-on-dark)" }}
-                  >
-                    {proposedEmail.to.join(", ")}
-                  </p>
-                </div>
-                <div
-                  className="h-8 w-px"
-                  style={{ backgroundColor: "rgba(255,255,255,0.14)" }}
+                <Mail
+                  className="h-4 w-4 shrink-0"
+                  style={{ color: "var(--app-on-dark-muted)" }}
                 />
-                <div className="min-w-0 flex-1">
-                  <p
-                    className="text-[10px] font-semibold uppercase tracking-[0.18em]"
-                    style={{ color: "var(--app-on-dark-muted)" }}
-                  >
-                    Subject
-                  </p>
-                  <p
-                    className="truncate text-sm font-medium"
-                    style={{ color: "var(--app-on-dark)" }}
-                  >
-                    {proposedEmail.subject}
-                  </p>
-                </div>
-              </div>
-
-              {bodySnippet ? (
-                <div
-                  className="rounded-[1rem] border px-3 py-2.5 text-xs leading-5"
-                  style={{
-                    borderColor: "rgba(255,255,255,0.16)",
-                    backgroundColor: "rgba(255,255,255,0.08)",
-                    color: "var(--app-on-dark-muted)",
-                  }}
+                <p
+                  className="min-w-0 flex-1 truncate text-sm font-medium"
+                  style={{ color: "var(--app-on-dark)" }}
                 >
-                  <div
-                    style={{
-                      display: "-webkit-box",
-                      WebkitBoxOrient: "vertical",
-                      WebkitLineClamp: 2,
-                      overflow: "hidden",
-                    }}
-                  >
-                    {bodySnippet}
-                  </div>
-                </div>
-              ) : null}
+                  {collapsedSummary}
+                </p>
+              </div>
 
               {props.approvalPending ? (
                 <div className="flex flex-wrap justify-end gap-2">
