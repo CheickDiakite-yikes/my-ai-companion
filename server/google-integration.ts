@@ -1,5 +1,9 @@
 import type {
   CalendarEventItem,
+  GoogleCalendarEventDetail,
+  GoogleEmailMessageDetail,
+  GoogleEmailParticipant,
+  GoogleEmailThreadDetail,
   GooglePersonalContextTimeRange,
   InboxDigestItem,
 } from "@shared/agent";
@@ -40,7 +44,11 @@ interface GoogleCalendarEventsResponse {
     status?: string;
     location?: string;
     description?: string;
-    attendees?: Array<unknown>;
+    attendees?: Array<{
+      email?: string;
+      displayName?: string;
+      responseStatus?: string;
+    }>;
     start?: {
       dateTime?: string;
       date?: string;
@@ -50,6 +58,58 @@ interface GoogleCalendarEventsResponse {
       date?: string;
     };
   }>;
+}
+
+interface GoogleCalendarEventResponse {
+  id?: string;
+  summary?: string;
+  status?: string;
+  location?: string;
+  description?: string;
+  attendees?: Array<{
+    email?: string;
+    displayName?: string;
+    responseStatus?: string;
+  }>;
+  start?: {
+    dateTime?: string;
+    date?: string;
+  };
+  end?: {
+    dateTime?: string;
+    date?: string;
+  };
+}
+
+interface GmailListResponse {
+  messages?: Array<{ id?: string; threadId?: string }>;
+  threads?: Array<{ id?: string; historyId?: string }>;
+  error?: { message?: string };
+}
+
+interface GmailMessagePartBody {
+  data?: string;
+}
+
+interface GmailMessagePart {
+  mimeType?: string;
+  filename?: string;
+  body?: GmailMessagePartBody;
+  headers?: Array<{ name?: string; value?: string }>;
+  parts?: GmailMessagePart[];
+}
+
+interface GmailMessageResponse {
+  id?: string;
+  threadId?: string;
+  snippet?: string;
+  internalDate?: string;
+  payload?: GmailMessagePart;
+}
+
+interface GmailThreadResponse {
+  id?: string;
+  messages?: GmailMessageResponse[];
 }
 
 export type GoogleFetchIssueKind =
@@ -103,6 +163,12 @@ const GOOGLE_AUTH_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_USERINFO_ENDPOINT = "https://www.googleapis.com/oauth2/v3/userinfo";
 const GMAIL_MESSAGES_ENDPOINT =
   "https://gmail.googleapis.com/gmail/v1/users/me/messages";
+const GMAIL_THREADS_ENDPOINT =
+  "https://gmail.googleapis.com/gmail/v1/users/me/threads";
+const GMAIL_DRAFTS_ENDPOINT =
+  "https://gmail.googleapis.com/gmail/v1/users/me/drafts";
+const GMAIL_SEND_ENDPOINT =
+  "https://gmail.googleapis.com/gmail/v1/users/me/messages/send";
 const GOOGLE_CALENDAR_EVENTS_ENDPOINT =
   "https://www.googleapis.com/calendar/v3/calendars/primary/events";
 
@@ -111,8 +177,14 @@ const GOOGLE_TOKEN_REFRESH_BUFFER_MS = 60_000;
 
 export const GOOGLE_GMAIL_READONLY_SCOPE =
   "https://www.googleapis.com/auth/gmail.readonly";
+export const GOOGLE_GMAIL_COMPOSE_SCOPE =
+  "https://www.googleapis.com/auth/gmail.compose";
+export const GOOGLE_GMAIL_SEND_SCOPE =
+  "https://www.googleapis.com/auth/gmail.send";
 export const GOOGLE_CALENDAR_EVENTS_READONLY_SCOPE =
   "https://www.googleapis.com/auth/calendar.events.readonly";
+export const GOOGLE_CALENDAR_EVENTS_WRITE_SCOPE =
+  "https://www.googleapis.com/auth/calendar.events";
 
 const GOOGLE_COMBINED_HINT_PATTERN =
   /\b(what should i know|anything important|key (emails?|messages?|events?)|overview of (my\s+)?(day|week))\b/i;
@@ -431,23 +503,39 @@ function elapsedSince(startedAt: number): number {
   return Date.now() - startedAt;
 }
 
-export function resolveGoogleOAuthScopes(): string[] {
+export function resolveGoogleOAuthScopes(mode: "read" | "write" = "read"): string[] {
   const configured = (process.env.GOOGLE_OAUTH_SCOPES ?? "")
     .split(",")
     .map((value) => value.trim())
     .filter((value) => value.length > 0);
 
   if (configured.length > 0) {
+    if (mode === "write") {
+      const requiredWriteScopes = [
+        GOOGLE_GMAIL_COMPOSE_SCOPE,
+        GOOGLE_GMAIL_SEND_SCOPE,
+        GOOGLE_CALENDAR_EVENTS_WRITE_SCOPE,
+      ];
+      return Array.from(new Set([...configured, ...requiredWriteScopes]));
+    }
     return configured;
   }
 
-  return [
+  const scopes = [
     "openid",
     "email",
     "profile",
     GOOGLE_GMAIL_READONLY_SCOPE,
     GOOGLE_CALENDAR_EVENTS_READONLY_SCOPE,
   ];
+  if (mode === "write") {
+    scopes.push(
+      GOOGLE_GMAIL_COMPOSE_SCOPE,
+      GOOGLE_GMAIL_SEND_SCOPE,
+      GOOGLE_CALENDAR_EVENTS_WRITE_SCOPE,
+    );
+  }
+  return Array.from(new Set(scopes));
 }
 
 export function buildGoogleOAuthConnectUrl(params: {
@@ -848,6 +936,164 @@ function classifyUrgency(params: {
   return "medium";
 }
 
+function parseEmailParticipant(raw: string | undefined): GoogleEmailParticipant | null {
+  const value = raw?.trim();
+  if (!value) return null;
+  const angleMatch = value.match(/^(.*)<([^>]+)>$/);
+  if (angleMatch) {
+    const name = angleMatch[1]?.trim().replace(/^"|"$/g, "") || null;
+    const email = angleMatch[2]?.trim().toLowerCase() || null;
+    return {
+      name,
+      email,
+      raw: value,
+    };
+  }
+  const emailMatch = value.match(
+    /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i,
+  );
+  if (emailMatch?.[0]) {
+    return {
+      name: null,
+      email: emailMatch[0].trim().toLowerCase(),
+      raw: value,
+    };
+  }
+  return {
+    name: value,
+    email: null,
+    raw: value,
+  };
+}
+
+function parseEmailParticipantList(raw: string | undefined): GoogleEmailParticipant[] {
+  if (!raw) return [];
+  return raw
+    .split(/,(?![^<]*>)/)
+    .map((part) => parseEmailParticipant(part))
+    .filter((entry): entry is GoogleEmailParticipant => Boolean(entry));
+}
+
+function decodeBase64Url(value: string | undefined): string {
+  if (!value) return "";
+  try {
+    const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
+    const padding = normalized.length % 4;
+    const padded =
+      padding === 0 ? normalized : normalized + "=".repeat(4 - padding);
+    return Buffer.from(padded, "base64").toString("utf8");
+  } catch {
+    return "";
+  }
+}
+
+function stripHtml(input: string): string {
+  return input
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function collectGmailPartText(
+  part: GmailMessagePart | undefined,
+  plainParts: string[],
+  htmlParts: string[],
+): void {
+  if (!part) return;
+  const mimeType = (part.mimeType ?? "").toLowerCase();
+  const bodyText = decodeBase64Url(part.body?.data);
+  if (bodyText) {
+    if (mimeType === "text/plain") {
+      plainParts.push(bodyText);
+    } else if (mimeType === "text/html") {
+      htmlParts.push(bodyText);
+    }
+  }
+  for (const child of part.parts ?? []) {
+    collectGmailPartText(child, plainParts, htmlParts);
+  }
+}
+
+function extractGmailBodyText(payload: GmailMessagePart | undefined): string | null {
+  if (!payload) return null;
+  const plainParts: string[] = [];
+  const htmlParts: string[] = [];
+  collectGmailPartText(payload, plainParts, htmlParts);
+  const plain = plainParts
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0)
+    .join("\n\n")
+    .trim();
+  if (plain) {
+    return truncateText(plain, 1200);
+  }
+  const html = htmlParts
+    .map((part) => stripHtml(part))
+    .filter((part) => part.length > 0)
+    .join("\n\n")
+    .trim();
+  return truncateText(html, 1200);
+}
+
+function collectAttachmentNames(
+  part: GmailMessagePart | undefined,
+  names: Set<string>,
+): void {
+  if (!part) return;
+  const filename = part.filename?.trim();
+  if (filename) {
+    names.add(filename);
+  }
+  for (const child of part.parts ?? []) {
+    collectAttachmentNames(child, names);
+  }
+}
+
+function toGoogleEmailMessageDetail(
+  message: GmailMessageResponse,
+): GoogleEmailMessageDetail {
+  const headers = message.payload?.headers;
+  const subject = pickHeader(headers, "Subject") || "(No subject)";
+  const from = parseEmailParticipant(pickHeader(headers, "From"));
+  const to = parseEmailParticipantList(pickHeader(headers, "To"));
+  const cc = parseEmailParticipantList(pickHeader(headers, "Cc"));
+  const sentAt =
+    typeof message.internalDate === "string" &&
+    Number.isFinite(Number(message.internalDate))
+      ? new Date(Number(message.internalDate)).toISOString()
+      : null;
+  return {
+    messageId: message.id?.trim() || "unknown-message",
+    from,
+    to,
+    cc,
+    subject,
+    snippet: (message.snippet ?? "").trim(),
+    bodyText: extractGmailBodyText(message.payload),
+    sentAt,
+  };
+}
+
+function dedupeParticipants(
+  input: GoogleEmailParticipant[],
+): GoogleEmailParticipant[] {
+  const seen = new Set<string>();
+  const deduped: GoogleEmailParticipant[] = [];
+  for (const participant of input) {
+    const key = participant.email ?? participant.raw.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(participant);
+  }
+  return deduped;
+}
+
 export async function fetchGmailInboxDigest(params: {
   accessToken: string;
   maxThreads: number;
@@ -984,6 +1230,337 @@ export async function fetchGmailInboxDigest(params: {
   } finally {
     clearTimeout(timeout);
   }
+}
+
+export async function searchGmailInboxDigest(params: {
+  accessToken: string;
+  query: string;
+  maxThreads: number;
+}): Promise<InboxDigestItem[]> {
+  const startedAt = Date.now();
+  const maxThreads = Math.max(1, Math.min(20, Math.floor(params.maxThreads)));
+  const queryText = params.query.trim();
+  if (!queryText) {
+    return [];
+  }
+
+  gmailLog("INFO", "search.start", {
+    maxThreads,
+    query: truncateText(queryText, 120),
+  });
+
+  const abortController = new AbortController();
+  const timeout = setTimeout(() => abortController.abort(), GOOGLE_FETCH_TIMEOUT_MS);
+
+  try {
+    const query = new URLSearchParams({
+      maxResults: String(maxThreads),
+      q: queryText,
+    });
+    const listResponse = await fetch(
+      `${GMAIL_MESSAGES_ENDPOINT}?${query.toString()}`,
+      {
+        headers: {
+          Authorization: `Bearer ${params.accessToken}`,
+        },
+        signal: abortController.signal,
+      },
+    );
+    const listPayload = (await listResponse.json()) as GmailListResponse;
+
+    if (!listResponse.ok) {
+      const apiMessage =
+        listPayload?.error?.message?.trim() || `status ${listResponse.status}`;
+      throw new Error(
+        `Failed to search Gmail threads (status ${listResponse.status}; ${apiMessage})`,
+      );
+    }
+
+    const messageIds = (listPayload.messages ?? [])
+      .map((message) => message.id?.trim())
+      .filter((id): id is string => Boolean(id));
+
+    if (messageIds.length === 0) {
+      gmailLog("INFO", "search.success_empty", {
+        elapsedMs: elapsedSince(startedAt),
+      });
+      return [];
+    }
+
+    const detailPromises = messageIds.slice(0, maxThreads).map(async (messageId) => {
+      const detailQuery = new URLSearchParams({
+        format: "metadata",
+        metadataHeaders: "From",
+      });
+      detailQuery.append("metadataHeaders", "Subject");
+
+      const detailResponse = await fetch(
+        `${GMAIL_MESSAGES_ENDPOINT}/${encodeURIComponent(
+          messageId,
+        )}?${detailQuery.toString()}`,
+        {
+          headers: {
+            Authorization: `Bearer ${params.accessToken}`,
+          },
+          signal: abortController.signal,
+        },
+      );
+
+      if (!detailResponse.ok) {
+        return null;
+      }
+
+      const detailPayload = (await detailResponse.json()) as GmailMessageResponse;
+      const from =
+        pickHeader(detailPayload.payload?.headers, "From") || "Unknown sender";
+      const subject =
+        pickHeader(detailPayload.payload?.headers, "Subject") || "(No subject)";
+      const snippet = (detailPayload.snippet ?? "").trim();
+
+      return {
+        threadId:
+          detailPayload.threadId?.trim() || detailPayload.id?.trim() || messageId,
+        from,
+        subject,
+        snippet,
+        urgency: classifyUrgency({ subject, snippet, from }),
+      } satisfies InboxDigestItem;
+    });
+
+    const resolved = await Promise.all(detailPromises);
+    const items = resolved.filter((item): item is InboxDigestItem => Boolean(item));
+    gmailLog("INFO", "search.success", {
+      returned: items.length,
+      elapsedMs: elapsedSince(startedAt),
+    });
+    return items;
+  } catch (error) {
+    if ((error as { name?: string } | null)?.name === "AbortError") {
+      gmailLog("ERROR", "search.timeout", {
+        elapsedMs: elapsedSince(startedAt),
+      });
+      throw new Error(`Gmail search timed out after ${elapsedSince(startedAt)}ms`);
+    }
+    gmailLog("ERROR", "search.failed", {
+      elapsedMs: elapsedSince(startedAt),
+      message: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+export async function fetchGmailThreadDetail(params: {
+  accessToken: string;
+  threadId: string;
+}): Promise<GoogleEmailThreadDetail> {
+  const startedAt = Date.now();
+  const threadId = params.threadId.trim();
+  if (!threadId) {
+    throw new Error("threadId is required");
+  }
+
+  gmailLog("INFO", "thread.fetch.start", { threadId });
+
+  const abortController = new AbortController();
+  const timeout = setTimeout(() => abortController.abort(), GOOGLE_FETCH_TIMEOUT_MS);
+
+  try {
+    const query = new URLSearchParams({ format: "full" });
+    const response = await fetch(
+      `${GMAIL_THREADS_ENDPOINT}/${encodeURIComponent(threadId)}?${query.toString()}`,
+      {
+        headers: {
+          Authorization: `Bearer ${params.accessToken}`,
+        },
+        signal: abortController.signal,
+      },
+    );
+    const payload = (await response.json()) as GmailThreadResponse;
+    if (!response.ok) {
+      throw new Error(`Failed to fetch Gmail thread (status ${response.status})`);
+    }
+
+    const messages = (payload.messages ?? []).map((message) =>
+      toGoogleEmailMessageDetail(message),
+    );
+    if (messages.length === 0) {
+      throw new Error("Gmail thread did not contain any messages");
+    }
+    const latestMessage = messages[messages.length - 1] ?? messages[0];
+    const participants = dedupeParticipants(
+      messages.flatMap((message) => [
+        ...(message.from ? [message.from] : []),
+        ...message.to,
+        ...message.cc,
+      ]),
+    );
+    const attachmentNames = new Set<string>();
+    for (const message of payload.messages ?? []) {
+      collectAttachmentNames(message.payload, attachmentNames);
+    }
+
+    const detail: GoogleEmailThreadDetail = {
+      threadId,
+      subject: latestMessage.subject,
+      participants,
+      latestMessageId: latestMessage.messageId,
+      latestSnippet: latestMessage.snippet || null,
+      latestSentAt: latestMessage.sentAt,
+      attachmentNames: Array.from(attachmentNames),
+      messages,
+    };
+    gmailLog("INFO", "thread.fetch.success", {
+      threadId,
+      messageCount: messages.length,
+      elapsedMs: elapsedSince(startedAt),
+    });
+    return detail;
+  } catch (error) {
+    if ((error as { name?: string } | null)?.name === "AbortError") {
+      gmailLog("ERROR", "thread.fetch.timeout", {
+        threadId,
+        elapsedMs: elapsedSince(startedAt),
+      });
+      throw new Error(
+        `Gmail thread detail fetch timed out after ${elapsedSince(startedAt)}ms`,
+      );
+    }
+    gmailLog("ERROR", "thread.fetch.failed", {
+      threadId,
+      elapsedMs: elapsedSince(startedAt),
+      message: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function encodeMimeMessage(input: string): string {
+  return Buffer.from(input, "utf8")
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+}
+
+function buildMimeMessage(params: {
+  to: string[];
+  cc?: string[];
+  subject: string;
+  bodyText: string;
+  inReplyTo?: string | null;
+  references?: string | null;
+}): string {
+  const lines = [
+    `To: ${params.to.join(", ")}`,
+    ...(params.cc && params.cc.length > 0 ? [`Cc: ${params.cc.join(", ")}`] : []),
+    `Subject: ${params.subject}`,
+    "Content-Type: text/plain; charset=UTF-8",
+    "MIME-Version: 1.0",
+    "Content-Transfer-Encoding: 7bit",
+    ...(params.inReplyTo ? [`In-Reply-To: ${params.inReplyTo}`] : []),
+    ...(params.references ? [`References: ${params.references}`] : []),
+    "",
+    params.bodyText,
+  ];
+  return encodeMimeMessage(lines.join("\r\n"));
+}
+
+export async function createGmailDraft(params: {
+  accessToken: string;
+  to: string[];
+  cc?: string[];
+  subject: string;
+  bodyText: string;
+  threadId?: string | null;
+  inReplyTo?: string | null;
+  references?: string | null;
+}): Promise<{ draftId: string; threadId: string | null; messageId: string | null }> {
+  const response = await fetch(GMAIL_DRAFTS_ENDPOINT, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${params.accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      message: {
+        raw: buildMimeMessage({
+          to: params.to,
+          cc: params.cc,
+          subject: params.subject,
+          bodyText: params.bodyText,
+          inReplyTo: params.inReplyTo,
+          references: params.references,
+        }),
+        ...(params.threadId ? { threadId: params.threadId } : {}),
+      },
+    }),
+  });
+
+  const payload = (await response.json()) as {
+    id?: string;
+    message?: { id?: string; threadId?: string };
+    error?: { message?: string };
+  };
+  if (!response.ok || !payload.id) {
+    throw new Error(
+      payload.error?.message?.trim() ||
+        `Failed to create Gmail draft (status ${response.status})`,
+    );
+  }
+  return {
+    draftId: payload.id.trim(),
+    threadId: payload.message?.threadId?.trim() ?? params.threadId ?? null,
+    messageId: payload.message?.id?.trim() ?? null,
+  };
+}
+
+export async function sendGmailMessage(params: {
+  accessToken: string;
+  to: string[];
+  cc?: string[];
+  subject: string;
+  bodyText: string;
+  threadId?: string | null;
+  inReplyTo?: string | null;
+  references?: string | null;
+}): Promise<{ messageId: string | null; threadId: string | null }> {
+  const response = await fetch(GMAIL_SEND_ENDPOINT, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${params.accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      raw: buildMimeMessage({
+        to: params.to,
+        cc: params.cc,
+        subject: params.subject,
+        bodyText: params.bodyText,
+        inReplyTo: params.inReplyTo,
+        references: params.references,
+      }),
+      ...(params.threadId ? { threadId: params.threadId } : {}),
+    }),
+  });
+  const payload = (await response.json()) as {
+    id?: string;
+    threadId?: string;
+    error?: { message?: string };
+  };
+  if (!response.ok) {
+    throw new Error(
+      payload.error?.message?.trim() ||
+        `Failed to send Gmail message (status ${response.status})`,
+    );
+  }
+  return {
+    messageId: payload.id?.trim() ?? null,
+    threadId: payload.threadId?.trim() ?? params.threadId ?? null,
+  };
 }
 
 export function resolveCalendarTimeRange(params: {
@@ -1151,6 +1728,206 @@ export async function fetchGoogleCalendarEvents(params: {
   } finally {
     clearTimeout(timeout);
   }
+}
+
+function toCalendarEventDetail(
+  item: GoogleCalendarEventResponse,
+  timezone: string,
+): GoogleCalendarEventDetail | null {
+  const eventId = item.id?.trim();
+  if (!eventId) return null;
+
+  const isAllDay = Boolean(item.start?.date && !item.start?.dateTime);
+  const startDate = parseIsoDate(item.start?.date);
+  const endDate = parseIsoDate(item.end?.date);
+
+  const startTime = isAllDay
+    ? startDate
+      ? localDateToUtcIso(startDate, timezone)
+      : item.start?.dateTime ?? new Date().toISOString()
+    : item.start?.dateTime ?? item.start?.date ?? new Date().toISOString();
+
+  const endTime = isAllDay
+    ? endDate
+      ? localDateToUtcIso(endDate, timezone)
+      : item.end?.dateTime ?? item.end?.date ?? startTime
+    : item.end?.dateTime ?? item.end?.date ?? startTime;
+
+  return {
+    eventId,
+    title: item.summary?.trim() || "(Untitled event)",
+    startTime,
+    endTime,
+    isAllDay,
+    location: truncateText(item.location, 200),
+    description: truncateText(item.description, 1200),
+    attendeesCount: Array.isArray(item.attendees) ? item.attendees.length : 0,
+    attendees: Array.isArray(item.attendees)
+      ? item.attendees
+          .map((attendee) => attendee.displayName?.trim() || attendee.email?.trim() || "")
+          .filter((value) => value.length > 0)
+      : [],
+    status: item.status?.trim() || "confirmed",
+  };
+}
+
+export async function fetchGoogleCalendarEventDetail(params: {
+  accessToken: string;
+  eventId: string;
+  timezone: string;
+}): Promise<GoogleCalendarEventDetail> {
+  const timezone = resolveGoogleContextTimeZone(params.timezone);
+  const response = await fetch(
+    `${GOOGLE_CALENDAR_EVENTS_ENDPOINT}/${encodeURIComponent(params.eventId)}`,
+    {
+      headers: {
+        Authorization: `Bearer ${params.accessToken}`,
+      },
+    },
+  );
+  const payload = (await response.json()) as GoogleCalendarEventResponse;
+  if (!response.ok) {
+    throw new Error(`Calendar detail fetch failed with status ${response.status}`);
+  }
+  const detail = toCalendarEventDetail(payload, timezone);
+  if (!detail) {
+    throw new Error("Calendar detail response was missing an event id");
+  }
+  return detail;
+}
+
+export async function searchGoogleCalendarEvents(params: {
+  accessToken: string;
+  query: string;
+  timezone: string;
+  timeRange?: GoogleDataTimeRange;
+  maxEvents?: number;
+}): Promise<GoogleCalendarEventDetail[]> {
+  const timezone = resolveGoogleContextTimeZone(params.timezone);
+  const maxEvents = clamp(Math.floor(params.maxEvents ?? 10), 1, 20);
+  const { timeMin, timeMax } = resolveCalendarTimeRange({
+    timeRange: params.timeRange ?? "next_7_days",
+    timezone,
+  });
+  const query = new URLSearchParams({
+    timeMin,
+    timeMax,
+    singleEvents: "true",
+    orderBy: "startTime",
+    timeZone: timezone,
+    maxResults: String(maxEvents),
+    q: params.query.trim(),
+  });
+  const response = await fetch(
+    `${GOOGLE_CALENDAR_EVENTS_ENDPOINT}?${query.toString()}`,
+    {
+      headers: {
+        Authorization: `Bearer ${params.accessToken}`,
+      },
+    },
+  );
+  const payload = (await response.json()) as GoogleCalendarEventsResponse;
+  if (!response.ok) {
+    throw new Error(`Calendar search failed with status ${response.status}`);
+  }
+  return (payload.items ?? [])
+    .map((item) => toCalendarEventDetail(item, timezone))
+    .filter((item): item is GoogleCalendarEventDetail => Boolean(item));
+}
+
+export async function createGoogleCalendarEvent(params: {
+  accessToken: string;
+  timezone: string;
+  title: string;
+  startTime: string;
+  endTime: string;
+  location?: string | null;
+  description?: string | null;
+}): Promise<GoogleCalendarEventDetail> {
+  const timezone = resolveGoogleContextTimeZone(params.timezone);
+  const response = await fetch(GOOGLE_CALENDAR_EVENTS_ENDPOINT, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${params.accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      summary: params.title,
+      location: params.location ?? undefined,
+      description: params.description ?? undefined,
+      start: {
+        dateTime: params.startTime,
+        timeZone: timezone,
+      },
+      end: {
+        dateTime: params.endTime,
+        timeZone: timezone,
+      },
+    }),
+  });
+  const payload = (await response.json()) as GoogleCalendarEventResponse;
+  if (!response.ok) {
+    throw new Error(`Calendar create failed with status ${response.status}`);
+  }
+  const detail = toCalendarEventDetail(payload, timezone);
+  if (!detail) {
+    throw new Error("Created calendar event was missing an id");
+  }
+  return detail;
+}
+
+export async function updateGoogleCalendarEvent(params: {
+  accessToken: string;
+  timezone: string;
+  eventId: string;
+  title?: string | null;
+  startTime?: string | null;
+  endTime?: string | null;
+  location?: string | null;
+  description?: string | null;
+}): Promise<GoogleCalendarEventDetail> {
+  const timezone = resolveGoogleContextTimeZone(params.timezone);
+  const existing = await fetchGoogleCalendarEventDetail({
+    accessToken: params.accessToken,
+    eventId: params.eventId,
+    timezone,
+  });
+  const response = await fetch(
+    `${GOOGLE_CALENDAR_EVENTS_ENDPOINT}/${encodeURIComponent(params.eventId)}`,
+    {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${params.accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        summary: params.title ?? existing.title,
+        location:
+          params.location === undefined ? existing.location ?? undefined : params.location,
+        description:
+          params.description === undefined
+            ? existing.description ?? undefined
+            : params.description,
+        start: {
+          dateTime: params.startTime ?? existing.startTime,
+          timeZone: timezone,
+        },
+        end: {
+          dateTime: params.endTime ?? existing.endTime,
+          timeZone: timezone,
+        },
+      }),
+    },
+  );
+  const payload = (await response.json()) as GoogleCalendarEventResponse;
+  if (!response.ok) {
+    throw new Error(`Calendar update failed with status ${response.status}`);
+  }
+  const detail = toCalendarEventDetail(payload, timezone);
+  if (!detail) {
+    throw new Error("Updated calendar event was missing an id");
+  }
+  return detail;
 }
 
 function inferTimeRangeFromText(input: string): GoogleDataTimeRange {

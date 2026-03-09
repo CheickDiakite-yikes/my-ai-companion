@@ -537,8 +537,15 @@ const LIVE_DEBUG_STATE_EMIT_MIN_INTERVAL_MS = parseClientPositiveInt(
 const LIVE_WEB_SEARCH_SIGNAL_PATTERN =
   /\b(search|look up|google|latest|current|today|news|headline|what happened|updates?|did you see|last super bowl|super\s*bowl|score|standings?|who won)\b/i;
 const LIVE_EMAIL_SIGNAL_PATTERN = /\b(email|emails|inbox|unread|mail|gmail)\b/i;
+const LIVE_EMAIL_ACTION_PATTERN = /\b(reply|respond|draft|write|send)\b/i;
+const LIVE_EMAIL_DETAIL_PATTERN =
+  /\b(full|thread|details?|detail|read more|show me|before i reply)\b/i;
 const LIVE_CALENDAR_SIGNAL_PATTERN =
   /\b(calendar|meeting|meetings|schedule|event|events|appointment|appointments)\b/i;
+const LIVE_CALENDAR_ACTION_PATTERN =
+  /\b(schedule|create|add|move|reschedule|change|update)\b/i;
+const LIVE_CALENDAR_DETAIL_PATTERN =
+  /\b(details?|detail|description|location|attendees|what changed|invite|read me)\b/i;
 const LIVE_CALENDAR_FOLLOWUP_TIME_PATTERN =
   /\b(tomorrow|tomor+ow|tomore|tmrw|rest\s+of\s+the\s+week|later\s+this\s+week|this\s+week|next\s+week|next\s+7\s+days|next\s+few\s+days|weekend)\b/i;
 const LIVE_CALENDAR_FOLLOWUP_REQUEST_PATTERN =
@@ -594,6 +601,18 @@ const LIVE_GOOGLE_PERSONAL_CONTEXT_FUNCTION_DECLARATIONS = [
     },
   },
   {
+    name: "get_email_thread_detail",
+    description:
+      "Retrieve a detailed Gmail thread view, including latest message content and participants, for a user-referenced email.",
+    parameters: {
+      type: "object",
+      properties: {
+        query: { type: "string" },
+      },
+      required: ["query"],
+    },
+  },
+  {
     name: "get_calendar_events",
     description:
       "Retrieve the user's upcoming Google Calendar events for a specific time range. Only works if user has connected their Google account.",
@@ -609,6 +628,48 @@ const LIVE_GOOGLE_PERSONAL_CONTEXT_FUNCTION_DECLARATIONS = [
         refresh: { type: "boolean" },
       },
       required: ["timeRange", "timezone"],
+    },
+  },
+  {
+    name: "get_calendar_event_detail",
+    description:
+      "Retrieve a detailed Google Calendar event, including attendees, location, and description, for a user-referenced event.",
+    parameters: {
+      type: "object",
+      properties: {
+        query: { type: "string" },
+        timeRange: {
+          type: "string",
+          enum: ["today", "tomorrow", "this_week", "next_7_days"],
+        },
+        timezone: { type: "string" },
+      },
+      required: ["query", "timeRange", "timezone"],
+    },
+  },
+  {
+    name: "prepare_google_email_action",
+    description:
+      "Prepare an approval-gated Gmail draft, reply, or send action from the user's natural-language request.",
+    parameters: {
+      type: "object",
+      properties: {
+        request: { type: "string" },
+      },
+      required: ["request"],
+    },
+  },
+  {
+    name: "prepare_google_calendar_action",
+    description:
+      "Prepare an approval-gated Google Calendar create or update action from the user's natural-language request.",
+    parameters: {
+      type: "object",
+      properties: {
+        request: { type: "string" },
+        timezone: { type: "string" },
+      },
+      required: ["request", "timezone"],
     },
   },
 ];
@@ -660,6 +721,31 @@ function inferCalendarTimeRangeForNudge(text: string): CalendarNudgeTimeRange {
   return "today";
 }
 
+function inferPersonalContextLoadingLabel(
+  query: string,
+  intent: LivePersonalContextIntent,
+): string {
+  if (intent === "both") {
+    return "Retrieving your emails and calendar…";
+  }
+  if (intent === "email") {
+    if (LIVE_EMAIL_ACTION_PATTERN.test(query)) {
+      return "Preparing your email action…";
+    }
+    if (LIVE_EMAIL_DETAIL_PATTERN.test(query)) {
+      return "Retrieving email details…";
+    }
+    return "Retrieving your emails…";
+  }
+  if (LIVE_CALENDAR_ACTION_PATTERN.test(query)) {
+    return "Preparing your calendar action…";
+  }
+  if (LIVE_CALENDAR_DETAIL_PATTERN.test(query)) {
+    return "Retrieving calendar details…";
+  }
+  return "Retrieving your calendar…";
+}
+
 function buildPersonalContextToolInstruction(
   query: string,
   intent: LivePersonalContextIntent,
@@ -668,11 +754,32 @@ function buildPersonalContextToolInstruction(
   if (intent === "both") {
     return `Call get_user_emails with {"refresh": true} and get_calendar_events with {"timeRange":"${calendarTimeRange}","timezone":"user_local","refresh": true} before answering.`;
   }
+  if (intent === "email" && LIVE_EMAIL_ACTION_PATTERN.test(query)) {
+    return 'Call prepare_google_email_action with {"request":"<full user request>"} before answering.';
+  }
+  if (intent === "email" && LIVE_EMAIL_DETAIL_PATTERN.test(query)) {
+    return 'Call get_email_thread_detail with {"query":"<full user request>"} before answering.';
+  }
+  if (intent === "calendar" && LIVE_CALENDAR_ACTION_PATTERN.test(query)) {
+    return 'Call prepare_google_calendar_action with {"request":"<full user request>","timezone":"user_local"} before answering.';
+  }
+  if (intent === "calendar" && LIVE_CALENDAR_DETAIL_PATTERN.test(query)) {
+    return `Call get_calendar_event_detail with {"query":"<full user request>","timeRange":"${calendarTimeRange}","timezone":"user_local"} before answering.`;
+  }
   if (intent === "calendar") {
     return `Call get_calendar_events with {"timeRange":"${calendarTimeRange}","timezone":"user_local","refresh": true} before answering.`;
   }
   return 'Call get_user_emails with {"refresh": true} before answering.';
 }
+
+const LIVE_GOOGLE_PERSONAL_CONTEXT_TOOL_NAMES = new Set([
+  "get_user_emails",
+  "get_email_thread_detail",
+  "get_calendar_events",
+  "get_calendar_event_detail",
+  "prepare_google_email_action",
+  "prepare_google_calendar_action",
+]);
 
 function extractToolCallNames(toolCallPayload: unknown): string[] {
   const functionCalls =
@@ -3449,7 +3556,7 @@ export class GeminiLiveVoiceSession {
       ? extractToolCallNames(toolCallPayload)
       : [];
     const hasPersonalContextToolCall = toolCallNames.some(
-      (name) => name === "get_user_emails" || name === "get_calendar_events",
+      (name) => LIVE_GOOGLE_PERSONAL_CONTEXT_TOOL_NAMES.has(name),
     );
 
     if (hasPersonalContextToolCall) {
@@ -3777,11 +3884,7 @@ export class GeminiLiveVoiceSession {
       this.personalContextToolCalledThisTurn = false;
       this.emitWebSearchStatus(
         "searching",
-        personalContextIntent === "both"
-          ? "Retrieving your emails and calendar…"
-          : personalContextIntent === "calendar"
-            ? "Retrieving your calendar…"
-            : "Retrieving your emails…",
+        inferPersonalContextLoadingLabel(text, personalContextIntent),
       );
       this.debug("live.google_context.searching", {
         textLength: text.length,
@@ -4018,24 +4121,49 @@ export class GeminiLiveVoiceSession {
       };
     });
 
-    const hasEmailCall = normalizedCalls.some(
+    const hasEmailSummaryCall = normalizedCalls.some(
       (call) => call.name === "get_user_emails" || call.name === "get_inbox_digest",
     );
-    const hasInboxCall = normalizedCalls.some(
-      (call) => call.name === "get_inbox_digest" || call.name === "get_user_emails",
+    const hasEmailDetailCall = normalizedCalls.some(
+      (call) => call.name === "get_email_thread_detail",
     );
-    const hasCalendarCall = normalizedCalls.some(
+    const hasEmailActionPrepCall = normalizedCalls.some(
+      (call) => call.name === "prepare_google_email_action",
+    );
+    const hasCalendarSummaryCall = normalizedCalls.some(
       (call) => call.name === "get_calendar_events",
     );
+    const hasCalendarDetailCall = normalizedCalls.some(
+      (call) => call.name === "get_calendar_event_detail",
+    );
+    const hasCalendarActionPrepCall = normalizedCalls.some(
+      (call) => call.name === "prepare_google_calendar_action",
+    );
+    const hasEmailCall =
+      hasEmailSummaryCall || hasEmailDetailCall || hasEmailActionPrepCall;
+    const hasCalendarCall =
+      hasCalendarSummaryCall || hasCalendarDetailCall || hasCalendarActionPrepCall;
     this.emitWebSearchStatus(
       "searching",
-      hasEmailCall && hasCalendarCall
-        ? "Retrieving your emails and calendar…"
-        : hasCalendarCall
-          ? "Retrieving your calendar…"
-          : hasInboxCall
-            ? "Retrieving your emails…"
-            : "Searching live sources…",
+      hasEmailActionPrepCall && hasCalendarActionPrepCall
+        ? "Preparing your email and calendar actions…"
+        : hasEmailActionPrepCall
+          ? "Preparing your email action…"
+          : hasCalendarActionPrepCall
+            ? "Preparing your calendar action…"
+            : hasEmailDetailCall && hasCalendarDetailCall
+              ? "Retrieving email and calendar details…"
+              : hasEmailDetailCall
+                ? "Retrieving email details…"
+                : hasCalendarDetailCall
+                  ? "Retrieving calendar details…"
+                  : hasEmailCall && hasCalendarCall
+                    ? "Retrieving your emails and calendar…"
+                    : hasCalendarCall
+                      ? "Retrieving your calendar…"
+                      : hasEmailCall
+                        ? "Retrieving your emails…"
+                        : "Searching live sources…",
     );
 
     const toolCallStartedAt = Date.now();

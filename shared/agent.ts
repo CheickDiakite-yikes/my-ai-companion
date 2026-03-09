@@ -305,6 +305,91 @@ export interface GoogleCalendarQueryResult {
   partialFailures: GoogleDataFailureCode[];
 }
 
+export interface GoogleEmailParticipant {
+  name: string | null;
+  email: string | null;
+  raw: string;
+}
+
+export interface GoogleEmailMessageDetail {
+  messageId: string;
+  from: GoogleEmailParticipant | null;
+  to: GoogleEmailParticipant[];
+  cc: GoogleEmailParticipant[];
+  subject: string;
+  snippet: string;
+  bodyText: string | null;
+  sentAt: string | null;
+}
+
+export interface GoogleEmailThreadDetail {
+  threadId: string;
+  subject: string;
+  participants: GoogleEmailParticipant[];
+  latestMessageId: string | null;
+  latestSnippet: string | null;
+  latestSentAt: string | null;
+  attachmentNames: string[];
+  messages: GoogleEmailMessageDetail[];
+}
+
+export interface GoogleCalendarEventDetail extends CalendarEventItem {
+  attendees: string[];
+}
+
+export type GoogleActionPreviewKind =
+  | "email_detail"
+  | "email_compose"
+  | "email_reply"
+  | "calendar_detail"
+  | "calendar_create"
+  | "calendar_update";
+
+export interface GoogleActionPreview {
+  kind: GoogleActionPreviewKind;
+  title: string;
+  summary: string;
+  connector: "gmail" | "calendar";
+  requiresWriteAccess: boolean;
+  missingScopes?: string[];
+  emailThread?: GoogleEmailThreadDetail | null;
+  calendarEvent?: GoogleCalendarEventDetail | null;
+  proposedEmail?: {
+    to: string[];
+    cc: string[];
+    subject: string;
+    bodyPreview: string | null;
+    sendAfterApproval: boolean;
+  } | null;
+  proposedCalendar?: {
+    title: string;
+    startTime: string;
+    endTime: string;
+    location: string | null;
+    descriptionPreview: string | null;
+    originalEventId?: string | null;
+    originalTitle?: string | null;
+    originalStartTime?: string | null;
+    originalEndTime?: string | null;
+  } | null;
+}
+
+export interface GoogleActionResult {
+  kind: GoogleActionPreviewKind;
+  connector: "gmail" | "calendar";
+  status:
+    | "detail_ready"
+    | "draft_created"
+    | "email_sent"
+    | "event_created"
+    | "event_updated";
+  summary: string;
+  draftId?: string | null;
+  messageId?: string | null;
+  threadId?: string | null;
+  eventId?: string | null;
+}
+
 export type ArtifactRenderEngine = "json_render";
 
 export interface ArtifactRenderElementV1 {
@@ -398,12 +483,15 @@ export type AgentMessageUiPayload =
       task: AgentTaskSummary;
       latestStep?: AgentStepSummary;
       text: string;
+      googleActionPreview?: GoogleActionPreview | null;
+      googleActionResult?: GoogleActionResult | null;
     }
   | {
       kind: "agent_approval";
       taskId: string;
       approval: AgentApprovalSummary;
       text: string;
+      googleActionPreview?: GoogleActionPreview | null;
     }
   | {
       kind: "agent_artifact";

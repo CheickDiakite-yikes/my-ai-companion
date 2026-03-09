@@ -93,6 +93,12 @@ import {
   isExplicitBuildCommand,
   startAgentTaskRun,
 } from "./agent-runtime";
+import {
+  approveAndExecuteGoogleActionTask,
+  detectGoogleActionTaskIntent,
+  prepareGoogleActionTask,
+  startGoogleActionTaskRun,
+} from "./google-action-tasks";
 import { elapsedMs, getTraceId, trace, traceError } from "./observability";
 import { getMediaStore, type StorageProvider } from "./media-store";
 import { createSignedMediaPath, verifyMediaSignature } from "./media-signing";
@@ -110,16 +116,23 @@ import {
   classifyGoogleFetchIssue,
   detectGooglePersonalContextIntent,
   fetchGoogleCalendarEvents,
+  fetchGoogleCalendarEventDetail,
   exchangeGoogleOAuthCode,
   fetchGmailInboxDigest,
+  fetchGmailThreadDetail,
   fetchGoogleUserInfo,
   GOOGLE_CALENDAR_EVENTS_READONLY_SCOPE,
+  GOOGLE_CALENDAR_EVENTS_WRITE_SCOPE,
   GOOGLE_GMAIL_READONLY_SCOPE,
+  GOOGLE_GMAIL_COMPOSE_SCOPE,
+  GOOGLE_GMAIL_SEND_SCOPE,
   getGoogleOAuthMissingEnvVars,
   getGoogleOAuthConfig,
   resolveGoogleAccessTokenForUser,
   resolveGoogleContextTimeZone,
   resolveGoogleOAuthScopes,
+  searchGmailInboxDigest,
+  searchGoogleCalendarEvents,
 } from "./google-integration";
 import {
   encryptGoogleToken,
@@ -224,9 +237,12 @@ const liveToolResponseSchema = z.object({
   clientTimeZone: z.string().trim().min(1).max(80).optional(),
 });
 
+const googleScopeModeSchema = z.enum(["read", "write"]);
+
 const googleConnectUrlQuerySchema = z.object({
   returnTo: z.string().trim().max(400).optional(),
   redirectUri: z.string().trim().url().max(400).optional(),
+  scopeMode: googleScopeModeSchema.optional(),
 });
 
 const googleCallbackQuerySchema = z.object({
@@ -361,6 +377,7 @@ const googleOAuthStatePayloadSchema = z.object({
   returnTo: z.string().min(1),
   redirectUri: z.string().url(),
   redirectSource: z.enum(["configured_env", "dynamic_host", "query_override"]),
+  scopeMode: googleScopeModeSchema.optional().default("read"),
   iat: z.number().int().nonnegative(),
   exp: z.number().int().nonnegative(),
   nonce: z.string().min(1),
@@ -517,6 +534,7 @@ function createGoogleOAuthStateRecord(params: {
   returnTo: string;
   redirectUri: string;
   redirectSource: "configured_env" | "dynamic_host" | "query_override";
+  scopeMode: "read" | "write";
 }): string {
   const nowMs = Date.now();
   const payload = {
@@ -525,6 +543,7 @@ function createGoogleOAuthStateRecord(params: {
     returnTo: params.returnTo,
     redirectUri: params.redirectUri,
     redirectSource: params.redirectSource,
+    scopeMode: params.scopeMode,
     iat: nowMs,
     exp: nowMs + GOOGLE_OAUTH_STATE_TTL_MS,
     nonce: randomUUID(),
@@ -542,6 +561,7 @@ function resolveGoogleOAuthStateRecord(params: {
       returnTo: string;
       redirectUri: string;
       redirectSource: "configured_env" | "dynamic_host" | "query_override";
+      scopeMode: "read" | "write";
     }
   | null {
   const [payloadPart, signaturePart, ...extra] = params.state.split(".");
@@ -559,6 +579,7 @@ function resolveGoogleOAuthStateRecord(params: {
     returnTo: record.returnTo,
     redirectUri: record.redirectUri,
     redirectSource: record.redirectSource,
+    scopeMode: record.scopeMode ?? "read",
   };
 }
 
@@ -768,6 +789,18 @@ const ENABLE_GOOGLE_PERSONAL_CONTEXT_TEXT = parseBooleanFlag(
 const ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE = parseBooleanFlag(
   process.env.ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE,
   true,
+);
+const ENABLE_GOOGLE_PERSONAL_CONTEXT_DETAIL_READS = parseBooleanFlag(
+  process.env.ENABLE_GOOGLE_PERSONAL_CONTEXT_DETAIL_READS,
+  false,
+);
+const ENABLE_GOOGLE_PERSONAL_CONTEXT_WRITES = parseBooleanFlag(
+  process.env.ENABLE_GOOGLE_PERSONAL_CONTEXT_WRITES,
+  false,
+);
+const ENABLE_VOICE_GOOGLE_WRITE_HANDOFF = parseBooleanFlag(
+  process.env.ENABLE_VOICE_GOOGLE_WRITE_HANDOFF,
+  false,
 );
 const MORNING_BRIEF_DAILY_CAP = Math.max(
   1,
@@ -5989,6 +6022,387 @@ function makeLegacyAssistantMessage(messagesList: Array<{
   };
 }
 
+async function collectRecentAssistantTaskMessages(params: {
+  conversationId: string;
+  taskId: string;
+  userId: string;
+  userCreatedAt: Date | null;
+}) {
+  const allMessages = mapMessagesWithSignedAttachments(
+    await storage.getMessagesWithAttachments(params.conversationId),
+    params.userId,
+  );
+  const userCreatedAtMs = params.userCreatedAt?.getTime() ?? Date.now();
+  return allMessages.filter((message) => {
+    if (message.sender !== "assistant") return false;
+    if (!isAgentMessageUiPayload((message as Record<string, unknown>).uiPayload)) {
+      return false;
+    }
+    const uiPayload = (message as Record<string, unknown>).uiPayload as Record<
+      string,
+      unknown
+    >;
+    const payloadTaskId =
+      typeof uiPayload.taskId === "string"
+        ? uiPayload.taskId
+        : uiPayload.task &&
+            typeof uiPayload.task === "object" &&
+            typeof (uiPayload.task as Record<string, unknown>).id === "string"
+          ? ((uiPayload.task as Record<string, unknown>).id as string)
+          : null;
+    if (payloadTaskId !== params.taskId) return false;
+    const createdAtMs =
+      message.createdAt instanceof Date
+        ? message.createdAt.getTime()
+        : message.createdAt
+          ? new Date(message.createdAt).getTime()
+          : 0;
+    return createdAtMs >= userCreatedAtMs - 5_000;
+  });
+}
+
+function hasGoogleDetailReadIntent(text: string): boolean {
+  return /\b(detail|details|full|thread|read|show|changed|invite)\b/i.test(text);
+}
+
+function normalizeGoogleLookupQuery(raw: string, stripPattern: RegExp): string {
+  return raw
+    .replace(stripPattern, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function buildGoogleEmailDetailLookupQuery(text: string): string {
+  const normalized = text.trim();
+  const fromMatch = normalized.match(
+    /\b(?:email|thread|message)\s+(?:from|with)\s+(.+?)(?:\s+(?:about|regarding)\b|$)/i,
+  );
+  if (fromMatch?.[1]) {
+    return fromMatch[1].trim();
+  }
+  const aboutMatch = normalized.match(/\b(?:about|regarding)\s+(.+)$/i);
+  if (aboutMatch?.[1]) {
+    return aboutMatch[1].trim();
+  }
+  return normalizeGoogleLookupQuery(
+    normalized,
+    /\b(show|read|open|check|tell me|what changed in|give me|the|my|full|latest|details?|detail|thread|email|message|mail|gmail|please)\b/gi,
+  );
+}
+
+function buildGoogleCalendarDetailLookupQuery(text: string): string {
+  const normalized = text.trim();
+  const aboutMatch = normalized.match(
+    /\b(?:meeting|event|appointment|invite)\s+(?:with|about|for)\s+(.+?)(?:\s+(?:today|tomorrow|this week|next week|next 7 days)\b|$)/i,
+  );
+  if (aboutMatch?.[1]) {
+    return aboutMatch[1].trim();
+  }
+  return normalizeGoogleLookupQuery(
+    normalized,
+    /\b(show|read|open|check|tell me|what changed in|give me|the|my|full|latest|details?|detail|calendar|meeting|event|appointment|invite|please)\b/gi,
+  );
+}
+
+function formatDisplayDateTime(value: string | null, timeZone: string): string | null {
+  if (!value) return null;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(parsed);
+}
+
+function formatGoogleEmailThreadReply(params: {
+  thread: Awaited<ReturnType<typeof fetchGmailThreadDetail>>;
+  timeZone: string;
+}): string {
+  const latestMessage =
+    params.thread.messages[params.thread.messages.length - 1] ?? null;
+  const latestSender =
+    latestMessage?.from?.name ??
+    latestMessage?.from?.email ??
+    "the sender";
+  const latestSentAt = formatDisplayDateTime(
+    latestMessage?.sentAt ?? params.thread.latestSentAt,
+    params.timeZone,
+  );
+  const participants = params.thread.participants
+    .map((participant) => participant.name ?? participant.email ?? participant.raw)
+    .filter((value) => value.trim().length > 0)
+    .slice(0, 4);
+  const attachmentText =
+    params.thread.attachmentNames.length > 0
+      ? ` Attachments: ${params.thread.attachmentNames.join(", ")}.`
+      : "";
+  const bodyPreview =
+    latestMessage?.bodyText?.trim() || latestMessage?.snippet?.trim() || "";
+  return [
+    `I found the thread "${params.thread.subject}".`,
+    latestSentAt
+      ? `The latest message is from ${latestSender} at ${latestSentAt}.`
+      : `The latest message is from ${latestSender}.`,
+    participants.length > 0
+      ? `Participants: ${participants.join(", ")}.`
+      : null,
+    bodyPreview ? `Latest excerpt: "${bodyPreview.slice(0, 320)}"` : null,
+    attachmentText.trim() || null,
+    "If you want, I can draft a reply for approval next.",
+  ]
+    .filter((part): part is string => Boolean(part && part.trim().length > 0))
+    .join(" ");
+}
+
+function formatGoogleCalendarEventReply(params: {
+  event: Awaited<ReturnType<typeof fetchGoogleCalendarEventDetail>>;
+  timeZone: string;
+}): string {
+  const start = formatDisplayDateTime(params.event.startTime, params.timeZone);
+  const end = formatDisplayDateTime(params.event.endTime, params.timeZone);
+  const attendees =
+    params.event.attendees.length > 0
+      ? `Attendees: ${params.event.attendees.slice(0, 5).join(", ")}.`
+      : "";
+  const location = params.event.location ? `Location: ${params.event.location}.` : "";
+  const description = params.event.description
+    ? `Notes: ${params.event.description.slice(0, 320)}`
+    : "";
+  return [
+    `I found the calendar event "${params.event.title}".`,
+    start
+      ? `It starts ${start}${end ? ` and ends ${end}` : ""}.`
+      : null,
+    location || null,
+    attendees || null,
+    description || null,
+    "If you want, I can move it or update the details with your approval.",
+  ]
+    .filter((part): part is string => Boolean(part && part.trim().length > 0))
+    .join(" ");
+}
+
+async function maybePrepareGoogleDetailReadReply(params: {
+  req: any;
+  userId: string;
+  text: string;
+  clientTimeZone?: string | null;
+}): Promise<string | null> {
+  if (
+    !ENABLE_GOOGLE_PERSONAL_CONTEXT ||
+    !ENABLE_GOOGLE_PERSONAL_CONTEXT_TEXT ||
+    !ENABLE_GOOGLE_PERSONAL_CONTEXT_DETAIL_READS
+  ) {
+    return null;
+  }
+
+  if (!hasGoogleDetailReadIntent(params.text)) {
+    return null;
+  }
+
+  const intent = detectGooglePersonalContextIntent(params.text);
+  const timeZone = resolveGoogleContextTimeZone(params.clientTimeZone ?? null);
+  const prefersEmailDetail =
+    intent.emailIntent &&
+    /\b(email|thread|message|mail|gmail)\b/i.test(params.text);
+  const prefersCalendarDetail =
+    intent.calendarIntent &&
+    /\b(calendar|meeting|event|appointment|invite)\b/i.test(params.text);
+
+  if (prefersEmailDetail && !prefersCalendarDetail) {
+    const auth = await resolveGoogleAccessTokenForUser({
+      userId: params.userId,
+      storage,
+      requiredScopes: [GOOGLE_GMAIL_READONLY_SCOPE],
+    });
+    if (!auth.ok) {
+      return auth.code === "google_not_connected"
+        ? "Connect Google in Profile before I can read email threads in more detail."
+        : "Reconnect Google in Profile so I can reach your Gmail data.";
+    }
+
+    const query = buildGoogleEmailDetailLookupQuery(params.text);
+    const matches =
+      query.length > 0
+        ? await searchGmailInboxDigest({
+            accessToken: auth.accessToken,
+            query,
+            maxThreads: 1,
+          })
+        : await fetchGmailInboxDigest({
+            accessToken: auth.accessToken,
+            maxThreads: 1,
+            sinceDays: intent.emailSinceDays,
+            unreadOnly: intent.emailUnreadOnly,
+          });
+    const threadId = matches[0]?.threadId ?? null;
+    if (!threadId) {
+      return query.length > 0
+        ? `I couldn't find a recent email matching "${query}". Try the sender or subject.`
+        : "I couldn't find a recent email thread to expand right now.";
+    }
+    const thread = await fetchGmailThreadDetail({
+      accessToken: auth.accessToken,
+      threadId,
+    });
+    return formatGoogleEmailThreadReply({
+      thread,
+      timeZone,
+    });
+  }
+
+  if (prefersCalendarDetail) {
+    const auth = await resolveGoogleAccessTokenForUser({
+      userId: params.userId,
+      storage,
+      requiredScopes: [GOOGLE_CALENDAR_EVENTS_READONLY_SCOPE],
+    });
+    if (!auth.ok) {
+      return auth.code === "google_not_connected"
+        ? "Connect Google in Profile before I can read calendar events in more detail."
+        : "Reconnect Google in Profile so I can reach your Calendar data.";
+    }
+
+    const query = buildGoogleCalendarDetailLookupQuery(params.text);
+    const matches =
+      query.length > 0
+        ? await searchGoogleCalendarEvents({
+            accessToken: auth.accessToken,
+            query,
+            timezone: timeZone,
+            timeRange: intent.timeRange,
+            maxEvents: 1,
+          })
+        : await fetchGoogleCalendarEvents({
+            accessToken: auth.accessToken,
+            timeRange: intent.timeRange,
+            timezone: timeZone,
+            maxEvents: 1,
+          });
+    const eventId = matches[0]?.eventId ?? null;
+    if (!eventId) {
+      return query.length > 0
+        ? `I couldn't find a calendar event matching "${query}". Try the title or who it's with.`
+        : "I couldn't find an upcoming event to expand right now.";
+    }
+    const event = await fetchGoogleCalendarEventDetail({
+      accessToken: auth.accessToken,
+      eventId,
+      timezone: timeZone,
+    });
+    return formatGoogleCalendarEventReply({
+      event,
+      timeZone,
+    });
+  }
+
+  return null;
+}
+
+async function maybeHandleGoogleActionTask(params: {
+  storage: typeof storage;
+  userId: string;
+  conversationId: string;
+  text: string;
+  clientTimeZone?: string | null;
+  userMessage: {
+    id: string;
+    createdAt: Date | null;
+  };
+  onEvent?: (event: AgentTaskEvent) => void;
+}) {
+  if (!ENABLE_GOOGLE_PERSONAL_CONTEXT_WRITES) {
+    return { handled: false as const };
+  }
+
+  const preparation = await prepareGoogleActionTask({
+    storage: params.storage,
+    userId: params.userId,
+    text: params.text,
+    clientTimeZone: params.clientTimeZone ?? null,
+  });
+
+  if (preparation.kind === "none") {
+    return { handled: false as const };
+  }
+
+  if (preparation.kind === "clarify" || preparation.kind === "upgrade_required") {
+    const assistantMessages = await storage.createAssistantTurnParts({
+      conversationId: params.conversationId,
+      textParts: [preparation.message],
+    });
+    return {
+      handled: true as const,
+      kind: preparation.kind,
+      assistantMessages,
+      legacyAssistantMessage: makeLegacyAssistantMessage(assistantMessages),
+      model:
+        preparation.kind === "clarify"
+          ? "google_action_clarification_v1"
+          : "google_action_upgrade_required_v1",
+      decisionPath: "companion_reply" as const,
+      decisionPathReason: "companion" as const,
+      awaitingApproval: false,
+      task: null,
+    };
+  }
+
+  const run = await startGoogleActionTaskRun({
+    storage: params.storage,
+    userId: params.userId,
+    conversationId: params.conversationId,
+    prompt: params.text,
+    requestedByMessageId: params.userMessage.id,
+    preview: preparation.preview,
+    plan: preparation.plan,
+    onEvent: params.onEvent,
+  });
+
+  const assistantMessages = await collectRecentAssistantTaskMessages({
+    conversationId: params.conversationId,
+    taskId: run.task.id,
+    userId: params.userId,
+    userCreatedAt: params.userMessage.createdAt,
+  });
+
+  const finalizedAssistantMessages =
+    assistantMessages.length > 0
+      ? assistantMessages
+      : [
+          {
+            id: `google-action-final-${run.task.id}`,
+            conversationId: params.conversationId,
+            sender: "assistant",
+            turnId: randomUUID(),
+            partIndex: 0,
+            text: "I prepared a Google action and need your approval before I continue.",
+            createdAt: new Date(),
+            attachments: [],
+            uiPayload: {
+              kind: "agent_task_status",
+              task: run.task,
+              text: "Approval needed",
+              googleActionPreview: preparation.preview,
+            },
+          },
+        ];
+
+  return {
+    handled: true as const,
+    kind: "ready" as const,
+    assistantMessages: finalizedAssistantMessages,
+    legacyAssistantMessage: makeLegacyAssistantMessage(finalizedAssistantMessages),
+    model: "google_action_task_v1",
+    decisionPath: "agent_task" as const,
+    decisionPathReason: "task_started" as const,
+    awaitingApproval: run.awaitingApproval,
+    task: run.task,
+  };
+}
+
 function longestDelimiterPrefixSuffix(buffer: string): number {
   const delimiter = ZEE_SPLIT_TOKEN;
   const maxCheck = Math.min(buffer.length, delimiter.length - 1);
@@ -7646,18 +8060,24 @@ export async function registerRoutes(
     isAuthenticated,
     async (req: any, res) => {
       const startedAt = Date.now();
-      if (!ENABLE_AGENTIC_CREATIONS) {
-        return res.status(410).json({
-          message: "Agentic creation features are archived in companion-only mode.",
-          traceId: getTraceId(req),
-        });
-      }
       try {
         const parsed = agentApprovalDecisionSchema.parse(req.body ?? {});
         const task = await storage.getAgentTaskById(req.params.taskId);
         if (!task || task.userId !== req.session.userId) {
           return res.status(404).json({
             message: "Task not found",
+            traceId: getTraceId(req),
+          });
+        }
+        const isGoogleActionTask = task.taskKind === "google_action";
+        if (
+          !ENABLE_AGENTIC_CREATIONS &&
+          !(isGoogleActionTask && ENABLE_GOOGLE_PERSONAL_CONTEXT_WRITES)
+        ) {
+          return res.status(410).json({
+            message: isGoogleActionTask
+              ? "Google assistant write actions are disabled in this environment."
+              : "Agentic creation features are archived in companion-only mode.",
             traceId: getTraceId(req),
           });
         }
@@ -7732,12 +8152,18 @@ export async function registerRoutes(
           });
         }
 
-        let resumed: Awaited<ReturnType<typeof approveAndContinueAgentTask>>;
+        let resumed: AgentTaskSummary;
         try {
-          resumed = await approveAndContinueAgentTask({
-            taskId: task.id,
-            userId: req.session.userId,
-          });
+          resumed = isGoogleActionTask
+            ? await approveAndExecuteGoogleActionTask({
+                storage,
+                taskId: task.id,
+                userId: req.session.userId,
+              })
+            : await approveAndContinueAgentTask({
+                taskId: task.id,
+                userId: req.session.userId,
+              });
         } catch (approvalError) {
           const message =
             approvalError instanceof Error
@@ -8563,8 +8989,9 @@ export async function registerRoutes(
           returnTo,
           redirectUri: effectiveConfig.redirectUri,
           redirectSource: redirectResolution.source,
+          scopeMode: parsed.scopeMode ?? "read",
         });
-        const scopes = resolveGoogleOAuthScopes();
+        const scopes = resolveGoogleOAuthScopes(parsed.scopeMode ?? "read");
         const connectUrl = buildGoogleOAuthConnectUrl({
           config: effectiveConfig,
           state,
@@ -8707,7 +9134,7 @@ export async function registerRoutes(
           scopes:
             exchanged.scopes.length > 0
               ? exchanged.scopes
-              : resolveGoogleOAuthScopes(),
+              : resolveGoogleOAuthScopes(stateRecord.scopeMode),
           refreshTokenEncrypted: encryptGoogleToken(refreshTokenToStore),
           accessTokenEncrypted: encryptGoogleToken(exchanged.accessToken),
           expiry: exchanged.expiry,
@@ -8765,10 +9192,25 @@ export async function registerRoutes(
           connected && scopes.includes(GOOGLE_GMAIL_READONLY_SCOPE);
         const calendarConnected =
           connected && scopes.includes(GOOGLE_CALENDAR_EVENTS_READONLY_SCOPE);
+        const gmailWriteConnected =
+          connected && scopes.includes(GOOGLE_GMAIL_COMPOSE_SCOPE);
+        const gmailSendConnected =
+          connected && scopes.includes(GOOGLE_GMAIL_SEND_SCOPE);
+        const calendarWriteConnected =
+          connected && scopes.includes(GOOGLE_CALENDAR_EVENTS_WRITE_SCOPE);
         const missingScopes = connected
           ? [
               ...(gmailConnected ? [] : [GOOGLE_GMAIL_READONLY_SCOPE]),
               ...(calendarConnected ? [] : [GOOGLE_CALENDAR_EVENTS_READONLY_SCOPE]),
+            ]
+          : [];
+        const writeMissingScopes = connected
+          ? [
+              ...(gmailWriteConnected ? [] : [GOOGLE_GMAIL_COMPOSE_SCOPE]),
+              ...(gmailSendConnected ? [] : [GOOGLE_GMAIL_SEND_SCOPE]),
+              ...(calendarWriteConnected
+                ? []
+                : [GOOGLE_CALENDAR_EVENTS_WRITE_SCOPE]),
             ]
           : [];
         return res.status(200).json({
@@ -8779,10 +9221,15 @@ export async function registerRoutes(
           scopes,
           gmailConnected,
           calendarConnected,
+          gmailWriteConnected,
+          gmailSendConnected,
+          calendarWriteConnected,
           missingScopes,
+          writeMissingScopes,
           lastError: integration?.lastError ?? null,
           expiry: integration?.expiry?.toISOString() ?? null,
           enabled: ENABLE_GOOGLE_PERSONAL_CONTEXT,
+          writesEnabled: ENABLE_GOOGLE_PERSONAL_CONTEXT_WRITES,
         });
       } catch (error) {
         traceError(req, "google.integration.status.failed", error, {
@@ -8967,6 +9414,7 @@ export async function registerRoutes(
           status: "searching" | "grounded" | "idle";
           label?: string;
         }> = [];
+        let latestConversationUserMessageId: string | null = null;
         const hasMorningBriefFunctionCalls = parsed.functionCalls.some(
           (call) =>
             call.name === "get_morning_brief" ||
@@ -8975,7 +9423,11 @@ export async function registerRoutes(
         const hasGooglePersonalContextFunctionCalls = parsed.functionCalls.some(
           (call) =>
             call.name === "get_user_emails" ||
-            call.name === "get_calendar_events",
+            call.name === "get_calendar_events" ||
+            call.name === "get_email_thread_detail" ||
+            call.name === "get_calendar_event_detail" ||
+            call.name === "prepare_google_email_action" ||
+            call.name === "prepare_google_calendar_action",
         );
 
         if (
@@ -9367,6 +9819,130 @@ export async function registerRoutes(
             continue;
           }
 
+          if (functionCall.name === "get_email_thread_detail") {
+            const detailStartedAt = Date.now();
+            webSearchEvents.push({
+              status: "searching",
+              label: "Retrieving email details…",
+            });
+            const query =
+              typeof args.query === "string"
+                ? args.query.trim()
+                : "";
+            const auth = await resolveGoogleAccessTokenForUser({
+              userId: req.session.userId,
+              storage,
+              requiredScopes: [GOOGLE_GMAIL_READONLY_SCOPE],
+            });
+            if (!auth.ok) {
+              functionResponses.push({
+                id: functionCall.id,
+                name: functionCall.name,
+                response: {
+                  error: {
+                    code: auth.code,
+                    message:
+                      auth.code === "google_scope_missing"
+                        ? "Google email permission is missing. Reconnect Google in Profile settings."
+                        : auth.code === "google_token_refresh_failed"
+                          ? "Google session expired. Reconnect in Profile settings."
+                          : "Google is not connected. Connect your account in Profile settings.",
+                  },
+                },
+              });
+              webSearchEvents.push({
+                status: "grounded",
+                label: "Inbox unavailable",
+              });
+              continue;
+            }
+
+            try {
+              const matches =
+                query.length > 0
+                  ? await searchGmailInboxDigest({
+                      accessToken: auth.accessToken,
+                      query,
+                      maxThreads: 1,
+                    })
+                  : await fetchGmailInboxDigest({
+                      accessToken: auth.accessToken,
+                      maxThreads: 1,
+                    });
+              const threadId = matches[0]?.threadId ?? null;
+              if (!threadId) {
+                functionResponses.push({
+                  id: functionCall.id,
+                  name: functionCall.name,
+                  response: {
+                    error: {
+                      code: "email_thread_not_found",
+                      message: query
+                        ? `I couldn't find an email thread matching "${query}".`
+                        : "I couldn't find a recent email thread to expand.",
+                    },
+                  },
+                });
+                webSearchEvents.push({
+                  status: "grounded",
+                  label: "Email details unavailable",
+                });
+                continue;
+              }
+              const thread = await fetchGmailThreadDetail({
+                accessToken: auth.accessToken,
+                threadId,
+              });
+              const nextBestAction =
+                thread.messages.length > 0
+                  ? `I can draft a reply to ${thread.messages[thread.messages.length - 1]?.from?.email ?? "the sender"} if you want.`
+                  : "I can draft a reply next if you want.";
+              functionResponses.push({
+                id: functionCall.id,
+                name: functionCall.name,
+                response: {
+                  result: {
+                    thread,
+                    nextBestAction,
+                  },
+                },
+              });
+              webSearchEvents.push({
+                status: "grounded",
+                label: "Email details ready",
+              });
+              trace(req, "live.tool.email_detail.success", {
+                conversationId: conversation.id,
+                threadId,
+                query,
+                elapsedMs: elapsedMs(detailStartedAt),
+              });
+            } catch (error) {
+              const fetchIssue = classifyGoogleFetchIssue(error, "gmail");
+              functionResponses.push({
+                id: functionCall.id,
+                name: functionCall.name,
+                response: {
+                  error: {
+                    code: fetchIssue?.kind ?? "google_fetch_failed",
+                    message: "Could not retrieve that Gmail thread right now. Please try again shortly.",
+                  },
+                },
+              });
+              webSearchEvents.push({
+                status: "grounded",
+                label: "Email details unavailable",
+              });
+              traceError(req, "live.tool.email_detail.failed", error, {
+                conversationId: conversation.id,
+                query,
+                fetchIssueKind: fetchIssue?.kind ?? null,
+                elapsedMs: elapsedMs(detailStartedAt),
+              });
+            }
+            continue;
+          }
+
           if (functionCall.name === "get_calendar_events") {
             const calendarToolStartedAt = Date.now();
             webSearchEvents.push({
@@ -9528,6 +10104,296 @@ export async function registerRoutes(
                 elapsedMs: elapsedMs(calendarToolStartedAt),
               });
             }
+            continue;
+          }
+
+          if (functionCall.name === "get_calendar_event_detail") {
+            const detailStartedAt = Date.now();
+            webSearchEvents.push({
+              status: "searching",
+              label: "Retrieving calendar details…",
+            });
+            const query =
+              typeof args.query === "string"
+                ? args.query.trim()
+                : "";
+            const timeRangeRaw =
+              typeof args.timeRange === "string" ? args.timeRange : "today";
+            const timeRange: GooglePersonalContextTimeRange =
+              timeRangeRaw === "tomorrow" ||
+              timeRangeRaw === "this_week" ||
+              timeRangeRaw === "next_7_days"
+                ? timeRangeRaw
+                : "today";
+            const timezone = resolveGoogleContextTimeZone(
+              typeof args.timezone === "string"
+                ? args.timezone
+                : parsed.clientTimeZone ?? null,
+            );
+            const auth = await resolveGoogleAccessTokenForUser({
+              userId: req.session.userId,
+              storage,
+              requiredScopes: [GOOGLE_CALENDAR_EVENTS_READONLY_SCOPE],
+            });
+            if (!auth.ok) {
+              functionResponses.push({
+                id: functionCall.id,
+                name: functionCall.name,
+                response: {
+                  error: {
+                    code: auth.code,
+                    message:
+                      auth.code === "google_scope_missing"
+                        ? "Google Calendar permission is missing. Reconnect Google in Profile settings."
+                        : auth.code === "google_token_refresh_failed"
+                          ? "Google session expired. Reconnect in Profile settings."
+                          : "Google is not connected. Connect your account in Profile settings.",
+                  },
+                },
+              });
+              webSearchEvents.push({
+                status: "grounded",
+                label: "Calendar unavailable",
+              });
+              continue;
+            }
+
+            try {
+              const matches =
+                query.length > 0
+                  ? await searchGoogleCalendarEvents({
+                      accessToken: auth.accessToken,
+                      query,
+                      timezone,
+                      timeRange,
+                      maxEvents: 1,
+                    })
+                  : await fetchGoogleCalendarEvents({
+                      accessToken: auth.accessToken,
+                      timeRange,
+                      timezone,
+                      maxEvents: 1,
+                    });
+              const eventId = matches[0]?.eventId ?? null;
+              if (!eventId) {
+                functionResponses.push({
+                  id: functionCall.id,
+                  name: functionCall.name,
+                  response: {
+                    error: {
+                      code: "calendar_event_not_found",
+                      message: query
+                        ? `I couldn't find a calendar event matching "${query}".`
+                        : "I couldn't find an upcoming event to expand.",
+                    },
+                  },
+                });
+                webSearchEvents.push({
+                  status: "grounded",
+                  label: "Calendar details unavailable",
+                });
+                continue;
+              }
+              const event = await fetchGoogleCalendarEventDetail({
+                accessToken: auth.accessToken,
+                eventId,
+                timezone,
+              });
+              functionResponses.push({
+                id: functionCall.id,
+                name: functionCall.name,
+                response: {
+                  result: {
+                    event,
+                    nextBestAction:
+                      "I can move this event or update its details with your approval.",
+                  },
+                },
+              });
+              webSearchEvents.push({
+                status: "grounded",
+                label: "Calendar details ready",
+              });
+              trace(req, "live.tool.calendar_detail.success", {
+                conversationId: conversation.id,
+                eventId,
+                query,
+                timeRange,
+                timezone,
+                elapsedMs: elapsedMs(detailStartedAt),
+              });
+            } catch (error) {
+              const fetchIssue = classifyGoogleFetchIssue(error, "calendar");
+              functionResponses.push({
+                id: functionCall.id,
+                name: functionCall.name,
+                response: {
+                  error: {
+                    code: fetchIssue?.kind ?? "google_fetch_failed",
+                    message:
+                      "Could not retrieve that calendar event right now. Please try again shortly.",
+                  },
+                },
+              });
+              webSearchEvents.push({
+                status: "grounded",
+                label: "Calendar details unavailable",
+              });
+              traceError(req, "live.tool.calendar_detail.failed", error, {
+                conversationId: conversation.id,
+                query,
+                timeRange,
+                timezone,
+                fetchIssueKind: fetchIssue?.kind ?? null,
+                elapsedMs: elapsedMs(detailStartedAt),
+              });
+            }
+            continue;
+          }
+
+          if (
+            functionCall.name === "prepare_google_email_action" ||
+            functionCall.name === "prepare_google_calendar_action"
+          ) {
+            const actionStartedAt = Date.now();
+            if (
+              !ENABLE_GOOGLE_PERSONAL_CONTEXT_WRITES ||
+              !ENABLE_VOICE_GOOGLE_WRITE_HANDOFF
+            ) {
+              functionResponses.push({
+                id: functionCall.id,
+                name: functionCall.name,
+                response: {
+                  error: {
+                    code: "google_voice_write_handoff_disabled",
+                    message:
+                      "Approval-gated Google write actions are disabled in voice mode right now.",
+                  },
+                },
+              });
+              webSearchEvents.push({
+                status: "grounded",
+                label: "Action prep unavailable",
+              });
+              continue;
+            }
+
+            const requestText =
+              typeof args.request === "string"
+                ? args.request.trim()
+                : "";
+            if (!requestText) {
+              functionResponses.push({
+                id: functionCall.id,
+                name: functionCall.name,
+                response: {
+                  result: {
+                    status: "clarification_needed",
+                    message: "Tell me the Google action you want me to prepare.",
+                  },
+                },
+              });
+              continue;
+            }
+
+            const actionTimeZone = resolveGoogleContextTimeZone(
+              typeof args.timezone === "string"
+                ? args.timezone
+                : parsed.clientTimeZone ?? null,
+            );
+            const preparation = await prepareGoogleActionTask({
+              storage,
+              userId: req.session.userId,
+              text: requestText,
+              clientTimeZone: actionTimeZone,
+            });
+
+            if (preparation.kind === "none") {
+              functionResponses.push({
+                id: functionCall.id,
+                name: functionCall.name,
+                response: {
+                  result: {
+                    status: "clarification_needed",
+                    message:
+                      "I couldn't tell which Google action to prepare. Tell me whether you want an email draft/reply or a calendar create/update.",
+                  },
+                },
+              });
+              continue;
+            }
+
+            if (preparation.kind === "clarify" || preparation.kind === "upgrade_required") {
+              functionResponses.push({
+                id: functionCall.id,
+                name: functionCall.name,
+                response: {
+                  result: {
+                    status:
+                      preparation.kind === "clarify"
+                        ? "clarification_needed"
+                        : "upgrade_required",
+                    message: preparation.message,
+                  },
+                },
+              });
+              chatDigests.push({
+                sender: "assistant",
+                text: preparation.message,
+              });
+              webSearchEvents.push({
+                status: "grounded",
+                label:
+                  preparation.kind === "clarify"
+                    ? "Need one more detail"
+                    : "Google access upgrade required",
+              });
+              continue;
+            }
+
+            if (!latestConversationUserMessageId) {
+              const conversationMessages = await storage.getMessages(conversation.id);
+              latestConversationUserMessageId =
+                [...conversationMessages]
+                  .reverse()
+                  .find((message) => message.sender === "user")
+                  ?.id ?? null;
+            }
+
+            const run = await startGoogleActionTaskRun({
+              storage,
+              userId: req.session.userId,
+              conversationId: conversation.id,
+              prompt: requestText,
+              requestedByMessageId:
+                latestConversationUserMessageId ??
+                `live-google-action-${randomUUID()}`,
+              preview: preparation.preview,
+              plan: preparation.plan,
+            });
+            functionResponses.push({
+              id: functionCall.id,
+              name: functionCall.name,
+              response: {
+                result: {
+                  status: "approval_required",
+                  message:
+                    "I prepared the Google action and added an approval card to the chat.",
+                  taskId: run.task.id,
+                  preview: preparation.preview,
+                },
+              },
+            });
+            webSearchEvents.push({
+              status: "grounded",
+              label: "Approval card ready",
+            });
+            trace(req, "live.tool.google_action_prepared", {
+              conversationId: conversation.id,
+              taskId: run.task.id,
+              actionKind: preparation.preview.kind,
+              elapsedMs: elapsedMs(actionStartedAt),
+            });
             continue;
           }
 
@@ -10613,7 +11479,13 @@ export async function registerRoutes(
         });
       }
 
-      if (effectiveTurnIntent === "agent_task") {
+      if (
+        effectiveTurnIntent === "agent_task" &&
+        !(
+          ENABLE_GOOGLE_PERSONAL_CONTEXT_WRITES &&
+          detectGoogleActionTaskIntent(parsed.text)
+        )
+      ) {
         const taskKind = activeIntentSession
           ? coerceTaskKind(activeIntentSession.taskKind)
           : inferAgentTaskKind(
@@ -10968,6 +11840,71 @@ export async function registerRoutes(
           usage: null,
           decisionPath: "agent_task" satisfies IntentDecisionPath,
           decisionPathReason: "task_started" satisfies IntentDecisionPathReason,
+          elapsedMs: elapsedMs(startedAt),
+        });
+      }
+
+      const googleDetailReply = await maybePrepareGoogleDetailReadReply({
+        req,
+        userId: req.session.userId,
+        text: parsed.text,
+        clientTimeZone: parsed.clientTimeZone ?? null,
+      });
+      if (googleDetailReply) {
+        const assistantMessages = await storage.createAssistantTurnParts({
+          conversationId: conversation.id,
+          textParts: [googleDetailReply],
+        });
+        const legacyAssistantMessage = makeLegacyAssistantMessage(assistantMessages);
+        return res.status(201).json({
+          traceId: getTraceId(req),
+          conversationId: conversation.id,
+          userMessage: {
+            ...userMessage,
+            attachments: boundAttachments.map((attachment) =>
+              toAttachmentResponse(attachment, req.session.userId),
+            ),
+          },
+          assistantMessage: legacyAssistantMessage,
+          assistantMessages,
+          model: "google_personal_context_detail_v1",
+          usage: null,
+          googleSearchGroundingUsed: false,
+          decisionPath: "companion_reply" satisfies IntentDecisionPath,
+          decisionPathReason: "companion" satisfies IntentDecisionPathReason,
+          routeReason: "companion",
+          elapsedMs: elapsedMs(startedAt),
+        });
+      }
+
+      const googleActionOutcome = await maybeHandleGoogleActionTask({
+        storage,
+        userId: req.session.userId,
+        conversationId: conversation.id,
+        text: parsed.text,
+        clientTimeZone: parsed.clientTimeZone ?? null,
+        userMessage: {
+          id: userMessage.id,
+          createdAt: userMessage.createdAt,
+        },
+      });
+      if (googleActionOutcome.handled) {
+        return res.status(201).json({
+          traceId: getTraceId(req),
+          conversationId: conversation.id,
+          userMessage: {
+            ...userMessage,
+            attachments: boundAttachments.map((attachment) =>
+              toAttachmentResponse(attachment, req.session.userId),
+            ),
+          },
+          assistantMessage: googleActionOutcome.legacyAssistantMessage,
+          assistantMessages: googleActionOutcome.assistantMessages,
+          model: googleActionOutcome.model,
+          usage: null,
+          decisionPath: googleActionOutcome.decisionPath,
+          decisionPathReason: googleActionOutcome.decisionPathReason,
+          routeReason: googleActionOutcome.decisionPathReason,
           elapsedMs: elapsedMs(startedAt),
         });
       }
@@ -12034,7 +12971,13 @@ export async function registerRoutes(
         return;
       }
 
-      if (effectiveTurnIntent === "agent_task") {
+      if (
+        effectiveTurnIntent === "agent_task" &&
+        !(
+          ENABLE_GOOGLE_PERSONAL_CONTEXT_WRITES &&
+          detectGoogleActionTaskIntent(parsed.text)
+        )
+      ) {
         trace(req, "chat.stream.agent_task.started", {
           conversationId: conversation.id,
           attachmentCount: boundAttachments.length,
@@ -12404,6 +13347,66 @@ export async function registerRoutes(
           elapsedMs: elapsedMs(startedAt),
         });
 
+        res.end();
+        return;
+      }
+
+      const googleDetailReply = await maybePrepareGoogleDetailReadReply({
+        req,
+        userId: req.session.userId,
+        text: parsed.text,
+        clientTimeZone: parsed.clientTimeZone ?? null,
+      });
+      if (googleDetailReply) {
+        const responseAssistantMessages = await storage.createAssistantTurnParts({
+          conversationId: conversation.id,
+          textParts: [googleDetailReply],
+        });
+        const legacyAssistantMessage = makeLegacyAssistantMessage(
+          responseAssistantMessages,
+        );
+        writeEvent({
+          type: "final",
+          assistantMessage: legacyAssistantMessage,
+          assistantMessages: responseAssistantMessages,
+          model: "google_personal_context_detail_v1",
+          usage: null,
+          googleSearchGroundingUsed: false,
+          decisionPath: "companion_reply",
+          decisionPathReason: "companion",
+          routeReason: "companion",
+          elapsedMs: elapsedMs(startedAt),
+        });
+        res.end();
+        return;
+      }
+
+      const googleActionOutcome = await maybeHandleGoogleActionTask({
+        storage,
+        userId: req.session.userId,
+        conversationId: conversation.id,
+        text: parsed.text,
+        clientTimeZone: parsed.clientTimeZone ?? null,
+        userMessage: {
+          id: userMessage.id,
+          createdAt: userMessage.createdAt,
+        },
+        onEvent: (event: AgentTaskEvent) => {
+          writeEvent(event as unknown as Record<string, unknown>);
+        },
+      });
+      if (googleActionOutcome.handled) {
+        writeEvent({
+          type: "final",
+          assistantMessage: googleActionOutcome.legacyAssistantMessage,
+          assistantMessages: googleActionOutcome.assistantMessages,
+          model: googleActionOutcome.model,
+          usage: null,
+          decisionPath: googleActionOutcome.decisionPath,
+          decisionPathReason: googleActionOutcome.decisionPathReason,
+          routeReason: googleActionOutcome.decisionPathReason,
+          elapsedMs: elapsedMs(startedAt),
+        });
         res.end();
         return;
       }

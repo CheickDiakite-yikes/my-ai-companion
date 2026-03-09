@@ -103,8 +103,21 @@ const ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE = parseBooleanFlag(
   process.env.ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE,
   true,
 );
+const ENABLE_GOOGLE_PERSONAL_CONTEXT_DETAIL_READS = parseBooleanFlag(
+  process.env.ENABLE_GOOGLE_PERSONAL_CONTEXT_DETAIL_READS,
+  false,
+);
+const ENABLE_GOOGLE_PERSONAL_CONTEXT_WRITES = parseBooleanFlag(
+  process.env.ENABLE_GOOGLE_PERSONAL_CONTEXT_WRITES,
+  false,
+);
+const ENABLE_VOICE_GOOGLE_WRITE_HANDOFF = parseBooleanFlag(
+  process.env.ENABLE_VOICE_GOOGLE_WRITE_HANDOFF,
+  false,
+);
 const GOOGLE_SEARCH_TOOLS: GoogleSearchTool[] = [{ googleSearch: {} }];
-export const GOOGLE_DATA_FUNCTION_DECLARATIONS: LiveFunctionDeclaration[] = [
+const LIVE_GOOGLE_PERSONAL_CONTEXT_READ_FUNCTION_DECLARATIONS: LiveFunctionDeclaration[] =
+  [
   {
     name: "get_user_emails",
     description:
@@ -138,11 +151,78 @@ export const GOOGLE_DATA_FUNCTION_DECLARATIONS: LiveFunctionDeclaration[] = [
     },
   },
 ];
-const LIVE_GOOGLE_DATA_FUNCTION_TOOLS: LiveFunctionDeclarationsTool[] = [
-  {
-    functionDeclarations: GOOGLE_DATA_FUNCTION_DECLARATIONS,
-  },
-];
+const LIVE_GOOGLE_PERSONAL_CONTEXT_DETAIL_FUNCTION_DECLARATIONS: LiveFunctionDeclaration[] =
+  [
+    {
+      name: "get_email_thread_detail",
+      description:
+        "Retrieve a detailed Gmail thread with participants, body excerpts, and attachments for a specific email reference.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string" },
+        },
+        required: ["query"],
+      },
+    },
+    {
+      name: "get_calendar_event_detail",
+      description:
+        "Retrieve a detailed Google Calendar event with attendees, notes, and the latest event metadata.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string" },
+          timeRange: {
+            type: "string",
+            enum: ["today", "tomorrow", "this_week", "next_7_days"],
+          },
+          timezone: { type: "string" },
+        },
+        required: ["query"],
+      },
+    },
+  ];
+const LIVE_GOOGLE_PERSONAL_CONTEXT_ACTION_FUNCTION_DECLARATIONS: LiveFunctionDeclaration[] =
+  [
+    {
+      name: "prepare_google_email_action",
+      description:
+        "Prepare an approval-gated Gmail action such as drafting a reply or composing an email. This creates an in-thread approval card instead of sending immediately.",
+      parameters: {
+        type: "object",
+        properties: {
+          request: { type: "string" },
+        },
+        required: ["request"],
+      },
+    },
+    {
+      name: "prepare_google_calendar_action",
+      description:
+        "Prepare an approval-gated Google Calendar action such as creating or moving an event. This creates an in-thread approval card instead of updating the calendar immediately.",
+      parameters: {
+        type: "object",
+        properties: {
+          request: { type: "string" },
+          timezone: { type: "string" },
+        },
+        required: ["request"],
+      },
+    },
+  ];
+
+export function buildLiveGoogleDataFunctionDeclarations(): LiveFunctionDeclaration[] {
+  const declarations = [...LIVE_GOOGLE_PERSONAL_CONTEXT_READ_FUNCTION_DECLARATIONS];
+  if (ENABLE_GOOGLE_PERSONAL_CONTEXT_DETAIL_READS) {
+    declarations.push(...LIVE_GOOGLE_PERSONAL_CONTEXT_DETAIL_FUNCTION_DECLARATIONS);
+  }
+  if (ENABLE_GOOGLE_PERSONAL_CONTEXT_WRITES && ENABLE_VOICE_GOOGLE_WRITE_HANDOFF) {
+    declarations.push(...LIVE_GOOGLE_PERSONAL_CONTEXT_ACTION_FUNCTION_DECLARATIONS);
+  }
+  return declarations;
+}
+
 const LIVE_MORNING_BRIEF_FUNCTION_DECLARATIONS: LiveFunctionDeclaration[] = [
   {
     name: "get_morning_brief",
@@ -1291,6 +1371,11 @@ function composeLiveSystemInstruction(params: {
         "- If the user asks for last day/yesterday, set get_user_emails.sinceDays=1. If they ask for past week, set sinceDays=7.",
         "- If the user asks about calendar, meetings, events, schedule, or appointments, call get_calendar_events with an appropriate timeRange and timezone.",
         "- If the user asks for a combined daily/weekly overview, call both get_user_emails and get_calendar_events.",
+        "- If the user asks to read a specific email thread in more detail, call get_email_thread_detail with a short sender/subject query before answering.",
+        "- If the user asks for the details of a specific meeting or what changed in an invite, call get_calendar_event_detail before answering.",
+        "- If the user asks you to draft/reply/send an email, call prepare_google_email_action instead of pretending it was sent.",
+        "- If the user asks you to create/update/move a calendar event, call prepare_google_calendar_action instead of pretending it was updated.",
+        "- After detailed reads, prefer offering one grounded next step such as drafting a reply or updating the event.",
         "- If tools report google_not_connected or google_scope_missing, tell the user to connect/reconnect Google from Profile settings.",
         "- Never fabricate email or calendar information. Use only returned tool data.",
       ].join("\n"),
@@ -1321,6 +1406,8 @@ export async function createLiveToken(
     !ENABLE_MORNING_BRIEF_TEXT_ONLY;
   const enableGooglePersonalContextFunctionCalling =
     ENABLE_GOOGLE_PERSONAL_CONTEXT && ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE;
+  const liveGoogleDataFunctionDeclarations =
+    buildLiveGoogleDataFunctionDeclarations();
   const languageHintResolution = resolveEffectiveLanguageHint({
     clientLanguage: input.clientLanguage,
     clientLanguages: input.clientLanguages,
@@ -1593,7 +1680,9 @@ export async function createLiveToken(
                     tools.push(...LIVE_MORNING_BRIEF_FUNCTION_TOOLS);
                   }
                   if (enableGooglePersonalContextFunctionCalling) {
-                    tools.push(...LIVE_GOOGLE_DATA_FUNCTION_TOOLS);
+                    tools.push({
+                      functionDeclarations: liveGoogleDataFunctionDeclarations,
+                    });
                   }
                   return tools.length > 0 ? tools : undefined;
                 })(),

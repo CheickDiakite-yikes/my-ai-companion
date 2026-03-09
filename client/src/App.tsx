@@ -74,6 +74,8 @@ import {
 import type {
   AgentArtifactSummary,
   AgentApprovalSummary,
+  GoogleActionPreview,
+  GoogleActionResult,
   ArtifactQualitySummary,
   AgentOfferSummary,
   AgentToolCallSummary,
@@ -84,7 +86,7 @@ import type {
   TaskFailureSummary,
   TaskStateResolvedStatusSource,
   TaskStateVersion,
-  UnifiedAgentTaskCardModel,
+  UnifiedAgentTaskCardModel as SharedUnifiedAgentTaskCardModel,
   UnifiedAgentTaskTimelineItem,
 } from "@shared/agent";
 import { resolveLiveAudioCompatibilityProfile } from "@shared/live-audio-compatibility";
@@ -699,6 +701,9 @@ interface GoogleIntegrationStatusResponse extends TraceAwareResponse {
   gmailConnected?: boolean;
   calendarConnected?: boolean;
   missingScopes?: string[];
+  gmailWriteConnected?: boolean;
+  calendarWriteConnected?: boolean;
+  writeMissingScopes?: string[];
   lastError: string | null;
   expiry: string | null;
   enabled?: boolean;
@@ -724,6 +729,13 @@ interface LiveTaskSnapshot {
   timeline: UnifiedAgentTaskTimelineItem[];
   updatedAtIso: string;
 }
+
+type GoogleConnectScopeMode = "read" | "write";
+
+type UnifiedAgentTaskCardModel = SharedUnifiedAgentTaskCardModel & {
+  googleActionPreview?: GoogleActionPreview | null;
+  googleActionResult?: GoogleActionResult | null;
+};
 
 type TextRenderItem =
   | {
@@ -966,6 +978,21 @@ function isAgentUiPayload(payload: MessageData["uiPayload"]): boolean {
   );
 }
 
+function isGoogleAssistantUiPayload(payload: MessageData["uiPayload"]): boolean {
+  if (!payload) return false;
+  if (payload.kind === "agent_task_status") {
+    return (
+      payload.task.taskKind === "google_action" ||
+      Boolean(payload.googleActionPreview) ||
+      Boolean(payload.googleActionResult)
+    );
+  }
+  if (payload.kind === "agent_approval") {
+    return Boolean(payload.googleActionPreview);
+  }
+  return false;
+}
+
 function toTaskStatusLabel(status: AgentTaskSummary["status"]): string {
   if (status === "in_progress") return "In progress";
   if (status === "approval_required") return "Needs approval";
@@ -1001,6 +1028,14 @@ const ENABLE_UNIFIED_AGENT_TASK_CARD = parseClientBooleanFlag(
 const ENABLE_AGENTIC_CREATIONS = parseClientBooleanFlag(
   (import.meta.env as Record<string, unknown>).VITE_ENABLE_AGENTIC_CREATIONS ??
     (import.meta.env as Record<string, unknown>).ENABLE_AGENTIC_CREATIONS,
+  false,
+);
+
+const ENABLE_GOOGLE_ASSISTANT_TASKS = parseClientBooleanFlag(
+  (import.meta.env as Record<string, unknown>)
+    .VITE_ENABLE_GOOGLE_PERSONAL_CONTEXT_WRITES ??
+    (import.meta.env as Record<string, unknown>)
+      .ENABLE_GOOGLE_PERSONAL_CONTEXT_WRITES,
   false,
 );
 
@@ -1151,12 +1186,19 @@ function toTaskKindLabel(taskKind: string): string {
   if (taskKind === "web_build") return "Web build";
   if (taskKind === "doc_markdown") return "Document";
   if (taskKind === "mixed") return "Mixed";
+  if (taskKind === "google_action") return "Google assistant";
   return "Agent task";
 }
 
 function toUnifiedTaskOutputSummary(card: UnifiedAgentTaskCardModel): string {
   const summary = card.summaryText?.trim() ?? "";
   const summaryLooksLeakedArtifact = isLikelyAgentArtifactBodyLeak(summary);
+  if (card.googleActionResult?.summary?.trim()) {
+    return card.googleActionResult.summary.trim();
+  }
+  if (card.googleActionPreview?.summary?.trim()) {
+    return card.googleActionPreview.summary.trim();
+  }
   if (card.status === "failed") {
     return (
       card.failure?.reason ||
@@ -1197,8 +1239,12 @@ function toDefaultTaskTitle(params: {
   task: AgentTaskSummary | null;
   artifact: AgentArtifactSummary | null;
   taskId: string;
+  googleActionPreview?: GoogleActionPreview | null;
 }): string {
   if (params.artifact?.title) return params.artifact.title;
+  if (params.googleActionPreview?.title?.trim()) {
+    return params.googleActionPreview.title.trim();
+  }
   if (params.task?.prompt?.trim()) {
     return params.task.prompt.trim().slice(0, 72);
   }
@@ -1214,6 +1260,26 @@ function normalizeTimeline(
     if (aRank !== bRank) return aRank - bRank;
     return a.id.localeCompare(b.id);
   });
+}
+
+function formatGoogleActionDateTime(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return parsed.toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function shouldRenderAgentUiPayload(payload: MessageData["uiPayload"]): boolean {
+  if (!payload) return false;
+  if (ENABLE_AGENTIC_CREATIONS) {
+    return isAgentUiPayload(payload);
+  }
+  return ENABLE_GOOGLE_ASSISTANT_TASKS && isGoogleAssistantUiPayload(payload);
 }
 
 function buildUnifiedAgentTaskCards(
@@ -1232,6 +1298,8 @@ function buildUnifiedAgentTaskCards(
     approval: AgentApprovalSummary | null;
     artifact: AgentArtifactSummary | null;
     failure: TaskFailureSummary | null;
+    googleActionPreview: GoogleActionPreview | null;
+    googleActionResult: GoogleActionResult | null;
     timeline: UnifiedAgentTaskTimelineItem[];
     summaryText: string | null;
   }
@@ -1254,6 +1322,8 @@ function buildUnifiedAgentTaskCards(
         approval: null,
         artifact: null,
         failure: null,
+        googleActionPreview: null,
+        googleActionResult: null,
         timeline: [],
         summaryText: null,
       });
@@ -1270,6 +1340,12 @@ function buildUnifiedAgentTaskCards(
 
     if (isAgentTaskStatusPayload(message.uiPayload)) {
       aggregate.task = pickLatestTaskSummary(aggregate.task, message.uiPayload.task);
+      if (message.uiPayload.googleActionPreview) {
+        aggregate.googleActionPreview = message.uiPayload.googleActionPreview;
+      }
+      if (message.uiPayload.googleActionResult) {
+        aggregate.googleActionResult = message.uiPayload.googleActionResult;
+      }
       if (message.uiPayload.task.status === "failed") {
         const failureReason =
           message.uiPayload.task.errorMessage?.trim() ||
@@ -1321,6 +1397,9 @@ function buildUnifiedAgentTaskCards(
 
     if (isAgentApprovalPayload(message.uiPayload)) {
       aggregate.approval = message.uiPayload.approval;
+      if (message.uiPayload.googleActionPreview) {
+        aggregate.googleActionPreview = message.uiPayload.googleActionPreview;
+      }
       upsertTimelineItem(aggregate.timeline, {
         id: `approval-${message.uiPayload.approval.id}`,
         title:
@@ -1440,6 +1519,7 @@ function buildUnifiedAgentTaskCards(
         task: resolvedTask,
         artifact: aggregate.artifact,
         taskId,
+        googleActionPreview: aggregate.googleActionPreview,
       }),
       prompt: resolvedTask.prompt,
       summaryText,
@@ -1449,6 +1529,8 @@ function buildUnifiedAgentTaskCards(
       approval: aggregate.approval,
       artifact: aggregate.artifact,
       failure: aggregate.failure,
+      googleActionPreview: aggregate.googleActionPreview,
+      googleActionResult: aggregate.googleActionResult,
       timeline,
       autoCollapsed:
         isTerminalTaskStatus(resolvedStatus) &&
@@ -2491,6 +2573,8 @@ const ProfileView = ({
   const [quotaOpen, setQuotaOpen] = useState(false);
   const [accountOpen, setAccountOpen] = useState(false);
   const [connectedAccountsOpen, setConnectedAccountsOpen] = useState(false);
+  const [googleConnectScopeMode, setGoogleConnectScopeMode] =
+    useState<GoogleConnectScopeMode>("read");
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveSuccess, setSaveSuccess] = useState<string | null>(null);
   const [googleIntegrationNotice, setGoogleIntegrationNotice] = useState<string | null>(
@@ -2509,10 +2593,13 @@ const ProfileView = ({
   });
 
   const connectGoogleMutation = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (scopeMode: GoogleConnectScopeMode) => {
       const query = new URLSearchParams({
         returnTo: "/",
       });
+      if (scopeMode === "write") {
+        query.set("scopeMode", "write");
+      }
       if (GOOGLE_OAUTH_CONNECT_REDIRECT_URI_OVERRIDE) {
         query.set("redirectUri", GOOGLE_OAUTH_CONNECT_REDIRECT_URI_OVERRIDE);
       }
@@ -2629,7 +2716,12 @@ const ProfileView = ({
   const googleConnected = Boolean(googleIntegration?.connected);
   const gmailConnected = Boolean(googleIntegration?.gmailConnected);
   const calendarConnected = Boolean(googleIntegration?.calendarConnected);
+  const gmailWriteConnected = Boolean(googleIntegration?.gmailWriteConnected);
+  const calendarWriteConnected = Boolean(
+    googleIntegration?.calendarWriteConnected,
+  );
   const missingScopes = googleIntegration?.missingScopes ?? [];
+  const writeMissingScopes = googleIntegration?.writeMissingScopes ?? [];
 
   const hasCustomZeeAvatar = Boolean(profile?.zeeAvatarUrl) && !clearZeeAvatarAttachment;
   const zeeAvatarPreviewSrc = hasCustomZeeAvatar
@@ -2685,7 +2777,15 @@ const ProfileView = ({
   const onConnectGoogle = () => {
     setGoogleIntegrationNotice(null);
     setGoogleIntegrationActionError(null);
-    connectGoogleMutation.mutate();
+    setGoogleConnectScopeMode("read");
+    connectGoogleMutation.mutate("read");
+  };
+
+  const onUpgradeGoogleAccess = () => {
+    setGoogleIntegrationNotice(null);
+    setGoogleIntegrationActionError(null);
+    setGoogleConnectScopeMode("write");
+    connectGoogleMutation.mutate("write");
   };
 
   const onDisconnectGoogle = () => {
@@ -2999,7 +3099,21 @@ const ProfileView = ({
                                   border: "1px solid var(--app-soft-card-border)",
                                 }}
                               >
-                                Gmail {gmailConnected ? "✓" : "—"}
+                                Gmail read {gmailConnected ? "✓" : "—"}
+                              </span>
+                              <span
+                                className="inline-flex items-center rounded-full px-2 py-0.5 text-xs"
+                                style={{
+                                  backgroundColor: gmailWriteConnected
+                                    ? "rgba(46, 204, 113, 0.14)"
+                                    : "var(--app-input-bg)",
+                                  color: gmailWriteConnected
+                                    ? "#83f0b7"
+                                    : "var(--app-on-dark-muted)",
+                                  border: "1px solid var(--app-soft-card-border)",
+                                }}
+                              >
+                                Gmail write {gmailWriteConnected ? "✓" : "—"}
                               </span>
                               <span
                                 className="inline-flex items-center rounded-full px-2 py-0.5 text-xs"
@@ -3013,34 +3127,77 @@ const ProfileView = ({
                                   border: "1px solid var(--app-soft-card-border)",
                                 }}
                               >
-                                Calendar {calendarConnected ? "✓" : "— reconnect to enable"}
+                                Calendar read {calendarConnected ? "✓" : "—"}
+                              </span>
+                              <span
+                                className="inline-flex items-center rounded-full px-2 py-0.5 text-xs"
+                                style={{
+                                  backgroundColor: calendarWriteConnected
+                                    ? "rgba(46, 204, 113, 0.14)"
+                                    : "var(--app-input-bg)",
+                                  color: calendarWriteConnected
+                                    ? "#83f0b7"
+                                    : "var(--app-on-dark-muted)",
+                                  border: "1px solid var(--app-soft-card-border)",
+                                }}
+                              >
+                                Calendar write {calendarWriteConnected ? "✓" : "—"}
                               </span>
                             </div>
 
                             {missingScopes.length > 0 && (
                               <p className="text-xs" style={{ color: "#f5c57a" }}>
-                                Missing permission detected. Disconnect and reconnect Google to grant
-                                required scope(s).
+                                Read access is incomplete. Reconnect Google to restore Gmail and
+                                Calendar reads.
+                              </p>
+                            )}
+
+                            {writeMissingScopes.length > 0 && googleConnected && (
+                              <p className="text-xs" style={{ color: "#f5c57a" }}>
+                                Write access is not enabled yet. Upgrade Google access to let Zee
+                                draft emails and update calendar events with approval.
                               </p>
                             )}
 
                             {googleConnected ? (
-                              <button
-                                type="button"
-                                onClick={onDisconnectGoogle}
-                                disabled={disconnectGoogleMutation.isPending}
-                                className="w-full rounded-xl border px-3 py-2 text-sm font-medium transition-colors hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-70"
-                                style={{
-                                  borderColor: "rgba(250, 131, 131, 0.5)",
-                                  backgroundColor: "rgba(250, 131, 131, 0.08)",
-                                  color: "#f7b6b6",
-                                }}
-                                data-testid="button-disconnect-google"
-                              >
-                                {disconnectGoogleMutation.isPending
-                                  ? "Disconnecting..."
-                                  : "Disconnect Google"}
-                              </button>
+                              <div className="space-y-2">
+                                {(!gmailWriteConnected || !calendarWriteConnected) && (
+                                  <button
+                                    type="button"
+                                    onClick={onUpgradeGoogleAccess}
+                                    disabled={connectGoogleMutation.isPending}
+                                    className="w-full rounded-xl border px-3 py-2 text-sm font-medium transition-colors hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-70"
+                                    style={{
+                                      borderColor: "var(--app-accent)",
+                                      backgroundColor:
+                                        "color-mix(in srgb, var(--app-accent) 18%, transparent)",
+                                      color: "var(--app-on-dark)",
+                                    }}
+                                    data-testid="button-upgrade-google-access"
+                                  >
+                                    {connectGoogleMutation.isPending &&
+                                    googleConnectScopeMode === "write"
+                                      ? "Preparing write access..."
+                                      : "Upgrade Google access"}
+                                  </button>
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={onDisconnectGoogle}
+                                  disabled={disconnectGoogleMutation.isPending}
+                                  className="w-full rounded-xl border px-3 py-2 text-sm font-medium transition-colors hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-70"
+                                  style={{
+                                    borderColor: "rgba(250, 131, 131, 0.5)",
+                                    backgroundColor: "rgba(250, 131, 131, 0.08)",
+                                    color: "#f7b6b6",
+                                  }}
+                                  data-testid="button-disconnect-google"
+                                >
+                                  {disconnectGoogleMutation.isPending
+                                    ? "Disconnecting..."
+                                    : "Disconnect Google"}
+                                </button>
+                              </div>
                             ) : (
                               <button
                                 type="button"
@@ -3054,8 +3211,11 @@ const ProfileView = ({
                                 }}
                                 data-testid="button-connect-google"
                               >
-                                {connectGoogleMutation.isPending
-                                  ? "Preparing connection..."
+                                {connectGoogleMutation.isPending &&
+                                googleConnectScopeMode === "write"
+                                  ? "Preparing write access..."
+                                  : connectGoogleMutation.isPending
+                                    ? "Preparing connection..."
                                   : "Connect Google"}
                               </button>
                             )}
@@ -5301,6 +5461,9 @@ const UnifiedAgentTaskCard = ({
   const kindLabel = toTaskKindLabel(card.taskKind);
   const outputSummary = toUnifiedTaskOutputSummary(card);
   const detailTools = taskDetailQuery.data?.toolCalls ?? [];
+  const googleActionPreview = card.googleActionPreview ?? null;
+  const googleActionResult = card.googleActionResult ?? null;
+  const hasGoogleActionOutput = Boolean(googleActionPreview || googleActionResult);
 
   const statusTone =
     card.status === "failed"
@@ -5810,6 +5973,129 @@ const UnifiedAgentTaskCard = ({
                       </button>
                     </div>
                   </div>
+                ) : hasGoogleActionOutput ? (
+                  <div
+                    className="relative overflow-hidden rounded-xl border p-4"
+                    style={{
+                      borderColor: "var(--app-soft-card-border)",
+                      background:
+                        "radial-gradient(120% 100% at 12% 10%, color-mix(in srgb, var(--app-accent) 14%, transparent) 0%, transparent 56%), color-mix(in srgb, var(--app-soft-card-bg) 80%, transparent)",
+                    }}
+                    data-testid="google-action-output-panel"
+                  >
+                    <div className="space-y-3">
+                      <div className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide opacity-70">
+                        {googleActionResult ? (
+                          <CheckCircle2 className="h-3 w-3" />
+                        ) : (
+                          <Globe className="h-3 w-3" />
+                        )}
+                        {googleActionResult ? "Applied" : "Preview"}
+                      </div>
+                      <div className="space-y-1">
+                        <p className="text-sm font-semibold">
+                          {googleActionPreview?.title ?? card.title}
+                        </p>
+                        <p className="text-xs opacity-80">
+                          {googleActionResult?.summary ??
+                            googleActionPreview?.summary ??
+                            outputSummary}
+                        </p>
+                      </div>
+
+                      {googleActionPreview?.proposedEmail && (
+                        <div
+                          className="rounded-xl border p-3 text-xs"
+                          style={{
+                            borderColor: "var(--app-soft-card-border)",
+                            backgroundColor:
+                              "color-mix(in srgb, var(--app-soft-card-bg) 72%, transparent)",
+                          }}
+                        >
+                          <p className="font-semibold">Email action</p>
+                          <p className="mt-1 opacity-80">
+                            To: {googleActionPreview.proposedEmail.to.join(", ") || "None"}
+                          </p>
+                          <p className="opacity-80">
+                            Subject: {googleActionPreview.proposedEmail.subject}
+                          </p>
+                          {googleActionPreview.proposedEmail.bodyPreview ? (
+                            <p className="mt-2 whitespace-pre-wrap opacity-80">
+                              {googleActionPreview.proposedEmail.bodyPreview}
+                            </p>
+                          ) : null}
+                        </div>
+                      )}
+
+                      {googleActionPreview?.proposedCalendar && (
+                        <div
+                          className="rounded-xl border p-3 text-xs"
+                          style={{
+                            borderColor: "var(--app-soft-card-border)",
+                            backgroundColor:
+                              "color-mix(in srgb, var(--app-soft-card-bg) 72%, transparent)",
+                          }}
+                        >
+                          <p className="font-semibold">
+                            {googleActionPreview.proposedCalendar.title}
+                          </p>
+                          <p className="mt-1 opacity-80">
+                            {formatGoogleActionDateTime(
+                              googleActionPreview.proposedCalendar.startTime,
+                            )}{" "}
+                            to{" "}
+                            {formatGoogleActionDateTime(
+                              googleActionPreview.proposedCalendar.endTime,
+                            )}
+                          </p>
+                          {googleActionPreview.proposedCalendar.location ? (
+                            <p className="opacity-80">
+                              Location: {googleActionPreview.proposedCalendar.location}
+                            </p>
+                          ) : null}
+                          {googleActionPreview.proposedCalendar.descriptionPreview ? (
+                            <p className="mt-2 whitespace-pre-wrap opacity-80">
+                              {googleActionPreview.proposedCalendar.descriptionPreview}
+                            </p>
+                          ) : null}
+                        </div>
+                      )}
+
+                      {googleActionPreview?.emailThread && (
+                        <div className="space-y-1 text-xs opacity-80">
+                          <p className="font-semibold">Thread context</p>
+                          <p>
+                            {googleActionPreview.emailThread.subject}
+                            {googleActionPreview.emailThread.latestSentAt
+                              ? ` · ${formatGoogleActionDateTime(
+                                  googleActionPreview.emailThread.latestSentAt,
+                                )}`
+                              : ""}
+                          </p>
+                          {googleActionPreview.emailThread.latestSnippet ? (
+                            <p>{googleActionPreview.emailThread.latestSnippet}</p>
+                          ) : null}
+                        </div>
+                      )}
+
+                      {googleActionPreview?.calendarEvent && (
+                        <div className="space-y-1 text-xs opacity-80">
+                          <p className="font-semibold">Current calendar event</p>
+                          <p>
+                            {googleActionPreview.calendarEvent.title}
+                            {googleActionPreview.calendarEvent.startTime
+                              ? ` · ${formatGoogleActionDateTime(
+                                  googleActionPreview.calendarEvent.startTime,
+                                )}`
+                              : ""}
+                          </p>
+                          {googleActionPreview.calendarEvent.location ? (
+                            <p>{googleActionPreview.calendarEvent.location}</p>
+                          ) : null}
+                        </div>
+                      )}
+                    </div>
+                  </div>
                 ) : card.status === "failed" ? (
                   <div
                     className="rounded-xl border p-4"
@@ -6270,9 +6556,12 @@ const TextView = ({
 
   const visibleMessages = useMemo(
     () =>
-      ENABLE_AGENTIC_CREATIONS
-        ? messages
-        : messages.filter((message) => !isAgentUiPayload(message.uiPayload)),
+      messages.filter((message) => {
+        if (!isAgentUiPayload(message.uiPayload)) {
+          return true;
+        }
+        return shouldRenderAgentUiPayload(message.uiPayload);
+      }),
     [messages],
   );
 
@@ -6290,7 +6579,10 @@ const TextView = ({
       ?.text ?? "";
 
   const renderItems = useMemo(() => {
-    if (!ENABLE_AGENTIC_CREATIONS || !ENABLE_UNIFIED_AGENT_TASK_CARD) {
+    if (
+      (!ENABLE_AGENTIC_CREATIONS && !ENABLE_GOOGLE_ASSISTANT_TASKS) ||
+      !ENABLE_UNIFIED_AGENT_TASK_CARD
+    ) {
       return visibleMessages.map((message) => ({
         kind: "message",
         message,
@@ -6575,16 +6867,28 @@ const TextView = ({
                         data-testid="agent-task-status-card"
                         data-agent-task-id={msg.uiPayload.task.id}
                         data-agent-task-status={msg.uiPayload.task.status}
-                      >
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="text-[11px] font-semibold uppercase tracking-wide opacity-75">
-                            Agent task
-                          </span>
-                          <span className="text-[11px] font-semibold">
-                            {toTaskStatusLabel(msg.uiPayload.task.status)}
-                          </span>
-                        </div>
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[11px] font-semibold uppercase tracking-wide opacity-75">
+                            {msg.uiPayload.task.taskKind === "google_action"
+                              ? "Google assistant"
+                              : "Agent task"}
+                        </span>
+                        <span className="text-[11px] font-semibold">
+                          {toTaskStatusLabel(msg.uiPayload.task.status)}
+                        </span>
+                      </div>
                         <p className="text-sm font-medium">{msg.uiPayload.text}</p>
+                        {msg.uiPayload.googleActionPreview?.summary && (
+                          <p className="text-xs opacity-80">
+                            {msg.uiPayload.googleActionPreview.summary}
+                          </p>
+                        )}
+                        {msg.uiPayload.googleActionResult?.summary && (
+                          <p className="text-xs opacity-80">
+                            {msg.uiPayload.googleActionResult.summary}
+                          </p>
+                        )}
                         {msg.uiPayload.latestStep && (
                           <div className="rounded-lg border border-black/10 bg-black/5 px-3 py-2 text-xs">
                             <p className="font-semibold">{msg.uiPayload.latestStep.title}</p>
@@ -6605,6 +6909,11 @@ const TextView = ({
                         <p className="text-xs opacity-85">
                           {msg.uiPayload.approval.requestedAction}
                         </p>
+                        {msg.uiPayload.googleActionPreview?.summary && (
+                          <p className="text-xs opacity-75">
+                            {msg.uiPayload.googleActionPreview.summary}
+                          </p>
+                        )}
                         <div className="flex gap-2">
                           <button
                             type="button"
