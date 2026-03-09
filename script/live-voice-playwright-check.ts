@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { eq } from "drizzle-orm";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
+import { db } from "../server/db";
+import { storage } from "../server/storage";
+import { users } from "../shared/models/auth";
 import {
   clearLiveTraceBuffer,
   installLiveVoiceFixtureMic,
@@ -114,10 +119,16 @@ async function main(): Promise<void> {
       );
     }
 
+    await clearTraceBuffer();
+    const conversationId = await resolveActiveConversationId(page, args.baseUrl);
+    await seedVoiceStageDraftFixture(args.email, conversationId);
+    const voiceStageTrace = await assertVoiceStageSurface(page, readTraceBuffer);
+
     const combinedTrace = {
       noiseTrace,
       speechTrace,
       interruptTrace,
+      voiceStageTrace,
     };
     await writeFile(
       resolve(args.outputDir, "live-voice-playwright-traces.json"),
@@ -126,6 +137,10 @@ async function main(): Promise<void> {
     );
     await page.screenshot({
       path: resolve(args.outputDir, "live-voice-playwright.png"),
+      fullPage: true,
+    });
+    await page.screenshot({
+      path: resolve(args.outputDir, "live-voice-playwright-stage.png"),
       fullPage: true,
     });
 
@@ -138,6 +153,170 @@ async function main(): Promise<void> {
     }
     await browser.close();
   }
+}
+
+async function resolveActiveConversationId(
+  page: Page,
+  baseUrl: string,
+): Promise<string> {
+  const response = await page.request.get(`${baseUrl}/api/conversations`);
+  assert.equal(response.ok(), true, "Expected conversation list request to succeed");
+  const payload = (await response.json()) as Array<{ id: string }>;
+  const conversationId = payload[0]?.id;
+  assert.ok(conversationId, "Expected at least one active conversation");
+  return conversationId;
+}
+
+async function seedVoiceStageDraftFixture(
+  email: string,
+  conversationId: string,
+): Promise<void> {
+  const [user] = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(eq(users.email, email))
+    .limit(1);
+  assert.ok(user?.id, `Expected to find user for ${email}`);
+
+  const prompt = "draft an email to voice-stage@example.com saying hello from voice mode";
+  const preview = {
+    kind: "email_compose" as const,
+    title: "Create email draft",
+    summary: "Create an email draft to voice-stage@example.com.",
+    connector: "gmail" as const,
+    requiresWriteAccess: true,
+    proposedEmail: {
+      to: ["voice-stage@example.com"],
+      cc: [],
+      subject: "Voice stage hello",
+      bodyPreview: "hello from voice mode",
+      sendAfterApproval: false,
+    },
+  };
+  const plan = {
+    version: "google_action_v1" as const,
+    preview,
+    execution: {
+      kind: "email_compose" as const,
+      sendAfterApproval: false,
+      to: ["voice-stage@example.com"],
+      cc: [],
+      subject: "Voice stage hello",
+      bodyText: "hello from voice mode",
+    },
+  };
+  const completedAt = new Date();
+  const task = await storage.createAgentTask({
+    userId: user.id,
+    conversationId,
+    status: "completed",
+    riskLevel: "high",
+    taskKind: "google_action",
+    prompt,
+    requestedByMessageId: randomUUID(),
+    plan,
+    completedAt,
+  });
+
+  await storage.createMessage({
+    conversationId,
+    sender: "assistant",
+    text: "Created a Gmail draft to voice-stage@example.com.",
+    partIndex: 0,
+    uiPayload: {
+      kind: "agent_task_status",
+      task: {
+        id: task.id,
+        conversationId: task.conversationId,
+        status: task.status,
+        riskLevel: task.riskLevel,
+        taskKind: task.taskKind,
+        prompt: task.prompt,
+        errorMessage: task.errorMessage ?? null,
+        createdAt: task.createdAt,
+        updatedAt: task.updatedAt,
+        completedAt: task.completedAt,
+      },
+      text: "Completed",
+      googleActionPreview: preview,
+      googleActionResult: {
+        kind: "email_compose",
+        connector: "gmail",
+        status: "draft_created",
+        summary: "Created a Gmail draft to voice-stage@example.com.",
+        draftId: `voice-stage-draft-${task.id}`,
+        messageId: `voice-stage-message-${task.id}`,
+        threadId: null,
+      },
+    },
+  });
+}
+
+async function assertVoiceStageSurface(
+  page: Page,
+  readTraceBuffer: () => Promise<LiveTraceEntry[]>,
+): Promise<LiveTraceEntry[]> {
+  try {
+    await page.waitForSelector('[data-testid="voice-task-stage"]', {
+      timeout: 12_000,
+    });
+  } catch (error) {
+    const trace = await readTraceBuffer();
+    throw new Error(
+      `Voice stage surface did not appear: ${error instanceof Error ? error.message : String(error)}\nRecent traces: ${JSON.stringify(trace.slice(-20), null, 2)}`,
+    );
+  }
+
+  const stage = page.getByTestId("voice-task-stage");
+  const stageText = (await stage.textContent()) ?? "";
+  assert.match(
+    stageText,
+    /(zee mail|create email draft|voice stage hello|voice-stage@example\.com)/i,
+    "Expected the voice task stage to render the seeded Gmail surface",
+  );
+
+  let trace = await readTraceBuffer();
+  assert.equal(
+    trace.some((entry) => entry.event === "voice.stage.surface_resolved"),
+    true,
+    "Expected a voice.stage.surface_resolved trace after the task surface appeared",
+  );
+  assert.equal(
+    trace.some((entry) => entry.event === "voice.stage.surface_visible"),
+    true,
+    "Expected a voice.stage.surface_visible trace after the task surface appeared",
+  );
+  assert.equal(
+    trace.some((entry) => entry.event === "voice.stage.candidate_snapshot"),
+    true,
+    "Expected a voice.stage.candidate_snapshot trace after the task surface appeared",
+  );
+
+  await page.getByTestId("button-voice-stage-dismiss").click();
+  await page.waitForSelector('[data-testid="button-voice-stage-open-canvas"]', {
+    timeout: 5_000,
+  });
+  await page.waitForSelector('[data-testid="button-end-call"]', {
+    timeout: 5_000,
+  });
+  await page.getByTestId("button-voice-stage-open-canvas").click();
+  await page.waitForSelector('[data-testid="voice-task-stage"]', {
+    timeout: 5_000,
+  });
+
+  trace = await readTraceBuffer();
+  assert.equal(
+    trace.some((entry) => entry.event === "voice.stage.surface_dismissed"),
+    true,
+    "Expected a voice.stage.surface_dismissed trace after hiding the canvas",
+  );
+  assert.equal(
+    trace.some((entry) => entry.event === "voice.stage.surface_reopened"),
+    true,
+    "Expected a voice.stage.surface_reopened trace after reopening the canvas",
+  );
+
+  return trace;
 }
 
 function parseArgs(argv: string[]): CliArgs {

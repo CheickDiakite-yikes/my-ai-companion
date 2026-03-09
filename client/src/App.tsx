@@ -753,6 +753,38 @@ type TextRenderItem =
       card: UnifiedAgentTaskCardModel;
     };
 
+type VoiceStageSurface =
+  | {
+      kind: "task";
+      surfaceKey: string;
+      message: MessageData;
+      card: UnifiedAgentTaskCardModel;
+    }
+  | {
+      kind: "compose_session";
+      surfaceKey: string;
+      message: MessageData;
+      session: GoogleComposeSession;
+      text: string;
+    }
+  | {
+      kind: "email_ambiguity";
+      surfaceKey: string;
+      message: MessageData;
+      ambiguity: Extract<
+        AgentMessageUiPayload,
+        { kind: "agent_google_email_ambiguity" }
+      >["ambiguity"];
+      text: string;
+    };
+
+type VoiceStageCandidate = VoiceStageSurface & {
+  activeRank: number;
+  recencyRank: number;
+  source: "task" | "compose_session" | "email_ambiguity";
+  isTerminal: boolean;
+};
+
 const ZEE_AVATAR_PRESET_OPTIONS: Array<{
   id: ZeeAvatarPreset;
   label: string;
@@ -3986,6 +4018,176 @@ function buildUnifiedAgentTaskCards(
   });
 }
 
+function isTerminalTaskCardStatus(status: UnifiedAgentTaskCardModel["status"]): boolean {
+  return status === "completed" || status === "failed" || status === "cancelled";
+}
+
+function summarizeVoiceStageSurface(
+  surface: VoiceStageSurface | VoiceStageCandidate | null,
+): Record<string, unknown> | null {
+  if (!surface) {
+    return null;
+  }
+
+  if (surface.kind === "task") {
+    return {
+      kind: surface.kind,
+      surfaceKey: surface.surfaceKey,
+      taskId: surface.card.taskId,
+      taskStatus: surface.card.status,
+      connector:
+        surface.card.googleActionPreview?.connector ??
+        surface.card.googleActionResult?.connector ??
+        null,
+      title: surface.card.title,
+      summary:
+        surface.card.googleActionResult?.summary ??
+        surface.card.googleActionPreview?.summary ??
+        surface.card.summary ??
+        null,
+      source: "source" in surface ? surface.source : "task",
+      activeRank: "activeRank" in surface ? surface.activeRank : null,
+      recencyRank: "recencyRank" in surface ? surface.recencyRank : null,
+      isTerminal: "isTerminal" in surface ? surface.isTerminal : null,
+    };
+  }
+
+  if (surface.kind === "compose_session") {
+    return {
+      kind: surface.kind,
+      surfaceKey: surface.surfaceKey,
+      sessionStatus: surface.session.status,
+      sessionMode: surface.session.mode,
+      recipient: surface.session.recipientEmail ?? null,
+      title: surface.text,
+      source: "source" in surface ? surface.source : "compose_session",
+      activeRank: "activeRank" in surface ? surface.activeRank : null,
+      recencyRank: "recencyRank" in surface ? surface.recencyRank : null,
+      isTerminal: "isTerminal" in surface ? surface.isTerminal : null,
+    };
+  }
+
+  return {
+    kind: surface.kind,
+    surfaceKey: surface.surfaceKey,
+    candidateCount: surface.ambiguity.candidates.length,
+    title: surface.text,
+    source: "source" in surface ? surface.source : "email_ambiguity",
+    activeRank: "activeRank" in surface ? surface.activeRank : null,
+    recencyRank: "recencyRank" in surface ? surface.recencyRank : null,
+    isTerminal: "isTerminal" in surface ? surface.isTerminal : null,
+  };
+}
+
+function buildVoiceStageCandidates(
+  messages: MessageData[],
+  liveTaskSnapshots: Record<string, LiveTaskSnapshot>,
+): VoiceStageCandidate[] {
+  const visibleMessages = messages.filter((message) => {
+    if (!isAgentUiPayload(message.uiPayload)) {
+      return true;
+    }
+    return shouldRenderAgentUiPayload(message.uiPayload);
+  });
+
+  const renderItems =
+    (!ENABLE_AGENTIC_CREATIONS && !ENABLE_GOOGLE_ASSISTANT_TASKS) ||
+    !ENABLE_UNIFIED_AGENT_TASK_CARD
+      ? (visibleMessages.map((message) => ({
+          kind: "message",
+          message,
+        })) as TextRenderItem[])
+      : buildUnifiedAgentTaskCards(visibleMessages, liveTaskSnapshots);
+
+  const candidates: VoiceStageCandidate[] = [];
+  const recencyFloor = Math.max(0, renderItems.length - 8);
+
+  renderItems.forEach((item, index) => {
+    if (item.kind === "agent_unified_task") {
+      const isTerminal = isTerminalTaskCardStatus(item.card.status);
+      if (isTerminal && index < recencyFloor) {
+        return;
+      }
+      const activeRank = !isTerminal
+        ? 4
+        : item.card.googleActionPreview || item.card.googleActionResult
+          ? 2
+          : 1;
+      candidates.push({
+        kind: "task",
+        surfaceKey: [
+          "task",
+          item.card.taskId,
+          item.card.status,
+          item.card.approval?.status ?? "none",
+          item.card.googleActionResult?.status ?? "none",
+          item.card.googleActionPreview?.kind ?? "none",
+        ].join(":"),
+        message: item.message,
+        card: item.card,
+        source: "task",
+        isTerminal,
+        activeRank,
+        recencyRank: index,
+      });
+      return;
+    }
+
+    if (item.message.sender !== "assistant" || !item.message.uiPayload) {
+      return;
+    }
+
+    if (isGoogleEmailAmbiguityPayload(item.message.uiPayload)) {
+      candidates.push({
+        kind: "email_ambiguity",
+        surfaceKey: `ambiguity:${item.message.id}`,
+        message: item.message,
+        ambiguity: item.message.uiPayload.ambiguity,
+        text: item.message.uiPayload.text,
+        source: "email_ambiguity",
+        isTerminal: false,
+        activeRank: 5,
+        recencyRank: index,
+      });
+      return;
+    }
+
+    if (isGoogleComposeSessionPayload(item.message.uiPayload)) {
+      const status = item.message.uiPayload.session.status;
+      if ((status === "resolved" || status === "cancelled") && index < recencyFloor) {
+        return;
+      }
+      candidates.push({
+        kind: "compose_session",
+        surfaceKey: `compose:${item.message.id}:${status}`,
+        message: item.message,
+        session: item.message.uiPayload.session,
+        text: item.message.uiPayload.text,
+        source: "compose_session",
+        isTerminal: status === "resolved" || status === "cancelled",
+        activeRank: status === "resolved" || status === "cancelled" ? 1 : 4,
+        recencyRank: index,
+      });
+    }
+  });
+
+  candidates.sort((a, b) => {
+    if (a.activeRank !== b.activeRank) {
+      return b.activeRank - a.activeRank;
+    }
+    return b.recencyRank - a.recencyRank;
+  });
+
+  return candidates;
+}
+
+function buildVoiceStageSurface(
+  messages: MessageData[],
+  liveTaskSnapshots: Record<string, LiveTaskSnapshot>,
+): VoiceStageSurface | null {
+  return buildVoiceStageCandidates(messages, liveTaskSnapshots)[0] ?? null;
+}
+
 function formatMinutesFromSeconds(seconds: number): string {
   return `${Math.max(0, Math.floor(seconds / 60))}`;
 }
@@ -6921,7 +7123,7 @@ interface VoiceLiveDebugPanelProps {
   onExport: () => void;
 }
 
-const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, onProfile, assistantName, assistantAvatar, selectedVoice, setSelectedVoice, mode, setMode, duration, userProfileImage, isVideoEnabled, onToggleVideo, onFlipCamera, videoStream, isVideoTransitioning, cameraFacingMode, webLookupStatus, webLookupLabel, liveDebug }: {
+const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, onProfile, assistantName, assistantAvatar, selectedVoice, setSelectedVoice, mode, setMode, duration, userProfileImage, isVideoEnabled, onToggleVideo, onFlipCamera, videoStream, isVideoTransitioning, cameraFacingMode, webLookupStatus, webLookupLabel, liveDebug, messages, liveTaskSnapshots, onOpenArtifact, onResolveApproval, onSendMessage, onTraceStageEvent }: {
   isActive: boolean; 
   isConnecting: boolean;
   onEndCall: () => void;
@@ -6944,14 +7146,219 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
   webLookupStatus: WebLookupStatus | null;
   webLookupLabel?: string | null;
   liveDebug: VoiceLiveDebugPanelProps;
+  messages: MessageData[];
+  liveTaskSnapshots: Record<string, LiveTaskSnapshot>;
+  onOpenArtifact: (artifactId: string) => void;
+  onResolveApproval: (
+    taskId: string,
+    approve: boolean,
+    reason?: string,
+  ) => Promise<void>;
+  onSendMessage: (text: string, options?: SendMessageOptions) => Promise<void>;
+  onTraceStageEvent: (event: string, metadata?: Record<string, unknown>) => void;
 }) => {
   const videoPreviewRef = useRef<HTMLVideoElement | null>(null);
+  const stageVideoPreviewRef = useRef<HTMLVideoElement | null>(null);
+  const lastTracedStageCandidateKeyRef = useRef<string | null>(null);
+  const lastTracedStageSurfaceKeyRef = useRef<string | null>(null);
   const [debugPanelOpen, setDebugPanelOpen] = useState(false);
+  const [dismissedStageSurfaceKey, setDismissedStageSurfaceKey] = useState<string | null>(
+    null,
+  );
+
+  const voiceStageCandidates = useMemo(
+    () => buildVoiceStageCandidates(messages, liveTaskSnapshots),
+    [messages, liveTaskSnapshots],
+  );
+  const voiceStageSurface = useMemo(
+    () => voiceStageCandidates[0] ?? null,
+    [voiceStageCandidates],
+  );
+  const voiceStageSurfaceKey = voiceStageSurface?.surfaceKey ?? null;
+  const voiceStageCandidateTraceKey = useMemo(
+    () =>
+      voiceStageCandidates
+        .map(
+          (candidate) =>
+            `${candidate.surfaceKey}:${candidate.activeRank}:${candidate.recencyRank}:${candidate.isTerminal ? "terminal" : "active"}`,
+        )
+        .join("|"),
+    [voiceStageCandidates],
+  );
+  const isVoiceCanvasVisible = Boolean(
+    isActive &&
+      voiceStageSurface &&
+      voiceStageSurface.surfaceKey !== dismissedStageSurfaceKey,
+  );
 
   useEffect(() => {
-    if (!videoPreviewRef.current) return;
-    videoPreviewRef.current.srcObject = videoStream;
+    if (videoPreviewRef.current) {
+      videoPreviewRef.current.srcObject = videoStream;
+    }
+    if (stageVideoPreviewRef.current) {
+      stageVideoPreviewRef.current.srcObject = videoStream;
+    }
   }, [videoStream]);
+
+  useEffect(() => {
+    if (!voiceStageSurfaceKey) {
+      setDismissedStageSurfaceKey(null);
+      return;
+    }
+    if (voiceStageSurfaceKey !== dismissedStageSurfaceKey) {
+      setDismissedStageSurfaceKey(null);
+    }
+  }, [dismissedStageSurfaceKey, voiceStageSurfaceKey]);
+
+  useEffect(() => {
+    if (lastTracedStageCandidateKeyRef.current === voiceStageCandidateTraceKey) {
+      return;
+    }
+    lastTracedStageCandidateKeyRef.current = voiceStageCandidateTraceKey;
+    onTraceStageEvent("candidate_snapshot", {
+      totalCandidates: voiceStageCandidates.length,
+      canvasVisible: isVoiceCanvasVisible,
+      dismissedSurfaceKey: dismissedStageSurfaceKey,
+      activeSurfaceKey: voiceStageSurfaceKey,
+      candidates: voiceStageCandidates
+        .slice(0, 4)
+        .map((candidate) => summarizeVoiceStageSurface(candidate)),
+    });
+  }, [
+    dismissedStageSurfaceKey,
+    isVoiceCanvasVisible,
+    onTraceStageEvent,
+    voiceStageCandidateTraceKey,
+    voiceStageCandidates,
+    voiceStageSurfaceKey,
+  ]);
+
+  useEffect(() => {
+    if (!voiceStageSurface) {
+      if (lastTracedStageSurfaceKeyRef.current) {
+        onTraceStageEvent("surface_cleared", {
+          previousSurfaceKey: lastTracedStageSurfaceKeyRef.current,
+        });
+      }
+      lastTracedStageSurfaceKeyRef.current = null;
+      return;
+    }
+    if (lastTracedStageSurfaceKeyRef.current === voiceStageSurface.surfaceKey) {
+      return;
+    }
+    lastTracedStageSurfaceKeyRef.current = voiceStageSurface.surfaceKey;
+    onTraceStageEvent("surface_resolved", {
+      surfaceKind: voiceStageSurface.kind,
+      surfaceKey: voiceStageSurface.surfaceKey,
+      taskId: voiceStageSurface.kind === "task" ? voiceStageSurface.card.taskId : null,
+      taskStatus:
+        voiceStageSurface.kind === "task" ? voiceStageSurface.card.status : null,
+      summary: summarizeVoiceStageSurface(voiceStageSurface),
+    });
+  }, [onTraceStageEvent, voiceStageSurface]);
+
+  useEffect(() => {
+    if (!voiceStageSurfaceKey) return;
+    onTraceStageEvent(isVoiceCanvasVisible ? "surface_visible" : "surface_hidden", {
+      surfaceKey: voiceStageSurfaceKey,
+      dismissed: dismissedStageSurfaceKey === voiceStageSurfaceKey,
+    });
+  }, [
+    dismissedStageSurfaceKey,
+    isVoiceCanvasVisible,
+    onTraceStageEvent,
+    voiceStageSurfaceKey,
+  ]);
+
+  const dismissVoiceCanvas = () => {
+    if (!voiceStageSurface) return;
+    setDismissedStageSurfaceKey(voiceStageSurface.surfaceKey);
+    onTraceStageEvent("surface_dismissed", {
+      surfaceKind: voiceStageSurface.kind,
+      surfaceKey: voiceStageSurface.surfaceKey,
+    });
+  };
+
+  const reopenVoiceCanvas = () => {
+    setDismissedStageSurfaceKey(null);
+    onTraceStageEvent("surface_reopened", {
+      surfaceKind: voiceStageSurface?.kind ?? null,
+      surfaceKey: voiceStageSurface?.surfaceKey ?? null,
+    });
+  };
+
+  const handleVoiceStageResolveApproval = async (
+    taskId: string,
+    approve: boolean,
+    reason?: string,
+  ) => {
+    onTraceStageEvent("approval_requested", {
+      taskId,
+      approve,
+      surfaceKey: voiceStageSurface?.surfaceKey ?? null,
+    });
+    try {
+      await onResolveApproval(taskId, approve, reason);
+    } catch (error) {
+      onTraceStageEvent("approval_failed", {
+        taskId,
+        approve,
+        surfaceKey: voiceStageSurface?.surfaceKey ?? null,
+        message: getErrorMessage(error),
+      });
+      throw error;
+    }
+  };
+
+  const handleVoiceStageOpenArtifact = (artifactId: string) => {
+    onTraceStageEvent("artifact_opened", {
+      artifactId,
+      surfaceKey: voiceStageSurface?.surfaceKey ?? null,
+    });
+    onOpenArtifact(artifactId);
+  };
+
+  const handleVoiceStageSendMessage = async (
+    text: string,
+    options?: SendMessageOptions,
+  ) => {
+    onTraceStageEvent("message_sent", {
+      surfaceKey: voiceStageSurface?.surfaceKey ?? null,
+      textPreview: text.slice(0, 160),
+    });
+    try {
+      await onSendMessage(text, options);
+    } catch (error) {
+      onTraceStageEvent("message_failed", {
+        surfaceKey: voiceStageSurface?.surfaceKey ?? null,
+        textPreview: text.slice(0, 160),
+        message: getErrorMessage(error),
+      });
+      throw error;
+    }
+  };
+
+  const voiceStageTitle =
+    voiceStageSurface?.kind === "task"
+      ? voiceStageSurface.card.googleActionPreview?.connector === "gmail"
+        ? "Zee Mail"
+        : voiceStageSurface.card.googleActionPreview?.connector === "calendar"
+          ? "Zee Calendar"
+          : "Zee Canvas"
+      : voiceStageSurface?.kind === "compose_session"
+        ? "Draft In Progress"
+        : voiceStageSurface?.kind === "email_ambiguity"
+          ? "Choose The Email"
+          : "Voice Canvas";
+
+  const voiceStageSubtitle =
+    voiceStageSurface?.kind === "task"
+      ? voiceStageSurface.card.title
+      : voiceStageSurface?.kind === "compose_session"
+        ? "Zee is shaping a draft from your voice instructions."
+        : voiceStageSurface?.kind === "email_ambiguity"
+          ? "Zee needs one quick clarification before acting."
+          : "Task-ready surface";
 
   return (
     <motion.div 
@@ -7293,6 +7700,65 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
                           "color-mix(in srgb, var(--app-soft-card-border) 72%, transparent)",
                       }}
                     >
+                      <div className="text-[10px] uppercase tracking-[0.18em]" style={{ color: "var(--app-on-dark-muted)" }}>
+                        Voice Stage
+                      </div>
+                      <div className="mt-2 grid grid-cols-2 gap-2 text-[11px]">
+                        <div
+                          className="rounded-xl border px-3 py-2"
+                          style={{
+                            borderColor:
+                              "color-mix(in srgb, var(--app-soft-card-border) 58%, transparent)",
+                          }}
+                        >
+                          <div style={{ color: "var(--app-on-dark-muted)" }}>Canvas</div>
+                          <div className="mt-1 font-medium">
+                            {isVoiceCanvasVisible ? "visible" : "hidden"}
+                          </div>
+                        </div>
+                        <div
+                          className="rounded-xl border px-3 py-2"
+                          style={{
+                            borderColor:
+                              "color-mix(in srgb, var(--app-soft-card-border) 58%, transparent)",
+                          }}
+                        >
+                          <div style={{ color: "var(--app-on-dark-muted)" }}>Candidates</div>
+                          <div className="mt-1 font-medium">
+                            {voiceStageCandidates.length}
+                          </div>
+                        </div>
+                      </div>
+                      <pre className="mt-3 whitespace-pre-wrap break-words rounded-xl border px-3 py-3 text-[10px] leading-4"
+                        style={{
+                          borderColor:
+                            "color-mix(in srgb, var(--app-soft-card-border) 58%, transparent)",
+                        }}
+                      >
+                        {JSON.stringify(
+                          {
+                            dismissedSurfaceKey: dismissedStageSurfaceKey,
+                            activeSurface: summarizeVoiceStageSurface(
+                              voiceStageSurface,
+                            ),
+                            candidates: voiceStageCandidates
+                              .slice(0, 4)
+                              .map((candidate) =>
+                                summarizeVoiceStageSurface(candidate),
+                              ),
+                          },
+                          null,
+                          2,
+                        )}
+                      </pre>
+                    </div>
+
+                    <div className="rounded-2xl border px-3 py-3"
+                      style={{
+                        borderColor:
+                          "color-mix(in srgb, var(--app-soft-card-border) 72%, transparent)",
+                      }}
+                    >
                       <div className="mb-2 flex items-center justify-between">
                         <div className="text-[10px] uppercase tracking-[0.18em]" style={{ color: "var(--app-on-dark-muted)" }}>
                           LiveTrace Buffer ({liveDebug.traces.length})
@@ -7389,178 +7855,395 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
             )}
           </AnimatePresence>
           <div className="flex-1 flex flex-col items-center justify-center relative">
+            {isActive && voiceStageSurface && !isVoiceCanvasVisible ? (
+              <div className="absolute left-1/2 top-4 z-20 -translate-x-1/2">
+                <button
+                  type="button"
+                  onClick={reopenVoiceCanvas}
+                  className="rounded-full border px-3 py-1.5 text-[11px] font-semibold tracking-wide backdrop-blur-md transition-colors hover:opacity-90"
+                  style={{
+                    borderColor:
+                      "color-mix(in srgb, var(--app-soft-card-border) 76%, transparent)",
+                    backgroundColor:
+                      "color-mix(in srgb, var(--app-soft-card-bg) 88%, transparent)",
+                    color: "var(--app-on-dark)",
+                  }}
+                  data-testid="button-voice-stage-open-canvas"
+                >
+                  Open canvas
+                </button>
+              </div>
+            ) : null}
             {isActive ? (
               <div className="w-full h-full flex items-center justify-center px-8">
-                <div
-                  className={cn(
-                    "relative flex w-full items-center justify-center",
-                    isVideoEnabled ? "h-[56vh]" : "h-48",
-                  )}
-                >
-                  {isVideoEnabled && (
-                    <div className="absolute left-1/2 top-1/2 h-[52vh] max-h-[460px] w-[82%] max-w-[340px] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-[2rem] border border-white/20 bg-black/40 shadow-2xl">
-                      <video
-                        ref={videoPreviewRef}
-                        autoPlay
-                        muted
-                        playsInline
-                        className="h-full w-full object-cover"
-                        style={cameraFacingMode === "user" ? { transform: "scaleX(-1)" } : undefined}
-                      />
-                      <button
-                        type="button"
-                        className="absolute top-3 right-3 w-10 h-10 rounded-full bg-black/50 backdrop-blur-sm flex items-center justify-center text-white/90 hover:bg-black/70 transition-colors active:scale-95"
-                        onClick={onFlipCamera}
-                        disabled={isVideoTransitioning}
-                        aria-label="Switch camera"
-                        data-testid="button-flip-camera"
+                {isVoiceCanvasVisible && voiceStageSurface ? (
+                  <motion.div
+                    initial={{ opacity: 0, y: 12, scale: 0.98 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    transition={{ duration: 0.2, ease: "easeOut" }}
+                    className="relative h-[56vh] max-h-[500px] w-full max-w-[360px] overflow-hidden rounded-[2rem] border shadow-2xl"
+                    style={{
+                      borderColor:
+                        "color-mix(in srgb, var(--app-soft-card-border) 78%, transparent)",
+                      background:
+                        "linear-gradient(180deg, color-mix(in srgb, var(--app-soft-card-bg) 92%, rgba(255,255,255,0.08)), color-mix(in srgb, var(--app-panel-bg) 94%, rgba(255,255,255,0.04)))",
+                      boxShadow:
+                        "0 24px 48px rgba(0,0,0,0.22), inset 0 1px 0 rgba(255,255,255,0.12)",
+                    }}
+                    data-testid="voice-task-stage"
+                  >
+                    <div
+                      className="pointer-events-none absolute inset-x-5 top-0 h-px"
+                      style={{
+                        background:
+                          "linear-gradient(90deg, transparent, color-mix(in srgb, var(--app-accent) 44%, transparent), transparent)",
+                      }}
+                    />
+                    <div className="relative flex h-full flex-col">
+                      <div className="flex items-start justify-between gap-3 border-b px-4 pb-3 pt-4"
+                        style={{
+                          borderColor:
+                            "color-mix(in srgb, var(--app-soft-card-border) 72%, transparent)",
+                        }}
                       >
-                        <SwitchCamera className="w-5 h-5" />
-                      </button>
-                      <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/65 to-transparent px-3 pb-3 pt-8 text-center text-sm text-white/95">
-                        Camera on
+                        <div className="min-w-0">
+                          <div
+                            className="text-[10px] font-semibold uppercase tracking-[0.2em]"
+                            style={{ color: "var(--app-on-dark-muted)" }}
+                          >
+                            Smart Voice Stage
+                          </div>
+                          <div
+                            className="mt-1 truncate text-sm font-semibold"
+                            style={{ color: "var(--app-on-dark)" }}
+                          >
+                            {voiceStageTitle}
+                          </div>
+                          <div
+                            className="mt-1 text-[11px] leading-4"
+                            style={{ color: "var(--app-on-dark-muted)" }}
+                          >
+                            {voiceStageSubtitle}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {isVideoEnabled ? (
+                            <button
+                              type="button"
+                              onClick={dismissVoiceCanvas}
+                              className="rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide transition-colors hover:opacity-90"
+                              style={{
+                                borderColor:
+                                  "color-mix(in srgb, var(--app-soft-card-border) 76%, transparent)",
+                                backgroundColor:
+                                  "color-mix(in srgb, var(--app-soft-card-bg) 82%, transparent)",
+                                color: "var(--app-on-dark-muted)",
+                              }}
+                              data-testid="button-voice-stage-show-camera"
+                            >
+                              Show camera
+                            </button>
+                          ) : null}
+                          <button
+                            type="button"
+                            onClick={dismissVoiceCanvas}
+                            className="rounded-full border p-2 transition-colors hover:opacity-90"
+                            style={{
+                              borderColor:
+                                "color-mix(in srgb, var(--app-soft-card-border) 76%, transparent)",
+                              backgroundColor:
+                                "color-mix(in srgb, var(--app-soft-card-bg) 82%, transparent)",
+                              color: "var(--app-on-dark-muted)",
+                            }}
+                            aria-label="Hide task canvas"
+                            data-testid="button-voice-stage-dismiss"
+                          >
+                            <ChevronDown className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="relative flex-1 overflow-hidden px-3 pb-3 pt-3">
+                        {isVideoEnabled ? (
+                          <div className="absolute right-4 top-4 z-10 h-28 w-20 overflow-hidden rounded-[1.2rem] border bg-black/40 shadow-lg">
+                            <video
+                              ref={stageVideoPreviewRef}
+                              autoPlay
+                              muted
+                              playsInline
+                              className="h-full w-full object-cover"
+                              style={
+                                cameraFacingMode === "user"
+                                  ? { transform: "scaleX(-1)" }
+                                  : undefined
+                              }
+                            />
+                            <button
+                              type="button"
+                              className="absolute right-1.5 top-1.5 flex h-7 w-7 items-center justify-center rounded-full bg-black/55 text-white/90 transition-colors hover:bg-black/70"
+                              onClick={onFlipCamera}
+                              disabled={isVideoTransitioning}
+                              aria-label="Switch camera"
+                              data-testid="button-flip-camera"
+                            >
+                              <SwitchCamera className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                        ) : null}
+
+                        <ScrollArea className="h-full pr-2">
+                          <div className={cn("space-y-3", isVideoEnabled ? "pr-24" : "")}>
+                            {voiceStageSurface.kind === "task" ? (
+                              <UnifiedAgentTaskCard
+                                card={voiceStageSurface.card}
+                                onOpenArtifact={handleVoiceStageOpenArtifact}
+                                onResolveApproval={handleVoiceStageResolveApproval}
+                              />
+                            ) : voiceStageSurface.kind === "compose_session" ? (
+                              <GoogleComposeSessionCard
+                                session={voiceStageSurface.session}
+                                text={voiceStageSurface.text}
+                              />
+                            ) : (
+                              <GoogleEmailAmbiguityCard
+                                ambiguity={voiceStageSurface.ambiguity}
+                                text={voiceStageSurface.text}
+                                onChoose={(selectionPrompt) => {
+                                  void handleVoiceStageSendMessage(selectionPrompt, {
+                                    ignoreAttachments: true,
+                                  });
+                                }}
+                              />
+                            )}
+                          </div>
+                        </ScrollArea>
+                      </div>
+
+                      <div className="border-t px-4 py-3"
+                        style={{
+                          borderColor:
+                            "color-mix(in srgb, var(--app-soft-card-border) 72%, transparent)",
+                        }}
+                      >
+                        <div
+                          className="flex items-center justify-center gap-2 rounded-full px-3 py-2"
+                          style={{
+                            backgroundColor:
+                              "color-mix(in srgb, var(--app-soft-card-bg) 78%, transparent)",
+                          }}
+                        >
+                          {webLookupStatus === "searching" ? (
+                            <>
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              <span
+                                className="text-[11px] font-medium tracking-wide"
+                                style={{ color: "var(--app-on-dark-muted)" }}
+                              >
+                                {webLookupLabel ?? "Looking up latest info"}
+                              </span>
+                            </>
+                          ) : webLookupStatus === "grounded" ? (
+                            <>
+                              <Globe className="h-3.5 w-3.5" style={{ color: "var(--app-accent)" }} />
+                              <span
+                                className="text-[11px] font-medium tracking-wide"
+                                style={{ color: "var(--app-on-dark-muted)" }}
+                              >
+                                {webLookupLabel ?? "Web-checked"}
+                              </span>
+                            </>
+                          ) : (
+                            <>
+                              <motion.span
+                                className="h-2 w-2 rounded-full"
+                                style={{ backgroundColor: "var(--app-accent)" }}
+                                animate={{ opacity: [0.4, 1, 0.4] }}
+                                transition={{ duration: 1.2, repeat: Infinity, ease: "easeInOut" }}
+                              />
+                              <span
+                                className="text-[11px] font-medium tracking-wide"
+                                style={{ color: "var(--app-on-dark-muted)" }}
+                              >
+                                Listening and ready
+                              </span>
+                            </>
+                          )}
+                        </div>
                       </div>
                     </div>
-                  )}
-
-                  {!isVideoEnabled && (
-                    <div className="relative flex items-center justify-center">
-                      {[0, 1, 2].map((i) => (
-                        <motion.div
-                          key={`active-ring-${i}`}
-                          className="absolute rounded-full border border-[#DAA112]/20"
-                          animate={{
-                            width: [120, 200 + i * 40],
-                            height: [120, 200 + i * 40],
-                            opacity: [0.4, 0],
-                          }}
-                          transition={{
-                            duration: 2,
-                            repeat: Infinity,
-                            delay: i * 0.6,
-                            ease: "easeOut",
-                          }}
-                        />
-                      ))}
-                      <motion.div
-                        className="w-28 h-28 rounded-full overflow-hidden ring-4 ring-[#DAA112]/40 shadow-[0_0_50px_rgba(218,161,18,0.25)]"
-                        animate={{ scale: [1, 1.06, 1] }}
-                        transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}
-                      >
-                        <img src={assistantAvatar} alt={assistantName} className="w-full h-full object-cover" />
-                      </motion.div>
-                    </div>
-                  )}
-
+                  </motion.div>
+                ) : (
                   <div
                     className={cn(
-                      "z-10 flex items-center justify-center gap-1.5",
-                      isVideoEnabled
-                        ? "absolute bottom-5 left-1/2 -translate-x-1/2 rounded-full bg-black/35 px-4 py-3 backdrop-blur-sm"
-                        : "absolute -bottom-12 left-1/2 -translate-x-1/2 rounded-full bg-white/5 px-4 py-2 backdrop-blur-sm",
+                      "relative flex w-full items-center justify-center",
+                      isVideoEnabled ? "h-[56vh]" : "h-48",
                     )}
                   >
-                    {webLookupStatus === "searching" ? (
-                      <div
-                        className="flex min-w-[232px] flex-col gap-1.5"
-                        data-testid="voice-web-lookup-indicator"
-                      >
-                        <div className="flex items-center justify-center gap-2">
-                          <div className="flex items-center gap-1.5">
-                            <motion.span
-                              className="h-1.5 w-1.5 rounded-full"
-                              style={{ backgroundColor: "#4285F4" }}
-                              animate={{ opacity: [0.5, 1, 0.5], y: [0, -1, 0] }}
-                              transition={{ duration: 0.95, repeat: Infinity, delay: 0 }}
-                            />
-                            <motion.span
-                              className="h-1.5 w-1.5 rounded-full"
-                              style={{ backgroundColor: "#EA4335" }}
-                              animate={{ opacity: [0.5, 1, 0.5], y: [0, -1, 0] }}
-                              transition={{ duration: 0.95, repeat: Infinity, delay: 0.12 }}
-                            />
-                            <motion.span
-                              className="h-1.5 w-1.5 rounded-full"
-                              style={{ backgroundColor: "#FBBC05" }}
-                              animate={{ opacity: [0.5, 1, 0.5], y: [0, -1, 0] }}
-                              transition={{ duration: 0.95, repeat: Infinity, delay: 0.24 }}
-                            />
-                            <motion.span
-                              className="h-1.5 w-1.5 rounded-full"
-                              style={{ backgroundColor: "#34A853" }}
-                              animate={{ opacity: [0.5, 1, 0.5], y: [0, -1, 0] }}
-                              transition={{ duration: 0.95, repeat: Infinity, delay: 0.36 }}
+                    {isVideoEnabled && (
+                      <div className="absolute left-1/2 top-1/2 h-[52vh] max-h-[460px] w-[82%] max-w-[340px] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-[2rem] border border-white/20 bg-black/40 shadow-2xl">
+                        <video
+                          ref={videoPreviewRef}
+                          autoPlay
+                          muted
+                          playsInline
+                          className="h-full w-full object-cover"
+                          style={cameraFacingMode === "user" ? { transform: "scaleX(-1)" } : undefined}
+                        />
+                        <button
+                          type="button"
+                          className="absolute top-3 right-3 w-10 h-10 rounded-full bg-black/50 backdrop-blur-sm flex items-center justify-center text-white/90 hover:bg-black/70 transition-colors active:scale-95"
+                          onClick={onFlipCamera}
+                          disabled={isVideoTransitioning}
+                          aria-label="Switch camera"
+                          data-testid="button-flip-camera"
+                        >
+                          <SwitchCamera className="w-5 h-5" />
+                        </button>
+                        <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/65 to-transparent px-3 pb-3 pt-8 text-center text-sm text-white/95">
+                          Camera on
+                        </div>
+                      </div>
+                    )}
+
+                    {!isVideoEnabled && (
+                      <div className="relative flex items-center justify-center">
+                        {[0, 1, 2].map((i) => (
+                          <motion.div
+                            key={`active-ring-${i}`}
+                            className="absolute rounded-full border border-[#DAA112]/20"
+                            animate={{
+                              width: [120, 200 + i * 40],
+                              height: [120, 200 + i * 40],
+                              opacity: [0.4, 0],
+                            }}
+                            transition={{
+                              duration: 2,
+                              repeat: Infinity,
+                              delay: i * 0.6,
+                              ease: "easeOut",
+                            }}
+                          />
+                        ))}
+                        <motion.div
+                          className="w-28 h-28 rounded-full overflow-hidden ring-4 ring-[#DAA112]/40 shadow-[0_0_50px_rgba(218,161,18,0.25)]"
+                          animate={{ scale: [1, 1.06, 1] }}
+                          transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}
+                        >
+                          <img src={assistantAvatar} alt={assistantName} className="w-full h-full object-cover" />
+                        </motion.div>
+                      </div>
+                    )}
+
+                    <div
+                      className={cn(
+                        "z-10 flex items-center justify-center gap-1.5",
+                        isVideoEnabled
+                          ? "absolute bottom-5 left-1/2 -translate-x-1/2 rounded-full bg-black/35 px-4 py-3 backdrop-blur-sm"
+                          : "absolute -bottom-12 left-1/2 -translate-x-1/2 rounded-full bg-white/5 px-4 py-2 backdrop-blur-sm",
+                      )}
+                    >
+                      {webLookupStatus === "searching" ? (
+                        <div
+                          className="flex min-w-[232px] flex-col gap-1.5"
+                          data-testid="voice-web-lookup-indicator"
+                        >
+                          <div className="flex items-center justify-center gap-2">
+                            <div className="flex items-center gap-1.5">
+                              <motion.span
+                                className="h-1.5 w-1.5 rounded-full"
+                                style={{ backgroundColor: "#4285F4" }}
+                                animate={{ opacity: [0.5, 1, 0.5], y: [0, -1, 0] }}
+                                transition={{ duration: 0.95, repeat: Infinity, delay: 0 }}
+                              />
+                              <motion.span
+                                className="h-1.5 w-1.5 rounded-full"
+                                style={{ backgroundColor: "#EA4335" }}
+                                animate={{ opacity: [0.5, 1, 0.5], y: [0, -1, 0] }}
+                                transition={{ duration: 0.95, repeat: Infinity, delay: 0.12 }}
+                              />
+                              <motion.span
+                                className="h-1.5 w-1.5 rounded-full"
+                                style={{ backgroundColor: "#FBBC05" }}
+                                animate={{ opacity: [0.5, 1, 0.5], y: [0, -1, 0] }}
+                                transition={{ duration: 0.95, repeat: Infinity, delay: 0.24 }}
+                              />
+                              <motion.span
+                                className="h-1.5 w-1.5 rounded-full"
+                                style={{ backgroundColor: "#34A853" }}
+                                animate={{ opacity: [0.5, 1, 0.5], y: [0, -1, 0] }}
+                                transition={{ duration: 0.95, repeat: Infinity, delay: 0.36 }}
+                              />
+                            </div>
+                            <span
+                              className="text-[11px] font-medium tracking-wide"
+                              style={{ color: "var(--app-on-dark-muted)" }}
+                            >
+                              {webLookupLabel ?? "Looking up latest info"}
+                            </span>
+                          </div>
+                          <div
+                            className="relative h-1.5 overflow-hidden rounded-full"
+                            style={{
+                              backgroundColor:
+                                "color-mix(in srgb, var(--app-soft-card-border) 50%, transparent)",
+                            }}
+                          >
+                            <motion.div
+                              className="absolute inset-y-0 left-0 rounded-full"
+                              style={{
+                                width: "42%",
+                                background:
+                                  "linear-gradient(90deg, #4285F4 0%, #EA4335 33%, #FBBC05 66%, #34A853 100%)",
+                              }}
+                              animate={{ x: ["-35%", "140%"] }}
+                              transition={{ duration: 1.1, repeat: Infinity, ease: "easeInOut" }}
                             />
                           </div>
+                        </div>
+                      ) : webLookupStatus === "grounded" ? (
+                        <div
+                          className="flex min-w-[194px] items-center justify-center gap-2 rounded-full px-2 py-1"
+                          style={{
+                            backgroundColor:
+                              "color-mix(in srgb, var(--app-soft-card-bg) 65%, transparent)",
+                          }}
+                        >
+                          <Globe className="h-3.5 w-3.5" style={{ color: "var(--app-accent)" }} />
                           <span
                             className="text-[11px] font-medium tracking-wide"
                             style={{ color: "var(--app-on-dark-muted)" }}
                           >
-                            {webLookupLabel ?? "Looking up latest info"}
+                            {webLookupLabel ?? "Web-checked"}
                           </span>
                         </div>
-                        <div
-                          className="relative h-1.5 overflow-hidden rounded-full"
-                          style={{
-                            backgroundColor:
-                              "color-mix(in srgb, var(--app-soft-card-border) 50%, transparent)",
-                          }}
-                        >
+                      ) : (
+                        [...Array(8)].map((_, i) => (
                           <motion.div
-                            className="absolute inset-y-0 left-0 rounded-full"
-                            style={{
-                              width: "42%",
-                              background:
-                                "linear-gradient(90deg, #4285F4 0%, #EA4335 33%, #FBBC05 66%, #34A853 100%)",
+                            key={i}
+                            className={cn(
+                              "rounded-full opacity-80",
+                              isVideoEnabled ? "w-3" : "w-2.5",
+                            )}
+                            animate={{
+                              height: ["20%", "80%", "20%"],
+                              backgroundColor: [
+                                "var(--app-accent)",
+                                "var(--app-assistant-bubble-bg)",
+                                "var(--app-accent)",
+                              ],
                             }}
-                            animate={{ x: ["-35%", "140%"] }}
-                            transition={{ duration: 1.1, repeat: Infinity, ease: "easeInOut" }}
+                            transition={{
+                              duration: 1 + Math.random() * 0.5,
+                              repeat: Infinity,
+                              delay: i * 0.1,
+                              ease: "easeInOut"
+                            }}
                           />
-                        </div>
-                      </div>
-                    ) : webLookupStatus === "grounded" ? (
-                      <div
-                        className="flex min-w-[194px] items-center justify-center gap-2 rounded-full px-2 py-1"
-                        style={{
-                          backgroundColor:
-                            "color-mix(in srgb, var(--app-soft-card-bg) 65%, transparent)",
-                        }}
-                      >
-                        <Globe className="h-3.5 w-3.5" style={{ color: "var(--app-accent)" }} />
-                        <span
-                          className="text-[11px] font-medium tracking-wide"
-                          style={{ color: "var(--app-on-dark-muted)" }}
-                        >
-                          {webLookupLabel ?? "Web-checked"}
-                        </span>
-                      </div>
-                    ) : (
-                      [...Array(8)].map((_, i) => (
-                        <motion.div
-                          key={i}
-                          className={cn(
-                            "rounded-full opacity-80",
-                            isVideoEnabled ? "w-3" : "w-2.5",
-                          )}
-                          animate={{
-                            height: ["20%", "80%", "20%"],
-                            backgroundColor: [
-                              "var(--app-accent)",
-                              "var(--app-assistant-bubble-bg)",
-                              "var(--app-accent)",
-                            ],
-                          }}
-                          transition={{
-                            duration: 1 + Math.random() * 0.5,
-                            repeat: Infinity,
-                            delay: i * 0.1,
-                            ease: "easeInOut"
-                          }}
-                        />
-                      ))
-                    )}
+                        ))
+                      )}
+                    </div>
                   </div>
-                </div>
+                )}
               </div>
             ) : (
               <div className="flex flex-col items-center gap-6">
@@ -11094,6 +11777,17 @@ function App() {
     null,
   );
 
+  const traceVoiceStageEvent = useCallback(
+    (event: string, metadata: Record<string, unknown> = {}) => {
+      logLiveTrace(`voice.stage.${event}`, {
+        runId: liveRunIdRef.current,
+        conversationId: activeConversationId,
+        ...metadata,
+      });
+    },
+    [activeConversationId, logLiveTrace],
+  );
+
   useEffect(() => {
     if (!isAuthenticated || showOnboarding) return;
     if (conversations && conversations.length > 0) {
@@ -13244,6 +13938,12 @@ function App() {
             cameraFacingMode={cameraFacingMode}
             webLookupStatus={voiceWebLookupStatus}
             webLookupLabel={voiceWebLookupLabel}
+            messages={messagesData}
+            liveTaskSnapshots={liveTaskSnapshots}
+            onOpenArtifact={handleOpenArtifact}
+            onResolveApproval={handleResolveTaskApproval}
+            onSendMessage={handleSendMessage}
+            onTraceStageEvent={traceVoiceStageEvent}
             liveDebug={{
               enabled: liveDebugEnabled,
               state: liveDebugState,

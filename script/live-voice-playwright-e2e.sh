@@ -115,7 +115,13 @@ fi
 
 if [[ "$START_SERVER" == "1" ]]; then
   log "Starting app server on ${TEST_HOST}:${TEST_PORT}"
-  DATABASE_URL="$TEST_DB_URL" HOST="$TEST_HOST" PORT="$TEST_PORT" npm run dev >"$TEST_SERVER_LOG" 2>&1 &
+  DATABASE_URL="$TEST_DB_URL" \
+    HOST="$TEST_HOST" \
+    PORT="$TEST_PORT" \
+    ENABLE_GOOGLE_PERSONAL_CONTEXT_WRITES="${ENABLE_GOOGLE_PERSONAL_CONTEXT_WRITES:-true}" \
+    VITE_ENABLE_GOOGLE_PERSONAL_CONTEXT_WRITES="${VITE_ENABLE_GOOGLE_PERSONAL_CONTEXT_WRITES:-true}" \
+    ENABLE_VOICE_GOOGLE_WRITE_HANDOFF="${ENABLE_VOICE_GOOGLE_WRITE_HANDOFF:-true}" \
+    npm run dev >"$TEST_SERVER_LOG" 2>&1 &
   SERVER_PID=$!
   wait_for_server
 fi
@@ -152,7 +158,7 @@ if [[ "$PREF_STATUS" != "200" ]]; then
 fi
 
 log "3/3 run Playwright checks"
-npx tsx script/live-voice-playwright-check.ts \
+DATABASE_URL="$TEST_DB_URL" npx tsx script/live-voice-playwright-check.ts \
   --base-url "$BASE_URL" \
   --email "$EMAIL" \
   --password "$PASSWORD" \
