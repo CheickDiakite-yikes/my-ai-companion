@@ -573,6 +573,7 @@ async function verifySavedDraftSendFollowUpFlow(
   outputDir: string,
 ): Promise<void> {
   const conversationId = await resolveActiveConversationId(page, baseUrl);
+  await seedPendingDraftApprovalFixture(email, conversationId);
   await seedSavedDraftTaskFixture(email, conversationId);
   await page.reload({ waitUntil: "networkidle" });
 
@@ -898,6 +899,109 @@ async function seedSavedDraftTaskFixture(
         messageId: `fixture-message-${task.id}`,
         threadId: null,
       },
+    },
+  });
+}
+
+async function seedPendingDraftApprovalFixture(
+  email: string,
+  conversationId: string,
+): Promise<void> {
+  const [user] = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(eq(users.email, email))
+    .limit(1);
+  assert.ok(user?.id, `Expected to find user for ${email}`);
+
+  const prompt = "draft an email to stale@example.com saying quick hello";
+  const preview = {
+    kind: "email_compose" as const,
+    title: "Create email draft",
+    summary: "Create an email draft to stale@example.com.",
+    connector: "gmail" as const,
+    requiresWriteAccess: true,
+    proposedEmail: {
+      to: ["stale@example.com"],
+      cc: [],
+      subject: "Quick hello",
+      bodyPreview: "quick hello",
+      sendAfterApproval: false,
+    },
+  };
+  const plan = {
+    version: "google_action_v1" as const,
+    preview,
+    execution: {
+      kind: "email_compose" as const,
+      sendAfterApproval: false,
+      to: ["stale@example.com"],
+      cc: [],
+      subject: "Quick hello",
+      bodyText: "quick hello",
+    },
+  };
+
+  const task = await storage.createAgentTask({
+    userId: user.id,
+    conversationId,
+    status: "approval_required",
+    riskLevel: "high",
+    taskKind: "google_action",
+    prompt,
+    requestedByMessageId: randomUUID(),
+    plan,
+  });
+  const approval = await storage.createAgentApproval({
+    taskId: task.id,
+    status: "pending",
+    requestedAction: preview.summary,
+    reason: null,
+  });
+
+  await storage.createMessage({
+    conversationId,
+    sender: "assistant",
+    text: preview.summary,
+    partIndex: 0,
+    uiPayload: {
+      kind: "agent_task_status",
+      task: {
+        id: task.id,
+        conversationId: task.conversationId,
+        status: task.status,
+        riskLevel: task.riskLevel,
+        taskKind: task.taskKind,
+        prompt: task.prompt,
+        errorMessage: task.errorMessage ?? null,
+        createdAt: task.createdAt,
+        updatedAt: task.updatedAt,
+        completedAt: task.completedAt,
+      },
+      text: "Preview ready",
+      googleActionPreview: preview,
+    },
+  });
+
+  await storage.createMessage({
+    conversationId,
+    sender: "assistant",
+    text: "I prepared this Google action. Approve if you want me to apply it.",
+    partIndex: 0,
+    uiPayload: {
+      kind: "agent_approval",
+      taskId: task.id,
+      approval: {
+        id: approval.id,
+        taskId: approval.taskId,
+        status: approval.status,
+        reason: approval.reason,
+        requestedAction: approval.requestedAction,
+        createdAt: approval.createdAt,
+        respondedAt: approval.respondedAt,
+      },
+      text: "Approval needed",
+      googleActionPreview: preview,
     },
   });
 }

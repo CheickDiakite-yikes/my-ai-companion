@@ -6075,6 +6075,7 @@ type GoogleConversationRecentTask = {
   taskId: string;
   preview: GoogleActionPreview;
   result: GoogleActionResult | null;
+  messageIndex: number;
 };
 
 type GoogleConversationState = {
@@ -6085,10 +6086,26 @@ type GoogleConversationState = {
   pendingTask: {
     taskId: string;
     preview: GoogleActionPreview | null;
+    messageIndex: number;
   } | null;
   recentEmailTask: GoogleConversationRecentTask | null;
   recentCalendarTask: GoogleConversationRecentTask | null;
 };
+
+type GoogleEmailConversationTaskTarget =
+  | {
+      source: "pending";
+      taskId: string;
+      preview: GoogleActionPreview;
+      messageIndex: number;
+    }
+  | {
+      source: "recent";
+      taskId: string;
+      preview: GoogleActionPreview;
+      result: GoogleActionResult | null;
+      messageIndex: number;
+    };
 
 function isGoogleComposeSessionPayload(value: unknown): value is GoogleComposeSession {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -6176,6 +6193,47 @@ function toGoogleRecentActionContext(
   };
 }
 
+function isGoogleEmailDraftPreview(
+  preview: GoogleActionPreview | null | undefined,
+): preview is GoogleActionPreview {
+  return Boolean(
+    preview &&
+      preview.connector === "gmail" &&
+      preview.proposedEmail &&
+      (preview.kind === "email_compose" || preview.kind === "email_reply"),
+  );
+}
+
+function resolveLatestGoogleEmailTaskTarget(
+  state: GoogleConversationState,
+): GoogleEmailConversationTaskTarget | null {
+  const pendingEmailTask =
+    state.pendingTask && isGoogleEmailDraftPreview(state.pendingTask.preview)
+      ? {
+          source: "pending" as const,
+          taskId: state.pendingTask.taskId,
+          preview: state.pendingTask.preview,
+          messageIndex: state.pendingTask.messageIndex,
+        }
+      : null;
+  const recentEmailTask =
+    state.recentEmailTask && isGoogleEmailDraftPreview(state.recentEmailTask.preview)
+      ? {
+          source: "recent" as const,
+          taskId: state.recentEmailTask.taskId,
+          preview: state.recentEmailTask.preview,
+          result: state.recentEmailTask.result,
+          messageIndex: state.recentEmailTask.messageIndex,
+        }
+      : null;
+
+  if (!pendingEmailTask) return recentEmailTask;
+  if (!recentEmailTask) return pendingEmailTask;
+  return pendingEmailTask.messageIndex > recentEmailTask.messageIndex
+    ? pendingEmailTask
+    : recentEmailTask;
+}
+
 function resolveLatestGoogleConversationState(messages: Message[]): GoogleConversationState {
   const state: GoogleConversationState = {
     composeSession: null,
@@ -6203,6 +6261,7 @@ function resolveLatestGoogleConversationState(messages: Message[]): GoogleConver
         state.pendingTask = {
           taskId: payload.taskId,
           preview,
+          messageIndex: idx,
         };
         seenGoogleTaskIds.add(payload.taskId);
       }
@@ -6225,6 +6284,7 @@ function resolveLatestGoogleConversationState(messages: Message[]): GoogleConver
         state.pendingTask = {
           taskId: payload.task.id,
           preview,
+          messageIndex: idx,
         };
         continue;
       }
@@ -6234,6 +6294,7 @@ function resolveLatestGoogleConversationState(messages: Message[]): GoogleConver
             taskId: payload.task.id,
             preview,
             result,
+            messageIndex: idx,
           };
         }
         if (
@@ -6244,6 +6305,7 @@ function resolveLatestGoogleConversationState(messages: Message[]): GoogleConver
             taskId: payload.task.id,
             preview,
             result,
+            messageIndex: idx,
           };
         }
       }
@@ -6321,6 +6383,7 @@ function shouldBypassGenericAgentTaskForGoogleAction(params: {
   conversationMessages: Message[];
 }): boolean {
   const state = resolveLatestGoogleConversationState(params.conversationMessages);
+  const latestEmailTaskTarget = resolveLatestGoogleEmailTaskTarget(state);
   if (state.composeSession) {
     return true;
   }
@@ -6333,22 +6396,13 @@ function shouldBypassGenericAgentTaskForGoogleAction(params: {
     return true;
   }
   if (
-    state.pendingTask?.preview?.connector === "gmail" &&
-    state.pendingTask.preview.proposedEmail &&
-    (state.pendingTask.preview.kind === "email_compose" ||
-      state.pendingTask.preview.kind === "email_reply") &&
-    looksLikeGoogleEmailDraftRevisionInstruction(params.text)
-  ) {
-    return true;
-  }
-  if (state.recentEmailTask && isGoogleActionSendMessage(params.text)) {
-    return true;
-  }
-  if (
-    state.recentEmailTask?.result?.status === "draft_created" &&
+    latestEmailTaskTarget &&
     !detectGoogleActionTaskIntent(params.text, toGoogleRecentActionContext(state)) &&
     looksLikeGoogleEmailDraftRevisionInstruction(params.text)
   ) {
+    return true;
+  }
+  if (latestEmailTaskTarget && isGoogleActionSendMessage(params.text)) {
     return true;
   }
   return detectGoogleActionTaskIntent(
@@ -6650,18 +6704,97 @@ async function maybeHandleGoogleActionTask(params: {
   const googleConversationState = resolveLatestGoogleConversationState(
     params.conversationMessages,
   );
+  const latestEmailTaskTarget = resolveLatestGoogleEmailTaskTarget(
+    googleConversationState,
+  );
+  const hasOtherGoogleFollowUpIntent = detectGoogleActionTaskIntent(
+    params.text,
+    toGoogleRecentActionContext(googleConversationState),
+  );
+  const wantsEmailSendFollowUp =
+    Boolean(latestEmailTaskTarget) && isGoogleActionSendMessage(params.text);
+  const wantsEmailRevisionFollowUp =
+    Boolean(latestEmailTaskTarget) &&
+    !wantsEmailSendFollowUp &&
+    !isGoogleActionApproveMessage(params.text) &&
+    !isGoogleActionDeclineMessage(params.text) &&
+    !hasOtherGoogleFollowUpIntent &&
+    looksLikeGoogleEmailDraftRevisionInstruction(params.text);
+
+  if (
+    latestEmailTaskTarget?.source === "recent" &&
+    latestEmailTaskTarget.result?.status === "draft_created"
+  ) {
+    if (wantsEmailSendFollowUp) {
+      const run = await startFollowUpGoogleEmailSendTask({
+        storage: params.storage,
+        taskId: latestEmailTaskTarget.taskId,
+        userId: params.userId,
+        conversationId: params.conversationId,
+        requestedByMessageId: params.userMessage.id,
+        onEvent: params.onEvent,
+      });
+
+      const assistantMessages = await collectRecentAssistantTaskMessages({
+        conversationId: params.conversationId,
+        taskId: run.task.id,
+        userId: params.userId,
+        userCreatedAt: params.userMessage.createdAt,
+      });
+
+      return {
+        handled: true as const,
+        kind: "ready" as const,
+        assistantMessages,
+        legacyAssistantMessage: makeLegacyAssistantMessage(assistantMessages),
+        model: "google_action_task_send_followup_v1",
+        decisionPath: "agent_task" as const,
+        decisionPathReason: "task_started" as const,
+        awaitingApproval: run.awaitingApproval,
+        task: run.task,
+      };
+    }
+
+    if (wantsEmailRevisionFollowUp) {
+      const run = await startFollowUpGoogleEmailRevisionTask({
+        storage: params.storage,
+        taskId: latestEmailTaskTarget.taskId,
+        userId: params.userId,
+        conversationId: params.conversationId,
+        requestedByMessageId: params.userMessage.id,
+        instructionText: params.text,
+        onEvent: params.onEvent,
+      });
+
+      const assistantMessages = await collectRecentAssistantTaskMessages({
+        conversationId: params.conversationId,
+        taskId: run.task.id,
+        userId: params.userId,
+        userCreatedAt: params.userMessage.createdAt,
+      });
+
+      return {
+        handled: true as const,
+        kind: "ready" as const,
+        assistantMessages,
+        legacyAssistantMessage: makeLegacyAssistantMessage(assistantMessages),
+        model: "google_action_task_saved_draft_revision_v1",
+        decisionPath: "agent_task" as const,
+        decisionPathReason: "task_started" as const,
+        awaitingApproval: run.awaitingApproval,
+        task: run.task,
+      };
+    }
+  }
 
   if (googleConversationState.pendingTask) {
     const wantsSend = isGoogleActionSendMessage(params.text);
     const wantsApprove = wantsSend || isGoogleActionApproveMessage(params.text);
     const wantsDecline = isGoogleActionDeclineMessage(params.text);
-    const hasOtherGoogleFollowUpIntent = detectGoogleActionTaskIntent(
-      params.text,
-      toGoogleRecentActionContext(googleConversationState),
-    );
     const wantsDraftRevision =
       !wantsApprove &&
       !wantsDecline &&
+      latestEmailTaskTarget?.source !== "recent" &&
       !hasOtherGoogleFollowUpIntent &&
       googleConversationState.pendingTask.preview?.connector === "gmail" &&
       googleConversationState.pendingTask.preview.proposedEmail &&
@@ -6825,77 +6958,6 @@ async function maybeHandleGoogleActionTask(params: {
         decisionPathReason: "task_started" as const,
         awaitingApproval: true,
         task: revised.task,
-      };
-    }
-  }
-
-  if (googleConversationState.recentEmailTask) {
-    const wantsSend = isGoogleActionSendMessage(params.text);
-    const wantsSavedDraftRevision =
-      googleConversationState.recentEmailTask.result?.status === "draft_created" &&
-      !detectGoogleActionTaskIntent(
-        params.text,
-        toGoogleRecentActionContext(googleConversationState),
-      ) &&
-      looksLikeGoogleEmailDraftRevisionInstruction(params.text);
-    if (wantsSend) {
-      const run = await startFollowUpGoogleEmailSendTask({
-        storage: params.storage,
-        taskId: googleConversationState.recentEmailTask.taskId,
-        userId: params.userId,
-        conversationId: params.conversationId,
-        requestedByMessageId: params.userMessage.id,
-        onEvent: params.onEvent,
-      });
-
-      const assistantMessages = await collectRecentAssistantTaskMessages({
-        conversationId: params.conversationId,
-        taskId: run.task.id,
-        userId: params.userId,
-        userCreatedAt: params.userMessage.createdAt,
-      });
-
-      return {
-        handled: true as const,
-        kind: "ready" as const,
-        assistantMessages,
-        legacyAssistantMessage: makeLegacyAssistantMessage(assistantMessages),
-        model: "google_action_task_send_followup_v1",
-        decisionPath: "agent_task" as const,
-        decisionPathReason: "task_started" as const,
-        awaitingApproval: run.awaitingApproval,
-        task: run.task,
-      };
-    }
-
-    if (wantsSavedDraftRevision) {
-      const run = await startFollowUpGoogleEmailRevisionTask({
-        storage: params.storage,
-        taskId: googleConversationState.recentEmailTask.taskId,
-        userId: params.userId,
-        conversationId: params.conversationId,
-        requestedByMessageId: params.userMessage.id,
-        instructionText: params.text,
-        onEvent: params.onEvent,
-      });
-
-      const assistantMessages = await collectRecentAssistantTaskMessages({
-        conversationId: params.conversationId,
-        taskId: run.task.id,
-        userId: params.userId,
-        userCreatedAt: params.userMessage.createdAt,
-      });
-
-      return {
-        handled: true as const,
-        kind: "ready" as const,
-        assistantMessages,
-        legacyAssistantMessage: makeLegacyAssistantMessage(assistantMessages),
-        model: "google_action_task_saved_draft_revision_v1",
-        decisionPath: "agent_task" as const,
-        decisionPathReason: "task_started" as const,
-        awaitingApproval: run.awaitingApproval,
-        task: run.task,
       };
     }
   }
