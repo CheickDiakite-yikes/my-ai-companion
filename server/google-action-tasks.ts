@@ -6,10 +6,12 @@ import type {
   GoogleActionPreview,
   GoogleActionResult,
   GoogleCalendarEventDetail,
+  GoogleComposeSession,
   GoogleEmailThreadDetail,
 } from "@shared/agent";
 import type { AgentTask, AgentApproval, AgentStep } from "@shared/schema";
 import type { IStorage } from "./storage";
+import { generateStructuredJson } from "./gemini";
 import {
   GOOGLE_CALENDAR_EVENTS_READONLY_SCOPE,
   GOOGLE_CALENDAR_EVENTS_WRITE_SCOPE,
@@ -69,15 +71,19 @@ type GoogleActionTaskPreparation =
   | {
       kind: "clarify";
       message: string;
+      composeSession?: GoogleComposeSession | null;
+      resolvedPrompt?: string | null;
     }
   | {
       kind: "upgrade_required";
       message: string;
+      resolvedPrompt?: string | null;
     }
   | {
       kind: "ready";
       preview: GoogleActionPreview;
       plan: StoredGoogleActionPlan;
+      resolvedPrompt?: string | null;
     };
 
 type StepState = {
@@ -183,7 +189,7 @@ function extractEmailAddress(input: string): string | null {
   return match?.[0]?.trim().toLowerCase() ?? null;
 }
 
-function inferEmailBodyText(input: string): string | null {
+function inferLiteralEmailBodyText(input: string): string | null {
   const normalized = normalizeText(input);
   const match =
     normalized.match(/\b(?:saying|that|says)\s+(.+)$/i) ??
@@ -195,6 +201,167 @@ function inferEmailSubject(input: string): string | null {
   const normalized = normalizeText(input);
   const match = normalized.match(/\babout\s+(.+?)(?:\s+(?:saying|that)\s+.+)?$/i);
   return match?.[1]?.trim() ?? null;
+}
+
+function stripComposeLeadIn(input: string): string {
+  return normalizeText(input)
+    .replace(/^\s*(?:can|could|would|will)\s+you\s+/i, "")
+    .replace(/^\s*please\s+/i, "")
+    .replace(
+      /^\s*(?:draft|write|send)\s+(?:an?\s+)?(?:email|message)\b/i,
+      "",
+    )
+    .trim();
+}
+
+function inferDraftInstructionText(input: string): string | null {
+  const normalized = normalizeText(input);
+  if (!normalized) return null;
+
+  const composeTail = stripComposeLeadIn(normalized);
+  const askingMatch = composeTail.match(
+    /^(?:to\s+ask|asking|ask|to\s+say|saying|say|to\s+tell|telling|tell)\s+(.+)$/i,
+  );
+  if (askingMatch?.[1]) {
+    return askingMatch[1].trim();
+  }
+
+  const afterRecipientMatch = composeTail.match(
+    /^to\s+\S+@\S+\s+(.+)$/i,
+  );
+  if (afterRecipientMatch?.[1]) {
+    return afterRecipientMatch[1].trim();
+  }
+
+  const plainTail = composeTail.replace(/^to\s+\S+@\S+/i, "").trim();
+  return plainTail.length > 0 ? plainTail : null;
+}
+
+function buildComposeSession(input: {
+  status: GoogleComposeSession["status"];
+  recipientEmail: string | null;
+  subject: string | null;
+  bodyPreview: string | null;
+  promptSeed: string;
+  followUpPrompt: string;
+}): GoogleComposeSession {
+  return {
+    mode: "email_compose",
+    status: input.status,
+    recipientEmail: input.recipientEmail,
+    subject: input.subject,
+    bodyPreview: input.bodyPreview,
+    promptSeed: input.promptSeed,
+    followUpPrompt: input.followUpPrompt,
+  };
+}
+
+function buildComposeContinuationPrompt(params: {
+  session: GoogleComposeSession;
+  userText: string;
+}): string | null {
+  const followUpText = normalizeText(params.userText);
+  if (!followUpText) return null;
+  if (
+    /^(?:yes|yeah|yep|sure|ok|okay|send|approve|cancel|stop|never mind|nevermind|nope|nah)\b/i.test(
+      followUpText,
+    )
+  ) {
+    return null;
+  }
+
+  if (params.session.status === "awaiting_body") {
+    if (!params.session.recipientEmail) {
+      return null;
+    }
+    const subjectPart = params.session.subject
+      ? ` about ${params.session.subject}`
+      : "";
+    return `draft an email to ${params.session.recipientEmail}${subjectPart} ${followUpText}`;
+  }
+
+  if (params.session.status === "awaiting_recipient") {
+    const recipientEmail = extractEmailAddress(followUpText);
+    if (!recipientEmail) return null;
+    const subjectPart = params.session.subject
+      ? ` about ${params.session.subject}`
+      : "";
+    const bodyPart = params.session.bodyPreview
+      ? ` ${params.session.bodyPreview}`
+      : "";
+    return `draft an email to ${recipientEmail}${subjectPart}${bodyPart}`.trim();
+  }
+
+  return null;
+}
+
+function stripJsonFence(input: string): string {
+  return input.replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/\s*```$/i, "").trim();
+}
+
+function buildFallbackEmailDraft(params: {
+  instructionText: string;
+  subjectHint: string | null;
+}): { subject: string; bodyText: string } {
+  const instruction = normalizeText(params.instructionText);
+  const normalizedCore = instruction
+    .replace(/^(?:if|whether)\s+/i, "I wanted to ask if ")
+    .replace(/^(?:ask|asking)\s+/i, "I wanted to ask ")
+    .replace(/^(?:say|saying)\s+/i, "")
+    .trim();
+  const sentence =
+    normalizedCore.length > 0
+      ? normalizedCore.charAt(0).toUpperCase() + normalizedCore.slice(1)
+      : "I wanted to follow up with you";
+  const punctuated = /[.!?]$/.test(sentence) ? sentence : `${sentence}.`;
+  return {
+    subject: params.subjectHint ?? "Quick question",
+    bodyText: `Hi,\n\n${punctuated}\n\nBest,`,
+  };
+}
+
+async function buildEmailDraftContent(params: {
+  instructionText: string;
+  subjectHint: string | null;
+}): Promise<{ subject: string; bodyText: string }> {
+  const fallback = buildFallbackEmailDraft(params);
+
+  try {
+    const structured = await generateStructuredJson({
+      systemInstruction: [
+        "You draft concise, send-ready personal emails.",
+        'Return strict JSON only with keys "subject" and "bodyText".',
+        "bodyText must be plain text only.",
+        "bodyText must include a greeting and a short closing.",
+        "Do not mention being an AI assistant.",
+        "Keep the tone warm, natural, and brief.",
+      ].join("\n"),
+      userPrompt: [
+        `Subject hint: ${params.subjectHint ?? "none"}`,
+        `User instruction: ${params.instructionText}`,
+      ].join("\n"),
+      enableGoogleSearchGrounding: false,
+    });
+    const raw = stripJsonFence(structured.text);
+    const parsed = JSON.parse(raw) as {
+      subject?: unknown;
+      bodyText?: unknown;
+    };
+    const subject =
+      typeof parsed.subject === "string" && parsed.subject.trim().length > 0
+        ? parsed.subject.trim()
+        : fallback.subject;
+    const bodyText =
+      typeof parsed.bodyText === "string" && parsed.bodyText.trim().length > 0
+        ? parsed.bodyText.trim()
+        : fallback.bodyText;
+    return {
+      subject,
+      bodyText,
+    };
+  } catch {
+    return fallback;
+  }
 }
 
 function isLikelyGoogleActionRequest(text: string): boolean {
@@ -397,7 +564,7 @@ function buildCalendarSearchQuery(raw: string): string {
 }
 
 function buildEmailReplyBody(text: string): string | null {
-  const body = inferEmailBodyText(text);
+  const body = inferLiteralEmailBodyText(text);
   if (!body) return null;
   return body;
 }
@@ -411,8 +578,21 @@ export async function prepareGoogleActionTask(params: {
   userId: string;
   text: string;
   clientTimeZone?: string | null;
+  composeSession?: GoogleComposeSession | null;
 }): Promise<GoogleActionTaskPreparation> {
-  const rawText = normalizeText(params.text);
+  let rawText = normalizeText(params.text);
+  const resolvedFromComposeSession =
+    params.composeSession &&
+    (params.composeSession.status === "awaiting_body" ||
+      params.composeSession.status === "awaiting_recipient")
+      ? buildComposeContinuationPrompt({
+          session: params.composeSession,
+          userText: rawText,
+        })
+      : null;
+  if (resolvedFromComposeSession) {
+    rawText = resolvedFromComposeSession;
+  }
   if (!detectGoogleActionTaskIntent(rawText)) {
     return { kind: "none" };
   }
@@ -421,12 +601,14 @@ export async function prepareGoogleActionTask(params: {
 
   if (/\b(reply|respond)\b/i.test(rawText)) {
     const replyTarget = matchReplyTarget(rawText);
-    const bodyText = buildEmailReplyBody(rawText);
+    const literalBodyText = buildEmailReplyBody(rawText);
+    const bodyText = literalBodyText;
     if (!replyTarget || !bodyText) {
       return {
         kind: "clarify",
         message:
           "Tell me which email to reply to and what you want the reply to say.",
+        resolvedPrompt: resolvedFromComposeSession,
       };
     }
 
@@ -442,6 +624,7 @@ export async function prepareGoogleActionTask(params: {
           auth.code === "google_not_connected"
             ? "Connect Google in Profile before I can draft replies."
             : "Reconnect Google in Profile so I can reach your Gmail data.",
+        resolvedPrompt: resolvedFromComposeSession,
       };
     }
 
@@ -455,6 +638,7 @@ export async function prepareGoogleActionTask(params: {
       return {
         kind: "clarify",
         message: `I couldn't find a recent email matching "${replyTarget}". Tell me the sender or subject more specifically.`,
+        resolvedPrompt: resolvedFromComposeSession,
       };
     }
     const thread = await fetchGmailThreadDetail({
@@ -475,6 +659,7 @@ export async function prepareGoogleActionTask(params: {
       return {
         kind: "clarify",
         message: "I found the thread, but I couldn't determine who to reply to.",
+        resolvedPrompt: resolvedFromComposeSession,
       };
     }
 
@@ -488,6 +673,7 @@ export async function prepareGoogleActionTask(params: {
         kind: "upgrade_required",
         message:
           "I found the right email thread, but I still need Gmail write access. Upgrade Google permissions in Profile, then ask again.",
+        resolvedPrompt: resolvedFromComposeSession,
       };
     }
 
@@ -526,18 +712,48 @@ export async function prepareGoogleActionTask(params: {
           threadId: thread.threadId,
         },
       },
+      resolvedPrompt: resolvedFromComposeSession,
     };
   }
 
   if (/\b(?:draft|write|send)\b/i.test(rawText) && /\b(?:email|message)\b/i.test(rawText)) {
     const composeTarget = matchComposeTarget(rawText);
     const recipientEmail = composeTarget ? extractEmailAddress(composeTarget) : null;
-    const bodyText = inferEmailBodyText(rawText);
-    if (!recipientEmail || !bodyText) {
+    const subjectHint = inferEmailSubject(rawText);
+    const literalBodyText = inferLiteralEmailBodyText(rawText);
+    const draftInstructionText = literalBodyText ?? inferDraftInstructionText(rawText);
+
+    if (!recipientEmail) {
       return {
         kind: "clarify",
         message:
-          "Give me the recipient email address and what you want the message to say.",
+          "Who should I send it to? Share the recipient email address and I'll keep drafting.",
+        composeSession: buildComposeSession({
+          status: "awaiting_recipient",
+          recipientEmail: null,
+          subject: subjectHint,
+          bodyPreview: draftInstructionText,
+          promptSeed: rawText,
+          followUpPrompt: "Who should I send it to? Share the email address.",
+        }),
+        resolvedPrompt: resolvedFromComposeSession,
+      };
+    }
+
+    if (!draftInstructionText) {
+      return {
+        kind: "clarify",
+        message:
+          `I can draft that to ${recipientEmail}. What should the email say?`,
+        composeSession: buildComposeSession({
+          status: "awaiting_body",
+          recipientEmail,
+          subject: subjectHint,
+          bodyPreview: null,
+          promptSeed: rawText,
+          followUpPrompt: `What should I say to ${recipientEmail}?`,
+        }),
+        resolvedPrompt: resolvedFromComposeSession,
       };
     }
     const auth = await resolveGoogleAccessTokenForUser({
@@ -552,6 +768,7 @@ export async function prepareGoogleActionTask(params: {
           auth.code === "google_not_connected"
             ? "Connect Google in Profile before I can prepare email drafts."
             : "Reconnect Google in Profile so I can use Gmail for drafts.",
+        resolvedPrompt: resolvedFromComposeSession,
       };
     }
     const sendAfterApproval = /\bsend\b/i.test(rawText) && !/\bdraft\b/i.test(rawText);
@@ -564,9 +781,20 @@ export async function prepareGoogleActionTask(params: {
         kind: "upgrade_required",
         message:
           "I need Gmail write access before I can create or send drafts. Upgrade Google permissions in Profile, then try again.",
+        resolvedPrompt: resolvedFromComposeSession,
       };
     }
-    const subject = inferEmailSubject(rawText) ?? "Quick note";
+    const draftContent = literalBodyText
+      ? {
+          subject: subjectHint ?? "Quick note",
+          bodyText: literalBodyText,
+        }
+      : await buildEmailDraftContent({
+          instructionText: draftInstructionText,
+          subjectHint,
+        });
+    const subject = draftContent.subject;
+    const bodyText = draftContent.bodyText;
     const preview: GoogleActionPreview = {
       kind: "email_compose",
       title: sendAfterApproval ? "Send email" : "Create email draft",
@@ -598,6 +826,7 @@ export async function prepareGoogleActionTask(params: {
           bodyText,
         },
       },
+      resolvedPrompt: resolvedFromComposeSession,
     };
   }
 
@@ -611,6 +840,7 @@ export async function prepareGoogleActionTask(params: {
         kind: "clarify",
         message:
           "Tell me when the event should happen using something explicit like tomorrow at 1pm.",
+        resolvedPrompt: resolvedFromComposeSession,
       };
     }
     const title = normalizeText(
@@ -624,6 +854,7 @@ export async function prepareGoogleActionTask(params: {
       return {
         kind: "clarify",
         message: "Tell me what the calendar event should be called.",
+        resolvedPrompt: resolvedFromComposeSession,
       };
     }
     const auth = await resolveGoogleAccessTokenForUser({
@@ -638,6 +869,7 @@ export async function prepareGoogleActionTask(params: {
           auth.code === "google_not_connected"
             ? "Connect Google in Profile before I can create calendar events."
             : "Reconnect Google in Profile so I can use Calendar.",
+        resolvedPrompt: resolvedFromComposeSession,
       };
     }
     const missingWriteScopes = getMissingScopes(auth.scopes, [
@@ -648,6 +880,7 @@ export async function prepareGoogleActionTask(params: {
         kind: "upgrade_required",
         message:
           "I need Calendar write access before I can create events. Upgrade Google permissions in Profile, then try again.",
+        resolvedPrompt: resolvedFromComposeSession,
       };
     }
     const preview: GoogleActionPreview = {
@@ -680,6 +913,7 @@ export async function prepareGoogleActionTask(params: {
           description: null,
         },
       },
+      resolvedPrompt: resolvedFromComposeSession,
     };
   }
 
@@ -692,6 +926,7 @@ export async function prepareGoogleActionTask(params: {
         kind: "clarify",
         message:
           "Tell me the new time for the event, for example move it to 4pm tomorrow.",
+        resolvedPrompt: resolvedFromComposeSession,
       };
     }
     const auth = await resolveGoogleAccessTokenForUser({
@@ -706,6 +941,7 @@ export async function prepareGoogleActionTask(params: {
           auth.code === "google_not_connected"
             ? "Connect Google in Profile before I can update calendar events."
             : "Reconnect Google in Profile so I can use Calendar.",
+        resolvedPrompt: resolvedFromComposeSession,
       };
     }
     const searchQuery = buildCalendarSearchQuery(rawText);
@@ -714,6 +950,7 @@ export async function prepareGoogleActionTask(params: {
         kind: "clarify",
         message:
           "Tell me which calendar event you want to update, for example the event title or who it's with.",
+        resolvedPrompt: resolvedFromComposeSession,
       };
     }
     const eventMatches = await searchGoogleCalendarEvents({
@@ -728,6 +965,7 @@ export async function prepareGoogleActionTask(params: {
       return {
         kind: "clarify",
         message: `I couldn't find a calendar event matching "${searchQuery}". Tell me the event title more specifically.`,
+        resolvedPrompt: resolvedFromComposeSession,
       };
     }
     const missingWriteScopes = getMissingScopes(auth.scopes, [
@@ -738,6 +976,7 @@ export async function prepareGoogleActionTask(params: {
         kind: "upgrade_required",
         message:
           "I found the event, but I still need Calendar write access. Upgrade Google permissions in Profile, then ask again.",
+        resolvedPrompt: resolvedFromComposeSession,
       };
     }
     const newTime = parseTimeToken(newTimeMatch[1]);
@@ -745,6 +984,7 @@ export async function prepareGoogleActionTask(params: {
       return {
         kind: "clarify",
         message: "Tell me the new time more explicitly, like 4pm or 4:30pm.",
+        resolvedPrompt: resolvedFromComposeSession,
       };
     }
     const existingStart = new Date(existingEvent.startTime);
@@ -803,6 +1043,7 @@ export async function prepareGoogleActionTask(params: {
           endTime: updatedEnd,
         },
       },
+      resolvedPrompt: resolvedFromComposeSession,
     };
   }
 
@@ -933,6 +1174,57 @@ function taskPlanFromTask(task: AgentTask): StoredGoogleActionPlan {
     throw new Error("Google action task plan is missing or invalid");
   }
   return task.plan as StoredGoogleActionPlan;
+}
+
+export async function promotePendingGoogleEmailTaskToSend(params: {
+  storage: IStorage;
+  taskId: string;
+  userId: string;
+}): Promise<AgentTaskSummary> {
+  const task = await params.storage.getAgentTaskById(params.taskId);
+  if (!task || task.userId !== params.userId) {
+    throw new Error("Task not found");
+  }
+
+  const plan = taskPlanFromTask(task);
+  if (
+    (plan.execution.kind !== "email_compose" &&
+      plan.execution.kind !== "email_reply") ||
+    plan.execution.sendAfterApproval
+  ) {
+    return toTaskSummary(task);
+  }
+
+  const nextPreview: GoogleActionPreview = {
+    ...plan.preview,
+    title: plan.execution.kind === "email_reply" ? "Send email reply" : "Send email",
+    summary:
+      plan.execution.kind === "email_reply"
+        ? `Send a reply to ${plan.execution.to.join(", ")}.`
+        : `Send an email to ${plan.execution.to.join(", ")}.`,
+    proposedEmail: plan.preview.proposedEmail
+      ? {
+          ...plan.preview.proposedEmail,
+          sendAfterApproval: true,
+        }
+      : null,
+  };
+
+  const nextPlan: StoredGoogleActionPlan = {
+    ...plan,
+    preview: nextPreview,
+    execution: {
+      ...plan.execution,
+      sendAfterApproval: true,
+    },
+  };
+
+  const updated = await params.storage.updateAgentTaskStatus({
+    taskId: task.id,
+    status: task.status,
+    plan: nextPlan,
+  });
+  return toTaskSummary(updated ?? task);
 }
 
 export async function approveAndExecuteGoogleActionTask(params: {

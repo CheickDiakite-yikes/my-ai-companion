@@ -76,6 +76,7 @@ import type {
   AgentApprovalSummary,
   GoogleActionPreview,
   GoogleActionResult,
+  GoogleComposeSession,
   ArtifactQualitySummary,
   AgentOfferSummary,
   AgentToolCallSummary,
@@ -969,12 +970,19 @@ function isAgentOfferPayload(
   return Boolean(payload && payload.kind === "agent_offer");
 }
 
+function isGoogleComposeSessionPayload(
+  payload: MessageData["uiPayload"],
+): payload is Extract<AgentMessageUiPayload, { kind: "agent_google_compose_session" }> {
+  return Boolean(payload && payload.kind === "agent_google_compose_session");
+}
+
 function isAgentUiPayload(payload: MessageData["uiPayload"]): boolean {
   return (
     isAgentTaskStatusPayload(payload) ||
     isAgentApprovalPayload(payload) ||
     isAgentArtifactPayload(payload) ||
-    isAgentOfferPayload(payload)
+    isAgentOfferPayload(payload) ||
+    isGoogleComposeSessionPayload(payload)
   );
 }
 
@@ -989,6 +997,9 @@ function isGoogleAssistantUiPayload(payload: MessageData["uiPayload"]): boolean 
   }
   if (payload.kind === "agent_approval") {
     return Boolean(payload.googleActionPreview);
+  }
+  if (payload.kind === "agent_google_compose_session") {
+    return payload.session.mode === "email_compose";
   }
   return false;
 }
@@ -1206,7 +1217,7 @@ function toUnifiedTaskOutputSummary(card: UnifiedAgentTaskCardModel): string {
       "This task failed before publishing an output."
     );
   }
-  if (card.approval?.status === "pending") {
+  if (card.status === "approval_required" && card.approval?.status === "pending") {
     return card.approval.requestedAction;
   }
   if (card.artifact) {
@@ -1272,6 +1283,203 @@ function formatGoogleActionDateTime(value: string | null | undefined): string | 
     hour: "numeric",
     minute: "2-digit",
   });
+}
+
+function getGoogleApprovalPrimaryLabel(
+  preview: GoogleActionPreview | null | undefined,
+): string {
+  if (!preview) return "Approve";
+  if (preview.kind === "email_compose") {
+    return preview.proposedEmail?.sendAfterApproval ? "Send email" : "Create draft";
+  }
+  if (preview.kind === "email_reply") {
+    return preview.proposedEmail?.sendAfterApproval ? "Send reply" : "Create draft";
+  }
+  if (preview.kind === "calendar_create") return "Create event";
+  if (preview.kind === "calendar_update") return "Apply change";
+  return "Approve";
+}
+
+function getGoogleApprovalSecondaryLabel(
+  preview: GoogleActionPreview | null | undefined,
+): string {
+  if (!preview) return "Deny";
+  if (preview.connector === "gmail") return "Cancel";
+  return "Not now";
+}
+
+function getGoogleComposeStatusMeta(session: GoogleComposeSession): {
+  label: string;
+  helperText: string;
+  tone: "pending" | "ready" | "cancelled";
+} {
+  if (session.status === "awaiting_recipient") {
+    return {
+      label: "Waiting for recipient",
+      helperText: "Reply with an email address so Zee knows who this draft is for.",
+      tone: "pending",
+    };
+  }
+  if (session.status === "awaiting_body") {
+    return {
+      label: "Waiting for message",
+      helperText: "Tell Zee what you want to say and she will turn it into a send-ready draft.",
+      tone: "pending",
+    };
+  }
+  if (session.status === "cancelled") {
+    return {
+      label: "Draft cancelled",
+      helperText: "That compose flow is closed. Start a new draft whenever you want.",
+      tone: "cancelled",
+    };
+  }
+  return {
+    label: "Draft ready",
+    helperText: "The draft preview is ready below.",
+    tone: "ready",
+  };
+}
+
+function getGoogleEmailPreviewHelper(
+  preview: NonNullable<GoogleActionPreview["proposedEmail"]>,
+): string {
+  return preview.sendAfterApproval
+    ? "Approve to send this from Gmail."
+    : 'Approve to save this as a Gmail draft. Reply "let\'s send" to send instead.';
+}
+
+function GoogleEmailComposerPreview(props: {
+  to: string[];
+  subject: string | null | undefined;
+  bodyPreview: string | null | undefined;
+  statusLabel: string;
+  helperText: string;
+  tone: "pending" | "ready" | "cancelled";
+  testId?: string;
+}) {
+  const statusIcon =
+    props.tone === "ready" ? (
+      <CheckCircle2 className="h-3 w-3" />
+    ) : props.tone === "cancelled" ? (
+      <AlertTriangle className="h-3 w-3" />
+    ) : (
+      <Clock3 className="h-3 w-3" />
+    );
+
+  const statusColor =
+    props.tone === "ready"
+      ? "color-mix(in srgb, var(--app-accent) 80%, #22c55e)"
+      : props.tone === "cancelled"
+        ? "color-mix(in srgb, var(--app-accent) 35%, #ef4444)"
+        : "color-mix(in srgb, var(--app-accent) 82%, #f59e0b)";
+
+  const subject = props.subject?.trim() || "Zee will suggest a subject";
+  const toLine = props.to.length > 0 ? props.to.join(", ") : "Waiting for recipient";
+  const bodyPreview = props.bodyPreview?.trim();
+
+  return (
+    <div
+      className="relative overflow-hidden rounded-[1.35rem] border p-3"
+      style={{
+        borderColor: "var(--app-soft-card-border)",
+        background:
+          "radial-gradient(120% 120% at 12% 8%, color-mix(in srgb, var(--app-accent) 18%, transparent) 0%, transparent 58%), linear-gradient(180deg, color-mix(in srgb, var(--app-soft-card-bg) 96%, rgba(255,255,255,0.04)), color-mix(in srgb, var(--app-soft-card-bg) 82%, rgba(255,255,255,0.02)))",
+        boxShadow: "0 14px 28px rgba(0, 0, 0, 0.14)",
+      }}
+      data-testid={props.testId}
+    >
+      <div
+        className="pointer-events-none absolute inset-x-4 top-0 h-px"
+        style={{
+          background:
+            "linear-gradient(90deg, transparent, color-mix(in srgb, var(--app-accent) 46%, transparent), transparent)",
+        }}
+      />
+      <div className="relative space-y-3">
+        <div className="flex items-center justify-between gap-2">
+          <div
+            className="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em]"
+            style={{
+              borderColor: "var(--app-soft-card-border)",
+              backgroundColor: "color-mix(in srgb, var(--app-soft-card-bg) 76%, transparent)",
+            }}
+          >
+            <Sparkles className="h-3 w-3" />
+            Zee Mail
+          </div>
+          <div
+            className="inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[10px] font-semibold uppercase tracking-wide"
+            style={{
+              borderColor: "color-mix(in srgb, var(--app-soft-card-border) 80%, transparent)",
+              backgroundColor: "color-mix(in srgb, var(--app-soft-card-bg) 70%, transparent)",
+              color: statusColor,
+            }}
+          >
+            {statusIcon}
+            {props.statusLabel}
+          </div>
+        </div>
+
+        <div className="grid gap-2 text-[11px]">
+          <div
+            className="rounded-xl border px-3 py-2"
+            style={{
+              borderColor: "var(--app-soft-card-border)",
+              backgroundColor: "color-mix(in srgb, var(--app-soft-card-bg) 72%, transparent)",
+            }}
+          >
+            <p className="font-semibold uppercase tracking-wide opacity-65">To</p>
+            <p className="mt-1 break-words text-sm">{toLine}</p>
+          </div>
+          <div
+            className="rounded-xl border px-3 py-2"
+            style={{
+              borderColor: "var(--app-soft-card-border)",
+              backgroundColor: "color-mix(in srgb, var(--app-soft-card-bg) 72%, transparent)",
+            }}
+          >
+            <p className="font-semibold uppercase tracking-wide opacity-65">Subject</p>
+            <p className="mt-1 text-sm">{subject}</p>
+          </div>
+        </div>
+
+        <div
+          className="rounded-[1.15rem] border p-3"
+          style={{
+            borderColor: "color-mix(in srgb, var(--app-soft-card-border) 92%, transparent)",
+            background:
+              "linear-gradient(180deg, rgba(255,255,255,0.96), rgba(248,248,248,0.92))",
+            color: "#18363c",
+          }}
+        >
+          {bodyPreview ? (
+            <p className="whitespace-pre-wrap text-sm leading-6">{bodyPreview}</p>
+          ) : (
+            <div className="space-y-2 py-2 text-sm opacity-55">
+              <p>The draft body will appear here.</p>
+              <div className="space-y-1">
+                <div className="h-2 rounded-full bg-black/10" />
+                <div className="h-2 w-5/6 rounded-full bg-black/10" />
+                <div className="h-2 w-2/3 rounded-full bg-black/10" />
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div
+          className="flex items-start gap-2 rounded-xl border px-3 py-2 text-[11px]"
+          style={{
+            borderColor: "var(--app-soft-card-border)",
+            backgroundColor: "color-mix(in srgb, var(--app-soft-card-bg) 75%, transparent)",
+          }}
+        >
+          <MessageSquare className="mt-0.5 h-3.5 w-3.5 shrink-0 opacity-70" />
+          <p className="leading-5 opacity-80">{props.helperText}</p>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function shouldRenderAgentUiPayload(payload: MessageData["uiPayload"]): boolean {
@@ -5455,7 +5663,8 @@ const UnifiedAgentTaskCard = ({
   const timeline = detailTimeline.length > 0 ? detailTimeline : card.timeline;
   const failure = taskDetailQuery.data?.failure ?? card.failure;
   const hasArtifact = Boolean(card.artifact);
-  const approvalPending = card.approval?.status === "pending";
+  const approvalPending =
+    card.status === "approval_required" && card.approval?.status === "pending";
   const isRunning = card.status === "queued" || card.status === "in_progress";
   const statusLabel = toTaskStatusLabel(card.status);
   const kindLabel = toTaskKindLabel(card.taskKind);
@@ -6004,27 +6213,31 @@ const UnifiedAgentTaskCard = ({
                       </div>
 
                       {googleActionPreview?.proposedEmail && (
-                        <div
-                          className="rounded-xl border p-3 text-xs"
-                          style={{
-                            borderColor: "var(--app-soft-card-border)",
-                            backgroundColor:
-                              "color-mix(in srgb, var(--app-soft-card-bg) 72%, transparent)",
-                          }}
-                        >
-                          <p className="font-semibold">Email action</p>
-                          <p className="mt-1 opacity-80">
-                            To: {googleActionPreview.proposedEmail.to.join(", ") || "None"}
-                          </p>
-                          <p className="opacity-80">
-                            Subject: {googleActionPreview.proposedEmail.subject}
-                          </p>
-                          {googleActionPreview.proposedEmail.bodyPreview ? (
-                            <p className="mt-2 whitespace-pre-wrap opacity-80">
-                              {googleActionPreview.proposedEmail.bodyPreview}
-                            </p>
-                          ) : null}
-                        </div>
+                        <GoogleEmailComposerPreview
+                          to={googleActionPreview.proposedEmail.to}
+                          subject={googleActionPreview.proposedEmail.subject}
+                          bodyPreview={googleActionPreview.proposedEmail.bodyPreview}
+                          statusLabel={
+                            googleActionResult?.status === "email_sent"
+                              ? "Sent"
+                              : googleActionResult?.status === "draft_created"
+                                ? "Draft saved"
+                                : googleActionPreview.proposedEmail.sendAfterApproval
+                                  ? "Ready to send"
+                                  : "Draft preview"
+                          }
+                          helperText={
+                            googleActionResult?.status === "email_sent"
+                              ? "This email was sent through Gmail."
+                              : googleActionResult?.status === "draft_created"
+                                ? "This draft was saved to Gmail."
+                                : getGoogleEmailPreviewHelper(
+                                    googleActionPreview.proposedEmail,
+                                  )
+                          }
+                          tone={googleActionResult ? "ready" : "pending"}
+                          testId="google-email-preview-card"
+                        />
                       )}
 
                       {googleActionPreview?.proposedCalendar && (
@@ -6168,7 +6381,7 @@ const UnifiedAgentTaskCard = ({
                         }}
                         data-testid="button-agent-approve"
                       >
-                        Approve
+                        {getGoogleApprovalPrimaryLabel(googleActionPreview)}
                       </button>
                       <button
                         type="button"
@@ -6181,7 +6394,7 @@ const UnifiedAgentTaskCard = ({
                         }}
                         data-testid="button-agent-deny"
                       >
-                        Deny
+                        {getGoogleApprovalSecondaryLabel(googleActionPreview)}
                       </button>
                     </div>
                   </div>
@@ -6861,6 +7074,35 @@ const TextView = ({
                           <p className="text-xs opacity-80">{sanitizeSplitTokenArtifacts(msg.text)}</p>
                         )}
                       </div>
+                    ) : isGoogleComposeSessionPayload(msg.uiPayload) ? (
+                      <div
+                        className="space-y-3"
+                        data-testid="google-compose-session-card"
+                        data-compose-status={msg.uiPayload.session.status}
+                      >
+                        <div className="flex items-center gap-2">
+                          <Pencil className="h-4 w-4" />
+                          <p className="text-sm font-semibold">Draft in progress</p>
+                        </div>
+                        <p className="text-xs opacity-80">{msg.uiPayload.text}</p>
+                        <GoogleEmailComposerPreview
+                          to={
+                            msg.uiPayload.session.recipientEmail
+                              ? [msg.uiPayload.session.recipientEmail]
+                              : []
+                          }
+                          subject={msg.uiPayload.session.subject}
+                          bodyPreview={msg.uiPayload.session.bodyPreview}
+                          statusLabel={
+                            getGoogleComposeStatusMeta(msg.uiPayload.session).label
+                          }
+                          helperText={
+                            getGoogleComposeStatusMeta(msg.uiPayload.session).helperText
+                          }
+                          tone={getGoogleComposeStatusMeta(msg.uiPayload.session).tone}
+                          testId="google-compose-session-preview"
+                        />
+                      </div>
                     ) : isAgentTaskStatusPayload(msg.uiPayload) ? (
                       <div
                         className="space-y-2"
@@ -6931,7 +7173,9 @@ const TextView = ({
                             }}
                             data-testid="button-agent-approve"
                           >
-                            Approve
+                            {getGoogleApprovalPrimaryLabel(
+                              msg.uiPayload.googleActionPreview,
+                            )}
                           </button>
                           <button
                             type="button"
@@ -6953,7 +7197,9 @@ const TextView = ({
                             }}
                             data-testid="button-agent-deny"
                           >
-                            Deny
+                            {getGoogleApprovalSecondaryLabel(
+                              msg.uiPayload.googleActionPreview,
+                            )}
                           </button>
                         </div>
                       </div>

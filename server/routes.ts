@@ -37,6 +37,7 @@ import {
 import type {
   AgentArtifactSummary,
   AgentApprovalSummary,
+  AgentMessageUiPayload,
   ArtifactRenderMetadata,
   ArtifactQualitySummary,
   AgentIntentSessionSummary,
@@ -56,6 +57,8 @@ import type {
   AgentToolCallSummary,
   CalendarEventItem,
   GoogleDataFailureCode,
+  GoogleActionPreview,
+  GoogleComposeSession,
   GooglePersonalContextTimeRange,
   InboxDigestItem,
   MorningBriefFailureCode,
@@ -97,6 +100,7 @@ import {
   approveAndExecuteGoogleActionTask,
   detectGoogleActionTaskIntent,
   prepareGoogleActionTask,
+  promotePendingGoogleEmailTaskToSend,
   startGoogleActionTaskRun,
 } from "./google-action-tasks";
 import { elapsedMs, getTraceId, trace, traceError } from "./observability";
@@ -6061,6 +6065,191 @@ async function collectRecentAssistantTaskMessages(params: {
   });
 }
 
+type GoogleConversationState =
+  | {
+      kind: "none";
+    }
+  | {
+      kind: "compose_session";
+      messageId: string;
+      session: GoogleComposeSession;
+    }
+  | {
+      kind: "pending_task";
+      taskId: string;
+      preview: GoogleActionPreview | null;
+    };
+
+function isGoogleComposeSessionPayload(value: unknown): value is GoogleComposeSession {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const session = value as Record<string, unknown>;
+  if (session.mode !== "email_compose") return false;
+  if (
+    session.status !== "awaiting_body" &&
+    session.status !== "awaiting_recipient" &&
+    session.status !== "resolved" &&
+    session.status !== "cancelled"
+  ) {
+    return false;
+  }
+  return (
+    (session.recipientEmail === null || typeof session.recipientEmail === "string") &&
+    (session.subject === null || typeof session.subject === "string") &&
+    (session.bodyPreview === null || typeof session.bodyPreview === "string") &&
+    typeof session.promptSeed === "string" &&
+    typeof session.followUpPrompt === "string"
+  );
+}
+
+function getGoogleActionPreviewOrNull(value: unknown): GoogleActionPreview | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const preview = value as Record<string, unknown>;
+  if (
+    typeof preview.kind !== "string" ||
+    typeof preview.title !== "string" ||
+    typeof preview.summary !== "string" ||
+    (preview.connector !== "gmail" && preview.connector !== "calendar")
+  ) {
+    return null;
+  }
+  return value as GoogleActionPreview;
+}
+
+function resolveLatestGoogleConversationState(messages: Message[]): GoogleConversationState {
+  for (let idx = messages.length - 1; idx >= 0; idx -= 1) {
+    const message = messages[idx];
+    if (message.sender !== "assistant" || !isAgentMessageUiPayload(message.uiPayload)) {
+      continue;
+    }
+
+    const payload = message.uiPayload as AgentMessageUiPayload;
+    if (payload.kind === "agent_approval") {
+      const preview = getGoogleActionPreviewOrNull(payload.googleActionPreview ?? null);
+      if (!preview) continue;
+      return payload.approval.status === "pending"
+        ? {
+            kind: "pending_task",
+            taskId: payload.taskId,
+            preview,
+          }
+        : { kind: "none" };
+    }
+
+    if (payload.kind === "agent_task_status") {
+      const preview = getGoogleActionPreviewOrNull(payload.googleActionPreview ?? null);
+      const isGoogleTask =
+        payload.task.taskKind === "google_action" ||
+        Boolean(preview) ||
+        Boolean(payload.googleActionResult);
+      if (!isGoogleTask) continue;
+      return payload.task.status === "approval_required"
+        ? {
+            kind: "pending_task",
+            taskId: payload.task.id,
+            preview,
+          }
+        : { kind: "none" };
+    }
+
+    if (payload.kind === "agent_google_compose_session") {
+      if (!isGoogleComposeSessionPayload(payload.session)) {
+        continue;
+      }
+      return payload.session.status === "awaiting_body" ||
+        payload.session.status === "awaiting_recipient"
+        ? {
+            kind: "compose_session",
+            messageId: message.id,
+            session: payload.session,
+          }
+        : { kind: "none" };
+    }
+  }
+
+  return { kind: "none" };
+}
+
+function normalizeGoogleActionControlText(text: string): string {
+  return normalizeApostrophes(toCompactMessageText(text)).toLowerCase();
+}
+
+function isGoogleActionSendMessage(text: string): boolean {
+  const compact = normalizeGoogleActionControlText(text);
+  if (!compact) return false;
+  return (
+    /\b(?:send|ship)\b/.test(compact) ||
+    compact.includes("let's send") ||
+    compact.includes("lets send") ||
+    compact.includes("fire it off") ||
+    compact.includes("fire this off")
+  );
+}
+
+function isGoogleActionApproveMessage(text: string): boolean {
+  if (isGoogleActionSendMessage(text)) return false;
+  const compact = normalizeGoogleActionControlText(text);
+  if (!compact) return false;
+  if (isOfferAcceptMessage(compact)) return true;
+  return (
+    compact.includes("looks good") ||
+    compact.includes("sounds good") ||
+    compact.includes("that's good") ||
+    compact.includes("thats good") ||
+    compact.includes("go ahead") ||
+    /\bapprove(?:d)?\b/.test(compact)
+  );
+}
+
+function isGoogleActionDeclineMessage(text: string): boolean {
+  const compact = normalizeGoogleActionControlText(text);
+  if (!compact) return false;
+  if (isOfferDeclineMessage(compact)) return true;
+  return (
+    compact.includes("don't send") ||
+    compact.includes("dont send") ||
+    compact.includes("never mind") ||
+    compact.includes("nevermind") ||
+    compact.includes("cancel it") ||
+    compact.includes("stop that")
+  );
+}
+
+function buildComposeSessionReminder(session: GoogleComposeSession): string {
+  return session.status === "awaiting_recipient"
+    ? "I still need the recipient email before I can draft it."
+    : "I still need what you want the email to say before I can draft it.";
+}
+
+function toGoogleComposeSessionUiPayload(
+  session: GoogleComposeSession,
+  text: string,
+): Extract<AgentMessageUiPayload, { kind: "agent_google_compose_session" }> {
+  return {
+    kind: "agent_google_compose_session",
+    session,
+    text,
+  };
+}
+
+async function createGoogleComposeSessionAssistantMessage(params: {
+  storage: typeof storage;
+  conversationId: string;
+  session: GoogleComposeSession;
+  text: string;
+}) {
+  return params.storage.createMessage({
+    conversationId: params.conversationId,
+    sender: "assistant",
+    text: params.text,
+    partIndex: 0,
+    uiPayload: toGoogleComposeSessionUiPayload(params.session, params.text),
+  });
+}
+
 function hasGoogleDetailReadIntent(text: string): boolean {
   return /\b(detail|details|full|thread|read|show|changed|invite)\b/i.test(text);
 }
@@ -6306,6 +6495,7 @@ async function maybeHandleGoogleActionTask(params: {
   storage: typeof storage;
   userId: string;
   conversationId: string;
+  conversationMessages: Message[];
   text: string;
   clientTimeZone?: string | null;
   userMessage: {
@@ -6318,11 +6508,202 @@ async function maybeHandleGoogleActionTask(params: {
     return { handled: false as const };
   }
 
+  const googleConversationState = resolveLatestGoogleConversationState(
+    params.conversationMessages,
+  );
+
+  if (googleConversationState.kind === "pending_task") {
+    const wantsSend = isGoogleActionSendMessage(params.text);
+    const wantsApprove = wantsSend || isGoogleActionApproveMessage(params.text);
+    const wantsDecline = isGoogleActionDeclineMessage(params.text);
+
+    if (wantsApprove || wantsDecline) {
+      const task = await params.storage.getAgentTaskById(googleConversationState.taskId);
+      if (!task || task.userId !== params.userId) {
+        return { handled: false as const };
+      }
+
+      const pendingApproval = await params.storage.getPendingAgentApproval(task.id);
+      if (!pendingApproval) {
+        return { handled: false as const };
+      }
+
+      if (wantsDecline) {
+        const reason = "Denied by user";
+        await params.storage.resolveAgentApproval({
+          approvalId: pendingApproval.id,
+          status: "denied",
+          reason,
+        });
+
+        const cancelledAt = new Date();
+        const cancelled =
+          (await params.storage.updateAgentTaskStatus({
+            taskId: task.id,
+            status: "cancelled",
+            errorMessage: reason,
+            completedAt: cancelledAt,
+          })) ??
+          ({
+            ...task,
+            status: "cancelled",
+            errorMessage: reason,
+            completedAt: cancelledAt,
+            updatedAt: cancelledAt,
+          } satisfies AgentTask);
+
+        await params.storage.createMessage({
+          conversationId: task.conversationId,
+          sender: "assistant",
+          text: "Understood. I canceled that Google action.",
+          partIndex: 0,
+          uiPayload: {
+            kind: "agent_task_status",
+            task: toAgentTaskSummary(cancelled),
+            text: "Canceled",
+            googleActionPreview: googleConversationState.preview,
+          },
+        });
+
+        const assistantMessages = await collectRecentAssistantTaskMessages({
+          conversationId: params.conversationId,
+          taskId: task.id,
+          userId: params.userId,
+          userCreatedAt: params.userMessage.createdAt,
+        });
+
+        return {
+          handled: true as const,
+          kind: "ready" as const,
+          assistantMessages,
+          legacyAssistantMessage: makeLegacyAssistantMessage(assistantMessages),
+          model: "google_action_task_cancelled_v1",
+          decisionPath: "agent_task" as const,
+          decisionPathReason: "task_started" as const,
+          awaitingApproval: false,
+          task: toAgentTaskSummary(cancelled),
+        };
+      }
+
+      if (wantsSend) {
+        await promotePendingGoogleEmailTaskToSend({
+          storage: params.storage,
+          taskId: task.id,
+          userId: params.userId,
+        });
+      }
+
+      const approvedTask = await approveAndExecuteGoogleActionTask({
+        storage: params.storage,
+        taskId: task.id,
+        userId: params.userId,
+        onEvent: params.onEvent,
+      });
+
+      const assistantMessages = await collectRecentAssistantTaskMessages({
+        conversationId: params.conversationId,
+        taskId: task.id,
+        userId: params.userId,
+        userCreatedAt: params.userMessage.createdAt,
+      });
+
+      const finalizedAssistantMessages =
+        assistantMessages.length > 0
+          ? assistantMessages
+          : [
+              {
+                id: `google-action-approved-${task.id}`,
+                conversationId: params.conversationId,
+                sender: "assistant",
+                turnId: randomUUID(),
+                partIndex: 0,
+                text: "Approval received. Applying it now.",
+                createdAt: new Date(),
+                attachments: [],
+                uiPayload: {
+                  kind: "agent_task_status",
+                  task: approvedTask,
+                  text: "Approved and running",
+                  googleActionPreview: googleConversationState.preview,
+                },
+              },
+            ];
+
+      return {
+        handled: true as const,
+        kind: "ready" as const,
+        assistantMessages: finalizedAssistantMessages,
+        legacyAssistantMessage: makeLegacyAssistantMessage(
+          finalizedAssistantMessages,
+        ),
+        model: wantsSend
+          ? "google_action_task_send_v1"
+          : "google_action_task_approved_v1",
+        decisionPath: "agent_task" as const,
+        decisionPathReason: "task_started" as const,
+        awaitingApproval: false,
+        task: approvedTask,
+      };
+    }
+  }
+
+  let composeSession: GoogleComposeSession | null = null;
+  if (googleConversationState.kind === "compose_session") {
+    if (isGoogleActionDeclineMessage(params.text)) {
+      const assistantMessage = await createGoogleComposeSessionAssistantMessage({
+        storage: params.storage,
+        conversationId: params.conversationId,
+        text: "Okay, I dropped that draft idea.",
+        session: {
+          ...googleConversationState.session,
+          status: "cancelled",
+        },
+      });
+      const assistantMessages = [assistantMessage];
+      return {
+        handled: true as const,
+        kind: "clarify" as const,
+        assistantMessages,
+        legacyAssistantMessage: makeLegacyAssistantMessage(assistantMessages),
+        model: "google_action_clarification_v2",
+        decisionPath: "companion_reply" as const,
+        decisionPathReason: "companion" as const,
+        awaitingApproval: false,
+        task: null,
+      };
+    }
+
+    if (isGoogleActionApproveMessage(params.text) || isGoogleActionSendMessage(params.text)) {
+      const reminder = buildComposeSessionReminder(googleConversationState.session);
+      const assistantMessage = await createGoogleComposeSessionAssistantMessage({
+        storage: params.storage,
+        conversationId: params.conversationId,
+        text: reminder,
+        session: googleConversationState.session,
+      });
+      const assistantMessages = [assistantMessage];
+      return {
+        handled: true as const,
+        kind: "clarify" as const,
+        assistantMessages,
+        legacyAssistantMessage: makeLegacyAssistantMessage(assistantMessages),
+        model: "google_action_clarification_v2",
+        decisionPath: "companion_reply" as const,
+        decisionPathReason: "companion" as const,
+        awaitingApproval: false,
+        task: null,
+      };
+    }
+
+    composeSession = googleConversationState.session;
+  }
+
   const preparation = await prepareGoogleActionTask({
     storage: params.storage,
     userId: params.userId,
     text: params.text,
     clientTimeZone: params.clientTimeZone ?? null,
+    composeSession,
   });
 
   if (preparation.kind === "none") {
@@ -6330,10 +6711,20 @@ async function maybeHandleGoogleActionTask(params: {
   }
 
   if (preparation.kind === "clarify" || preparation.kind === "upgrade_required") {
-    const assistantMessages = await storage.createAssistantTurnParts({
-      conversationId: params.conversationId,
-      textParts: [preparation.message],
-    });
+    const assistantMessages =
+      preparation.kind === "clarify" && preparation.composeSession
+        ? [
+            await createGoogleComposeSessionAssistantMessage({
+              storage: params.storage,
+              conversationId: params.conversationId,
+              session: preparation.composeSession,
+              text: preparation.message,
+            }),
+          ]
+        : await storage.createAssistantTurnParts({
+            conversationId: params.conversationId,
+            textParts: [preparation.message],
+          });
     return {
       handled: true as const,
       kind: preparation.kind,
@@ -6354,7 +6745,7 @@ async function maybeHandleGoogleActionTask(params: {
     storage: params.storage,
     userId: params.userId,
     conversationId: params.conversationId,
-    prompt: params.text,
+    prompt: preparation.resolvedPrompt ?? params.text,
     requestedByMessageId: params.userMessage.id,
     preview: preparation.preview,
     plan: preparation.plan,
@@ -11881,6 +12272,7 @@ export async function registerRoutes(
         storage,
         userId: req.session.userId,
         conversationId: conversation.id,
+        conversationMessages: existingConversationMessages,
         text: parsed.text,
         clientTimeZone: parsed.clientTimeZone ?? null,
         userMessage: {
@@ -13385,6 +13777,7 @@ export async function registerRoutes(
         storage,
         userId: req.session.userId,
         conversationId: conversation.id,
+        conversationMessages: existingConversationMessages,
         text: parsed.text,
         clientTimeZone: parsed.clientTimeZone ?? null,
         userMessage: {

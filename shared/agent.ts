@@ -390,6 +390,22 @@ export interface GoogleActionResult {
   eventId?: string | null;
 }
 
+export type GoogleComposeSessionStatus =
+  | "awaiting_body"
+  | "awaiting_recipient"
+  | "resolved"
+  | "cancelled";
+
+export interface GoogleComposeSession {
+  mode: "email_compose";
+  status: GoogleComposeSessionStatus;
+  recipientEmail: string | null;
+  subject: string | null;
+  bodyPreview: string | null;
+  promptSeed: string;
+  followUpPrompt: string;
+}
+
 export type ArtifactRenderEngine = "json_render";
 
 export interface ArtifactRenderElementV1 {
@@ -492,6 +508,11 @@ export type AgentMessageUiPayload =
       approval: AgentApprovalSummary;
       text: string;
       googleActionPreview?: GoogleActionPreview | null;
+    }
+  | {
+      kind: "agent_google_compose_session";
+      session: GoogleComposeSession;
+      text: string;
     }
   | {
       kind: "agent_artifact";

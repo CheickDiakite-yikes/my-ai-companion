@@ -375,11 +375,61 @@ async function verifyApprovalCardComposeFlow(
   outputDir: string,
 ): Promise<void> {
   const conversationId = await resolveActiveConversationId(page, baseUrl);
+  const beforeComposeMessages = await fetchConversationMessages(
+    page,
+    baseUrl,
+    conversationId,
+  );
+  const beforeComposeAssistantCount = beforeComposeMessages.filter(
+    (message) => message.sender === "assistant",
+  ).length;
+
+  await page.getByTestId("input-message").fill("draft an email to alex@example.com");
+  await page.getByTestId("input-message").press("Enter");
+
+  const composeReply = await waitForLatestAssistantReply({
+    page,
+    baseUrl,
+    conversationId,
+    previousAssistantCount: beforeComposeAssistantCount,
+    timeoutMs: 45_000,
+  });
+  assert.match(
+    composeReply,
+    /(what you want the email to say|what should the email say|what should it say|draft it)/i,
+    "Multi-turn compose should ask for the missing draft body first",
+  );
+
+  const composeSessionCard = page.locator(
+    '[data-testid="google-compose-session-card"]',
+  ).last();
+  await composeSessionCard.waitFor({ state: "visible", timeout: 20_000 });
+  await page.screenshot({
+    path: resolve(outputDir, "google-personal-context-compose-session-card.png"),
+    fullPage: true,
+  });
+
+  const afterComposeMessages = await fetchConversationMessages(
+    page,
+    baseUrl,
+    conversationId,
+  );
+  const afterComposeAssistantCount = afterComposeMessages.filter(
+    (message) => message.sender === "assistant",
+  ).length;
 
   await page.getByTestId("input-message").fill(
-    "draft an email to alex@example.com about project update saying hey alex i finished the beta build",
+    "ask if he is free to hang out on march 12th",
   );
   await page.getByTestId("input-message").press("Enter");
+
+  await waitForLatestAssistantReply({
+    page,
+    baseUrl,
+    conversationId,
+    previousAssistantCount: afterComposeAssistantCount,
+    timeoutMs: 45_000,
+  });
 
   console.log("[google-context-check] waiting for approval surface");
   const approvalCard = page.locator('[data-testid="agent-approval-card"]').last();
@@ -404,6 +454,13 @@ async function verifyApprovalCardComposeFlow(
     approvalCardCount > 0 || unifiedCardCount > 0,
     "Expected a Google approval UI card to render in chat",
   );
+
+  if (unifiedCardCount > 0) {
+    assert.ok(
+      (await page.locator('[data-testid="google-email-preview-card"]').count()) > 0,
+      "Expected the unified Google card to render the email composer preview",
+    );
+  }
 
   const taskId =
     (approvalCardCount > 0
