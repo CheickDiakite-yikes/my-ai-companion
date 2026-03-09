@@ -70,6 +70,7 @@ async function main(): Promise<void> {
     await login(page, args);
     await dismissOnboardingIfPresent(page);
     await startVoiceSession(page, readTraceBuffer, clearTraceBuffer);
+    await assertVoiceStageClosedByDefault(page);
 
     await clearTraceBuffer();
     await playLiveFixture(page, "noise_only");
@@ -153,6 +154,19 @@ async function main(): Promise<void> {
     }
     await browser.close();
   }
+}
+
+async function assertVoiceStageClosedByDefault(page: Page): Promise<void> {
+  assert.equal(
+    await page.getByTestId("voice-task-stage").count(),
+    0,
+    "Voice stage should stay closed by default until a task surface is opened",
+  );
+  assert.equal(
+    await page.getByTestId("button-voice-stage-open-canvas").count(),
+    0,
+    "Voice canvas reopen affordance should not show before a task surface exists",
+  );
 }
 
 async function resolveActiveConversationId(

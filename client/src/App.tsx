@@ -7159,6 +7159,7 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
 }) => {
   const videoPreviewRef = useRef<HTMLVideoElement | null>(null);
   const stageVideoPreviewRef = useRef<HTMLVideoElement | null>(null);
+  const wasVoiceCallActiveRef = useRef(false);
   const lastTracedStageCandidateKeyRef = useRef<string | null>(null);
   const lastTracedStageSurfaceKeyRef = useRef<string | null>(null);
   const [debugPanelOpen, setDebugPanelOpen] = useState(false);
@@ -7199,6 +7200,28 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
       stageVideoPreviewRef.current.srcObject = videoStream;
     }
   }, [videoStream]);
+
+  useEffect(() => {
+    const wasActive = wasVoiceCallActiveRef.current;
+    if (isActive && !wasActive) {
+      wasVoiceCallActiveRef.current = true;
+      setDismissedStageSurfaceKey(voiceStageSurfaceKey);
+      onTraceStageEvent("session_started", {
+        baselineSurfaceKey: voiceStageSurfaceKey,
+        baselineSurface: summarizeVoiceStageSurface(voiceStageSurface),
+      });
+      return;
+    }
+
+    if (!isActive && wasActive) {
+      wasVoiceCallActiveRef.current = false;
+      setDismissedStageSurfaceKey(null);
+      onTraceStageEvent("session_ended", {
+        finalSurfaceKey: voiceStageSurfaceKey,
+        finalSurface: summarizeVoiceStageSurface(voiceStageSurface),
+      });
+    }
+  }, [isActive, onTraceStageEvent, voiceStageSurface, voiceStageSurfaceKey]);
 
   useEffect(() => {
     if (!voiceStageSurfaceKey) {

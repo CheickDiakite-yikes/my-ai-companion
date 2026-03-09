@@ -398,7 +398,9 @@ async function verifyApprovalCardComposeFlow(
     (message) => message.sender === "assistant",
   ).length;
 
-  await page.getByTestId("input-message").fill("draft an email to alex@example.com");
+  await page
+    .getByTestId("input-message")
+    .fill("create an email draft to alex@example.com");
   await page.getByTestId("input-message").press("Enter");
 
   const composeReply = await waitForLatestAssistantReply({

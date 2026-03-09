@@ -11759,6 +11759,17 @@ export async function registerRoutes(
             }
 
             if (preparation.kind === "clarify" || preparation.kind === "upgrade_required") {
+              if (preparation.kind === "upgrade_required") {
+                trace(req, "live.tool.google_action.upgrade_required", {
+                  conversationId: conversation.id,
+                  requestText,
+                  connector: preparation.connector ?? null,
+                  reasonCode: preparation.reasonCode ?? null,
+                  missingScopes: preparation.missingScopes ?? [],
+                  resolvedPrompt: preparation.resolvedPrompt ?? null,
+                  elapsedMs: elapsedMs(actionStartedAt),
+                });
+              }
               functionResponses.push({
                 id: functionCall.id,
                 name: functionCall.name,
@@ -11769,6 +11780,18 @@ export async function registerRoutes(
                         ? "clarification_needed"
                         : "upgrade_required",
                     message: preparation.message,
+                    connector:
+                      preparation.kind === "upgrade_required"
+                        ? preparation.connector ?? null
+                        : null,
+                    reasonCode:
+                      preparation.kind === "upgrade_required"
+                        ? preparation.reasonCode ?? null
+                        : null,
+                    missingScopes:
+                      preparation.kind === "upgrade_required"
+                        ? preparation.missingScopes ?? []
+                        : [],
                   },
                 },
               });

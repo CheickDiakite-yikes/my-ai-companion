@@ -89,6 +89,12 @@ type GoogleActionTaskPreparation =
       kind: "upgrade_required";
       message: string;
       resolvedPrompt?: string | null;
+      connector?: "gmail" | "calendar";
+      reasonCode?:
+        | "not_connected"
+        | "reconnect_required"
+        | "missing_write_scopes";
+      missingScopes?: string[];
     }
   | {
       kind: "ready";
@@ -226,6 +232,10 @@ function stripComposeLeadIn(input: string): string {
   return normalizeText(input)
     .replace(/^\s*(?:can|could|would|will)\s+you\s+/i, "")
     .replace(/^\s*please\s+/i, "")
+    .replace(
+      /^\s*(?:create|make)\s+(?:an?\s+)?(?:(?:email|message)\s+draft|draft(?:\s+(?:email|message))?)\b/i,
+      "",
+    )
     .replace(
       /^\s*(?:draft|write|send)\s+(?:an?\s+)?(?:email|message)\b/i,
       "",
@@ -865,7 +875,7 @@ function matchReplyTarget(text: string): string | null {
 function matchComposeTarget(text: string): string | null {
   const normalized = normalizeText(text);
   const match = normalized.match(
-    /\b(?:draft|write|send)\s+(?:an?\s+)?(?:email|message)\s+to\s+(.+?)(?:\s+(?:about|saying|that)\b|$)/i,
+    /\b(?:(?:draft|write|send)\s+(?:an?\s+)?(?:email|message)|(?:create|make)\s+(?:an?\s+)?(?:(?:email|message)\s+draft|draft(?:\s+(?:email|message))?))\s+to\s+(.+?)(?:\s+(?:about|saying|that)\b|$)/i,
   );
   return normalizeText(match?.[1] ?? null);
 }
@@ -1015,6 +1025,11 @@ export async function prepareGoogleActionTask(params: {
     if (!auth.ok) {
       return {
         kind: "upgrade_required",
+        connector: "gmail",
+        reasonCode:
+          auth.code === "google_not_connected"
+            ? "not_connected"
+            : "reconnect_required",
         message:
           auth.code === "google_not_connected"
             ? "Connect Google in Profile before I can draft replies."
@@ -1066,6 +1081,9 @@ export async function prepareGoogleActionTask(params: {
     if (missingWriteScopes.length > 0) {
       return {
         kind: "upgrade_required",
+        connector: "gmail",
+        reasonCode: "missing_write_scopes",
+        missingScopes: missingWriteScopes,
         message:
           "I found the right email thread, but I still need Gmail write access. Upgrade Google permissions in Profile, then ask again.",
         resolvedPrompt: resolvedFromComposeSession,
@@ -1151,6 +1169,11 @@ export async function prepareGoogleActionTask(params: {
     if (!auth.ok) {
       return {
         kind: "upgrade_required",
+        connector: "gmail",
+        reasonCode:
+          auth.code === "google_not_connected"
+            ? "not_connected"
+            : "reconnect_required",
         message:
           auth.code === "google_not_connected"
             ? "Connect Google in Profile before I can prepare email drafts."
@@ -1166,6 +1189,9 @@ export async function prepareGoogleActionTask(params: {
     if (missingWriteScopes.length > 0) {
       return {
         kind: "upgrade_required",
+        connector: "gmail",
+        reasonCode: "missing_write_scopes",
+        missingScopes: missingWriteScopes,
         message:
           "I need Gmail write access before I can create or send drafts. Upgrade Google permissions in Profile, then try again.",
         resolvedPrompt: resolvedFromComposeSession,
@@ -1244,6 +1270,11 @@ export async function prepareGoogleActionTask(params: {
     if (!auth.ok) {
       return {
         kind: "upgrade_required",
+        connector: "calendar",
+        reasonCode:
+          auth.code === "google_not_connected"
+            ? "not_connected"
+            : "reconnect_required",
         message:
           auth.code === "google_not_connected"
             ? "Connect Google in Profile before I can create calendar events."
@@ -1257,6 +1288,9 @@ export async function prepareGoogleActionTask(params: {
     if (missingWriteScopes.length > 0) {
       return {
         kind: "upgrade_required",
+        connector: "calendar",
+        reasonCode: "missing_write_scopes",
+        missingScopes: missingWriteScopes,
         message:
           "I need Calendar write access before I can create events. Upgrade Google permissions in Profile, then try again.",
         resolvedPrompt: resolvedFromComposeSession,
@@ -1326,6 +1360,11 @@ export async function prepareGoogleActionTask(params: {
     if (!auth.ok) {
       return {
         kind: "upgrade_required",
+        connector: "calendar",
+        reasonCode:
+          auth.code === "google_not_connected"
+            ? "not_connected"
+            : "reconnect_required",
         message:
           auth.code === "google_not_connected"
             ? "Connect Google in Profile before I can update calendar events."
@@ -1378,6 +1417,9 @@ export async function prepareGoogleActionTask(params: {
     if (missingWriteScopes.length > 0) {
       return {
         kind: "upgrade_required",
+        connector: "calendar",
+        reasonCode: "missing_write_scopes",
+        missingScopes: missingWriteScopes,
         message:
           "I found the event, but I still need Calendar write access. Upgrade Google permissions in Profile, then ask again.",
         resolvedPrompt: resolvedFromComposeSession,
