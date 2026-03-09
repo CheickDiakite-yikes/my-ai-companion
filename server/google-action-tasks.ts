@@ -64,6 +64,17 @@ type StoredGoogleActionPlan = {
       };
 };
 
+export type RecentGoogleActionTask = {
+  taskId: string;
+  preview: GoogleActionPreview;
+  result: GoogleActionResult | null;
+};
+
+export type GoogleRecentActionContext = {
+  recentEmailTask?: RecentGoogleActionTask | null;
+  recentCalendarTask?: RecentGoogleActionTask | null;
+};
+
 type GoogleActionTaskPreparation =
   | {
       kind: "none";
@@ -237,6 +248,15 @@ function inferDraftInstructionText(input: string): string | null {
   return plainTail.length > 0 ? plainTail : null;
 }
 
+function inferSubjectRevision(input: string): string | null {
+  const normalized = normalizeText(input);
+  if (!normalized) return null;
+  const match =
+    normalized.match(/\b(?:change|update|set|make)\s+(?:the\s+)?subject(?:\s+(?:to|as))?\s+(.+)$/i) ??
+    normalized.match(/\bsubject(?:\s+(?:should be|to|as))\s+(.+)$/i);
+  return match?.[1]?.trim() ?? null;
+}
+
 function buildComposeSession(input: {
   status: GoogleComposeSession["status"];
   recipientEmail: string | null;
@@ -364,10 +384,231 @@ async function buildEmailDraftContent(params: {
   }
 }
 
+function shortenEmailBodyText(bodyText: string): string {
+  const lines = bodyText
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  if (lines.length <= 4) {
+    return bodyText.trim();
+  }
+
+  const greeting = lines[0];
+  const closing = lines[lines.length - 1];
+  const middle = lines.slice(1, -1).join(" ");
+  const sentences = middle
+    .split(/(?<=[.!?])\s+/)
+    .map((sentence) => sentence.trim())
+    .filter((sentence) => sentence.length > 0);
+  const compactMiddle = sentences.slice(0, 2).join(" ");
+
+  return [greeting, compactMiddle || middle, closing].filter(Boolean).join("\n\n");
+}
+
+function buildFallbackRevisedEmailDraft(params: {
+  instructionText: string;
+  currentSubject: string;
+  currentBodyText: string;
+}): { subject: string; bodyText: string } {
+  const normalizedInstruction = normalizeText(params.instructionText);
+  const subjectOverride =
+    inferSubjectRevision(normalizedInstruction) ?? params.currentSubject;
+
+  if (
+    /\b(?:shorten|shorter|brief|briefer|more concise|concise)\b/i.test(
+      normalizedInstruction,
+    )
+  ) {
+    return {
+      subject: subjectOverride,
+      bodyText: shortenEmailBodyText(params.currentBodyText),
+    };
+  }
+
+  if (
+    /^(?:ask|say|tell|mention|add|remove|rewrite|revise|edit|update|change|replace|use|keep|drop|swap|instead)\b/i.test(
+      normalizedInstruction,
+    ) ||
+    /^(?:can|could|would|will)\s+you\s+(?:ask|say|tell|mention|add|remove|rewrite|revise|edit|update|change|replace|use|keep|drop|swap)\b/i.test(
+      normalizedInstruction,
+    )
+  ) {
+    return buildFallbackEmailDraft({
+      instructionText: normalizedInstruction,
+      subjectHint: subjectOverride,
+    });
+  }
+
+  return {
+    subject: subjectOverride,
+    bodyText: params.currentBodyText,
+  };
+}
+
+async function buildRevisedEmailDraftContent(params: {
+  instructionText: string;
+  currentSubject: string;
+  currentBodyText: string;
+  threadSubject?: string | null;
+}): Promise<{ subject: string; bodyText: string }> {
+  const fallback = buildFallbackRevisedEmailDraft(params);
+
+  try {
+    const structured = await generateStructuredJson({
+      systemInstruction: [
+        "You revise concise, send-ready personal emails.",
+        'Return strict JSON only with keys "subject" and "bodyText".',
+        "bodyText must be plain text only.",
+        "bodyText must include a greeting and a short closing.",
+        "Do not mention being an AI assistant.",
+        "If the user gives a fresh ask/say/tell instruction, rewrite the draft to match that request.",
+        "If the user asks for a tone or length change, transform the existing draft rather than ignoring it.",
+      ].join("\n"),
+      userPrompt: [
+        `Current subject: ${params.currentSubject}`,
+        params.threadSubject ? `Thread subject: ${params.threadSubject}` : null,
+        "Current body:",
+        params.currentBodyText,
+        "",
+        `Revision request: ${params.instructionText}`,
+      ]
+        .filter((part): part is string => Boolean(part))
+        .join("\n"),
+      enableGoogleSearchGrounding: false,
+    });
+    const raw = stripJsonFence(structured.text);
+    const parsed = JSON.parse(raw) as {
+      subject?: unknown;
+      bodyText?: unknown;
+    };
+    const subject =
+      typeof parsed.subject === "string" && parsed.subject.trim().length > 0
+        ? parsed.subject.trim()
+        : fallback.subject;
+    const bodyText =
+      typeof parsed.bodyText === "string" && parsed.bodyText.trim().length > 0
+        ? parsed.bodyText.trim()
+        : fallback.bodyText;
+    return {
+      subject,
+      bodyText,
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+function buildGoogleEmailPreview(params: {
+  kind: "email_compose" | "email_reply";
+  sendAfterApproval: boolean;
+  to: string[];
+  cc: string[];
+  subject: string;
+  bodyText: string;
+  emailThread?: GoogleEmailThreadDetail | null;
+}): GoogleActionPreview {
+  const threadSubject = params.emailThread?.subject?.trim() ?? null;
+  const title =
+    params.kind === "email_reply"
+      ? params.sendAfterApproval
+        ? "Send email reply"
+        : "Create email reply draft"
+      : params.sendAfterApproval
+        ? "Send email"
+        : "Create email draft";
+  const summary =
+    params.kind === "email_reply"
+      ? params.sendAfterApproval
+        ? threadSubject
+          ? `Send a reply to ${params.to.join(", ")} about "${threadSubject}".`
+          : `Send a reply to ${params.to.join(", ")}.`
+        : threadSubject
+          ? `Create a reply draft to ${params.to.join(", ")} about "${threadSubject}".`
+          : `Create a reply draft to ${params.to.join(", ")}.`
+      : params.sendAfterApproval
+        ? `Send an email to ${params.to.join(", ")}.`
+        : `Create an email draft to ${params.to.join(", ")}.`;
+
+  return {
+    kind: params.kind,
+    title,
+    summary,
+    connector: "gmail",
+    requiresWriteAccess: true,
+    emailThread: params.emailThread ?? null,
+    proposedEmail: {
+      to: params.to,
+      cc: params.cc,
+      subject: params.subject,
+      bodyPreview: params.bodyText,
+      sendAfterApproval: params.sendAfterApproval,
+    },
+  };
+}
+
+function isEmailDraftRevisionCandidatePreview(
+  preview: GoogleActionPreview | null | undefined,
+): boolean {
+  return Boolean(
+    preview &&
+      preview.connector === "gmail" &&
+      preview.proposedEmail &&
+      (preview.kind === "email_compose" || preview.kind === "email_reply"),
+  );
+}
+
+export function looksLikeGoogleEmailDraftRevisionInstruction(text: string): boolean {
+  const normalized = normalizeText(text).toLowerCase();
+  if (!normalized) return false;
+  if (
+    /^(?:thanks|thank you|ok|okay|cool|got it|sounds good|looks good|yes|yep|yeah|no|nope|nah)\b/i.test(
+      normalized,
+    )
+  ) {
+    return false;
+  }
+  if (/\b(?:calendar|meeting|event|appointment|schedule)\b/i.test(normalized)) {
+    return false;
+  }
+  return (
+    /^(?:ask|say|tell|mention|add|remove|make|rewrite|revise|edit|update|change|shorten|lengthen|reword|replace|use|keep|drop|swap|instead)\b/i.test(
+      normalized,
+    ) ||
+    /^(?:can|could|would|will)\s+you\s+(?:ask|say|tell|mention|add|remove|make|rewrite|revise|edit|update|change|shorten|lengthen|reword|replace|use|keep|drop|swap)\b/i.test(
+      normalized,
+    ) ||
+    /\b(?:subject)\b.*\b(?:to|should be)\b/i.test(normalized) ||
+    /\b(?:make it|change it|rewrite it|reword it|shorten it)\b/i.test(
+      normalized,
+    )
+  );
+}
+
 function isLikelyGoogleActionRequest(text: string): boolean {
   return /\b(reply|respond|draft|write|send|schedule|create|add|move|reschedule|change)\b/i.test(
     text,
   );
+}
+
+function hasRecentCalendarFollowUpIntent(
+  text: string,
+  recentContext?: GoogleRecentActionContext | null,
+): boolean {
+  if (!recentContext?.recentCalendarTask) return false;
+  return (
+    /\b(move|reschedule|change|update|add|set|clear|remove)\b/i.test(text) &&
+    (/\bto\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)\b/i.test(text) ||
+      /\b(location|notes?|description)\b/i.test(text) ||
+      /\b(it|that)\b/i.test(text))
+  );
+}
+
+function hasRecentGoogleActionFollowUpIntent(
+  text: string,
+  recentContext?: GoogleRecentActionContext | null,
+): boolean {
+  if (!recentContext) return false;
+  return hasRecentCalendarFollowUpIntent(text, recentContext);
 }
 
 function datePartsInTimeZone(date: Date, timeZone: string): {
@@ -563,14 +804,91 @@ function buildCalendarSearchQuery(raw: string): string {
   );
 }
 
+function extractCalendarLocationUpdate(
+  raw: string,
+): string | null | undefined {
+  const normalized = normalizeText(raw);
+  if (!normalized) return undefined;
+  if (/\b(?:clear|remove)\s+(?:the\s+)?location\b/i.test(normalized)) {
+    return null;
+  }
+  const match = normalized.match(
+    /\b(?:add|set|change|update)\s+(?:the\s+)?location(?:\s+(?:to|as|for))?\s+(.+)$/i,
+  );
+  const value = match?.[1]?.trim();
+  return value && value.length > 0 ? value : undefined;
+}
+
+function extractCalendarDescriptionUpdate(
+  raw: string,
+): string | null | undefined {
+  const normalized = normalizeText(raw);
+  if (!normalized) return undefined;
+  if (
+    /\b(?:clear|remove)\s+(?:the\s+)?(?:notes?|description)\b/i.test(normalized)
+  ) {
+    return null;
+  }
+  const match = normalized.match(
+    /\b(?:add|set|change|update)\s+(?:the\s+)?(?:notes?|description)(?:\s+(?:to|as|for))?\s+(.+)$/i,
+  );
+  const value = match?.[1]?.trim();
+  return value && value.length > 0 ? value : undefined;
+}
+
+function buildRecentCalendarEventDetail(
+  recentTask?: RecentGoogleActionTask | null,
+): GoogleCalendarEventDetail | null {
+  if (!recentTask || recentTask.preview.connector !== "calendar") {
+    return null;
+  }
+  const proposed = recentTask.preview.proposedCalendar;
+  const current = recentTask.preview.calendarEvent;
+  const eventId =
+    recentTask.result?.eventId ??
+    proposed?.originalEventId ??
+    current?.eventId ??
+    null;
+  const title =
+    proposed?.title?.trim() ||
+    current?.title?.trim() ||
+    null;
+  const startTime = proposed?.startTime ?? current?.startTime ?? null;
+  const endTime = proposed?.endTime ?? current?.endTime ?? null;
+  if (!eventId || !title || !startTime || !endTime) {
+    return null;
+  }
+  return {
+    eventId,
+    title,
+    startTime,
+    endTime,
+    isAllDay: current?.isAllDay ?? false,
+    location: proposed?.location ?? current?.location ?? null,
+    description: proposed?.descriptionPreview ?? current?.description ?? null,
+    attendeesCount: current?.attendeesCount ?? current?.attendees.length ?? 0,
+    status: current?.status ?? "confirmed",
+    attendees: current?.attendees ?? [],
+  };
+}
+
 function buildEmailReplyBody(text: string): string | null {
   const body = inferLiteralEmailBodyText(text);
   if (!body) return null;
   return body;
 }
 
-export function detectGoogleActionTaskIntent(text: string): boolean {
-  return isLikelyGoogleActionRequest(text) && /gmail|email|calendar|meeting|event|reply|draft|schedule|reschedule/i.test(text);
+export function detectGoogleActionTaskIntent(
+  text: string,
+  recentContext?: GoogleRecentActionContext | null,
+): boolean {
+  return (
+    (isLikelyGoogleActionRequest(text) &&
+      /gmail|email|calendar|meeting|event|reply|draft|schedule|reschedule/i.test(
+        text,
+      )) ||
+    hasRecentGoogleActionFollowUpIntent(text, recentContext)
+  );
 }
 
 export async function prepareGoogleActionTask(params: {
@@ -579,6 +897,7 @@ export async function prepareGoogleActionTask(params: {
   text: string;
   clientTimeZone?: string | null;
   composeSession?: GoogleComposeSession | null;
+  recentContext?: GoogleRecentActionContext | null;
 }): Promise<GoogleActionTaskPreparation> {
   let rawText = normalizeText(params.text);
   const resolvedFromComposeSession =
@@ -593,7 +912,7 @@ export async function prepareGoogleActionTask(params: {
   if (resolvedFromComposeSession) {
     rawText = resolvedFromComposeSession;
   }
-  if (!detectGoogleActionTaskIntent(rawText)) {
+  if (!detectGoogleActionTaskIntent(rawText, params.recentContext ?? null)) {
     return { kind: "none" };
   }
 
@@ -677,25 +996,17 @@ export async function prepareGoogleActionTask(params: {
       };
     }
 
-    const preview: GoogleActionPreview = {
+    const preview = buildGoogleEmailPreview({
       kind: "email_reply",
-      title: sendAfterApproval ? "Send email reply" : "Create email reply draft",
-      summary: sendAfterApproval
-        ? `Send a reply to ${externalReplyTarget} about "${thread.subject}".`
-        : `Create a reply draft to ${externalReplyTarget} about "${thread.subject}".`,
-      connector: "gmail",
-      requiresWriteAccess: true,
+      sendAfterApproval,
+      to: [externalReplyTarget],
+      cc: [],
+      subject: thread.subject.startsWith("Re:")
+        ? thread.subject
+        : `Re: ${thread.subject}`,
+      bodyText,
       emailThread: thread,
-      proposedEmail: {
-        to: [externalReplyTarget],
-        cc: [],
-        subject: thread.subject.startsWith("Re:")
-          ? thread.subject
-          : `Re: ${thread.subject}`,
-        bodyPreview: bodyText,
-        sendAfterApproval,
-      },
-    };
+    });
     return {
       kind: "ready",
       preview,
@@ -795,22 +1106,14 @@ export async function prepareGoogleActionTask(params: {
         });
     const subject = draftContent.subject;
     const bodyText = draftContent.bodyText;
-    const preview: GoogleActionPreview = {
+    const preview = buildGoogleEmailPreview({
       kind: "email_compose",
-      title: sendAfterApproval ? "Send email" : "Create email draft",
-      summary: sendAfterApproval
-        ? `Send an email to ${recipientEmail}.`
-        : `Create an email draft to ${recipientEmail}.`,
-      connector: "gmail",
-      requiresWriteAccess: true,
-      proposedEmail: {
-        to: [recipientEmail],
-        cc: [],
-        subject,
-        bodyPreview: bodyText,
-        sendAfterApproval,
-      },
-    };
+      sendAfterApproval,
+      to: [recipientEmail],
+      cc: [],
+      subject,
+      bodyText,
+    });
     return {
       kind: "ready",
       preview,
@@ -917,15 +1220,25 @@ export async function prepareGoogleActionTask(params: {
     };
   }
 
-  if (/\b(move|reschedule|change|update)\b/i.test(rawText) && /\b(calendar|meeting|event|appointment|my)\b/i.test(rawText)) {
+  const hasCalendarUpdateIntent =
+    (/\b(move|reschedule|change|update)\b/i.test(rawText) &&
+      /\b(calendar|meeting|event|appointment|my)\b/i.test(rawText)) ||
+    hasRecentCalendarFollowUpIntent(rawText, params.recentContext ?? null);
+
+  if (hasCalendarUpdateIntent) {
     const newTimeMatch = rawText.match(
       /\bto\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm))(?:\s+(today|tomorrow))?/i,
     );
-    if (!newTimeMatch) {
+    const locationUpdate = extractCalendarLocationUpdate(rawText);
+    const descriptionUpdate = extractCalendarDescriptionUpdate(rawText);
+    const wantsTimeUpdate = Boolean(newTimeMatch);
+    const wantsLocationUpdate = locationUpdate !== undefined;
+    const wantsDescriptionUpdate = descriptionUpdate !== undefined;
+    if (!wantsTimeUpdate && !wantsLocationUpdate && !wantsDescriptionUpdate) {
       return {
         kind: "clarify",
         message:
-          "Tell me the new time for the event, for example move it to 4pm tomorrow.",
+          "Tell me what to change on the event, for example move it to 4pm, add a location, or update the notes.",
         resolvedPrompt: resolvedFromComposeSession,
       };
     }
@@ -945,26 +1258,41 @@ export async function prepareGoogleActionTask(params: {
       };
     }
     const searchQuery = buildCalendarSearchQuery(rawText);
-    if (!searchQuery) {
+    const shouldPreferRecentCalendarContext =
+      Boolean(params.recentContext?.recentCalendarTask) &&
+      (/\b(it|that)\b/i.test(rawText) ||
+        /\b(location|notes?|description)\b/i.test(rawText) ||
+        searchQuery.length === 0);
+    let existingDetail = shouldPreferRecentCalendarContext
+      ? buildRecentCalendarEventDetail(params.recentContext?.recentCalendarTask)
+      : null;
+    if (!existingDetail && searchQuery.length > 0) {
+      const eventMatches = await searchGoogleCalendarEvents({
+        accessToken: auth.accessToken,
+        query: searchQuery,
+        timezone: timeZone,
+        timeRange: /tomorrow/i.test(rawText) ? "tomorrow" : "next_7_days",
+        maxEvents: 1,
+      });
+      const existingEvent = eventMatches[0];
+      if (!existingEvent?.eventId) {
+        return {
+          kind: "clarify",
+          message: `I couldn't find a calendar event matching "${searchQuery}". Tell me the event title more specifically.`,
+          resolvedPrompt: resolvedFromComposeSession,
+        };
+      }
+      existingDetail = await fetchGoogleCalendarEventDetail({
+        accessToken: auth.accessToken,
+        eventId: existingEvent.eventId,
+        timezone: timeZone,
+      });
+    }
+    if (!existingDetail) {
       return {
         kind: "clarify",
         message:
           "Tell me which calendar event you want to update, for example the event title or who it's with.",
-        resolvedPrompt: resolvedFromComposeSession,
-      };
-    }
-    const eventMatches = await searchGoogleCalendarEvents({
-      accessToken: auth.accessToken,
-      query: searchQuery,
-      timezone: timeZone,
-      timeRange: /tomorrow/i.test(rawText) ? "tomorrow" : "next_7_days",
-      maxEvents: 1,
-    });
-    const existingEvent = eventMatches[0];
-    if (!existingEvent?.eventId) {
-      return {
-        kind: "clarify",
-        message: `I couldn't find a calendar event matching "${searchQuery}". Tell me the event title more specifically.`,
         resolvedPrompt: resolvedFromComposeSession,
       };
     }
@@ -979,50 +1307,55 @@ export async function prepareGoogleActionTask(params: {
         resolvedPrompt: resolvedFromComposeSession,
       };
     }
-    const newTime = parseTimeToken(newTimeMatch[1]);
-    if (!newTime) {
-      return {
-        kind: "clarify",
-        message: "Tell me the new time more explicitly, like 4pm or 4:30pm.",
-        resolvedPrompt: resolvedFromComposeSession,
-      };
-    }
-    const existingStart = new Date(existingEvent.startTime);
-    const existingEnd = new Date(existingEvent.endTime);
+    const existingStart = new Date(existingDetail.startTime);
+    const existingEnd = new Date(existingDetail.endTime);
     const durationMs = Math.max(30 * 60 * 1000, existingEnd.getTime() - existingStart.getTime());
-    const dateParts = datePartsInTimeZone(
-      /tomorrow/i.test(rawText)
-        ? new Date(Date.now() + 24 * 60 * 60 * 1000)
-        : existingStart,
-      timeZone,
-    );
-    const updatedStart = localDateTimeToIso({
-      year: dateParts.year,
-      month: dateParts.month,
-      day: dateParts.day,
-      hour: newTime.hour,
-      minute: newTime.minute,
-      timeZone,
-    });
-    const updatedEnd = new Date(Date.parse(updatedStart) + durationMs).toISOString();
-    const existingDetail = await fetchGoogleCalendarEventDetail({
-      accessToken: auth.accessToken,
-      eventId: existingEvent.eventId,
-      timezone: timeZone,
-    });
+    let updatedStart: string | null = null;
+    let updatedEnd: string | null = null;
+    if (newTimeMatch) {
+      const newTime = parseTimeToken(newTimeMatch[1]);
+      if (!newTime) {
+        return {
+          kind: "clarify",
+          message: "Tell me the new time more explicitly, like 4pm or 4:30pm.",
+          resolvedPrompt: resolvedFromComposeSession,
+        };
+      }
+      const dateParts = datePartsInTimeZone(
+        /tomorrow/i.test(rawText)
+          ? new Date(Date.now() + 24 * 60 * 60 * 1000)
+          : existingStart,
+        timeZone,
+      );
+      updatedStart = localDateTimeToIso({
+        year: dateParts.year,
+        month: dateParts.month,
+        day: dateParts.day,
+        hour: newTime.hour,
+        minute: newTime.minute,
+        timeZone,
+      });
+      updatedEnd = new Date(Date.parse(updatedStart) + durationMs).toISOString();
+    }
+    const nextLocation =
+      locationUpdate === undefined ? existingDetail.location : locationUpdate;
+    const nextDescription =
+      descriptionUpdate === undefined
+        ? existingDetail.description
+        : descriptionUpdate;
     const preview: GoogleActionPreview = {
       kind: "calendar_update",
       title: "Update calendar event",
-      summary: `Move "${existingDetail.title}" to ${updatedStart}.`,
+      summary: `Update "${existingDetail.title}" on your calendar.`,
       connector: "calendar",
       requiresWriteAccess: true,
       calendarEvent: existingDetail,
       proposedCalendar: {
         title: existingDetail.title,
-        startTime: updatedStart,
-        endTime: updatedEnd,
-        location: existingDetail.location,
-        descriptionPreview: existingDetail.description,
+        startTime: updatedStart ?? existingDetail.startTime,
+        endTime: updatedEnd ?? existingDetail.endTime,
+        location: nextLocation,
+        descriptionPreview: nextDescription,
         originalEventId: existingDetail.eventId,
         originalTitle: existingDetail.title,
         originalStartTime: existingDetail.startTime,
@@ -1041,6 +1374,8 @@ export async function prepareGoogleActionTask(params: {
           eventId: existingDetail.eventId,
           startTime: updatedStart,
           endTime: updatedEnd,
+          location: locationUpdate,
+          description: descriptionUpdate,
         },
       },
       resolvedPrompt: resolvedFromComposeSession,
@@ -1190,20 +1525,15 @@ function buildSendVariantFromPlan(
     return { preview: plan.preview, plan };
   }
 
-  const preview: GoogleActionPreview = {
-    ...plan.preview,
-    title: plan.execution.kind === "email_reply" ? "Send email reply" : "Send email",
-    summary:
-      plan.execution.kind === "email_reply"
-        ? `Send a reply to ${plan.execution.to.join(", ")}.`
-        : `Send an email to ${plan.execution.to.join(", ")}.`,
-    proposedEmail: plan.preview.proposedEmail
-      ? {
-          ...plan.preview.proposedEmail,
-          sendAfterApproval: true,
-        }
-      : null,
-  };
+  const preview = buildGoogleEmailPreview({
+    kind: plan.execution.kind,
+    sendAfterApproval: true,
+    to: plan.execution.to,
+    cc: plan.execution.cc,
+    subject: plan.execution.subject,
+    bodyText: plan.execution.bodyText,
+    emailThread: plan.preview.emailThread ?? null,
+  });
 
   return {
     preview,
@@ -1213,6 +1543,48 @@ function buildSendVariantFromPlan(
       execution: {
         ...plan.execution,
         sendAfterApproval: true,
+      },
+    },
+  };
+}
+
+async function buildRevisedEmailVariantFromPlan(params: {
+  plan: StoredGoogleActionPlan;
+  instructionText: string;
+}): Promise<{ preview: GoogleActionPreview; plan: StoredGoogleActionPlan }> {
+  if (
+    params.plan.execution.kind !== "email_compose" &&
+    params.plan.execution.kind !== "email_reply"
+  ) {
+    throw new Error("Task is not an email draft");
+  }
+
+  const revisedDraft = await buildRevisedEmailDraftContent({
+    instructionText: params.instructionText,
+    currentSubject: params.plan.execution.subject,
+    currentBodyText: params.plan.execution.bodyText,
+    threadSubject: params.plan.preview.emailThread?.subject ?? null,
+  });
+
+  const preview = buildGoogleEmailPreview({
+    kind: params.plan.execution.kind,
+    sendAfterApproval: params.plan.execution.sendAfterApproval,
+    to: params.plan.execution.to,
+    cc: params.plan.execution.cc,
+    subject: revisedDraft.subject,
+    bodyText: revisedDraft.bodyText,
+    emailThread: params.plan.preview.emailThread ?? null,
+  });
+
+  return {
+    preview,
+    plan: {
+      ...params.plan,
+      preview,
+      execution: {
+        ...params.plan.execution,
+        subject: revisedDraft.subject,
+        bodyText: revisedDraft.bodyText,
       },
     },
   };
@@ -1271,6 +1643,106 @@ export async function startFollowUpGoogleEmailSendTask(params: {
     plan: next.plan,
     onEvent: params.onEvent,
   });
+}
+
+export async function startFollowUpGoogleEmailRevisionTask(params: {
+  storage: IStorage;
+  taskId: string;
+  userId: string;
+  conversationId: string;
+  requestedByMessageId: string;
+  instructionText: string;
+  onEvent?: (event: AgentTaskEvent) => void;
+}): Promise<{ task: AgentTaskSummary; awaitingApproval: true }> {
+  const task = await params.storage.getAgentTaskById(params.taskId);
+  if (!task || task.userId !== params.userId) {
+    throw new Error("Task not found");
+  }
+
+  const plan = taskPlanFromTask(task);
+  if (!isEmailDraftRevisionCandidatePreview(plan.preview)) {
+    throw new Error("Task is not a revisable email draft");
+  }
+
+  const next = await buildRevisedEmailVariantFromPlan({
+    plan,
+    instructionText: params.instructionText,
+  });
+  const run = await startGoogleActionTaskRun({
+    storage: params.storage,
+    userId: params.userId,
+    conversationId: params.conversationId,
+    prompt: `${task.prompt}\n\nRevision: ${params.instructionText}`,
+    requestedByMessageId: params.requestedByMessageId,
+    preview: next.preview,
+    plan: next.plan,
+    onEvent: params.onEvent,
+  });
+
+  await createAssistantUiMessage({
+    storage: params.storage,
+    conversationId: params.conversationId,
+    text: "I updated the saved draft preview. Review it and approve when you're ready.",
+    uiPayload: {
+      kind: "agent_task_status",
+      task: run.task,
+      text: "Updated draft preview",
+      googleActionPreview: next.preview,
+    },
+  });
+
+  return run;
+}
+
+export async function revisePendingGoogleEmailTask(params: {
+  storage: IStorage;
+  taskId: string;
+  userId: string;
+  instructionText: string;
+}): Promise<{ task: AgentTaskSummary; preview: GoogleActionPreview }> {
+  const task = await params.storage.getAgentTaskById(params.taskId);
+  if (!task || task.userId !== params.userId) {
+    throw new Error("Task not found");
+  }
+
+  const pendingApproval = await params.storage.getPendingAgentApproval(task.id);
+  if (!pendingApproval) {
+    throw new Error("No pending approval for this task");
+  }
+
+  const plan = taskPlanFromTask(task);
+  if (!isEmailDraftRevisionCandidatePreview(plan.preview)) {
+    throw new Error("Task is not a revisable email draft");
+  }
+
+  const next = await buildRevisedEmailVariantFromPlan({
+    plan,
+    instructionText: params.instructionText,
+  });
+  const updated =
+    (await params.storage.updateAgentTaskStatus({
+      taskId: task.id,
+      status: task.status,
+      plan: next.plan,
+    })) ?? task;
+  const taskSummary = toTaskSummary(updated);
+
+  await createAssistantUiMessage({
+    storage: params.storage,
+    conversationId: task.conversationId,
+    text: "I updated the draft preview. Review it and approve when you're ready.",
+    uiPayload: {
+      kind: "agent_task_status",
+      task: taskSummary,
+      text: "Updated draft preview",
+      googleActionPreview: next.preview,
+    },
+  });
+
+  return {
+    task: taskSummary,
+    preview: next.preview,
+  };
 }
 
 export async function approveAndExecuteGoogleActionTask(params: {

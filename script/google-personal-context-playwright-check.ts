@@ -92,8 +92,12 @@ async function main(): Promise<void> {
     await verifyWriteEnabledGoogleAssistantState(page, args.outputDir);
     console.log("[google-context-check] approval card compose");
     await verifyApprovalCardComposeFlow(page, args.baseUrl, args.outputDir);
+    console.log("[google-context-check] saved-draft revision follow-up");
+    await verifySavedDraftRevisionFollowUpFlow(page, args.baseUrl, args.email, args.outputDir);
     console.log("[google-context-check] saved-draft send follow-up");
     await verifySavedDraftSendFollowUpFlow(page, args.baseUrl, args.email, args.outputDir);
+    console.log("[google-context-check] recent-calendar follow-up");
+    await verifyRecentCalendarFollowUpFlow(page, args.baseUrl, args.email, args.outputDir);
 
     console.log("google-personal-context Playwright checks passed");
     await page.close();
@@ -478,6 +482,53 @@ async function verifyApprovalCardComposeFlow(
     (message) => message.sender === "assistant",
   ).length;
 
+  await page
+    .getByTestId("input-message")
+    .fill("ask if he is free to hang out on march 12th");
+  await page.getByTestId("input-message").press("Enter");
+
+  const revisionReply = await waitForLatestAssistantReply({
+    page,
+    baseUrl,
+    conversationId,
+    previousAssistantCount,
+    timeoutMs: 45_000,
+  });
+  assert.match(
+    revisionReply,
+    /updated the draft preview|review it and approve/i,
+    "Draft follow-up edits should update the existing Gmail preview instead of falling back to companion chat",
+  );
+  assert.doesNotMatch(
+    revisionReply,
+    /calendar for today|totally clear schedule/i,
+    "Draft follow-up edits should not fall back into unrelated companion context",
+  );
+
+  const revisedUnifiedCard = page.locator('[data-testid="agent-unified-task-card"]').last();
+  await revisedUnifiedCard.waitFor({ state: "visible", timeout: 20_000 });
+  assert.equal(
+    (await revisedUnifiedCard.getAttribute("data-agent-task-id")) ?? null,
+    taskId,
+    "Draft follow-up edits should stay attached to the same pending Gmail task",
+  );
+  const revisedPreviewCard = page.locator('[data-testid="google-email-preview-card"]').last();
+  await revisedPreviewCard.waitFor({ state: "visible", timeout: 20_000 });
+  assert.match(
+    await revisedPreviewCard.innerText(),
+    /march 12|hang out/i,
+    "Expected the revised Gmail preview to reflect the follow-up edit request",
+  );
+
+  const revisedTaskMessages = await fetchConversationMessages(
+    page,
+    baseUrl,
+    conversationId,
+  );
+  const revisedAssistantCount = revisedTaskMessages.filter(
+    (message) => message.sender === "assistant",
+  ).length;
+
   console.log("[google-context-check] denying approval via API");
   const denyResponse = await page.request.post(
     `${baseUrl}/api/agent/tasks/${taskId}/approve`,
@@ -499,7 +550,7 @@ async function verifyApprovalCardComposeFlow(
     page,
     baseUrl,
     conversationId,
-    previousAssistantCount,
+    previousAssistantCount: revisedAssistantCount,
     timeoutMs: 45_000,
   });
   assert.match(
@@ -588,6 +639,183 @@ async function verifySavedDraftSendFollowUpFlow(
   });
 }
 
+async function verifySavedDraftRevisionFollowUpFlow(
+  page: Page,
+  baseUrl: string,
+  email: string,
+  outputDir: string,
+): Promise<void> {
+  const conversationId = await resolveActiveConversationId(page, baseUrl);
+  await seedSavedDraftTaskFixture(email, conversationId);
+  await page.reload({ waitUntil: "networkidle" });
+
+  const seededCard = page.locator('[data-testid="agent-unified-task-card"]').last();
+  await seededCard.waitFor({ state: "visible", timeout: 20_000 });
+  assert.match(
+    await seededCard.innerText(),
+    /team@soulnests\.com/i,
+    "Expected the seeded Gmail draft card to render before revision follow-up",
+  );
+
+  const beforeMessages = await fetchConversationMessages(page, baseUrl, conversationId);
+  const previousAssistantCount = beforeMessages.filter(
+    (message) => message.sender === "assistant",
+  ).length;
+  const previousComposeCardCount = await page
+    .locator('[data-testid="google-compose-session-card"]')
+    .count();
+
+  await page
+    .getByTestId("input-message")
+    .fill("ask if he is free to hang out on march 12th");
+  await page.getByTestId("input-message").press("Enter");
+
+  const revisionReply = await waitForLatestAssistantReply({
+    page,
+    baseUrl,
+    conversationId,
+    previousAssistantCount,
+    timeoutMs: 45_000,
+  });
+  assert.match(
+    revisionReply,
+    /updated the saved draft preview|updated the draft preview|review it and approve/i,
+    "Saved draft follow-up edits should create a revised approval flow",
+  );
+  assert.doesNotMatch(
+    revisionReply,
+    /who should i send it to|what should the email say/i,
+    "Saved draft follow-up edits should not fall back into compose-session clarification",
+  );
+  assert.equal(
+    await page.locator('[data-testid="google-compose-session-card"]').count(),
+    previousComposeCardCount,
+    "Saved draft follow-up edits should not create a new compose-session card",
+  );
+
+  const revisedUnifiedCard = page.locator('[data-testid="agent-unified-task-card"]').last();
+  await revisedUnifiedCard.waitFor({ state: "visible", timeout: 20_000 });
+  assert.match(
+    await revisedUnifiedCard.innerText(),
+    /needs draft approval|draft preview/i,
+    "Expected saved draft revision to surface a new approval card",
+  );
+  assert.match(
+    await revisedUnifiedCard.innerText(),
+    /march 12|hang out/i,
+    "Expected the revised saved draft preview to reflect the follow-up edit request",
+  );
+
+  const taskId = await revisedUnifiedCard.getAttribute("data-agent-task-id");
+  assert.ok(taskId, "Expected revised saved draft card to expose a task id");
+
+  const revisedMessages = await fetchConversationMessages(page, baseUrl, conversationId);
+  const revisedAssistantCount = revisedMessages.filter(
+    (message) => message.sender === "assistant",
+  ).length;
+
+  const denyResponse = await page.request.post(
+    `${baseUrl}/api/agent/tasks/${taskId}/approve`,
+    {
+      data: {
+        approve: false,
+        reason: "Denied saved draft revision from Playwright",
+      },
+    },
+  );
+  assert.equal(
+    denyResponse.ok(),
+    true,
+    "Expected saved draft revision denial request to succeed",
+  );
+
+  const denialReply = await waitForLatestAssistantReply({
+    page,
+    baseUrl,
+    conversationId,
+    previousAssistantCount: revisedAssistantCount,
+    timeoutMs: 45_000,
+  });
+  assert.match(
+    denialReply,
+    /(canceled that task|canceled|cancelled)/i,
+    "Denying the revised saved draft should cancel cleanly",
+  );
+
+  await page.screenshot({
+    path: resolve(outputDir, "google-personal-context-saved-draft-revision-follow-up.png"),
+    fullPage: true,
+  });
+}
+
+async function verifyRecentCalendarFollowUpFlow(
+  page: Page,
+  baseUrl: string,
+  email: string,
+  outputDir: string,
+): Promise<void> {
+  const conversationId = await resolveActiveConversationId(page, baseUrl);
+  await seedRecentCalendarTaskFixture(email, conversationId);
+  await page.reload({ waitUntil: "networkidle" });
+
+  const seededCalendarCard = page.locator('[data-google-calendar-card="true"]').last();
+  await seededCalendarCard.waitFor({ state: "visible", timeout: 20_000 });
+  assert.match(
+    await seededCalendarCard.innerText(),
+    /lunch with alex/i,
+    "Expected the seeded calendar card to reflect the recent event title",
+  );
+  assert.match(
+    await seededCalendarCard.innerText(),
+    /event created/i,
+    "Expected the seeded calendar task to appear as a created event",
+  );
+
+  const beforeMessages = await fetchConversationMessages(page, baseUrl, conversationId);
+  const previousAssistantCount = beforeMessages.filter(
+    (message) => message.sender === "assistant",
+  ).length;
+
+  await page.getByTestId("input-message").fill("add location blue bottle");
+  await page.getByTestId("input-message").press("Enter");
+
+  const followUpReply = await waitForLatestAssistantReply({
+    page,
+    baseUrl,
+    conversationId,
+    previousAssistantCount,
+    timeoutMs: 45_000,
+  });
+
+  assert.doesNotMatch(
+    followUpReply,
+    /tell me which calendar event/i,
+    "Recent calendar follow-up should not ask the user to restate the event target",
+  );
+
+  const updateCalendarCard = page.locator('[data-google-calendar-card="true"]').last();
+  await updateCalendarCard.waitFor({ state: "visible", timeout: 20_000 });
+  assert.match(
+    await updateCalendarCard.innerText(),
+    /blue bottle/i,
+    "Expected the calendar follow-up preview to carry the requested location update",
+  );
+  const applyChangeButton = page
+    .getByTestId("button-google-calendar-primary-action")
+    .last();
+  await applyChangeButton.waitFor({ state: "visible", timeout: 20_000 });
+  assert.match(
+    (await applyChangeButton.innerText()).trim(),
+    /apply change/i,
+    "Expected the calendar follow-up to surface an approval-gated update action",
+  );
+
+  await page.screenshot({
+    path: resolve(outputDir, "google-personal-context-calendar-follow-up.png"),
+    fullPage: true,
+  });
+}
+
 async function seedSavedDraftTaskFixture(
   email: string,
   conversationId: string,
@@ -669,6 +897,94 @@ async function seedSavedDraftTaskFixture(
         draftId: `fixture-draft-${task.id}`,
         messageId: `fixture-message-${task.id}`,
         threadId: null,
+      },
+    },
+  });
+}
+
+async function seedRecentCalendarTaskFixture(
+  email: string,
+  conversationId: string,
+): Promise<void> {
+  const [user] = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(eq(users.email, email))
+    .limit(1);
+  assert.ok(user?.id, `Expected to find user for ${email}`);
+
+  const startTime = new Date(Date.now() + 24 * 60 * 60 * 1000);
+  startTime.setHours(13, 0, 0, 0);
+  const endTime = new Date(startTime.getTime() + 60 * 60 * 1000);
+  const prompt = "create calendar event lunch with alex tomorrow at 1pm";
+  const preview = {
+    kind: "calendar_create" as const,
+    title: "Create calendar event",
+    summary: 'Create "Lunch with Alex" on your calendar.',
+    connector: "calendar" as const,
+    requiresWriteAccess: true,
+    proposedCalendar: {
+      title: "Lunch with Alex",
+      startTime: startTime.toISOString(),
+      endTime: endTime.toISOString(),
+      location: null,
+      descriptionPreview: null,
+    },
+  };
+  const plan = {
+    version: "google_action_v1" as const,
+    preview,
+    execution: {
+      kind: "calendar_create" as const,
+      timezone: "America/New_York",
+      title: "Lunch with Alex",
+      startTime: startTime.toISOString(),
+      endTime: endTime.toISOString(),
+      location: null,
+      description: null,
+    },
+  };
+  const completedAt = new Date();
+
+  const task = await storage.createAgentTask({
+    userId: user.id,
+    conversationId,
+    status: "completed",
+    riskLevel: "high",
+    taskKind: "google_action",
+    prompt,
+    requestedByMessageId: randomUUID(),
+    plan,
+    completedAt,
+  });
+
+  await storage.createMessage({
+    conversationId,
+    sender: "assistant",
+    text: 'Created "Lunch with Alex" on your calendar.',
+    partIndex: 0,
+    uiPayload: {
+      kind: "agent_task_status",
+      task: {
+        id: task.id,
+        conversationId: task.conversationId,
+        status: task.status,
+        riskLevel: task.riskLevel,
+        taskKind: task.taskKind,
+        prompt: task.prompt,
+        errorMessage: task.errorMessage ?? null,
+        createdAt: task.createdAt,
+        updatedAt: task.updatedAt,
+        completedAt: task.completedAt,
+      },
+      text: "Completed",
+      googleActionPreview: preview,
+      googleActionResult: {
+        kind: "calendar_create",
+        connector: "calendar",
+        status: "event_created",
+        summary: 'Created "Lunch with Alex" on your calendar.',
+        eventId: `fixture-event-${task.id}`,
       },
     },
   });
