@@ -116,6 +116,13 @@ async function main(): Promise<void> {
     await verifyApprovalCardComposeFlow(page, args.baseUrl, args.outputDir);
     console.log("[google-context-check] existing draft selection");
     await verifyExistingDraftSelectionFlow(page, args.baseUrl, args.email, args.outputDir);
+    console.log("[google-context-check] fresh compose overrides history");
+    await verifyFreshComposeOverridesHistoryFlow(
+      page,
+      args.baseUrl,
+      args.email,
+      args.outputDir,
+    );
     console.log("[google-context-check] calendar clarification card");
     await verifyCalendarClarificationCardFlow(page, args.baseUrl, args.outputDir);
     console.log("[google-context-check] saved-draft revision follow-up");
@@ -1071,6 +1078,120 @@ async function verifyExistingDraftSelectionFlow(
 
   await page.screenshot({
     path: resolve(outputDir, "google-personal-context-existing-draft-selection.png"),
+    fullPage: true,
+  });
+}
+
+async function verifyFreshComposeOverridesHistoryFlow(
+  page: Page,
+  baseUrl: string,
+  email: string,
+  outputDir: string,
+): Promise<void> {
+  const conversationId = await resolveActiveConversationId(page, baseUrl);
+  await seedCustomSavedDraftTaskFixture({
+    email,
+    conversationId,
+    recipient: "zorovt18@gmail.com",
+    subject: "Catch up on the 15th?",
+    bodyText: "Hey, can we catch up on the 15th?",
+  });
+  await page.reload({ waitUntil: "networkidle" });
+
+  let messages = await fetchConversationMessages(page, baseUrl, conversationId);
+  let previousAssistantCount = messages.filter(
+    (message) => message.sender === "assistant",
+  ).length;
+
+  await page.getByTestId("input-message").fill("create a new email");
+  await page.getByTestId("input-message").press("Enter");
+
+  const freshComposeReply = await waitForLatestAssistantReply({
+    page,
+    baseUrl,
+    conversationId,
+    previousAssistantCount,
+    timeoutMs: 45_000,
+  });
+  assert.match(
+    freshComposeReply,
+    /who should i send it to|share the recipient email address/i,
+    "A fresh compose request should open a new compose session instead of reviving an older draft",
+  );
+  assert.doesNotMatch(
+    freshComposeReply,
+    /keep that same wording|approval button|catch up on the 15th/i,
+    "Fresh compose should not free-chat about an older draft",
+  );
+
+  let composeSessionCard = page.locator('[data-testid="google-compose-session-card"]').last();
+  await composeSessionCard.waitFor({ state: "visible", timeout: 20_000 });
+  assert.equal(
+    await composeSessionCard.getAttribute("data-compose-status"),
+    "awaiting_recipient",
+    "Expected `create a new email` to open a fresh compose session",
+  );
+
+  messages = await fetchConversationMessages(page, baseUrl, conversationId);
+  previousAssistantCount = messages.filter((message) => message.sender === "assistant").length;
+
+  await page
+    .getByTestId("input-message")
+    .fill("okay lets create an email for zorovt18@gmail.com");
+  await page.getByTestId("input-message").press("Enter");
+
+  const recipientComposeReply = await waitForLatestAssistantReply({
+    page,
+    baseUrl,
+    conversationId,
+    previousAssistantCount,
+    timeoutMs: 45_000,
+  });
+  assert.match(
+    recipientComposeReply,
+    /what should the email say|i can draft that to zorovt18@gmail\.com/i,
+    "Fresh compose with a recipient should move into the structured awaiting_body state",
+  );
+  assert.doesNotMatch(
+    recipientComposeReply,
+    /keep that same wording|approval button|catch up on the 15th/i,
+    "Fresh compose with a recipient should not revive the prior draft copy",
+  );
+
+  composeSessionCard = page.locator('[data-testid="google-compose-session-card"]').last();
+  await composeSessionCard.waitFor({ state: "visible", timeout: 20_000 });
+  assert.equal(
+    await composeSessionCard.getAttribute("data-compose-status"),
+    "awaiting_body",
+    "Expected recipient-aware fresh compose to ask for the body next",
+  );
+  assert.match(
+    await composeSessionCard.innerText(),
+    /zorovt18@gmail\.com/i,
+    "Expected the fresh compose session to preserve the provided recipient",
+  );
+
+  messages = await fetchConversationMessages(page, baseUrl, conversationId);
+  previousAssistantCount = messages.filter((message) => message.sender === "assistant").length;
+
+  await page.getByTestId("input-message").fill("never mind");
+  await page.getByTestId("input-message").press("Enter");
+
+  const cancelReply = await waitForLatestAssistantReply({
+    page,
+    baseUrl,
+    conversationId,
+    previousAssistantCount,
+    timeoutMs: 45_000,
+  });
+  assert.match(
+    cancelReply,
+    /dropped that draft idea|okay, i dropped that draft idea/i,
+    "Expected the fresh compose session cleanup to cancel cleanly",
+  );
+
+  await page.screenshot({
+    path: resolve(outputDir, "google-personal-context-fresh-compose-overrides-history.png"),
     fullPage: true,
   });
 }

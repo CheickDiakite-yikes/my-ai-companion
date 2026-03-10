@@ -225,10 +225,21 @@ function inferLiteralEmailBodyText(input: string): string | null {
   return match?.[1]?.trim() ?? null;
 }
 
-function looksLikeGoogleEmailComposeRequest(input: string): boolean {
-  const normalized = normalizeText(input);
+function normalizeGoogleEmailComposeRequestText(input: string): string {
+  return normalizeText(input)
+    .replace(
+      /^\s*(?:okay|ok|alright|all right|sure|yeah|yep|yup)\s+(?:(?:lets|let's)\s+)?/i,
+      "",
+    )
+    .replace(/^\s*(?:can|could|would|will)\s+you\s+/i, "")
+    .replace(/^\s*please\s+/i, "")
+    .trim();
+}
+
+export function looksLikeGoogleEmailComposeRequest(input: string): boolean {
+  const normalized = normalizeGoogleEmailComposeRequestText(input);
   if (!normalized) return false;
-  return /\b(?:(?:draft|write|send|create|make)\s+(?:an?\s+)?(?:email|message)(?:\s+draft)?|(?:create|make)\s+(?:an?\s+)?draft(?:\s+(?:email|message))?)\b/i.test(
+  return /^(?:(?:draft|write|send|create|make|start)\s+(?:an?\s+)?(?:(?:new|fresh|another|different)\s+)?(?:email|message)(?:\s+draft)?|(?:create|make|start)\s+(?:an?\s+)?(?:(?:new|fresh|another|different)\s+)?draft(?:\s+(?:email|message))?|(?:new|fresh|another|different)\s+(?:email|message|draft))\b/i.test(
     normalized,
   );
 }
@@ -240,19 +251,20 @@ function inferEmailSubject(input: string): string | null {
 }
 
 function stripComposeLeadIn(input: string): string {
-  return normalizeText(input)
-    .replace(/^\s*(?:okay|ok|alright|all right|sure|yeah|yep)\s+(?:lets|let's)\s+/i, "")
-    .replace(/^\s*(?:can|could|would|will)\s+you\s+/i, "")
-    .replace(/^\s*please\s+/i, "")
+  return normalizeGoogleEmailComposeRequestText(input)
     .replace(
-      /^\s*(?:create|make)\s+(?:an?\s+)?(?:(?:email|message)\s+draft|draft(?:\s+(?:email|message))?)\b/i,
+      /^\s*(?:create|make|start)\s+(?:an?\s+)?(?:(?:new|fresh|another|different)\s+)?(?:(?:email|message)\s+draft|draft(?:\s+(?:email|message))?)\b/i,
       "",
     )
-    .replace(/^\s*(?:create|make)\s+(?:an?\s+)?(?:email|message)\b/i, "")
     .replace(
-      /^\s*(?:draft|write|send)\s+(?:an?\s+)?(?:email|message)\b/i,
+      /^\s*(?:create|make|start)\s+(?:an?\s+)?(?:(?:new|fresh|another|different)\s+)?(?:email|message)\b/i,
       "",
     )
+    .replace(
+      /^\s*(?:draft|write|send)\s+(?:an?\s+)?(?:(?:new|fresh|another|different)\s+)?(?:email|message)\b/i,
+      "",
+    )
+    .replace(/^\s*(?:new|fresh|another|different)\s+(?:email|message|draft)\b/i, "")
     .trim();
 }
 
@@ -770,7 +782,7 @@ export function looksLikeGoogleEmailDraftRevisionInstruction(text: string): bool
 }
 
 function isLikelyGoogleActionRequest(text: string): boolean {
-  return /\b(reply|respond|draft|write|send|schedule|create|add|put|book|block(?:\s+off)?|hold|mark|move|reschedule|change|update)\b/i.test(
+  return /\b(reply|respond|draft|write|send|schedule|create|start|add|put|book|block(?:\s+off)?|hold|mark|move|reschedule|change|update)\b/i.test(
     text,
   );
 }
@@ -1131,9 +1143,9 @@ function matchReplyTarget(text: string): string | null {
 }
 
 function matchComposeTarget(text: string): string | null {
-  const normalized = normalizeText(text);
+  const normalized = normalizeGoogleEmailComposeRequestText(text);
   const match = normalized.match(
-    /\b(?:(?:draft|write|send|create|make)\s+(?:an?\s+)?(?:email|message)(?:\s+draft)?|(?:create|make)\s+(?:an?\s+)?draft(?:\s+(?:email|message))?)\s+(?:to|for)\s+(.+?)(?:\s+(?:about|regarding|saying|that)\b|$)/i,
+    /\b(?:(?:draft|write|send|create|make|start)\s+(?:an?\s+)?(?:(?:new|fresh|another|different)\s+)?(?:email|message)(?:\s+draft)?|(?:create|make|start)\s+(?:an?\s+)?(?:(?:new|fresh|another|different)\s+)?draft(?:\s+(?:email|message))?)\s+(?:to|for)\s+(.+?)(?:\s+(?:about|regarding|saying|that)\b|$)/i,
   );
   return normalizeText(match?.[1] ?? null);
 }

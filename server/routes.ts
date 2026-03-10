@@ -109,6 +109,7 @@ import {
   detectGoogleActionTaskIntent,
   type GoogleRecentActionContext,
   type RecentGoogleActionTask,
+  looksLikeGoogleEmailComposeRequest,
   looksLikeGoogleEmailDraftRevisionInstruction,
   prepareGoogleActionTask,
   promotePendingGoogleEmailTaskToSend,
@@ -6900,10 +6901,14 @@ function hasExplicitAmbiguitySelectionContext(params: {
 }
 
 function looksLikeGoogleEmailAmbiguitySelectionText(text: string): boolean {
-  const normalized = normalizeGoogleEmailCandidateMatchText(text);
+  const normalized = normalizeGoogleEmailCandidateMatchText(text).replace(
+    /^(?:okay|ok|alright|all right|sure|yeah|yep|yup)\s+(?:(?:lets|let's)\s+)?/i,
+    "",
+  );
   if (!normalized) return false;
   if (
-    /^(?:(?:draft|write|send|create|make)\s+(?:an?\s+)?(?:email|message)(?:\s+draft)?|(?:create|make)\s+(?:an?\s+)?draft(?:\s+(?:email|message))?|reply|respond)\b/i.test(
+    looksLikeGoogleEmailComposeRequest(normalized) ||
+    /^(?:reply|respond)\b/i.test(
       normalized,
     )
   ) {
@@ -6926,7 +6931,8 @@ function looksLikeGoogleEmailDraftSelectionText(text: string): boolean {
     isGoogleActionSendMessage(text) ||
     isGoogleActionApproveMessage(text) ||
     isGoogleActionDeclineMessage(text) ||
-    looksLikeGoogleEmailDraftRevisionInstruction(text)
+    looksLikeGoogleEmailDraftRevisionInstruction(text) ||
+    looksLikeGoogleEmailComposeRequest(text)
   ) {
     return false;
   }
@@ -14761,6 +14767,29 @@ export async function registerRoutes(
           elapsedMs: elapsedMs(startedAt),
         });
       }
+      {
+        const googleFallbackState = resolveLatestGoogleConversationState(
+          existingConversationMessages,
+        );
+        const googleFallbackLikelyIntent =
+          looksLikeGoogleEmailComposeRequest(parsed.text) ||
+          detectGoogleActionTaskIntent(
+            parsed.text,
+            toGoogleRecentActionContext(googleFallbackState),
+          );
+        if (googleFallbackLikelyIntent) {
+          trace(req, "google.action.fell_through_to_companion", {
+            text: parsed.text,
+            activeSurfaceKey: parsed.googleActionContext?.surfaceKey ?? null,
+            connectorHint: parsed.googleActionContext?.connector ?? null,
+            emailCandidateCount: googleFallbackState.emailDraftCandidates.length,
+            calendarCandidateCount: googleFallbackState.calendarEventCandidates.length,
+            hasComposeSession: Boolean(googleFallbackState.composeSession),
+            hasCalendarSession: Boolean(googleFallbackState.calendarSession),
+            hasPendingTask: Boolean(googleFallbackState.pendingTask),
+          });
+        }
+      }
 
       const googlePersonalContext = await prepareGooglePersonalContextForChat({
         req,
@@ -16270,6 +16299,30 @@ export async function registerRoutes(
         });
         res.end();
         return;
+      }
+      {
+        const googleFallbackState = resolveLatestGoogleConversationState(
+          existingConversationMessages,
+        );
+        const googleFallbackLikelyIntent =
+          looksLikeGoogleEmailComposeRequest(parsed.text) ||
+          detectGoogleActionTaskIntent(
+            parsed.text,
+            toGoogleRecentActionContext(googleFallbackState),
+          );
+        if (googleFallbackLikelyIntent) {
+          trace(req, "google.action.fell_through_to_companion", {
+            text: parsed.text,
+            activeSurfaceKey: parsed.googleActionContext?.surfaceKey ?? null,
+            connectorHint: parsed.googleActionContext?.connector ?? null,
+            emailCandidateCount: googleFallbackState.emailDraftCandidates.length,
+            calendarCandidateCount: googleFallbackState.calendarEventCandidates.length,
+            hasComposeSession: Boolean(googleFallbackState.composeSession),
+            hasCalendarSession: Boolean(googleFallbackState.calendarSession),
+            hasPendingTask: Boolean(googleFallbackState.pendingTask),
+            streaming: true,
+          });
+        }
       }
 
       const googlePersonalContext = await prepareGooglePersonalContextForChat({
