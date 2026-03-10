@@ -1419,6 +1419,25 @@ function getGoogleApprovalPrimaryLabel(
   return "Approve";
 }
 
+function getGoogleApprovalProgressLabel(
+  preview: GoogleActionPreview | null | undefined,
+  approve: boolean,
+): string {
+  if (!approve) {
+    return preview?.connector === "calendar" ? "Skipping..." : "Cancelling...";
+  }
+  if (!preview) return "Working...";
+  if (preview.kind === "email_compose") {
+    return preview.proposedEmail?.sendAfterApproval ? "Sending..." : "Saving draft...";
+  }
+  if (preview.kind === "email_reply") {
+    return preview.proposedEmail?.sendAfterApproval ? "Sending..." : "Saving draft...";
+  }
+  if (preview.kind === "calendar_create") return "Creating event...";
+  if (preview.kind === "calendar_update") return "Updating event...";
+  return "Working...";
+}
+
 function getGoogleApprovalSecondaryLabel(
   preview: GoogleActionPreview | null | undefined,
 ): string {
@@ -1906,6 +1925,59 @@ function sanitizeGoogleActionContext(
   };
 
   return Object.keys(sanitized).length > 0 ? sanitized : undefined;
+}
+
+function resolveLatestAssistantGoogleActionContext(
+  messages: MessageData[],
+): SendMessageOptions["googleActionContext"] | undefined {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.sender !== "assistant") continue;
+    const context = sanitizeGoogleActionContext(
+      getGoogleActionContextFromPayload(message.uiPayload),
+    );
+    if (context?.actionableTargetId || (context?.candidateTargetIds?.length ?? 0) > 0) {
+      return context;
+    }
+  }
+  return undefined;
+}
+
+function looksLikeGoogleTargetedFollowUpText(
+  text: string,
+  context: SendMessageOptions["googleActionContext"],
+): boolean {
+  const normalized = text.trim().toLowerCase();
+  if (!normalized || !context?.connector) return false;
+
+  const looksLikeFreshEmailRequest =
+    /\b(?:create|draft|start|write|make)\b.*\b(?:new|fresh|another)?\s*(?:email|draft)\b/.test(
+      normalized,
+    ) || /\bfresh draft\b/.test(normalized);
+  const looksLikeFreshCalendarRequest =
+    /\b(?:create|add|book|schedule|put|block)\b.*\b(?:calendar|event|meeting|appointment)\b/.test(
+      normalized,
+    );
+  if (looksLikeFreshEmailRequest || looksLikeFreshCalendarRequest) {
+    return false;
+  }
+
+  if (
+    /\b(?:send|approve|cancel|deny|decline|not now|skip|edit|revise|rewrite|reword|update|change|shorter|longer|warmer|friendlier|formal|casual|subject|recipient|location|notes?|description|move|reschedule)\b/.test(
+      normalized,
+    )
+  ) {
+    return true;
+  }
+
+  if (
+    /\b(?:this|that|latest)\b/.test(normalized) &&
+    /\b(?:draft|email|reply|event|meeting|calendar)\b/.test(normalized)
+  ) {
+    return true;
+  }
+
+  return false;
 }
 
 function GoogleEmailComposerPreview(props: {
@@ -2808,6 +2880,7 @@ function GoogleEmailAssistantTaskCard(props: {
   googleActionResult: GoogleActionResult | null;
   approvalPending: boolean;
   isResolvingApproval: boolean;
+  approvalProgressLabel?: string | null;
   onApprove: () => void;
   onDeny: () => void;
   failure: TaskFailureSummary | null;
@@ -2902,6 +2975,17 @@ function GoogleEmailAssistantTaskCard(props: {
             );
           },
         }),
+        queryClient.refetchQueries({
+          predicate: (query) => {
+            const key = Array.isArray(query.queryKey) ? query.queryKey[0] : query.queryKey;
+            return (
+              typeof key === "string" &&
+              (key.startsWith("/api/conversations/") ||
+                key.startsWith("/api/agent/tasks/"))
+            );
+          },
+          type: "active",
+        }),
       ]);
     },
   });
@@ -2920,6 +3004,10 @@ function GoogleEmailAssistantTaskCard(props: {
     props.googleActionPreview.summary ||
     props.card.summaryText ||
     "";
+  const effectiveStatusLabel =
+    props.isResolvingApproval && props.approvalProgressLabel
+      ? props.approvalProgressLabel
+      : statusLabel;
   const statusTone: "pending" | "ready" | "cancelled" = props.failure
     ? "cancelled"
     : props.googleActionResult
@@ -2928,7 +3016,7 @@ function GoogleEmailAssistantTaskCard(props: {
   const statusToneStyles = getGoogleEmailToneStyles(statusTone);
   const collapsedSummary = buildGoogleEmailCollapsedSummary({
     preview: props.googleActionPreview,
-    statusLabel,
+    statusLabel: effectiveStatusLabel,
   });
   const isVoiceStage = props.displayMode === "voice_stage";
   const emailHeaderTitle =
@@ -3046,7 +3134,7 @@ function GoogleEmailAssistantTaskCard(props: {
                     color: statusToneStyles.textColor,
                   }}
                 >
-                  {statusLabel}
+                  {effectiveStatusLabel}
                 </span>
                 <button
                   type="button"
@@ -3104,7 +3192,7 @@ function GoogleEmailAssistantTaskCard(props: {
                     color: statusToneStyles.textColor,
                   }}
                 >
-                  {statusLabel}
+                  {effectiveStatusLabel}
                 </span>
                 <button
                   type="button"
@@ -3215,7 +3303,9 @@ function GoogleEmailAssistantTaskCard(props: {
                         }}
                         data-testid="button-google-email-primary-action"
                       >
-                        {getGoogleApprovalPrimaryLabel(props.googleActionPreview)}
+                        {props.isResolvingApproval && props.approvalProgressLabel
+                          ? props.approvalProgressLabel
+                          : getGoogleApprovalPrimaryLabel(props.googleActionPreview)}
                       </button>
                     </div>
                   ) : null}
@@ -3235,27 +3325,36 @@ function GoogleEmailAssistantTaskCard(props: {
                 subject={proposedEmail.subject}
                 bodyPreview={proposedEmail.bodyPreview}
                 statusLabel={
-                  props.googleActionResult?.status === "email_sent"
-                    ? "Sent"
-                    : props.googleActionResult?.status === "draft_created"
-                      ? "Draft saved"
-                      : proposedEmail.sendAfterApproval
-                        ? "Ready to send"
-                        : "Draft preview"
+                  props.isResolvingApproval && props.approvalProgressLabel
+                    ? props.approvalProgressLabel
+                    : props.googleActionResult?.status === "email_sent"
+                      ? "Sent"
+                      : props.googleActionResult?.status === "draft_created"
+                        ? "Draft saved"
+                        : proposedEmail.sendAfterApproval
+                          ? "Ready to send"
+                          : "Draft preview"
                 }
                 helperText={
-                  props.googleActionResult?.status === "email_sent"
-                    ? "This email was sent through Gmail."
-                    : props.googleActionResult?.status === "draft_created"
-                      ? "This draft was saved to Gmail."
-                      : getGoogleEmailPreviewHelper(proposedEmail)
+                  props.isResolvingApproval && props.approvalProgressLabel
+                    ? proposedEmail.sendAfterApproval
+                      ? "Sending your email through Gmail..."
+                      : "Saving this draft to Gmail..."
+                    : props.googleActionResult?.status === "email_sent"
+                      ? "This email was sent through Gmail."
+                      : props.googleActionResult?.status === "draft_created"
+                        ? "This draft was saved to Gmail."
+                        : getGoogleEmailPreviewHelper(proposedEmail)
                 }
                 tone={statusTone}
                 displayMode={isVoiceStage ? "voice_stage" : "default"}
                 primaryAction={
                   props.approvalPending
                     ? {
-                        label: getGoogleApprovalPrimaryLabel(props.googleActionPreview),
+                        label:
+                          props.isResolvingApproval && props.approvalProgressLabel
+                            ? props.approvalProgressLabel
+                            : getGoogleApprovalPrimaryLabel(props.googleActionPreview),
                         onClick: props.onApprove,
                         disabled: props.isResolvingApproval,
                         testId: "button-google-email-primary-action",
@@ -3358,7 +3457,7 @@ function GoogleEmailAssistantTaskCard(props: {
                   color: statusToneStyles.textColor,
                 }}
               >
-                {statusLabel}
+                {effectiveStatusLabel}
               </span>
             </div>
           </div>
@@ -3556,6 +3655,7 @@ function GoogleCalendarAssistantTaskCard(props: {
   googleActionResult: GoogleActionResult | null;
   approvalPending: boolean;
   isResolvingApproval: boolean;
+  approvalProgressLabel?: string | null;
   onApprove: () => void;
   onDeny: () => void;
   failure: TaskFailureSummary | null;
@@ -3676,6 +3776,17 @@ function GoogleCalendarAssistantTaskCard(props: {
             );
           },
         }),
+        queryClient.refetchQueries({
+          predicate: (query) => {
+            const key = Array.isArray(query.queryKey) ? query.queryKey[0] : query.queryKey;
+            return (
+              typeof key === "string" &&
+              (key.startsWith("/api/conversations/") ||
+                key.startsWith("/api/agent/tasks/"))
+            );
+          },
+          type: "active",
+        }),
       ]);
     },
   });
@@ -3694,6 +3805,10 @@ function GoogleCalendarAssistantTaskCard(props: {
     props.googleActionPreview.summary ||
     props.card.summaryText ||
     "";
+  const effectiveStatusLabel =
+    props.isResolvingApproval && props.approvalProgressLabel
+      ? props.approvalProgressLabel
+      : statusLabel;
   const statusTone: "pending" | "ready" | "cancelled" = props.failure
     ? "cancelled"
     : props.googleActionResult || props.googleActionPreview.kind === "calendar_detail"
@@ -3702,7 +3817,7 @@ function GoogleCalendarAssistantTaskCard(props: {
   const statusToneStyles = getGoogleEmailToneStyles(statusTone);
   const collapsedSummary = buildGoogleCalendarCollapsedSummary({
     preview: props.googleActionPreview,
-    statusLabel,
+    statusLabel: effectiveStatusLabel,
   });
   const isVoiceStage = props.displayMode === "voice_stage";
   const calendarHeaderTitle =
@@ -3853,7 +3968,7 @@ function GoogleCalendarAssistantTaskCard(props: {
                     color: statusToneStyles.textColor,
                   }}
                 >
-                  {statusLabel}
+                  {effectiveStatusLabel}
                 </span>
                 <button
                   type="button"
@@ -3911,7 +4026,7 @@ function GoogleCalendarAssistantTaskCard(props: {
                     color: statusToneStyles.textColor,
                   }}
                 >
-                  {statusLabel}
+                  {effectiveStatusLabel}
                 </span>
                 <button
                   type="button"
@@ -4023,7 +4138,9 @@ function GoogleCalendarAssistantTaskCard(props: {
                         }}
                         data-testid="button-google-calendar-primary-action"
                       >
-                        {getGoogleApprovalPrimaryLabel(props.googleActionPreview)}
+                        {props.isResolvingApproval && props.approvalProgressLabel
+                          ? props.approvalProgressLabel
+                          : getGoogleApprovalPrimaryLabel(props.googleActionPreview)}
                       </button>
                     </div>
                   ) : null}
@@ -4044,13 +4161,17 @@ function GoogleCalendarAssistantTaskCard(props: {
                 endTime={currentEndTime}
                 location={currentLocation}
                 descriptionPreview={currentDescription}
-                statusLabel={statusLabel}
+                statusLabel={effectiveStatusLabel}
                 helperText={
-                  props.googleActionResult?.status === "event_created"
-                    ? "This event was added to Google Calendar."
-                    : props.googleActionResult?.status === "event_updated"
-                      ? "This change was applied to Google Calendar."
-                      : getGoogleCalendarPreviewHelper(props.googleActionPreview)
+                  props.isResolvingApproval && props.approvalProgressLabel
+                    ? props.googleActionPreview.kind === "calendar_update"
+                      ? "Updating this event in Google Calendar..."
+                      : "Creating this event in Google Calendar..."
+                    : props.googleActionResult?.status === "event_created"
+                      ? "This event was added to Google Calendar."
+                      : props.googleActionResult?.status === "event_updated"
+                        ? "This change was applied to Google Calendar."
+                        : getGoogleCalendarPreviewHelper(props.googleActionPreview)
                 }
                 tone={statusTone}
                 displayMode={isVoiceStage ? "voice_stage" : "default"}
@@ -4072,7 +4193,10 @@ function GoogleCalendarAssistantTaskCard(props: {
                 primaryAction={
                   props.approvalPending
                     ? {
-                        label: getGoogleApprovalPrimaryLabel(props.googleActionPreview),
+                        label:
+                          props.isResolvingApproval && props.approvalProgressLabel
+                            ? props.approvalProgressLabel
+                            : getGoogleApprovalPrimaryLabel(props.googleActionPreview),
                         onClick: props.onApprove,
                         disabled: props.isResolvingApproval,
                         testId: "button-google-calendar-primary-action",
@@ -4175,7 +4299,7 @@ function GoogleCalendarAssistantTaskCard(props: {
                   color: statusToneStyles.textColor,
                 }}
               >
-                {statusLabel}
+                {effectiveStatusLabel}
               </span>
             </div>
           </div>
@@ -8057,6 +8181,7 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
     taskId: string,
     approve: boolean,
     reason?: string,
+    actionLabel?: string,
   ) => Promise<void>;
   onSendMessage: (text: string, options?: SendMessageOptions) => Promise<void>;
   onTraceStageEvent: (event: string, metadata?: Record<string, unknown>) => void;
@@ -9747,12 +9872,16 @@ const UnifiedAgentTaskCard = ({
     taskId: string,
     approve: boolean,
     reason?: string,
+    actionLabel?: string,
   ) => Promise<void>;
   displayMode?: "chat" | "voice_stage";
 }) => {
   const [activeTab, setActiveTab] = useState("output");
   const [isInfoOpen, setIsInfoOpen] = useState(false);
   const [isResolvingApproval, setIsResolvingApproval] = useState(false);
+  const [approvalProgressLabel, setApprovalProgressLabel] = useState<string | null>(
+    null,
+  );
   const [inlineIframeKey, setInlineIframeKey] = useState(0);
   const [hasRevealedIframe, setHasRevealedIframe] = useState(false);
   const [isCollapsed, setIsCollapsed] = useState(Boolean(card.autoCollapsed));
@@ -9868,15 +9997,22 @@ const UnifiedAgentTaskCard = ({
           : "var(--app-accent)";
 
   const handleApproval = async (approve: boolean) => {
+    const nextProgressLabel = getGoogleApprovalProgressLabel(
+      card.googleActionPreview ?? null,
+      approve,
+    );
     setIsResolvingApproval(true);
+    setApprovalProgressLabel(nextProgressLabel);
     try {
       await onResolveApproval(
         card.taskId,
         approve,
         approve ? undefined : "Denied from unified task card",
+        nextProgressLabel,
       );
     } finally {
       setIsResolvingApproval(false);
+      setApprovalProgressLabel(null);
     }
   };
 
@@ -9888,6 +10024,7 @@ const UnifiedAgentTaskCard = ({
         googleActionResult={googleActionResult}
         approvalPending={approvalPending}
         isResolvingApproval={isResolvingApproval}
+        approvalProgressLabel={approvalProgressLabel}
         onApprove={() => void handleApproval(true)}
         onDeny={() => void handleApproval(false)}
         failure={failure}
@@ -9908,6 +10045,7 @@ const UnifiedAgentTaskCard = ({
         googleActionResult={googleActionResult}
         approvalPending={approvalPending}
         isResolvingApproval={isResolvingApproval}
+        approvalProgressLabel={approvalProgressLabel}
         onApprove={() => void handleApproval(true)}
         onDeny={() => void handleApproval(false)}
         failure={failure}
@@ -10958,6 +11096,7 @@ const TextView = ({
     taskId: string,
     approve: boolean,
     reason?: string,
+    actionLabel?: string,
   ) => Promise<void>;
   onResolveOffer: (offerId: string, accept: boolean) => Promise<void>;
   onSendMessage: (text: string, options?: SendMessageOptions) => Promise<void>;
@@ -12301,6 +12440,9 @@ function App() {
   const [voiceWebLookupLabel, setVoiceWebLookupLabel] = useState<string | null>(
     null,
   );
+  const [activeConversationId, setActiveConversationId] = useState<string | null>(
+    null,
+  );
   const [liveDebugState, setLiveDebugState] =
     useState<LiveVoiceDebugState | null>(null);
   const [liveTokenConfigSummary, setLiveTokenConfigSummary] =
@@ -12335,6 +12477,11 @@ function App() {
   const cameraFacingModeRef = useRef<CameraFacingMode>("user");
   const activeVoiceGoogleActionContextRef =
     useRef<SendMessageOptions["googleActionContext"]>(null);
+  const activeTextGoogleActionContextRef =
+    useRef<SendMessageOptions["googleActionContext"]>(null);
+  const [activeGoogleActionBusyLabel, setActiveGoogleActionBusyLabel] =
+    useState<string | null>(null);
+  const activeGoogleActionBusyLabelRef = useRef<string | null>(null);
   const pendingAttachmentsRef = useRef<PendingImageAttachment[]>([]);
   const selectedVoiceRef = useRef<LiveVoiceName>(DEFAULT_LIVE_VOICE);
   const selectedThemeRef = useRef<AppThemeId>(DEFAULT_APP_THEME_ID);
@@ -12379,6 +12526,11 @@ function App() {
     }
     console.log("[LiveTrace]", event, metadata);
   }, [liveDebugEnabled]);
+
+  const setGoogleActionBusyLabel = useCallback((label: string | null) => {
+    activeGoogleActionBusyLabelRef.current = label;
+    setActiveGoogleActionBusyLabel(label);
+  }, []);
 
   const exportLiveDebugTrace = useCallback(() => {
     const payload = {
@@ -12802,6 +12954,30 @@ function App() {
     },
   });
 
+  const refetchActiveConversationState = useCallback(async () => {
+    if (activeConversationId) {
+      const conversationQueryKey = getConversationMessagesKey(activeConversationId);
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: conversationQueryKey,
+        }),
+        queryClient.refetchQueries({
+          queryKey: conversationQueryKey,
+          type: "active",
+        }),
+      ]);
+    }
+    await Promise.all([
+      queryClient.invalidateQueries({
+        queryKey: ["/api/agent/artifacts?includeArchived=1"],
+      }),
+      queryClient.refetchQueries({
+        queryKey: ["/api/agent/artifacts?includeArchived=1"],
+        type: "active",
+      }),
+    ]);
+  }, [activeConversationId, queryClient]);
+
   const resolveTaskApprovalMutation = useMutation({
     mutationFn: async (params: {
       taskId: string;
@@ -12818,15 +12994,8 @@ function App() {
       );
       return (await response.json()) as AgentTaskResponse;
     },
-    onSuccess: () => {
-      if (activeConversationId) {
-        queryClient.invalidateQueries({
-          queryKey: getConversationMessagesKey(activeConversationId),
-        });
-      }
-      queryClient.invalidateQueries({
-        queryKey: ["/api/agent/artifacts?includeArchived=1"],
-      });
+    onSuccess: async () => {
+      await refetchActiveConversationState();
     },
   });
 
@@ -12977,29 +13146,25 @@ function App() {
     taskId: string,
     approve: boolean,
     reason?: string,
+    actionLabel?: string,
   ) => {
+    const busyLabel = actionLabel ?? (approve ? "Working..." : "Cancelling...");
+    setGoogleActionBusyLabel(busyLabel);
     try {
       await resolveTaskApprovalMutation.mutateAsync({
         taskId,
         approve,
         reason,
       });
-      if (activeConversationId) {
-        queryClient.invalidateQueries({
-          queryKey: getConversationMessagesKey(activeConversationId),
-        });
-      }
     } catch (error) {
       const message = getErrorMessage(error);
       if (message.toLowerCase().includes("no pending approval")) {
-        if (activeConversationId) {
-          queryClient.invalidateQueries({
-            queryKey: getConversationMessagesKey(activeConversationId),
-          });
-        }
+        await refetchActiveConversationState();
         return;
       }
       setComposerError(message || "Failed to process approval decision.");
+    } finally {
+      setGoogleActionBusyLabel(null);
     }
   };
 
@@ -13060,10 +13225,6 @@ function App() {
       queryClient.invalidateQueries({ queryKey: ["/api/conversations"] });
     },
   });
-
-  const [activeConversationId, setActiveConversationId] = useState<string | null>(
-    null,
-  );
 
   const traceVoiceStageEvent = useCallback(
     (event: string, metadata: Record<string, unknown> = {}) => {
@@ -13147,6 +13308,17 @@ function App() {
     enabled: !!activeConversationId,
     refetchInterval: 5000,
   });
+
+  useEffect(() => {
+    const latestContext = resolveLatestAssistantGoogleActionContext(messagesData);
+    if (latestContext) {
+      activeTextGoogleActionContextRef.current = latestContext;
+    }
+  }, [messagesData]);
+
+  useEffect(() => {
+    activeTextGoogleActionContextRef.current = null;
+  }, [activeConversationId]);
 
   const saveVoiceSessionMutation = useMutation({
     mutationFn: async (data: {
@@ -14186,14 +14358,38 @@ function App() {
     options?: SendMessageOptions,
   ) => {
     const trimmed = text.trim();
-    const sanitizedGoogleActionContext = sanitizeGoogleActionContext(
+    const explicitGoogleActionContext = sanitizeGoogleActionContext(
       options?.googleActionContext,
     );
+    const inferredGoogleActionContext =
+      !explicitGoogleActionContext &&
+      looksLikeGoogleTargetedFollowUpText(
+        trimmed,
+        activeTextGoogleActionContextRef.current,
+      )
+        ? sanitizeGoogleActionContext(activeTextGoogleActionContextRef.current)
+        : undefined;
+    const sanitizedGoogleActionContext =
+      explicitGoogleActionContext ?? inferredGoogleActionContext;
     if (sanitizedGoogleActionContext) {
+      activeTextGoogleActionContextRef.current = sanitizedGoogleActionContext;
       logLiveTrace("chat.google_action_send.started", {
         textPreview: trimmed.slice(0, 160),
         googleActionContext: sanitizedGoogleActionContext,
       });
+      if (!explicitGoogleActionContext && inferredGoogleActionContext) {
+        logLiveTrace("chat.google_action_send.inferred_text_context", {
+          textPreview: trimmed.slice(0, 160),
+          googleActionContext: inferredGoogleActionContext,
+        });
+      }
+    }
+
+    if (activeGoogleActionBusyLabelRef.current) {
+      setComposerError(
+        `Hang on while I finish ${activeGoogleActionBusyLabelRef.current.toLowerCase()}`,
+      );
+      return;
     }
 
     if (quotaSummary && quotaSummary.remaining.text <= 0) {
@@ -14385,10 +14581,21 @@ function App() {
   };
 
   const handleSendMessage = async (text: string, options?: SendMessageOptions) => {
-    const sanitizedGoogleActionContext = sanitizeGoogleActionContext(
+    const explicitGoogleActionContext = sanitizeGoogleActionContext(
       options?.googleActionContext,
     );
+    const inferredGoogleActionContext =
+      !explicitGoogleActionContext &&
+      looksLikeGoogleTargetedFollowUpText(
+        text.trim(),
+        activeTextGoogleActionContextRef.current,
+      )
+        ? sanitizeGoogleActionContext(activeTextGoogleActionContextRef.current)
+        : undefined;
+    const sanitizedGoogleActionContext =
+      explicitGoogleActionContext ?? inferredGoogleActionContext;
     if (sanitizedGoogleActionContext) {
+      activeTextGoogleActionContextRef.current = sanitizedGoogleActionContext;
       logLiveTrace("chat.google_action_send.queued", {
         textPreview: text.trim().slice(0, 160),
         googleActionContext: sanitizedGoogleActionContext,
@@ -15267,7 +15474,7 @@ function App() {
             onSelectGalleryFiles={handleIncomingFiles}
             onRemoveAttachment={handleRemoveAttachment}
             pendingAttachments={pendingAttachments}
-            isSending={isSendingMessage}
+            isSending={isSendingMessage || Boolean(activeGoogleActionBusyLabel)}
             uploadError={composerError}
             quotaSummary={quotaSummary}
             quotaLoading={isQuotaLoading}

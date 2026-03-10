@@ -14,6 +14,7 @@ import type {
 import type { AgentTask, AgentApproval, AgentStep } from "@shared/schema";
 import type { IStorage } from "./storage";
 import { generateStructuredJson } from "./gemini";
+import { authStorage } from "./replit_integrations/auth/storage";
 import {
   GOOGLE_CALENDAR_EVENTS_READONLY_SCOPE,
   GOOGLE_CALENDAR_EVENTS_WRITE_SCOPE,
@@ -447,9 +448,103 @@ function stripJsonFence(input: string): string {
   return input.replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/\s*```$/i, "").trim();
 }
 
+type EmailAuthorContext = {
+  signatureName: string | null;
+  senderDisplayName: string | null;
+  profession: string | null;
+  bio: string | null;
+  location: string | null;
+  responseStylePreset: string | null;
+  responseStyleNote: string | null;
+};
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+async function resolveEmailAuthorContext(
+  storage: IStorage,
+  userId: string,
+): Promise<EmailAuthorContext> {
+  const [profile, user] = await Promise.all([
+    storage.getUserProfile(userId).catch(() => undefined),
+    authStorage.getUser(userId).catch(() => undefined),
+  ]);
+  const displayName = normalizeText(profile?.displayName);
+  const firstName = normalizeText(user?.firstName);
+  const lastName = normalizeText(user?.lastName);
+  const fallbackFullName = [firstName, lastName].filter(Boolean).join(" ").trim();
+  const senderDisplayName = displayName || fallbackFullName || firstName || null;
+  const signatureName = firstName || displayName || fallbackFullName || null;
+  return {
+    signatureName,
+    senderDisplayName,
+    profession: normalizeText(profile?.profession) || null,
+    bio: normalizeText(profile?.bio) || null,
+    location: normalizeText(profile?.location) || null,
+    responseStylePreset: normalizeText(profile?.responseStylePreset) || null,
+    responseStyleNote: normalizeText(profile?.responseStyleNote) || null,
+  };
+}
+
+function buildEmailAuthorPrompt(authorContext: EmailAuthorContext | null | undefined): string[] {
+  if (!authorContext) return [];
+  const lines: string[] = [];
+  if (authorContext.senderDisplayName) {
+    lines.push(`Write in first person as ${authorContext.senderDisplayName}.`);
+  }
+  if (authorContext.signatureName) {
+    lines.push(
+      `End with a natural sign-off that includes the sender name "${authorContext.signatureName}".`,
+    );
+  } else {
+    lines.push("End with a natural sign-off. Never use placeholders for the sender name.");
+  }
+  if (authorContext.responseStylePreset) {
+    lines.push(`Preferred writing style: ${authorContext.responseStylePreset}.`);
+  }
+  if (authorContext.responseStyleNote) {
+    lines.push(`Style note: ${authorContext.responseStyleNote}`);
+  }
+  if (authorContext.profession) {
+    lines.push(`Profession: ${authorContext.profession}`);
+  }
+  if (authorContext.location) {
+    lines.push(`Location: ${authorContext.location}`);
+  }
+  if (authorContext.bio) {
+    lines.push(`Profile context: ${authorContext.bio}`);
+  }
+  return lines;
+}
+
+function applyEmailBodySignature(bodyText: string, signatureName: string | null): string {
+  let next = bodyText
+    .replace(/\[(?:your|sender|user)\s+name\]/gi, signatureName ?? "")
+    .replace(/\{\{?\s*(?:your|sender|user)\s+name\s*\}?\}/gi, signatureName ?? "")
+    .replace(/\s+$/g, "")
+    .trim();
+
+  if (!signatureName) {
+    return next;
+  }
+
+  const signaturePattern = new RegExp(`${escapeRegExp(signatureName)}\\s*$`, "i");
+  if (signaturePattern.test(next)) {
+    return next;
+  }
+
+  if (/(?:^|\n)(?:best|thanks|thank you|cheers|warmly|sincerely|take care|talk soon)[,!]?\s*$/i.test(next)) {
+    return `${next}\n${signatureName}`.trim();
+  }
+
+  return `${next}\n\nBest,\n${signatureName}`.trim();
+}
+
 function buildFallbackEmailDraft(params: {
   instructionText: string;
   subjectHint: string | null;
+  authorContext?: EmailAuthorContext | null;
 }): { subject: string; bodyText: string } {
   const instruction = normalizeText(params.instructionText);
   const normalizedCore = instruction
@@ -464,13 +559,17 @@ function buildFallbackEmailDraft(params: {
   const punctuated = /[.!?]$/.test(sentence) ? sentence : `${sentence}.`;
   return {
     subject: params.subjectHint ?? "Quick question",
-    bodyText: `Hi,\n\n${punctuated}\n\nBest,`,
+    bodyText: applyEmailBodySignature(
+      `Hi,\n\n${punctuated}`,
+      params.authorContext?.signatureName ?? null,
+    ),
   };
 }
 
 async function buildEmailDraftContent(params: {
   instructionText: string;
   subjectHint: string | null;
+  authorContext?: EmailAuthorContext | null;
 }): Promise<{ subject: string; bodyText: string }> {
   const fallback = buildFallbackEmailDraft(params);
 
@@ -483,6 +582,8 @@ async function buildEmailDraftContent(params: {
         "bodyText must include a greeting and a short closing.",
         "Do not mention being an AI assistant.",
         "Keep the tone warm, natural, and brief.",
+        "Never use placeholder signatures like [your name] or [sender name].",
+        ...buildEmailAuthorPrompt(params.authorContext),
       ].join("\n"),
       userPrompt: [
         `Subject hint: ${params.subjectHint ?? "none"}`,
@@ -505,7 +606,10 @@ async function buildEmailDraftContent(params: {
         : fallback.bodyText;
     return {
       subject,
-      bodyText,
+      bodyText: applyEmailBodySignature(
+        bodyText,
+        params.authorContext?.signatureName ?? null,
+      ),
     };
   } catch {
     return fallback;
@@ -537,6 +641,7 @@ function buildFallbackRevisedEmailDraft(params: {
   instructionText: string;
   currentSubject: string;
   currentBodyText: string;
+  authorContext?: EmailAuthorContext | null;
 }): { subject: string; bodyText: string } {
   const normalizedInstruction = normalizeText(params.instructionText);
   const subjectOverride =
@@ -564,12 +669,16 @@ function buildFallbackRevisedEmailDraft(params: {
     return buildFallbackEmailDraft({
       instructionText: normalizedInstruction,
       subjectHint: subjectOverride,
+      authorContext: params.authorContext,
     });
   }
 
   return {
     subject: subjectOverride,
-    bodyText: params.currentBodyText,
+    bodyText: applyEmailBodySignature(
+      params.currentBodyText,
+      params.authorContext?.signatureName ?? null,
+    ),
   };
 }
 
@@ -578,6 +687,7 @@ async function buildRevisedEmailDraftContent(params: {
   currentSubject: string;
   currentBodyText: string;
   threadSubject?: string | null;
+  authorContext?: EmailAuthorContext | null;
 }): Promise<{ subject: string; bodyText: string }> {
   const fallback = buildFallbackRevisedEmailDraft(params);
 
@@ -591,6 +701,8 @@ async function buildRevisedEmailDraftContent(params: {
         "Do not mention being an AI assistant.",
         "If the user gives a fresh ask/say/tell instruction, rewrite the draft to match that request.",
         "If the user asks for a tone or length change, transform the existing draft rather than ignoring it.",
+        "Never use placeholder signatures like [your name] or [sender name].",
+        ...buildEmailAuthorPrompt(params.authorContext),
       ].join("\n"),
       userPrompt: [
         `Current subject: ${params.currentSubject}`,
@@ -619,7 +731,10 @@ async function buildRevisedEmailDraftContent(params: {
         : fallback.bodyText;
     return {
       subject,
-      bodyText,
+      bodyText: applyEmailBodySignature(
+        bodyText,
+        params.authorContext?.signatureName ?? null,
+      ),
     };
   } catch {
     return fallback;
@@ -1286,11 +1401,18 @@ export async function prepareGoogleActionTask(params: {
   }
 
   const timeZone = resolveGoogleContextTimeZone(params.clientTimeZone ?? null);
+  const emailAuthorContext = await resolveEmailAuthorContext(
+    params.storage,
+    params.userId,
+  );
 
   if (/\b(reply|respond)\b/i.test(rawText)) {
     const replyTarget = matchReplyTarget(rawText);
     const literalBodyText = buildEmailReplyBody(rawText);
-    const bodyText = literalBodyText;
+    const bodyText = applyEmailBodySignature(
+      literalBodyText,
+      emailAuthorContext.signatureName,
+    );
     if (!replyTarget || !bodyText) {
       return {
         kind: "clarify",
@@ -1483,11 +1605,15 @@ export async function prepareGoogleActionTask(params: {
     const draftContent = literalBodyText
       ? {
           subject: subjectHint ?? "Quick note",
-          bodyText: literalBodyText,
+          bodyText: applyEmailBodySignature(
+            literalBodyText,
+            emailAuthorContext.signatureName,
+          ),
         }
       : await buildEmailDraftContent({
           instructionText: draftInstructionText,
           subjectHint,
+          authorContext: emailAuthorContext,
         });
     const subject = draftContent.subject;
     const bodyText = draftContent.bodyText;
@@ -1981,6 +2107,7 @@ function buildSendVariantFromPlan(
 async function buildRevisedEmailVariantFromPlan(params: {
   plan: StoredGoogleActionPlan;
   instructionText: string;
+  authorContext?: EmailAuthorContext | null;
 }): Promise<{ preview: GoogleActionPreview; plan: StoredGoogleActionPlan }> {
   if (
     params.plan.execution.kind !== "email_compose" &&
@@ -1994,6 +2121,7 @@ async function buildRevisedEmailVariantFromPlan(params: {
     currentSubject: params.plan.execution.subject,
     currentBodyText: params.plan.execution.bodyText,
     threadSubject: params.plan.preview.emailThread?.subject ?? null,
+    authorContext: params.authorContext,
   });
 
   const preview = buildGoogleEmailPreview({
@@ -2065,6 +2193,27 @@ function buildStructuredEmailVariantFromPlan(params: {
         bodyText,
       },
     },
+  };
+}
+
+function buildGoogleTaskContextForPlan(params: {
+  taskId: string;
+  plan: StoredGoogleActionPlan;
+  selectionReason?: GoogleActionTargetContextMetadata["selectionReason"];
+}): GoogleActionTargetContextMetadata {
+  return {
+    connector: params.plan.preview.connector,
+    action:
+      params.plan.preview.connector === "gmail"
+        ? params.plan.preview.proposedEmail?.sendAfterApproval
+          ? "send"
+          : "revise"
+        : params.plan.preview.kind === "calendar_update"
+          ? "update"
+          : "create",
+    actionableTargetId: params.taskId,
+    candidateTargetIds: [params.taskId],
+    selectionReason: params.selectionReason ?? "latest_actionable",
   };
 }
 
@@ -2311,10 +2460,15 @@ export async function startFollowUpGoogleEmailRevisionTask(params: {
   if (!isEmailDraftRevisionCandidatePreview(plan.preview)) {
     throw new Error("Task is not a revisable email draft");
   }
+  const authorContext = await resolveEmailAuthorContext(
+    params.storage,
+    params.userId,
+  );
 
   const next = await buildRevisedEmailVariantFromPlan({
     plan,
     instructionText: params.instructionText,
+    authorContext,
   });
   const run = await startGoogleActionTaskRun({
     storage: params.storage,
@@ -2368,10 +2522,15 @@ export async function revisePendingGoogleEmailTask(params: {
   if (!isEmailDraftRevisionCandidatePreview(plan.preview)) {
     throw new Error("Task is not a revisable email draft");
   }
+  const authorContext = await resolveEmailAuthorContext(
+    params.storage,
+    params.userId,
+  );
 
   const next = await buildRevisedEmailVariantFromPlan({
     plan,
     instructionText: params.instructionText,
+    authorContext,
   });
   const updated =
     (await params.storage.updateAgentTaskStatus({
@@ -2430,8 +2589,18 @@ export async function applyStructuredGoogleEmailDraftEdit(params: {
     plan,
     to: params.to,
     subject: params.subject,
-    bodyText: params.bodyText,
+    bodyText: applyEmailBodySignature(
+      params.bodyText,
+      (await resolveEmailAuthorContext(params.storage, params.userId)).signatureName,
+    ),
   });
+  const nextContext: GoogleActionTargetContextMetadata = {
+    connector: "gmail",
+    action: next.plan.execution.sendAfterApproval ? "send" : "revise",
+    actionableTargetId: task.status === "approval_required" ? task.id : null,
+    candidateTargetIds: task.status === "approval_required" ? [task.id] : [],
+    selectionReason: "manual_selection",
+  };
 
   if (task.status === "approval_required") {
     const pendingApproval = await params.storage.getPendingAgentApproval(task.id);
@@ -2456,6 +2625,7 @@ export async function applyStructuredGoogleEmailDraftEdit(params: {
         task: taskSummary,
         text: "Saved draft edits",
         googleActionPreview: next.preview,
+        googleContext: nextContext,
       },
     });
 
@@ -2475,19 +2645,29 @@ export async function applyStructuredGoogleEmailDraftEdit(params: {
     preview: next.preview,
     plan: next.plan,
     onEvent: params.onEvent,
+    googleContext: {
+      ...nextContext,
+      actionableTargetId: null,
+      candidateTargetIds: [],
+    },
   });
 
   await createAssistantUiMessage({
     storage: params.storage,
     conversationId: task.conversationId,
     text: "I saved your edits into a fresh draft preview. Review it and approve when you're ready.",
-    uiPayload: {
-      kind: "agent_task_status",
-      task: run.task,
-      text: "Saved edited draft preview",
-      googleActionPreview: next.preview,
-    },
-  });
+      uiPayload: {
+        kind: "agent_task_status",
+        task: run.task,
+        text: "Saved edited draft preview",
+        googleActionPreview: next.preview,
+        googleContext: {
+          ...nextContext,
+          actionableTargetId: run.task.id,
+          candidateTargetIds: [run.task.id],
+        },
+      },
+    });
 
   return {
     task: run.task,
@@ -2830,6 +3010,10 @@ export async function approveAndExecuteGoogleActionTask(params: {
         text: "Completed",
         googleActionPreview: plan.preview,
         googleActionResult: actionResult,
+        googleContext: buildGoogleTaskContextForPlan({
+          taskId: task.id,
+          plan,
+        }),
       },
     });
     return taskSummary;
@@ -2879,6 +3063,10 @@ export async function approveAndExecuteGoogleActionTask(params: {
         task: taskSummary,
         text: "Failed",
         googleActionPreview: plan.preview,
+        googleContext: buildGoogleTaskContextForPlan({
+          taskId: task.id,
+          plan,
+        }),
       },
     });
     throw error;

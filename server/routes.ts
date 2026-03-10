@@ -8166,6 +8166,24 @@ async function maybeHandleGoogleActionTask(params: {
     text: params.text,
     candidates: rankedCalendarCandidates,
   });
+  const contextSelectedEmailTarget = resolveTargetFromClientActionContext({
+    candidates: actionableEmailCandidates,
+    clientActionContext: params.clientGoogleActionContext,
+    connector: "gmail",
+  });
+  const contextSelectedCalendarTarget = resolveTargetFromClientActionContext({
+    candidates: rankedCalendarCandidates,
+    clientActionContext: params.clientGoogleActionContext,
+    connector: "calendar",
+  });
+  const hasExplicitTargetSelection =
+    params.clientGoogleActionContext?.selectionReason === "manual_selection";
+  const explicitContextSelectedEmailTarget = hasExplicitTargetSelection
+    ? contextSelectedEmailTarget
+    : null;
+  const explicitContextSelectedCalendarTarget = hasExplicitTargetSelection
+    ? contextSelectedCalendarTarget
+    : null;
   const looksLikeEmailAmbiguityReply =
     looksLikeGoogleEmailAmbiguitySelectionText(params.text) ||
     isGoogleActionSendMessage(params.text) ||
@@ -8192,20 +8210,28 @@ async function maybeHandleGoogleActionTask(params: {
       clientActionContext: params.clientGoogleActionContext,
       ambiguity: googleConversationState.actionAmbiguity.prompt,
     });
-    const contextSelectedEmailTarget = resolveTargetFromClientActionContext({
+    const ambiguitySelectedEmailTarget = resolveTargetFromClientActionContext({
       candidates: actionableEmailCandidates,
       clientActionContext: hasExplicitAmbiguitySelection
         ? params.clientGoogleActionContext
         : null,
       connector: "gmail",
     });
-    const contextSelectedCalendarTarget = resolveTargetFromClientActionContext({
+    const ambiguitySelectedCalendarTarget = resolveTargetFromClientActionContext({
       candidates: rankedCalendarCandidates,
       clientActionContext: hasExplicitAmbiguitySelection
         ? params.clientGoogleActionContext
         : null,
       connector: "calendar",
     });
+    const shouldBypassStaleAmbiguity =
+      hasExplicitTargetSelection &&
+      Boolean(params.clientGoogleActionContext?.actionableTargetId) &&
+      !hasExplicitAmbiguitySelection &&
+      ((params.clientGoogleActionContext?.connector === "gmail" &&
+        Boolean(explicitContextSelectedEmailTarget)) ||
+        (params.clientGoogleActionContext?.connector === "calendar" &&
+          Boolean(explicitContextSelectedCalendarTarget)));
 
     if (
       params.clientGoogleActionContext?.actionableTargetId &&
@@ -8223,13 +8249,27 @@ async function maybeHandleGoogleActionTask(params: {
       });
     }
 
+    if (shouldBypassStaleAmbiguity) {
+      params.onTrace?.("google.target_ambiguity_bypassed_for_active_target", {
+        connector: params.clientGoogleActionContext?.connector ?? null,
+        activeTargetId: params.clientGoogleActionContext?.actionableTargetId ?? null,
+        selectionReason: params.clientGoogleActionContext?.selectionReason ?? null,
+        ambiguityConnector: googleConversationState.actionAmbiguity.prompt.connector,
+        ambiguityAction: googleConversationState.actionAmbiguity.prompt.action,
+        ambiguityCandidateIds:
+          googleConversationState.actionAmbiguity.prompt.candidates.map(
+            (candidate) => candidate.taskId,
+          ),
+      });
+    } else
+
     if (
       googleConversationState.actionAmbiguity.prompt.connector === "gmail" &&
       looksLikeEmailAmbiguityReply &&
-      (contextSelectedEmailTarget || emailCandidateResolution.kind === "resolved")
+      (ambiguitySelectedEmailTarget || emailCandidateResolution.kind === "resolved")
     ) {
       const selectedEmailTarget =
-        contextSelectedEmailTarget ??
+        ambiguitySelectedEmailTarget ??
         (emailCandidateResolution.kind === "resolved"
           ? emailCandidateResolution.candidate
           : null);
@@ -8240,7 +8280,7 @@ async function maybeHandleGoogleActionTask(params: {
         connector: "gmail",
         action: googleConversationState.actionAmbiguity.prompt.action,
         selectedTaskId: selectedEmailTarget.taskId,
-        resolutionKind: contextSelectedEmailTarget
+        resolutionKind: ambiguitySelectedEmailTarget
           ? "client_action_context"
           : emailCandidateResolution.kind,
       });
@@ -8282,11 +8322,11 @@ async function maybeHandleGoogleActionTask(params: {
     if (
       googleConversationState.actionAmbiguity.prompt.connector === "calendar" &&
       looksLikeCalendarAmbiguityReply &&
-      (contextSelectedCalendarTarget ||
+      (ambiguitySelectedCalendarTarget ||
         calendarCandidateResolution.kind === "resolved")
     ) {
       const selectedTarget =
-        contextSelectedCalendarTarget ??
+        ambiguitySelectedCalendarTarget ??
         (calendarCandidateResolution.kind === "resolved"
           ? calendarCandidateResolution.candidate
           : null);
@@ -8297,7 +8337,7 @@ async function maybeHandleGoogleActionTask(params: {
         connector: "calendar",
         action: googleConversationState.actionAmbiguity.prompt.action,
         selectedTaskId: selectedTarget.taskId,
-        resolutionKind: contextSelectedCalendarTarget
+        resolutionKind: ambiguitySelectedCalendarTarget
           ? "client_action_context"
           : calendarCandidateResolution.kind,
       });
@@ -8379,7 +8419,8 @@ async function maybeHandleGoogleActionTask(params: {
   if (latestEmailTaskTarget && (wantsEmailSendFollowUp || wantsEmailRevisionFollowUp)) {
     if (
       actionableEmailCandidates.length > 1 &&
-      emailCandidateResolution.kind !== "resolved"
+      emailCandidateResolution.kind !== "resolved" &&
+      !explicitContextSelectedEmailTarget
     ) {
       const ambiguity: GoogleActionAmbiguityPrompt = {
         connector: "gmail",
@@ -8427,9 +8468,10 @@ async function maybeHandleGoogleActionTask(params: {
     }
 
     const resolvedTarget =
-      emailCandidateResolution.kind === "resolved"
+      explicitContextSelectedEmailTarget ??
+      (emailCandidateResolution.kind === "resolved"
         ? emailCandidateResolution.candidate
-        : latestEmailTaskTarget;
+        : latestEmailTaskTarget);
     if (
       params.clientGoogleActionContext?.actionableTargetId &&
       params.clientGoogleActionContext.actionableTargetId !== resolvedTarget.taskId
@@ -8447,11 +8489,13 @@ async function maybeHandleGoogleActionTask(params: {
       action: wantsEmailSendFollowUp ? "send" : "revise",
       selectedTaskId: resolvedTarget.taskId,
       selectionReason:
-        emailCandidateResolution.kind === "resolved"
+        explicitContextSelectedEmailTarget
           ? "manual_selection"
-          : params.clientGoogleActionContext?.actionableTargetId === resolvedTarget.taskId
-            ? "active_surface"
-            : "single_candidate",
+          : emailCandidateResolution.kind === "resolved"
+            ? "manual_selection"
+            : params.clientGoogleActionContext?.actionableTargetId === resolvedTarget.taskId
+              ? "active_surface"
+              : "single_candidate",
     });
     const googleContext = buildGoogleTargetContextMetadata({
       connector: "gmail",
@@ -8460,7 +8504,9 @@ async function maybeHandleGoogleActionTask(params: {
       candidateTargetIds: actionableEmailCandidates.map((candidate) => candidate.taskId),
       sourceTurnId: params.userMessage.id,
       selectionReason:
-        emailCandidateResolution.kind === "resolved"
+        explicitContextSelectedEmailTarget
+          ? "manual_selection"
+          : emailCandidateResolution.kind === "resolved"
           ? "manual_selection"
           : params.clientGoogleActionContext?.actionableTargetId === resolvedTarget.taskId
             ? "active_surface"
@@ -8486,7 +8532,8 @@ async function maybeHandleGoogleActionTask(params: {
   if (latestEmailTaskTarget && wantsEmailSelectionFollowUp) {
     if (
       actionableEmailCandidates.length > 1 &&
-      emailCandidateResolution.kind !== "resolved"
+      emailCandidateResolution.kind !== "resolved" &&
+      !explicitContextSelectedEmailTarget
     ) {
       const ambiguity: GoogleActionAmbiguityPrompt = {
         connector: "gmail",
@@ -8532,15 +8579,18 @@ async function maybeHandleGoogleActionTask(params: {
     }
 
     const resolvedTarget =
-      emailCandidateResolution.kind === "resolved"
+      explicitContextSelectedEmailTarget ??
+      (emailCandidateResolution.kind === "resolved"
         ? emailCandidateResolution.candidate
-        : latestEmailTaskTarget;
+        : latestEmailTaskTarget);
     params.onTrace?.("google.target_resolved", {
       connector: "gmail",
       action: "select",
       selectedTaskId: resolvedTarget.taskId,
       selectionReason:
-        emailCandidateResolution.kind === "resolved"
+        explicitContextSelectedEmailTarget
+          ? "manual_selection"
+          : emailCandidateResolution.kind === "resolved"
           ? "manual_selection"
           : params.clientGoogleActionContext?.actionableTargetId === resolvedTarget.taskId
             ? "active_surface"
@@ -8553,7 +8603,9 @@ async function maybeHandleGoogleActionTask(params: {
       candidateTargetIds: actionableEmailCandidates.map((candidate) => candidate.taskId),
       sourceTurnId: params.userMessage.id,
       selectionReason:
-        emailCandidateResolution.kind === "resolved"
+        explicitContextSelectedEmailTarget
+          ? "manual_selection"
+          : emailCandidateResolution.kind === "resolved"
           ? "manual_selection"
           : params.clientGoogleActionContext?.actionableTargetId === resolvedTarget.taskId
             ? "active_surface"
@@ -8573,7 +8625,8 @@ async function maybeHandleGoogleActionTask(params: {
   if (wantsCalendarFollowUp) {
     if (
       rankedCalendarCandidates.length > 1 &&
-      calendarCandidateResolution.kind !== "resolved"
+      calendarCandidateResolution.kind !== "resolved" &&
+      !explicitContextSelectedCalendarTarget
     ) {
       const ambiguity: GoogleActionAmbiguityPrompt = {
         connector: "calendar",
@@ -8619,9 +8672,10 @@ async function maybeHandleGoogleActionTask(params: {
     }
 
     const resolvedCalendarTarget =
-      calendarCandidateResolution.kind === "resolved"
+      explicitContextSelectedCalendarTarget ??
+      (calendarCandidateResolution.kind === "resolved"
         ? calendarCandidateResolution.candidate
-        : rankedCalendarCandidates[0] ?? null;
+        : rankedCalendarCandidates[0] ?? null);
     if (resolvedCalendarTarget) {
       if (
         params.clientGoogleActionContext?.actionableTargetId &&
@@ -8643,7 +8697,9 @@ async function maybeHandleGoogleActionTask(params: {
         candidateTargetIds: rankedCalendarCandidates.map((candidate) => candidate.taskId),
         sourceTurnId: params.userMessage.id,
         selectionReason:
-          calendarCandidateResolution.kind === "resolved"
+          explicitContextSelectedCalendarTarget
+            ? "manual_selection"
+            : calendarCandidateResolution.kind === "resolved"
             ? "manual_selection"
             : params.clientGoogleActionContext?.actionableTargetId ===
                 resolvedCalendarTarget.taskId

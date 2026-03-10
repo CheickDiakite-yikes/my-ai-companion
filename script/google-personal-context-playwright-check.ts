@@ -1400,6 +1400,7 @@ async function verifyManualDraftEditorFlow(
   outputDir: string,
 ): Promise<void> {
   const conversationId = await resolveActiveConversationId(page, baseUrl);
+  await seedPendingDraftApprovalFixture(email, conversationId);
   await seedSavedDraftTaskFixture(email, conversationId);
   await page.reload({ waitUntil: "networkidle" });
 
@@ -1485,6 +1486,32 @@ async function verifyManualDraftEditorFlow(
     revisedCardText,
     /would love to catch up|march 12th/i,
     "Expected the manually edited body to appear in the updated Gmail card",
+  );
+
+  const beforeSendMessages = await fetchConversationMessages(page, baseUrl, conversationId);
+  const beforeSendAssistantCount = beforeSendMessages.filter(
+    (message) => message.sender === "assistant",
+  ).length;
+
+  await page.getByTestId("input-message").fill("okay lets send");
+  await page.getByTestId("input-message").press("Enter");
+
+  const sendReply = await waitForLatestAssistantReply({
+    page,
+    baseUrl,
+    conversationId,
+    previousAssistantCount: beforeSendAssistantCount,
+    timeoutMs: 45_000,
+  });
+  assert.doesNotMatch(
+    sendReply,
+    /which email did you mean/i,
+    "Sending immediately after manual draft save should stay bound to the edited draft",
+  );
+  assert.match(
+    sendReply,
+    /send email|review it and approve|approve if you want me to apply it/i,
+    "Manual draft save should keep the edited draft active for the next send follow-up",
   );
 
   await page.screenshot({
@@ -1688,6 +1715,16 @@ async function seedCustomSavedDraftTaskFixture(params: {
         messageId: `fixture-message-${task.id}`,
         threadId: null,
       },
+      googleContext: {
+        connector: "gmail",
+        action: "revise",
+        actionableTargetId: task.id,
+        candidateTargetIds: [task.id],
+        sourceTurnId: null,
+        selectionReason: "latest_actionable",
+        surfaceKey: null,
+        selectionMode: null,
+      },
     },
   });
 }
@@ -1769,6 +1806,16 @@ async function seedPendingDraftApprovalFixture(
       },
       text: "Preview ready",
       googleActionPreview: preview,
+      googleContext: {
+        connector: "gmail",
+        action: "revise",
+        actionableTargetId: task.id,
+        candidateTargetIds: [task.id],
+        sourceTurnId: null,
+        selectionReason: "latest_actionable",
+        surfaceKey: null,
+        selectionMode: null,
+      },
     },
   });
 
@@ -1791,6 +1838,16 @@ async function seedPendingDraftApprovalFixture(
       },
       text: "Approval needed",
       googleActionPreview: preview,
+      googleContext: {
+        connector: "gmail",
+        action: "revise",
+        actionableTargetId: task.id,
+        candidateTargetIds: [task.id],
+        sourceTurnId: null,
+        selectionReason: "latest_actionable",
+        surfaceKey: null,
+        selectionMode: null,
+      },
     },
   });
 }
