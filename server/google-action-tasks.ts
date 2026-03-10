@@ -223,7 +223,9 @@ function inferLiteralEmailBodyText(input: string): string | null {
   const match =
     normalized.match(/\b(?:saying|that|says)\s+(.+)$/i) ??
     normalized.match(/:\s*(.+)$/);
-  return match?.[1]?.trim() ?? null;
+  const bodyText = match?.[1]?.trim() ?? null;
+  if (!bodyText) return null;
+  return /^(?:please|pls|plz)[.!?]*$/i.test(bodyText) ? null : bodyText;
 }
 
 function normalizeGoogleEmailComposeRequestText(input: string): string {
@@ -232,6 +234,7 @@ function normalizeGoogleEmailComposeRequestText(input: string): string {
       /^\s*(?:okay|ok|alright|all right|sure|yeah|yep|yup)\s+(?:(?:lets|let's)\s+)?/i,
       "",
     )
+    .replace(/^\s*(?:(?:lets|let's)\s+)/i, "")
     .replace(/^\s*(?:can|could|would|will)\s+you\s+/i, "")
     .replace(/^\s*please\s+/i, "")
     .trim();
@@ -289,7 +292,8 @@ function inferDraftInstructionText(input: string): string | null {
   }
 
   const plainTail = composeTail.replace(/^(?:to|for)\s+\S+@\S+/i, "").trim();
-  return plainTail.length > 0 ? plainTail : null;
+  if (plainTail.length === 0) return null;
+  return /^(?:please|pls|plz)[.!?]*$/i.test(plainTail) ? null : plainTail;
 }
 
 function inferSubjectRevision(input: string): string | null {

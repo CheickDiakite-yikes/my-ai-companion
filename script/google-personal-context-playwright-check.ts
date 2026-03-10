@@ -1089,6 +1089,7 @@ async function verifyFreshComposeOverridesHistoryFlow(
   outputDir: string,
 ): Promise<void> {
   const conversationId = await resolveActiveConversationId(page, baseUrl);
+  await seedPendingDraftApprovalFixture(email, conversationId);
   await seedCustomSavedDraftTaskFixture({
     email,
     conversationId,
@@ -1102,6 +1103,67 @@ async function verifyFreshComposeOverridesHistoryFlow(
   let previousAssistantCount = messages.filter(
     (message) => message.sender === "assistant",
   ).length;
+
+  await page.getByTestId("input-message").fill("send it");
+  await page.getByTestId("input-message").press("Enter");
+
+  const staleAmbiguityReply = await waitForLatestAssistantReply({
+    page,
+    baseUrl,
+    conversationId,
+    previousAssistantCount,
+    timeoutMs: 45_000,
+  });
+  assert.match(
+    staleAmbiguityReply,
+    /which email did you mean|which email could i send/i,
+    "Multiple older draft candidates should trigger ambiguity before we start a fresh compose flow",
+  );
+
+  const staleAmbiguityCard = page.locator('[data-testid="google-email-ambiguity-card"]').last();
+  await staleAmbiguityCard.waitFor({ state: "visible", timeout: 20_000 });
+
+  messages = await fetchConversationMessages(page, baseUrl, conversationId);
+  previousAssistantCount = messages.filter((message) => message.sender === "assistant").length;
+
+  await page
+    .getByTestId("input-message")
+    .fill("lets draft an email to cheick@soulnests.com");
+  await page.getByTestId("input-message").press("Enter");
+
+  const bareLetsComposeReply = await waitForLatestAssistantReply({
+    page,
+    baseUrl,
+    conversationId,
+    previousAssistantCount,
+    timeoutMs: 45_000,
+  });
+  assert.match(
+    bareLetsComposeReply,
+    /what should the email say|i can draft that to cheick@soulnests\.com/i,
+    "Bare `lets draft an email to ...` should enter the structured compose flow",
+  );
+  assert.doesNotMatch(
+    bareLetsComposeReply,
+    /keep that same wording|which email did you mean|catch up on the 15th/i,
+    "A new compose request should not get hijacked by older drafts or stale ambiguity",
+  );
+
+  let composeSessionCard = page.locator('[data-testid="google-compose-session-card"]').last();
+  await composeSessionCard.waitFor({ state: "visible", timeout: 20_000 });
+  assert.equal(
+    await composeSessionCard.getAttribute("data-compose-status"),
+    "awaiting_body",
+    "Expected bare `lets draft...` phrasing to preserve the recipient and ask for the body",
+  );
+  assert.match(
+    await composeSessionCard.innerText(),
+    /cheick@soulnests\.com/i,
+    "Expected the compose session to preserve the provided recipient",
+  );
+
+  messages = await fetchConversationMessages(page, baseUrl, conversationId);
+  previousAssistantCount = messages.filter((message) => message.sender === "assistant").length;
 
   await page.getByTestId("input-message").fill("create a new email");
   await page.getByTestId("input-message").press("Enter");
@@ -1124,7 +1186,7 @@ async function verifyFreshComposeOverridesHistoryFlow(
     "Fresh compose should not free-chat about an older draft",
   );
 
-  let composeSessionCard = page.locator('[data-testid="google-compose-session-card"]').last();
+  composeSessionCard = page.locator('[data-testid="google-compose-session-card"]').last();
   await composeSessionCard.waitFor({ state: "visible", timeout: 20_000 });
   assert.equal(
     await composeSessionCard.getAttribute("data-compose-status"),
@@ -1174,6 +1236,40 @@ async function verifyFreshComposeOverridesHistoryFlow(
   messages = await fetchConversationMessages(page, baseUrl, conversationId);
   previousAssistantCount = messages.filter((message) => message.sender === "assistant").length;
 
+  await page
+    .getByTestId("input-message")
+    .fill("ask if he is free any time in april");
+  await page.getByTestId("input-message").press("Enter");
+
+  const bodyFollowUpReply = await waitForLatestAssistantReply({
+    page,
+    baseUrl,
+    conversationId,
+    previousAssistantCount,
+    timeoutMs: 45_000,
+  });
+  assert.doesNotMatch(
+    bodyFollowUpReply,
+    /which email did you mean|which email should i update/i,
+    "An active compose session should consume the body follow-up instead of reopening older draft ambiguity",
+  );
+  assert.match(
+    bodyFollowUpReply,
+    /create an email draft to zorovt18@gmail\.com|approve if you want me to apply it|preview ready/i,
+    "Body follow-up during an active compose session should produce a real Gmail preview",
+  );
+
+  const followUpDraftCard = page.locator('[data-testid="agent-unified-task-card"]').last();
+  await followUpDraftCard.waitFor({ state: "visible", timeout: 20_000 });
+  assert.match(
+    await followUpDraftCard.innerText(),
+    /zorovt18@gmail\.com/i,
+    "Expected the body follow-up preview to stay bound to the active compose recipient",
+  );
+
+  messages = await fetchConversationMessages(page, baseUrl, conversationId);
+  previousAssistantCount = messages.filter((message) => message.sender === "assistant").length;
+
   await page.getByTestId("input-message").fill("never mind");
   await page.getByTestId("input-message").press("Enter");
 
@@ -1186,8 +1282,8 @@ async function verifyFreshComposeOverridesHistoryFlow(
   });
   assert.match(
     cancelReply,
-    /dropped that draft idea|okay, i dropped that draft idea/i,
-    "Expected the fresh compose session cleanup to cancel cleanly",
+    /dropped that draft idea|okay, i dropped that draft idea|canceled that google action|understood\. i canceled/i,
+    "Expected the fresh compose cleanup to cancel cleanly",
   );
 
   await page.screenshot({
