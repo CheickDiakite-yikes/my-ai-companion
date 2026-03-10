@@ -6,6 +6,7 @@ import { eq } from "drizzle-orm";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { db } from "../server/db";
 import { encryptGoogleToken } from "../server/google-integration-crypto";
+import { storage } from "../server/storage";
 import { users } from "../shared/models/auth";
 import { googleIntegrations } from "../shared/schema";
 import {
@@ -28,6 +29,24 @@ type LiveTraceEntry = {
   at: number;
   event: string;
   metadata: Record<string, unknown>;
+};
+
+type GoogleActionContextPayload = {
+  connector?: "gmail" | "calendar";
+  action?: string;
+  actionableTargetId?: string | null;
+  candidateTargetIds?: string[];
+  sourceTurnId?: string | null;
+  selectionReason?:
+    | "single_candidate"
+    | "ambiguity_required"
+    | "active_surface"
+    | "recent_context"
+    | "manual_selection"
+    | "latest_actionable"
+    | "clarification_session";
+  surfaceKey?: string;
+  selectionMode?: "auto" | "manual" | "dismissed";
 };
 
 type GoogleFixtureScopeMode = "read" | "write";
@@ -144,6 +163,7 @@ async function main(): Promise<void> {
     await clearTraceBuffer();
     const conversationId = await resolveActiveConversationId(page, args.baseUrl);
     await upsertGoogleIntegrationFixture(args.email, "write");
+
     await prepareLiveGoogleAction(page, args.baseUrl, {
       conversationId,
       functionName: "prepare_google_calendar_action",
@@ -152,19 +172,80 @@ async function main(): Promise<void> {
       expectedStatus: "clarification_needed",
     });
     await assertVoiceCalendarSessionSurface(page, readTraceBuffer);
-    await prepareLiveGoogleAction(page, args.baseUrl, {
+
+    const emailDraft = await prepareLiveGoogleAction(page, args.baseUrl, {
       conversationId,
       functionName: "prepare_google_email_action",
       request: "draft an email to voice-stage@example.com saying hello from voice mode",
     });
+    assert.ok(emailDraft.taskId, "Expected voice email draft preparation to create a task");
+    await assertVoiceEmailDraftSurface(page, readTraceBuffer);
+
+    await finalizePreparedGoogleEmailDraftFixture(page, emailDraft.taskId, conversationId);
+    await assertVoiceSavedDraftSurface(page, readTraceBuffer);
+
+    await clearTraceBuffer();
+    await prepareLiveGoogleAction(page, args.baseUrl, {
+      conversationId,
+      functionName: "prepare_google_email_action",
+      request: "send it",
+      googleActionContext: {
+        connector: "gmail",
+        action: "send",
+        actionableTargetId: emailDraft.taskId,
+        candidateTargetIds: [emailDraft.taskId],
+        selectionReason: "active_surface",
+        surfaceKey: "voice-test-email-send",
+        selectionMode: "auto",
+      },
+    });
+    await assertVoiceEmailSendSurface(page, readTraceBuffer);
+
+    await clearTraceBuffer();
     await prepareLiveGoogleAction(page, args.baseUrl, {
       conversationId,
       functionName: "prepare_google_calendar_action",
-      request:
-        "create a calendar event called lunch with Alex tomorrow at 2pm at Blue Bottle",
+      request: "book that on my calendar for March 14th at 2pm",
       timezone: "America/New_York",
+      expectedStatus: ["approval_required", "clarification_needed"],
+      googleActionContext: {
+        connector: "gmail",
+        action: "send",
+        actionableTargetId: emailDraft.taskId,
+        candidateTargetIds: [emailDraft.taskId],
+        selectionReason: "active_surface",
+        surfaceKey: "voice-test-calendar-handoff",
+        selectionMode: "auto",
+      },
     });
-    const voiceStageTrace = await assertVoiceStageSurface(page, readTraceBuffer);
+    const handoffStatus = await assertVoiceCalendarHandoffSurface(page, readTraceBuffer);
+
+    let voiceStageTrace: LiveTraceEntry[];
+    if (handoffStatus === "clarification_needed") {
+      await clearTraceBuffer();
+      await prepareLiveGoogleAction(page, args.baseUrl, {
+        conversationId,
+        functionName: "prepare_google_calendar_action",
+        request: "call it March 14 hangout",
+        timezone: "America/New_York",
+        googleActionContext: {
+          connector: "calendar",
+          action: "create",
+          selectionReason: "clarification_session",
+          surfaceKey: "voice-test-calendar-title-followup",
+          selectionMode: "auto",
+        },
+      });
+      voiceStageTrace = await assertVoiceCalendarApprovalSurface(
+        page,
+        readTraceBuffer,
+      );
+    } else {
+      voiceStageTrace = await assertVoiceCalendarApprovalSurface(
+        page,
+        readTraceBuffer,
+      );
+    }
 
     const combinedTrace = {
       noiseTrace,
@@ -208,6 +289,19 @@ async function assertVoiceStageClosedByDefault(page: Page): Promise<void> {
     0,
     "Voice canvas reopen affordance should not show before a task surface exists",
   );
+}
+
+async function ensureVoiceStageVisible(page: Page): Promise<void> {
+  if (await page.getByTestId("voice-task-stage").count()) {
+    return;
+  }
+
+  const reopenButton = page.getByTestId("button-voice-stage-open-canvas");
+  await reopenButton.waitFor({ state: "visible", timeout: 12_000 });
+  await reopenButton.click();
+  await page.waitForSelector('[data-testid="voice-task-stage"]', {
+    timeout: 12_000,
+  });
 }
 
 async function resolveActiveConversationId(
@@ -291,14 +385,20 @@ async function prepareLiveGoogleAction(
     functionName: "prepare_google_email_action" | "prepare_google_calendar_action";
     request: string;
     timezone?: string;
-    expectedStatus?: "approval_required" | "clarification_needed" | "upgrade_required";
+    expectedStatus?:
+      | "approval_required"
+      | "clarification_needed"
+      | "upgrade_required"
+      | Array<"approval_required" | "clarification_needed" | "upgrade_required">;
+    googleActionContext?: GoogleActionContextPayload | null;
   },
-): Promise<void> {
+): Promise<{ status: string | null; message: string | null; taskId: string | null }> {
   const functionId = randomUUID();
   const response = await page.request.post(`${baseUrl}/api/live/tool-response`, {
     data: {
       conversationId: params.conversationId,
       clientTimeZone: params.timezone ?? "America/New_York",
+      googleActionContext: params.googleActionContext ?? undefined,
       functionCalls: [
         {
           id: functionId,
@@ -337,18 +437,124 @@ async function prepareLiveGoogleAction(
     (entry) => entry.id === functionId,
   );
   const resultStatus = functionResponse?.response?.result?.status ?? null;
-  const expectedStatus = params.expectedStatus ?? "approval_required";
+  const expectedStatuses = Array.isArray(params.expectedStatus)
+    ? params.expectedStatus
+    : [params.expectedStatus ?? "approval_required"];
   assert.equal(
-    resultStatus,
-    expectedStatus,
-    `Expected ${params.functionName} to return ${expectedStatus}, got ${resultStatus}`,
+    expectedStatuses.includes(
+      resultStatus as "approval_required" | "clarification_needed" | "upgrade_required",
+    ),
+    true,
+    `Expected ${params.functionName} to return one of ${expectedStatuses.join(", ")}, got ${resultStatus}`,
   );
-  if (expectedStatus === "approval_required") {
+  if (resultStatus === "approval_required") {
     assert.ok(
       functionResponse?.response?.result?.taskId,
       `Expected ${params.functionName} to return a task id`,
     );
   }
+  await page.evaluate((conversationId) => {
+    window.dispatchEvent(
+      new CustomEvent("zee:conversation-mutated", {
+        detail: {
+          conversationId,
+          source: "playwright",
+        },
+      }),
+    );
+  }, params.conversationId);
+  await page.waitForTimeout(250);
+  return {
+    status: resultStatus,
+    message: functionResponse?.response?.result?.message ?? null,
+    taskId: functionResponse?.response?.result?.taskId ?? null,
+  };
+}
+
+async function finalizePreparedGoogleEmailDraftFixture(
+  page: Page,
+  taskId: string,
+  conversationId: string,
+): Promise<void> {
+  const task = await storage.getAgentTaskById(taskId);
+  assert.ok(task, `Expected prepared Google task ${taskId} to exist`);
+  const plan =
+    task?.plan &&
+    typeof task.plan === "object" &&
+    !Array.isArray(task.plan) &&
+    (task.plan as { version?: unknown }).version === "google_action_v1"
+      ? (task.plan as {
+          preview?: {
+            kind?: "email_compose" | "email_reply";
+            connector?: "gmail";
+            proposedEmail?: {
+              to?: string[];
+            };
+          };
+        })
+      : null;
+  const preview = plan?.preview;
+  const recipientList = preview?.proposedEmail?.to ?? [];
+  assert.equal(
+    preview?.connector,
+    "gmail",
+    `Expected task ${taskId} to use a Gmail preview`,
+  );
+  assert.ok(
+    recipientList.length > 0,
+    `Expected task ${taskId} to include a Gmail recipient`,
+  );
+  const completedAt = new Date();
+  const updated =
+    (await storage.updateAgentTaskStatus({
+      taskId,
+      status: "completed",
+      completedAt,
+      errorMessage: null,
+    })) ?? task;
+  await storage.createMessage({
+    conversationId,
+    sender: "assistant",
+    text: `Created a Gmail draft to ${recipientList.join(", ")}.`,
+    partIndex: 0,
+    uiPayload: {
+      kind: "agent_task_status",
+      task: {
+        id: updated.id,
+        conversationId: updated.conversationId,
+        status: updated.status,
+        riskLevel: updated.riskLevel,
+        taskKind: updated.taskKind,
+        prompt: updated.prompt,
+        errorMessage: updated.errorMessage ?? null,
+        createdAt: updated.createdAt,
+        updatedAt: updated.updatedAt,
+        completedAt: updated.completedAt,
+      },
+      text: "Completed",
+      googleActionPreview: preview as any,
+      googleActionResult: {
+        kind: preview?.kind ?? "email_compose",
+        connector: "gmail",
+        status: "draft_created",
+        summary: `Created a Gmail draft to ${recipientList.join(", ")}.`,
+        draftId: `voice-stage-fixture-draft-${updated.id}`,
+        messageId: `voice-stage-fixture-message-${updated.id}`,
+        threadId: null,
+      },
+    },
+  });
+  await page.evaluate((nextConversationId) => {
+    window.dispatchEvent(
+      new CustomEvent("zee:conversation-mutated", {
+        detail: {
+          conversationId: nextConversationId,
+          source: "playwright",
+        },
+      }),
+    );
+  }, conversationId);
+  await page.waitForTimeout(250);
 }
 
 async function assertVoiceCalendarSessionSurface(
@@ -356,9 +562,7 @@ async function assertVoiceCalendarSessionSurface(
   readTraceBuffer: () => Promise<LiveTraceEntry[]>,
 ): Promise<void> {
   try {
-    await page.waitForSelector('[data-testid="voice-task-stage"]', {
-      timeout: 12_000,
-    });
+    await ensureVoiceStageVisible(page);
   } catch (error) {
     const trace = await readTraceBuffer();
     throw new Error(
@@ -381,14 +585,162 @@ async function assertVoiceCalendarSessionSurface(
   );
 }
 
-async function assertVoiceStageSurface(
+async function assertVoiceEmailDraftSurface(
+  page: Page,
+  readTraceBuffer: () => Promise<LiveTraceEntry[]>,
+): Promise<void> {
+  try {
+    await ensureVoiceStageVisible(page);
+  } catch (error) {
+    const trace = await readTraceBuffer();
+    throw new Error(
+      `Voice email draft surface did not appear: ${error instanceof Error ? error.message : String(error)}\nRecent traces: ${JSON.stringify(trace.slice(-20), null, 2)}`,
+    );
+  }
+
+  const stage = page.getByTestId("voice-task-stage");
+  await page.waitForFunction(() => {
+    const element = document.querySelector('[data-testid="voice-task-stage"]');
+    return /zee mail|create email draft|voice-stage@example\.com|needs draft approval/i.test(
+      element?.textContent ?? "",
+    );
+  });
+  const stageText = (await stage.textContent()) ?? "";
+  assert.match(
+    stageText,
+    /(zee mail|create email draft|voice-stage@example\.com|needs draft approval)/i,
+    "Expected the voice stage to render the draft approval surface",
+  );
+}
+
+async function assertVoiceSavedDraftSurface(
+  page: Page,
+  readTraceBuffer: () => Promise<LiveTraceEntry[]>,
+): Promise<void> {
+  try {
+    await ensureVoiceStageVisible(page);
+  } catch (error) {
+    const trace = await readTraceBuffer();
+    throw new Error(
+      `Voice saved draft surface did not appear: ${error instanceof Error ? error.message : String(error)}\nRecent traces: ${JSON.stringify(trace.slice(-20), null, 2)}`,
+    );
+  }
+
+  const stage = page.getByTestId("voice-task-stage");
+  await page.waitForFunction(() => {
+    const element = document.querySelector('[data-testid="voice-task-stage"]');
+    return /draft saved|saved to gmail|voice-stage@example\.com/i.test(
+      element?.textContent ?? "",
+    );
+  });
+  const stageText = (await stage.textContent()) ?? "";
+  assert.match(
+    stageText,
+    /(draft saved|saved to gmail|voice-stage@example\.com)/i,
+    "Expected the voice stage to update to the saved draft surface after approval",
+  );
+}
+
+async function assertVoiceEmailSendSurface(
+  page: Page,
+  readTraceBuffer: () => Promise<LiveTraceEntry[]>,
+): Promise<void> {
+  try {
+    await ensureVoiceStageVisible(page);
+  } catch (error) {
+    const trace = await readTraceBuffer();
+    throw new Error(
+      `Voice send follow-up surface did not appear: ${error instanceof Error ? error.message : String(error)}\nRecent traces: ${JSON.stringify(trace.slice(-20), null, 2)}`,
+    );
+  }
+
+  const stage = page.getByTestId("voice-task-stage");
+  await page.waitForFunction(() => {
+    const element = document.querySelector('[data-testid="voice-task-stage"]');
+    const text = element?.textContent ?? "";
+    return (
+      !/waiting for recipient|what do you want to say/i.test(text) &&
+      /send email|ready to send|review it and approve|approve if you want me to apply it/i.test(
+        text,
+      )
+    );
+  });
+  const stageText = (await stage.textContent()) ?? "";
+  assert.doesNotMatch(
+    stageText,
+    /waiting for recipient|what do you want to say/i,
+    "Voice send follow-up should not reopen a fresh compose session",
+  );
+  assert.match(
+    stageText,
+    /(send email|ready to send|review it and approve|approve if you want me to apply it)/i,
+    "Expected the voice stage to surface a send approval card for the saved draft",
+  );
+  await stage
+    .getByTestId("button-google-email-primary-action")
+    .last()
+    .waitFor({ state: "visible", timeout: 5_000 });
+}
+
+async function assertVoiceCalendarHandoffSurface(
+  page: Page,
+  readTraceBuffer: () => Promise<LiveTraceEntry[]>,
+): Promise<"approval_required" | "clarification_needed"> {
+  try {
+    await ensureVoiceStageVisible(page);
+  } catch (error) {
+    const trace = await readTraceBuffer();
+    throw new Error(
+      `Voice calendar handoff surface did not appear: ${error instanceof Error ? error.message : String(error)}\nRecent traces: ${JSON.stringify(trace.slice(-20), null, 2)}`,
+    );
+  }
+
+  const stage = page.getByTestId("voice-task-stage");
+  await page.waitForFunction(() => {
+    const element = document.querySelector('[data-testid="voice-task-stage"]');
+    return /zee calendar|event in progress|create calendar event|create event|what should i call the event|march 14|needs approval|ready for approval/i.test(element?.textContent ?? "");
+  });
+  const stageText = (await stage.textContent()) ?? "";
+  const handoffStatus =
+    /needs approval|create calendar event|create event|ready for approval/i.test(stageText)
+      ? "approval_required"
+      : "clarification_needed";
+  assert.match(
+    stageText,
+    /(zee calendar|event in progress|create calendar event|create event|what should i call the event|march 14|needs approval|ready for approval)/i,
+    "Expected the voice stage to switch from the email draft into a calendar surface",
+  );
+
+  const recentButtons = stage.locator('[data-testid^="button-voice-stage-surface-"]');
+  assert.ok(
+    (await recentButtons.count()) >= 2,
+    "Expected recent surfaces to keep both the email and calendar surfaces accessible",
+  );
+  assert.ok(
+    (await recentButtons.filter({ hasText: /zee mail/i }).count()) >= 1,
+    "Expected the recent surface switcher to retain the prior email draft surface",
+  );
+
+  const trace = await readTraceBuffer();
+  assert.equal(
+    trace.some(
+      (entry) =>
+        entry.event === "voice.stage.surface_auto_switched" &&
+        (/calendar/i.test(String(entry.metadata?.nextSurfaceKey ?? "")) ||
+          /calendar/i.test(String(entry.metadata?.raw ?? ""))),
+    ),
+    true,
+    "Expected a voice.stage.surface_auto_switched trace for the calendar handoff",
+  );
+  return handoffStatus;
+}
+
+async function assertVoiceCalendarApprovalSurface(
   page: Page,
   readTraceBuffer: () => Promise<LiveTraceEntry[]>,
 ): Promise<LiveTraceEntry[]> {
   try {
-    await page.waitForSelector('[data-testid="voice-task-stage"]', {
-      timeout: 12_000,
-    });
+    await ensureVoiceStageVisible(page);
   } catch (error) {
     const trace = await readTraceBuffer();
     throw new Error(
@@ -397,21 +749,27 @@ async function assertVoiceStageSurface(
   }
 
   const stage = page.getByTestId("voice-task-stage");
+  await page.waitForFunction(() => {
+    const element = document.querySelector('[data-testid="voice-task-stage"]');
+    return /zee calendar|create calendar event|march 14 hangout|lunch with alex|needs approval|event created|create event/i.test(element?.textContent ?? "");
+  });
   const stageText = (await stage.textContent()) ?? "";
   assert.match(
     stageText,
-    /(zee calendar|create calendar event|lunch with alex|blue bottle)/i,
-    "Expected the voice task stage to prefer the newest calendar surface",
+    /(zee calendar|create calendar event|march 14 hangout|lunch with alex|needs approval|event created|create event)/i,
+    "Expected the voice task stage to prefer the newest calendar approval surface",
   );
-  await page.waitForSelector('[data-testid="button-voice-stage-surface-1"]', {
-    timeout: 5_000,
-  });
   await stage.getByTestId("button-google-calendar-quick-open-event").click();
   await page.waitForSelector('[data-testid="google-calendar-event-dialog"]', {
     timeout: 5_000,
   });
   await page.keyboard.press("Escape");
-  await page.getByTestId("button-voice-stage-surface-1").click();
+  const emailSurfaceButton = stage
+    .locator('[data-testid^="button-voice-stage-surface-"]')
+    .filter({ hasText: /zee mail/i })
+    .first();
+  await emailSurfaceButton.waitFor({ state: "visible", timeout: 5_000 });
+  await emailSurfaceButton.click();
   await page.waitForSelector(
     '[data-testid="voice-task-stage"] [data-testid="button-google-email-quick-open-draft"]',
     {

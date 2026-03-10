@@ -78,8 +78,11 @@ import {
 import type {
   AgentArtifactSummary,
   AgentApprovalSummary,
+  GoogleActionAmbiguityCandidate,
+  GoogleActionAmbiguityPrompt,
   GoogleActionPreview,
   GoogleActionResult,
+  GoogleActionTargetContextMetadata,
   GoogleCalendarSession,
   GoogleComposeSession,
   ArtifactQualitySummary,
@@ -313,6 +316,10 @@ interface MessageData {
 
 interface SendMessageOptions {
   ignoreAttachments?: boolean;
+  googleActionContext?: (GoogleActionTargetContextMetadata & {
+    surfaceKey?: string | null;
+    selectionMode?: "auto" | "manual" | "dismissed";
+  }) | null;
 }
 
 interface TraceAwareResponse {
@@ -741,6 +748,9 @@ type GoogleConnectScopeMode = "read" | "write";
 type UnifiedAgentTaskCardModel = SharedUnifiedAgentTaskCardModel & {
   googleActionPreview?: GoogleActionPreview | null;
   googleActionResult?: GoogleActionResult | null;
+  googleContext?: GoogleActionTargetContextMetadata | null;
+  sourceMessageIndex?: number;
+  sourceTurnId?: string | null;
 };
 
 type TextRenderItem =
@@ -779,10 +789,7 @@ type VoiceStageSurface =
       kind: "email_ambiguity";
       surfaceKey: string;
       message: MessageData;
-      ambiguity: Extract<
-        AgentMessageUiPayload,
-        { kind: "agent_google_email_ambiguity" }
-      >["ambiguity"];
+      ambiguity: GoogleActionAmbiguityPrompt;
       text: string;
     };
 
@@ -791,6 +798,10 @@ type VoiceStageCandidate = VoiceStageSurface & {
   recencyRank: number;
   source: "task" | "calendar_session" | "compose_session" | "email_ambiguity";
   isTerminal: boolean;
+  isActionable: boolean;
+  connector: "gmail" | "calendar";
+  turnId: string | null;
+  selectionReason: string;
 };
 
 const ZEE_AVATAR_PRESET_OPTIONS: Array<{
@@ -1026,10 +1037,14 @@ function isGoogleCalendarSessionPayload(
   return Boolean(payload && payload.kind === "agent_google_calendar_session");
 }
 
-function isGoogleEmailAmbiguityPayload(
+function isGoogleActionAmbiguityPayload(
   payload: MessageData["uiPayload"],
-): payload is Extract<AgentMessageUiPayload, { kind: "agent_google_email_ambiguity" }> {
-  return Boolean(payload && payload.kind === "agent_google_email_ambiguity");
+): payload is Extract<AgentMessageUiPayload, { kind: "agent_google_action_ambiguity" }> | Extract<AgentMessageUiPayload, { kind: "agent_google_email_ambiguity" }> {
+  return Boolean(
+    payload &&
+      (payload.kind === "agent_google_action_ambiguity" ||
+        payload.kind === "agent_google_email_ambiguity"),
+  );
 }
 
 function isAgentUiPayload(payload: MessageData["uiPayload"]): boolean {
@@ -1040,7 +1055,7 @@ function isAgentUiPayload(payload: MessageData["uiPayload"]): boolean {
     isAgentOfferPayload(payload) ||
     isGoogleCalendarSessionPayload(payload) ||
     isGoogleComposeSessionPayload(payload) ||
-    isGoogleEmailAmbiguityPayload(payload)
+    isGoogleActionAmbiguityPayload(payload)
   );
 }
 
@@ -1062,10 +1077,30 @@ function isGoogleAssistantUiPayload(payload: MessageData["uiPayload"]): boolean 
   if (payload.kind === "agent_google_calendar_session") {
     return payload.session.mode === "calendar_create";
   }
-  if (payload.kind === "agent_google_email_ambiguity") {
+  if (
+    payload.kind === "agent_google_email_ambiguity" ||
+    payload.kind === "agent_google_action_ambiguity"
+  ) {
     return payload.ambiguity.candidates.length > 0;
   }
   return false;
+}
+
+function getGoogleActionContextFromPayload(
+  payload: MessageData["uiPayload"],
+): GoogleActionTargetContextMetadata | null {
+  if (!payload) return null;
+  if (
+    payload.kind === "agent_task_status" ||
+    payload.kind === "agent_approval" ||
+    payload.kind === "agent_google_compose_session" ||
+    payload.kind === "agent_google_calendar_session" ||
+    payload.kind === "agent_google_email_ambiguity" ||
+    payload.kind === "agent_google_action_ambiguity"
+  ) {
+    return payload.googleContext ?? null;
+  }
+  return null;
 }
 
 function toTaskStatusLabel(status: AgentTaskSummary["status"]): string {
@@ -1664,21 +1699,18 @@ function buildGoogleCalendarCollapsedSummary(params: {
   const proposedCalendar = params.preview.proposedCalendar;
   const currentEvent = params.preview.calendarEvent;
   const title =
-    proposedCalendar?.title?.trim() ||
-    currentEvent?.title?.trim() ||
+    sanitizeGoogleCalendarDisplayTitle(
+      proposedCalendar?.title ?? currentEvent?.title ?? null,
+    ) ||
     "Calendar event";
   const timeLabel = formatGoogleCalendarDateRange(
     proposedCalendar?.startTime ?? currentEvent?.startTime,
     proposedCalendar?.endTime ?? currentEvent?.endTime,
   );
-  const prefix =
-    params.preview.kind === "calendar_update"
-      ? "Update"
-      : params.preview.kind === "calendar_detail"
-        ? "Event"
-        : "Create";
+  const leadingLabel =
+    params.preview.kind === "calendar_update" ? `Update ${title}` : title;
 
-  return [`${prefix}: ${title}`, timeLabel, params.statusLabel].join(" • ");
+  return [leadingLabel, timeLabel, params.statusLabel].join(" • ");
 }
 
 function getGoogleCalendarPreviewHelper(preview: GoogleActionPreview): string {
@@ -1689,6 +1721,21 @@ function getGoogleCalendarPreviewHelper(preview: GoogleActionPreview): string {
     return "Approve to apply this update to Google Calendar.";
   }
   return "Approve to create this on Google Calendar.";
+}
+
+function sanitizeGoogleCalendarDisplayTitle(
+  title: string | null | undefined,
+): string {
+  return (title ?? "")
+    .replace(/\bon\s+my\s+calendar\b/gi, " ")
+    .replace(/\bon\s+your\s+calendar\b/gi, " ")
+    .replace(/\b(?:for|in)\s+my\s+calendar\b/gi, " ")
+    .replace(/\b(?:for|in)\s+your\s+calendar\b/gi, " ")
+    .replace(/^[`"'“”‘’]+/, "")
+    .replace(/[`"'“”‘’]+$/g, "")
+    .replace(/\s+/g, " ")
+    .replace(/[?]+$/g, "")
+    .trim();
 }
 
 function getVoiceStageCandidateSummary(candidate: VoiceStageCandidate): {
@@ -1728,12 +1775,19 @@ function getVoiceStageCandidateSummary(candidate: VoiceStageCandidate): {
   }
 
   if (candidate.kind === "email_ambiguity") {
+    const isCalendar = candidate.ambiguity.connector === "calendar";
     return {
-      title: "Which email?",
-      detail: `${candidate.ambiguity.candidates.length} drafts • ${
-        candidate.ambiguity.action === "send" ? "Choose one to send" : "Choose one to update"
+      title: isCalendar ? "Which event?" : "Which email?",
+      detail: `${candidate.ambiguity.candidates.length} ${
+        isCalendar ? "events" : "drafts"
+      } • ${
+        isCalendar
+          ? "Choose one to update"
+          : candidate.ambiguity.action === "send"
+            ? "Choose one to send"
+            : "Choose one to update"
       }`,
-      connector: "gmail",
+      connector: isCalendar ? "calendar" : "gmail",
     };
   }
 
@@ -1790,6 +1844,68 @@ function getVoiceStageCandidateSummary(candidate: VoiceStageCandidate): {
     connector:
       preview?.connector ?? result?.connector ?? null,
   };
+}
+
+function buildGoogleAmbiguitySelectionContext(params: {
+  ambiguity: GoogleActionAmbiguityPrompt;
+  candidate: GoogleActionAmbiguityCandidate;
+  sourceTurnId?: string | null;
+  surfaceKey?: string | null;
+  selectionMode?: "auto" | "manual" | "dismissed";
+}): NonNullable<SendMessageOptions["googleActionContext"]> {
+  return {
+    connector: params.ambiguity.connector,
+    action: params.ambiguity.action,
+    actionableTargetId: params.candidate.taskId,
+    candidateTargetIds: params.ambiguity.candidates.map((entry) => entry.taskId),
+    sourceTurnId: params.sourceTurnId ?? undefined,
+    selectionReason: "manual_selection",
+    surfaceKey: params.surfaceKey ?? undefined,
+    selectionMode: params.selectionMode ?? "manual",
+  };
+}
+
+function sanitizeGoogleActionContext(
+  context: SendMessageOptions["googleActionContext"],
+): SendMessageOptions["googleActionContext"] | undefined {
+  if (!context) {
+    return undefined;
+  }
+
+  const candidateTargetIds = Array.isArray(context.candidateTargetIds)
+    ? context.candidateTargetIds.filter(
+        (candidateId): candidateId is string =>
+          typeof candidateId === "string" && candidateId.trim().length > 0,
+      )
+    : undefined;
+
+  const sanitized: NonNullable<SendMessageOptions["googleActionContext"]> = {
+    ...(typeof context.connector === "string" && context.connector
+      ? { connector: context.connector }
+      : {}),
+    ...(typeof context.action === "string" && context.action.trim().length > 0
+      ? { action: context.action.trim() }
+      : {}),
+    ...(typeof context.actionableTargetId === "string" &&
+    context.actionableTargetId.trim().length > 0
+      ? { actionableTargetId: context.actionableTargetId.trim() }
+      : {}),
+    ...(candidateTargetIds && candidateTargetIds.length > 0
+      ? { candidateTargetIds }
+      : {}),
+    ...(typeof context.sourceTurnId === "string" && context.sourceTurnId.trim().length > 0
+      ? { sourceTurnId: context.sourceTurnId.trim() }
+      : {}),
+    ...(typeof context.selectionReason === "string" && context.selectionReason
+      ? { selectionReason: context.selectionReason }
+      : {}),
+    ...(typeof context.surfaceKey === "string" && context.surfaceKey.trim().length > 0
+      ? { surfaceKey: context.surfaceKey.trim() }
+      : {}),
+    ...(context.selectionMode ? { selectionMode: context.selectionMode } : {}),
+  };
+
+  return Object.keys(sanitized).length > 0 ? sanitized : undefined;
 }
 
 function GoogleEmailComposerPreview(props: {
@@ -2373,7 +2489,7 @@ function GoogleComposeSessionCard(props: {
 
       <div
         className={cn(
-          "w-full min-w-0 max-w-full rounded-[1.35rem] border",
+          "relative z-[1] w-full min-w-0 max-w-full rounded-[1.35rem] border pointer-events-auto",
           isVoiceStage ? "p-2.5" : "p-3",
         )}
         style={{
@@ -2523,18 +2639,36 @@ function GoogleCalendarSessionCard(props: {
 }
 
 function GoogleEmailAmbiguityCard(props: {
-  ambiguity: Extract<AgentMessageUiPayload, { kind: "agent_google_email_ambiguity" }>["ambiguity"];
+  ambiguity: GoogleActionAmbiguityPrompt;
   text: string;
-  onChoose: (selectionPrompt: string) => void;
+  onChoose: (candidate: GoogleActionAmbiguityCandidate) => void;
   displayMode?: "chat" | "voice_stage";
 }) {
   const isVoiceStage = props.displayMode === "voice_stage";
-  const actionLabel =
-    props.ambiguity.action === "send" ? "Choose a draft to send" : "Choose a draft to update";
-  const helperText =
-    props.ambiguity.action === "send"
+  const isCalendar = props.ambiguity.connector === "calendar";
+  const chooseLockRef = useRef<string | null>(null);
+  const actionLabel = isCalendar
+    ? "Choose an event to update"
+    : props.ambiguity.action === "send"
+      ? "Choose a draft to send"
+      : "Choose a draft to update";
+  const helperText = isCalendar
+    ? "Tap the calendar item you want Zee to update."
+    : props.ambiguity.action === "send"
       ? "Tap the email you want Zee to send next."
       : "Tap the email you want Zee to revise.";
+  const handleChoose = useCallback((candidate: GoogleActionAmbiguityCandidate) => {
+    if (chooseLockRef.current === candidate.taskId) {
+      return;
+    }
+    chooseLockRef.current = candidate.taskId;
+    props.onChoose(candidate);
+    window.setTimeout(() => {
+      if (chooseLockRef.current === candidate.taskId) {
+        chooseLockRef.current = null;
+      }
+    }, 300);
+  }, [props]);
 
   return (
     <div
@@ -2549,8 +2683,10 @@ function GoogleEmailAmbiguityCard(props: {
         <div className="flex items-start gap-2">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <Mail className="h-4 w-4" />
-              <p className="text-sm font-semibold">Which email did you mean?</p>
+              {isCalendar ? <CalendarDays className="h-4 w-4" /> : <Mail className="h-4 w-4" />}
+              <p className="text-sm font-semibold">
+                {isCalendar ? "Which event did you mean?" : "Which email did you mean?"}
+              </p>
             </div>
             <p className="mt-2 text-xs leading-5 opacity-80">{props.text}</p>
           </div>
@@ -2580,8 +2716,8 @@ function GoogleEmailAmbiguityCard(props: {
               color: "#173b40",
             }}
           >
-            <Mail className="h-3 w-3" />
-            Zee Mail
+            {isCalendar ? <CalendarDays className="h-3 w-3" /> : <Mail className="h-3 w-3" />}
+            {isCalendar ? "Zee Calendar" : "Zee Mail"}
           </div>
           <div
             className={cn(
@@ -2604,8 +2740,16 @@ function GoogleEmailAmbiguityCard(props: {
             <button
               key={candidate.taskId}
               type="button"
-              onClick={() => props.onChoose(candidate.selectionPrompt)}
-              className="w-full rounded-[1rem] border px-3 py-3 text-left transition-colors hover:opacity-90"
+              onClick={() => handleChoose(candidate)}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter" && event.key !== " ") {
+                  return;
+                }
+                event.preventDefault();
+                event.stopPropagation();
+                handleChoose(candidate);
+              }}
+              className="relative z-[2] w-full rounded-[1rem] border px-3 py-3 text-left transition-colors hover:opacity-90 pointer-events-auto"
               style={{
                 borderColor: "rgba(255,255,255,0.22)",
                 backgroundColor: "rgba(255,255,255,0.76)",
@@ -2615,13 +2759,13 @@ function GoogleEmailAmbiguityCard(props: {
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <p className="truncate text-sm font-semibold">{candidate.recipientLabel}</p>
+                  <p className="truncate text-sm font-semibold">{candidate.title}</p>
                   <p className="mt-1 truncate text-xs opacity-70">
-                    {candidate.subject?.trim() || "No subject"}
+                    {candidate.subtitle?.trim() || (isCalendar ? "No schedule yet" : "No subject")}
                   </p>
-                  {candidate.bodySnippet ? (
+                  {candidate.detail ? (
                     <p className="mt-2 line-clamp-2 text-xs leading-5 opacity-75">
-                      {candidate.bodySnippet}
+                      {candidate.detail}
                     </p>
                   ) : null}
                 </div>
@@ -2651,7 +2795,7 @@ function GoogleEmailAmbiguityCard(props: {
             color: "#5f7274",
           }}
         >
-          {helperText} You can also reply with the recipient or subject.
+          {helperText} You can also reply with the title, recipient, or subject.
         </div>
       </div>
     </div>
@@ -2787,6 +2931,22 @@ function GoogleEmailAssistantTaskCard(props: {
     statusLabel,
   });
   const isVoiceStage = props.displayMode === "voice_stage";
+  const emailHeaderTitle =
+    props.googleActionPreview.kind === "email_reply"
+      ? `Reply to ${resolveGoogleEmailReplyTargetLabel(props.googleActionPreview)}`
+      : currentTo.trim()
+        ? `To ${formatGoogleEmailRecipientSummary(proposedEmail.to)}`
+        : "Draft email";
+  const emailHeaderSummary =
+    [
+      currentSubject.trim() || props.googleActionPreview.emailThread?.subject?.trim() || "No subject",
+      currentBody.trim()
+        ? currentBody.trim().replace(/\s+/g, " ").slice(0, 72)
+        : null,
+    ]
+      .filter(Boolean)
+      .join(" • ") || summaryText;
+  const showHeaderQuickOpen = isVoiceStage && canOpenDraftDialog;
 
   const handleOpenDraftDialog = (editMode = false) => {
     resetDraftDialog(editMode);
@@ -2830,95 +2990,144 @@ function GoogleEmailAssistantTaskCard(props: {
         data-agent-task-status={props.card.status}
         data-google-email-card="true"
       >
-        <div className="flex items-start justify-between gap-3 px-1">
+        <div className="space-y-2 px-1">
           {!isVoiceStage ? (
-            <div className="min-w-0">
-              <div className="flex items-center gap-1.5">
-                <Mail className="h-3.5 w-3.5" style={{ color: "var(--app-on-dark-muted)" }} />
-                <p
-                  className="text-[11px] font-semibold uppercase tracking-[0.16em]"
-                  style={{ color: "var(--app-on-dark-muted)" }}
+            <div className="flex flex-wrap items-start justify-between gap-2.5">
+              <div className="flex min-w-0 flex-1 items-start gap-2.5">
+                <div
+                  className="inline-flex h-fit shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em]"
+                  style={{
+                    borderColor: "rgba(255,255,255,0.18)",
+                    backgroundColor: "rgba(255,255,255,0.08)",
+                    color: "var(--app-on-dark-muted)",
+                  }}
                 >
+                  <Mail className="h-3.5 w-3.5" />
                   Zee Mail
-                </p>
+                </div>
+                <div className="min-w-0 flex-1 space-y-0.5 pt-0.5">
+                  <p
+                    className="truncate text-[15px] font-semibold leading-tight"
+                    style={{ color: "var(--app-on-dark)" }}
+                  >
+                    {emailHeaderTitle}
+                  </p>
+                  {emailHeaderSummary ? (
+                    <p
+                      className="truncate text-[11px] leading-4"
+                      style={{ color: "var(--app-on-dark-muted)" }}
+                    >
+                      {emailHeaderSummary}
+                    </p>
+                  ) : null}
+                </div>
               </div>
-              <p className="mt-1.5 text-sm font-semibold" style={{ color: "var(--app-on-dark)" }}>
-                {props.googleActionPreview.title}
-              </p>
-              {summaryText ? (
-                <p
-                  className="mt-1 text-xs leading-5"
-                  style={{ color: "var(--app-on-dark-muted)" }}
+              <div className="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-2">
+                {canOpenDraftDialog ? (
+                  <button
+                    type="button"
+                    onClick={() => handleOpenDraftDialog(canEditDraft)}
+                    className="rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide transition-colors hover:opacity-90"
+                    style={{
+                      borderColor: "rgba(255,255,255,0.18)",
+                      backgroundColor: "rgba(255,255,255,0.08)",
+                      color: "var(--app-on-dark-muted)",
+                    }}
+                    data-testid="button-google-email-header-open-draft"
+                  >
+                    {canEditDraft ? "Edit" : "Open"}
+                  </button>
+                ) : null}
+                <span
+                  className="rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide"
+                  style={{
+                    borderColor: statusToneStyles.borderColor,
+                    backgroundColor: statusToneStyles.backgroundColor,
+                    color: statusToneStyles.textColor,
+                  }}
                 >
-                  {summaryText}
-                </p>
-              ) : null}
-              {props.googleActionPreview.emailThread ? (
-                <p
-                  className="mt-1 text-[11px] leading-5"
-                  style={{ color: "var(--app-on-dark-muted)" }}
+                  {statusLabel}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setIsCollapsed((value) => !value)}
+                  className="rounded-full border p-2 transition-colors hover:opacity-90"
+                  style={{
+                    borderColor: "rgba(255,255,255,0.18)",
+                    backgroundColor: "rgba(255,255,255,0.08)",
+                    color: "var(--app-on-dark-muted)",
+                  }}
+                  data-testid="button-google-email-collapse"
+                  aria-label={isCollapsed ? "Expand email card" : "Collapse email card"}
                 >
-                  Replying in: {props.googleActionPreview.emailThread.subject}
-                </p>
-              ) : null}
+                  <motion.div
+                    animate={{ rotate: isCollapsed ? 0 : 180 }}
+                    transition={{ duration: 0.2 }}
+                  >
+                    <ChevronDown className="h-3.5 w-3.5" />
+                  </motion.div>
+                </button>
+              </div>
             </div>
           ) : (
-            <div
-              className="text-[10px] font-semibold uppercase tracking-[0.16em]"
-              style={{ color: "var(--app-on-dark-muted)" }}
-            >
-              Email task
+            <div className="flex items-start justify-between gap-3">
+              <div
+                className="text-[10px] font-semibold uppercase tracking-[0.16em]"
+                style={{ color: "var(--app-on-dark-muted)" }}
+              >
+                Email task
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                {showHeaderQuickOpen ? (
+                  <button
+                    type="button"
+                    onClick={() => handleOpenDraftDialog(canEditDraft)}
+                    className="rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide transition-colors hover:opacity-90"
+                    style={{
+                      borderColor: "rgba(255,255,255,0.2)",
+                      backgroundColor: "rgba(255,255,255,0.1)",
+                      color: "var(--app-on-dark-muted)",
+                    }}
+                    data-testid="button-google-email-quick-open-draft"
+                  >
+                    <span className="inline-flex items-center gap-1">
+                      <Pencil className="h-3 w-3" />
+                      {canEditDraft ? "Edit" : "Open"}
+                    </span>
+                  </button>
+                ) : null}
+                <span
+                  className="rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide"
+                  style={{
+                    borderColor: statusToneStyles.borderColor,
+                    backgroundColor: statusToneStyles.backgroundColor,
+                    color: statusToneStyles.textColor,
+                  }}
+                >
+                  {statusLabel}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setIsCollapsed((value) => !value)}
+                  className="rounded-full border p-2 transition-colors hover:opacity-90"
+                  style={{
+                    borderColor: "rgba(255,255,255,0.18)",
+                    backgroundColor: "rgba(255,255,255,0.08)",
+                    color: "var(--app-on-dark-muted)",
+                  }}
+                  data-testid="button-google-email-collapse"
+                  aria-label={isCollapsed ? "Expand email card" : "Collapse email card"}
+                >
+                  <motion.div
+                    animate={{ rotate: isCollapsed ? 0 : 180 }}
+                    transition={{ duration: 0.2 }}
+                  >
+                    <ChevronDown className="h-3.5 w-3.5" />
+                  </motion.div>
+                </button>
+              </div>
             </div>
           )}
-          <div className="flex shrink-0 items-center gap-2">
-            {canOpenDraftDialog ? (
-              <button
-                type="button"
-                onClick={() => handleOpenDraftDialog(canEditDraft)}
-                className="rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide transition-colors hover:opacity-90"
-                style={{
-                  borderColor: "rgba(255,255,255,0.2)",
-                  backgroundColor: "rgba(255,255,255,0.1)",
-                  color: "var(--app-on-dark-muted)",
-                }}
-                data-testid="button-google-email-quick-open-draft"
-              >
-                <span className="inline-flex items-center gap-1">
-                  <Pencil className="h-3 w-3" />
-                  {canEditDraft ? "Edit" : "Open"}
-                </span>
-              </button>
-            ) : null}
-            <span
-              className="rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide"
-              style={{
-                borderColor: statusToneStyles.borderColor,
-                backgroundColor: statusToneStyles.backgroundColor,
-                color: statusToneStyles.textColor,
-              }}
-            >
-              {statusLabel}
-            </span>
-            <button
-              type="button"
-              onClick={() => setIsCollapsed((value) => !value)}
-              className="rounded-full border p-2 transition-colors hover:opacity-90"
-              style={{
-                borderColor: "rgba(255,255,255,0.18)",
-                backgroundColor: "rgba(255,255,255,0.08)",
-                color: "var(--app-on-dark-muted)",
-              }}
-              data-testid="button-google-email-collapse"
-              aria-label={isCollapsed ? "Expand email card" : "Collapse email card"}
-            >
-              <motion.div
-                animate={{ rotate: isCollapsed ? 0 : 180 }}
-                transition={{ duration: 0.2 }}
-              >
-                <ChevronDown className="h-3.5 w-3.5" />
-              </motion.div>
-            </button>
-          </div>
         </div>
 
         <AnimatePresence initial={false} mode="wait">
@@ -3496,6 +3705,42 @@ function GoogleCalendarAssistantTaskCard(props: {
     statusLabel,
   });
   const isVoiceStage = props.displayMode === "voice_stage";
+  const calendarHeaderTitle =
+    sanitizeGoogleCalendarDisplayTitle(
+      currentTitle ||
+        proposedCalendar?.title ||
+        calendarEvent?.title ||
+        props.googleActionResult?.summary ||
+        null,
+    ) ||
+    (props.googleActionPreview.kind === "calendar_update"
+      ? "Calendar update"
+      : props.googleActionPreview.kind === "calendar_detail"
+        ? "Calendar details"
+        : "Calendar event");
+  const calendarHeaderSummary =
+    [
+      formatGoogleCalendarDateRange(currentStartTime, currentEndTime),
+      currentLocation.trim() || null,
+      props.googleActionPreview.kind === "calendar_update" && calendarEvent?.title
+        ? `Was ${sanitizeGoogleCalendarDisplayTitle(calendarEvent.title) || "calendar event"}`
+        : null,
+    ]
+      .filter(Boolean)
+      .join(" • ") ||
+    [
+      props.googleActionResult?.status === "event_created"
+        ? "Added to Google Calendar"
+        : props.googleActionResult?.status === "event_updated"
+          ? "Updated in Google Calendar"
+          : props.approvalPending
+            ? "Ready for approval"
+            : null,
+      summaryText && !/on your calendar/i.test(summaryText) ? summaryText : null,
+    ]
+      .filter(Boolean)
+      .join(" • ");
+  const showHeaderQuickOpen = isVoiceStage && canOpenEventDialog;
 
   const handleOpenEventDialog = (editMode = false) => {
     resetEventDialog(editMode);
@@ -3552,98 +3797,144 @@ function GoogleCalendarAssistantTaskCard(props: {
         data-agent-task-status={props.card.status}
         data-google-calendar-card="true"
       >
-        <div className="flex items-start justify-between gap-3 px-1">
+        <div className="space-y-2 px-1">
           {!isVoiceStage ? (
-            <div className="min-w-0">
-              <div className="flex items-center gap-1.5">
-                <CalendarDays
-                  className="h-3.5 w-3.5"
-                  style={{ color: "var(--app-on-dark-muted)" }}
-                />
-                <p
-                  className="text-[11px] font-semibold uppercase tracking-[0.16em]"
-                  style={{ color: "var(--app-on-dark-muted)" }}
+            <div className="flex flex-wrap items-start justify-between gap-2.5">
+              <div className="flex min-w-0 flex-1 items-start gap-2.5">
+                <div
+                  className="inline-flex h-fit shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em]"
+                  style={{
+                    borderColor: "rgba(255,255,255,0.18)",
+                    backgroundColor: "rgba(255,255,255,0.08)",
+                    color: "var(--app-on-dark-muted)",
+                  }}
                 >
+                  <CalendarDays className="h-3.5 w-3.5" />
                   Zee Calendar
-                </p>
+                </div>
+                <div className="min-w-0 flex-1 space-y-0.5 pt-0.5">
+                  <p
+                    className="truncate text-[15px] font-semibold leading-tight"
+                    style={{ color: "var(--app-on-dark)" }}
+                  >
+                    {calendarHeaderTitle}
+                  </p>
+                  {calendarHeaderSummary ? (
+                    <p
+                      className="truncate text-[11px] leading-4"
+                      style={{ color: "var(--app-on-dark-muted)" }}
+                    >
+                      {calendarHeaderSummary}
+                    </p>
+                  ) : null}
+                </div>
               </div>
-              <p className="mt-1.5 text-sm font-semibold" style={{ color: "var(--app-on-dark)" }}>
-                {props.googleActionPreview.title}
-              </p>
-              {summaryText ? (
-                <p
-                  className="mt-1 text-xs leading-5"
-                  style={{ color: "var(--app-on-dark-muted)" }}
+              <div className="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-2">
+                {canOpenEventDialog ? (
+                  <button
+                    type="button"
+                    onClick={() => handleOpenEventDialog(canEditEvent)}
+                    className="rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide transition-colors hover:opacity-90"
+                    style={{
+                      borderColor: "rgba(255,255,255,0.18)",
+                      backgroundColor: "rgba(255,255,255,0.08)",
+                      color: "var(--app-on-dark-muted)",
+                    }}
+                    data-testid="button-google-calendar-header-open-event"
+                  >
+                    {canEditEvent ? "Edit" : "Open"}
+                  </button>
+                ) : null}
+                <span
+                  className="rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide"
+                  style={{
+                    borderColor: statusToneStyles.borderColor,
+                    backgroundColor: statusToneStyles.backgroundColor,
+                    color: statusToneStyles.textColor,
+                  }}
                 >
-                  {summaryText}
-                </p>
-              ) : null}
-              {calendarEvent && props.googleActionPreview.kind === "calendar_update" ? (
-                <p
-                  className="mt-1 text-[11px] leading-5"
-                  style={{ color: "var(--app-on-dark-muted)" }}
+                  {statusLabel}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setIsCollapsed((value) => !value)}
+                  className="rounded-full border p-2 transition-colors hover:opacity-90"
+                  style={{
+                    borderColor: "rgba(255,255,255,0.18)",
+                    backgroundColor: "rgba(255,255,255,0.08)",
+                    color: "var(--app-on-dark-muted)",
+                  }}
+                  data-testid="button-google-calendar-collapse"
+                  aria-label={isCollapsed ? "Expand calendar card" : "Collapse calendar card"}
                 >
-                  Updating: {calendarEvent.title}
-                </p>
-              ) : null}
+                  <motion.div
+                    animate={{ rotate: isCollapsed ? 0 : 180 }}
+                    transition={{ duration: 0.2 }}
+                  >
+                    <ChevronDown className="h-3.5 w-3.5" />
+                  </motion.div>
+                </button>
+              </div>
             </div>
           ) : (
-            <div
-              className="text-[10px] font-semibold uppercase tracking-[0.16em]"
-              style={{ color: "var(--app-on-dark-muted)" }}
-            >
-              Calendar task
+            <div className="flex items-start justify-between gap-3">
+              <div
+                className="text-[10px] font-semibold uppercase tracking-[0.16em]"
+                style={{ color: "var(--app-on-dark-muted)" }}
+              >
+                Calendar task
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                {showHeaderQuickOpen ? (
+                  <button
+                    type="button"
+                    onClick={() => handleOpenEventDialog(canEditEvent)}
+                    className="rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide transition-colors hover:opacity-90"
+                    style={{
+                      borderColor: "rgba(255,255,255,0.2)",
+                      backgroundColor: "rgba(255,255,255,0.1)",
+                      color: "var(--app-on-dark-muted)",
+                    }}
+                    data-testid="button-google-calendar-quick-open-event"
+                  >
+                    <span className="inline-flex items-center gap-1">
+                      <Pencil className="h-3 w-3" />
+                      {canEditEvent ? "Edit" : "Open"}
+                    </span>
+                  </button>
+                ) : null}
+                <span
+                  className="rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide"
+                  style={{
+                    borderColor: statusToneStyles.borderColor,
+                    backgroundColor: statusToneStyles.backgroundColor,
+                    color: statusToneStyles.textColor,
+                  }}
+                >
+                  {statusLabel}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setIsCollapsed((value) => !value)}
+                  className="rounded-full border p-2 transition-colors hover:opacity-90"
+                  style={{
+                    borderColor: "rgba(255,255,255,0.18)",
+                    backgroundColor: "rgba(255,255,255,0.08)",
+                    color: "var(--app-on-dark-muted)",
+                  }}
+                  data-testid="button-google-calendar-collapse"
+                  aria-label={isCollapsed ? "Expand calendar card" : "Collapse calendar card"}
+                >
+                  <motion.div
+                    animate={{ rotate: isCollapsed ? 0 : 180 }}
+                    transition={{ duration: 0.2 }}
+                  >
+                    <ChevronDown className="h-3.5 w-3.5" />
+                  </motion.div>
+                </button>
+              </div>
             </div>
           )}
-          <div className="flex shrink-0 items-center gap-2">
-            {canOpenEventDialog ? (
-              <button
-                type="button"
-                onClick={() => handleOpenEventDialog(canEditEvent)}
-                className="rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide transition-colors hover:opacity-90"
-                style={{
-                  borderColor: "rgba(255,255,255,0.2)",
-                  backgroundColor: "rgba(255,255,255,0.1)",
-                  color: "var(--app-on-dark-muted)",
-                }}
-                data-testid="button-google-calendar-quick-open-event"
-              >
-                <span className="inline-flex items-center gap-1">
-                  <Pencil className="h-3 w-3" />
-                  {canEditEvent ? "Edit" : "Open"}
-                </span>
-              </button>
-            ) : null}
-            <span
-              className="rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide"
-              style={{
-                borderColor: statusToneStyles.borderColor,
-                backgroundColor: statusToneStyles.backgroundColor,
-                color: statusToneStyles.textColor,
-              }}
-            >
-              {statusLabel}
-            </span>
-            <button
-              type="button"
-              onClick={() => setIsCollapsed((value) => !value)}
-              className="rounded-full border p-2 transition-colors hover:opacity-90"
-              style={{
-                borderColor: "rgba(255,255,255,0.18)",
-                backgroundColor: "rgba(255,255,255,0.08)",
-                color: "var(--app-on-dark-muted)",
-              }}
-              data-testid="button-google-calendar-collapse"
-              aria-label={isCollapsed ? "Expand calendar card" : "Collapse calendar card"}
-            >
-              <motion.div
-                animate={{ rotate: isCollapsed ? 0 : 180 }}
-                transition={{ duration: 0.2 }}
-              >
-                <ChevronDown className="h-3.5 w-3.5" />
-              </motion.div>
-            </button>
-          </div>
         </div>
 
         <AnimatePresence initial={false} mode="wait">
@@ -4158,7 +4449,9 @@ function buildUnifiedAgentTaskCards(
 
   interface AgentTaskAggregate {
     taskId: string;
-    firstMessageId: string;
+    latestMessageId: string;
+    latestMessageIndex: number;
+    latestMessage: MessageData;
     task: AgentTaskSummary | null;
     latestStep: AgentStepSummary | null;
     approval: AgentApprovalSummary | null;
@@ -4166,23 +4459,25 @@ function buildUnifiedAgentTaskCards(
     failure: TaskFailureSummary | null;
     googleActionPreview: GoogleActionPreview | null;
     googleActionResult: GoogleActionResult | null;
+    googleContext: GoogleActionTargetContextMetadata | null;
     timeline: UnifiedAgentTaskTimelineItem[];
     summaryText: string | null;
   }
 
   const taskAggregates = new Map<string, AgentTaskAggregate>();
-  const hiddenMessageIds = new Set<string>();
 
-  for (const message of messages) {
+  for (const [messageIndex, message] of messages.entries()) {
     if (message.sender !== "assistant") continue;
     const taskId = extractAgentTaskIdFromPayload(message.uiPayload);
     if (!taskId) continue;
 
-    const existingAggregate = taskAggregates.get(taskId);
-    if (!existingAggregate) {
-      taskAggregates.set(taskId, {
+    let aggregate = taskAggregates.get(taskId);
+    if (!aggregate) {
+      aggregate = {
         taskId,
-        firstMessageId: message.id,
+        latestMessageId: message.id,
+        latestMessageIndex: messageIndex,
+        latestMessage: message,
         task: null,
         latestStep: null,
         approval: null,
@@ -4190,18 +4485,23 @@ function buildUnifiedAgentTaskCards(
         failure: null,
         googleActionPreview: null,
         googleActionResult: null,
+        googleContext: null,
         timeline: [],
         summaryText: null,
-      });
+      };
+      taskAggregates.set(taskId, aggregate);
     } else {
-      hiddenMessageIds.add(message.id);
+      aggregate.latestMessageId = message.id;
+      aggregate.latestMessageIndex = messageIndex;
+      aggregate.latestMessage = message;
     }
-
-    const aggregate = taskAggregates.get(taskId);
-    if (!aggregate) continue;
 
     if (message.text.trim().length > 0 && !isLikelyAgentArtifactBodyLeak(message.text)) {
       aggregate.summaryText = message.text.trim();
+    }
+    const payloadGoogleContext = getGoogleActionContextFromPayload(message.uiPayload);
+    if (payloadGoogleContext) {
+      aggregate.googleContext = payloadGoogleContext;
     }
 
     if (isAgentTaskStatusPayload(message.uiPayload)) {
@@ -4313,7 +4613,7 @@ function buildUnifiedAgentTaskCards(
     }
   }
 
-  return messages.flatMap((message, messageIndex): TextRenderItem[] => {
+  return messages.flatMap((message): TextRenderItem[] => {
     const taskId =
       message.sender === "assistant"
         ? extractAgentTaskIdFromPayload(message.uiPayload)
@@ -4321,13 +4621,13 @@ function buildUnifiedAgentTaskCards(
     if (!taskId) {
       return [{ kind: "message", message }];
     }
-    if (hiddenMessageIds.has(message.id)) {
-      return [];
-    }
 
     const aggregate = taskAggregates.get(taskId);
-    if (!aggregate || aggregate.firstMessageId !== message.id) {
+    if (!aggregate) {
       return [{ kind: "message", message }];
+    }
+    if (aggregate.latestMessageId !== message.id) {
+      return [];
     }
 
     if (
@@ -4358,7 +4658,7 @@ function buildUnifiedAgentTaskCards(
       aggregate.task ??
       ({
         id: taskId,
-        conversationId: message.conversationId,
+        conversationId: aggregate.latestMessage.conversationId,
         status: resolvedStatus,
         riskLevel: "low",
         taskKind:
@@ -4367,11 +4667,15 @@ function buildUnifiedAgentTaskCards(
             : aggregate.artifact?.type === "web_app"
               ? "web_build"
               : "doc_markdown",
-        prompt: message.text,
+        prompt: aggregate.latestMessage.text,
         errorMessage:
           aggregate.failure?.rawMessage ?? aggregate.failure?.reason ?? null,
-        createdAt: message.createdAt ? new Date(message.createdAt) : null,
-        updatedAt: message.createdAt ? new Date(message.createdAt) : null,
+        createdAt: aggregate.latestMessage.createdAt
+          ? new Date(aggregate.latestMessage.createdAt)
+          : null,
+        updatedAt: aggregate.latestMessage.createdAt
+          ? new Date(aggregate.latestMessage.createdAt)
+          : null,
         completedAt: null,
       } satisfies AgentTaskSummary);
 
@@ -4397,15 +4701,18 @@ function buildUnifiedAgentTaskCards(
       failure: aggregate.failure,
       googleActionPreview: aggregate.googleActionPreview,
       googleActionResult: aggregate.googleActionResult,
+      googleContext: aggregate.googleContext,
+      sourceMessageIndex: aggregate.latestMessageIndex,
+      sourceTurnId: aggregate.latestMessage.turnId ?? null,
       timeline,
       autoCollapsed:
         isTerminalTaskStatus(resolvedStatus) &&
         messages
-          .slice(messageIndex + 1)
+          .slice(aggregate.latestMessageIndex + 1)
           .filter((entry) => entry.sender === "user").length >= 2,
     };
 
-    return [{ kind: "agent_unified_task", message, card }];
+    return [{ kind: "agent_unified_task", message: aggregate.latestMessage, card }];
   });
 }
 
@@ -4440,6 +4747,10 @@ function summarizeVoiceStageSurface(
       activeRank: "activeRank" in surface ? surface.activeRank : null,
       recencyRank: "recencyRank" in surface ? surface.recencyRank : null,
       isTerminal: "isTerminal" in surface ? surface.isTerminal : null,
+      isActionable: "isActionable" in surface ? surface.isActionable : null,
+      turnId: "turnId" in surface ? surface.turnId : surface.message.turnId ?? null,
+      selectionReason:
+        "selectionReason" in surface ? surface.selectionReason : "latest_actionable",
     };
   }
 
@@ -4455,6 +4766,11 @@ function summarizeVoiceStageSurface(
       activeRank: "activeRank" in surface ? surface.activeRank : null,
       recencyRank: "recencyRank" in surface ? surface.recencyRank : null,
       isTerminal: "isTerminal" in surface ? surface.isTerminal : null,
+      isActionable: "isActionable" in surface ? surface.isActionable : null,
+      connector: "gmail",
+      turnId: "turnId" in surface ? surface.turnId : surface.message.turnId ?? null,
+      selectionReason:
+        "selectionReason" in surface ? surface.selectionReason : "clarification_session",
     };
   }
 
@@ -4470,6 +4786,11 @@ function summarizeVoiceStageSurface(
       activeRank: "activeRank" in surface ? surface.activeRank : null,
       recencyRank: "recencyRank" in surface ? surface.recencyRank : null,
       isTerminal: "isTerminal" in surface ? surface.isTerminal : null,
+      isActionable: "isActionable" in surface ? surface.isActionable : null,
+      connector: "calendar",
+      turnId: "turnId" in surface ? surface.turnId : surface.message.turnId ?? null,
+      selectionReason:
+        "selectionReason" in surface ? surface.selectionReason : "clarification_session",
     };
   }
 
@@ -4478,10 +4799,15 @@ function summarizeVoiceStageSurface(
     surfaceKey: surface.surfaceKey,
     candidateCount: surface.ambiguity.candidates.length,
     title: surface.text,
+    connector: surface.ambiguity.connector,
     source: "source" in surface ? surface.source : "email_ambiguity",
     activeRank: "activeRank" in surface ? surface.activeRank : null,
     recencyRank: "recencyRank" in surface ? surface.recencyRank : null,
     isTerminal: "isTerminal" in surface ? surface.isTerminal : null,
+    isActionable: "isActionable" in surface ? surface.isActionable : null,
+    turnId: "turnId" in surface ? surface.turnId : surface.message.turnId ?? null,
+    selectionReason:
+      "selectionReason" in surface ? surface.selectionReason : "ambiguity_required",
   };
 }
 
@@ -4511,14 +4837,35 @@ function buildVoiceStageCandidates(
   renderItems.forEach((item, index) => {
     if (item.kind === "agent_unified_task") {
       const isTerminal = isTerminalTaskCardStatus(item.card.status);
-      if (isTerminal && index < recencyFloor) {
+      const connector =
+        item.card.googleContext?.connector ??
+        item.card.googleActionPreview?.connector ??
+        item.card.googleActionResult?.connector ??
+        null;
+      if (!connector) {
         return;
       }
-      const activeRank = !isTerminal
-        ? 4
-        : item.card.googleActionPreview || item.card.googleActionResult
-          ? 2
-          : 1;
+      if (isTerminal && (item.card.sourceMessageIndex ?? index) < recencyFloor) {
+        return;
+      }
+      const hasPendingApproval =
+        item.card.status === "approval_required" &&
+        item.card.approval?.status === "pending";
+      const isActionable =
+        hasPendingApproval ||
+        Boolean(
+          item.card.status !== "cancelled" &&
+            item.card.status !== "failed" &&
+            (item.card.googleActionPreview || item.card.googleActionResult),
+        ) ||
+        !isTerminal;
+      const activeRank = hasPendingApproval
+        ? 7
+        : isActionable
+          ? 5
+          : connector
+            ? 3
+            : 1;
       candidates.push({
         kind: "task",
         surfaceKey: [
@@ -4533,8 +4880,18 @@ function buildVoiceStageCandidates(
         card: item.card,
         source: "task",
         isTerminal,
+        isActionable,
         activeRank,
-        recencyRank: index,
+        recencyRank: item.card.sourceMessageIndex ?? index,
+        connector,
+        turnId: item.card.sourceTurnId ?? item.message.turnId ?? null,
+        selectionReason:
+          item.card.googleContext?.selectionReason ??
+          (hasPendingApproval
+            ? "latest_actionable"
+            : isActionable
+              ? "recent_context"
+              : "recent_context"),
       });
       return;
     }
@@ -4543,7 +4900,7 @@ function buildVoiceStageCandidates(
       return;
     }
 
-    if (isGoogleEmailAmbiguityPayload(item.message.uiPayload)) {
+    if (isGoogleActionAmbiguityPayload(item.message.uiPayload)) {
       candidates.push({
         kind: "email_ambiguity",
         surfaceKey: `ambiguity:${item.message.id}`,
@@ -4552,8 +4909,12 @@ function buildVoiceStageCandidates(
         text: item.message.uiPayload.text,
         source: "email_ambiguity",
         isTerminal: false,
-        activeRank: 5,
+        isActionable: true,
+        activeRank: 7,
         recencyRank: index,
+        connector: item.message.uiPayload.ambiguity.connector,
+        turnId: item.message.turnId ?? null,
+        selectionReason: "ambiguity_required",
       });
       return;
     }
@@ -4571,8 +4932,14 @@ function buildVoiceStageCandidates(
         text: item.message.uiPayload.text,
         source: "calendar_session",
         isTerminal: status === "resolved" || status === "cancelled",
-        activeRank: status === "resolved" || status === "cancelled" ? 1 : 4,
+        isActionable: status !== "cancelled",
+        activeRank: status === "resolved" || status === "cancelled" ? 1 : 6,
         recencyRank: index,
+        connector: "calendar",
+        turnId: item.message.turnId ?? null,
+        selectionReason:
+          item.message.uiPayload.googleContext?.selectionReason ??
+          "clarification_session",
       });
       return;
     }
@@ -4590,26 +4957,87 @@ function buildVoiceStageCandidates(
         text: item.message.uiPayload.text,
         source: "compose_session",
         isTerminal: status === "resolved" || status === "cancelled",
-        activeRank: status === "resolved" || status === "cancelled" ? 1 : 4,
+        isActionable: status !== "cancelled",
+        activeRank: status === "resolved" || status === "cancelled" ? 1 : 6,
         recencyRank: index,
+        connector: "gmail",
+        turnId: item.message.turnId ?? null,
+        selectionReason:
+          item.message.uiPayload.googleContext?.selectionReason ??
+          "clarification_session",
       });
     }
   });
 
-  candidates.sort((a, b) => {
+  const filteredCandidates = candidates.filter((candidate) => {
+    if (candidate.kind === "task" || candidate.isActionable) {
+      return true;
+    }
+    const newerTaskForConnector = candidates.some(
+      (other) =>
+        other.kind === "task" &&
+        other.connector === candidate.connector &&
+        other.recencyRank > candidate.recencyRank,
+    );
+    if (newerTaskForConnector) {
+      return false;
+    }
+    if (candidate.kind === "email_ambiguity") {
+      const newerClarificationForConnector = candidates.some(
+        (other) =>
+          other.kind !== "task" &&
+          other.connector === candidate.connector &&
+          other.recencyRank > candidate.recencyRank,
+      );
+      if (newerClarificationForConnector) {
+        return false;
+      }
+    }
+    return true;
+  });
+
+  const latestActionableRecency = filteredCandidates.reduce((max, candidate) => {
+    if (!candidate.isActionable) {
+      return max;
+    }
+    return Math.max(max, candidate.recencyRank);
+  }, -1);
+  const latestActionableTurnId =
+    [...filteredCandidates]
+      .filter(
+        (candidate) =>
+          candidate.isActionable && candidate.recencyRank === latestActionableRecency,
+      )
+      .sort((a, b) => b.activeRank - a.activeRank)[0]?.turnId ?? null;
+
+  filteredCandidates.sort((a, b) => {
+    const aMatchesLatestTurn =
+      latestActionableTurnId && a.turnId === latestActionableTurnId ? 1 : 0;
+    const bMatchesLatestTurn =
+      latestActionableTurnId && b.turnId === latestActionableTurnId ? 1 : 0;
+    if (aMatchesLatestTurn !== bMatchesLatestTurn) {
+      return bMatchesLatestTurn - aMatchesLatestTurn;
+    }
+    const aIsLatestActionable =
+      latestActionableRecency >= 0 && a.recencyRank === latestActionableRecency ? 1 : 0;
+    const bIsLatestActionable =
+      latestActionableRecency >= 0 && b.recencyRank === latestActionableRecency ? 1 : 0;
+    if (aIsLatestActionable !== bIsLatestActionable) {
+      return bIsLatestActionable - aIsLatestActionable;
+    }
+    if (a.isActionable !== b.isActionable) {
+      return a.isActionable ? -1 : 1;
+    }
     if (a.recencyRank !== b.recencyRank) {
       return b.recencyRank - a.recencyRank;
     }
     if (a.activeRank !== b.activeRank) {
       return b.activeRank - a.activeRank;
     }
-    if (a.isTerminal !== b.isTerminal) {
-      return a.isTerminal ? 1 : -1;
-    }
     return a.surfaceKey.localeCompare(b.surfaceKey);
   });
 
-  return candidates;
+  return filteredCandidates;
 }
 
 function buildVoiceStageSurface(
@@ -4617,6 +5045,51 @@ function buildVoiceStageSurface(
   liveTaskSnapshots: Record<string, LiveTaskSnapshot>,
 ): VoiceStageSurface | null {
   return buildVoiceStageCandidates(messages, liveTaskSnapshots)[0] ?? null;
+}
+
+function buildVoiceStageSurfaceRailCandidates(
+  candidates: VoiceStageCandidate[],
+  activeSurfaceKey: string | null,
+  maxItems = 4,
+): VoiceStageCandidate[] {
+  if (candidates.length <= 1) {
+    return candidates;
+  }
+
+  const selected: VoiceStageCandidate[] = [];
+  const seen = new Set<string>();
+  const pushCandidate = (candidate: VoiceStageCandidate | null | undefined) => {
+    if (!candidate || seen.has(candidate.surfaceKey)) {
+      return;
+    }
+    seen.add(candidate.surfaceKey);
+    selected.push(candidate);
+  };
+
+  pushCandidate(
+    activeSurfaceKey
+      ? candidates.find((candidate) => candidate.surfaceKey === activeSurfaceKey)
+      : candidates[0],
+  );
+
+  const latestByConnector = new Map<"gmail" | "calendar", VoiceStageCandidate>();
+  for (const candidate of candidates) {
+    if (!latestByConnector.has(candidate.connector)) {
+      latestByConnector.set(candidate.connector, candidate);
+    }
+  }
+
+  pushCandidate(latestByConnector.get("gmail"));
+  pushCandidate(latestByConnector.get("calendar"));
+
+  for (const candidate of candidates) {
+    pushCandidate(candidate);
+    if (selected.length >= maxItems) {
+      break;
+    }
+  }
+
+  return selected.slice(0, maxItems);
 }
 
 function formatMinutesFromSeconds(seconds: number): string {
@@ -7554,7 +8027,7 @@ interface VoiceLiveDebugPanelProps {
   onExport: () => void;
 }
 
-const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, onProfile, assistantName, assistantAvatar, selectedVoice, setSelectedVoice, mode, setMode, duration, userProfileImage, isVideoEnabled, onToggleVideo, onFlipCamera, videoStream, isVideoTransitioning, cameraFacingMode, webLookupStatus, webLookupLabel, liveDebug, messages, liveTaskSnapshots, onOpenArtifact, onResolveApproval, onSendMessage, onTraceStageEvent }: {
+const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, onProfile, assistantName, assistantAvatar, selectedVoice, setSelectedVoice, mode, setMode, duration, userProfileImage, isVideoEnabled, onToggleVideo, onFlipCamera, videoStream, isVideoTransitioning, cameraFacingMode, webLookupStatus, webLookupLabel, liveDebug, messages, liveTaskSnapshots, onOpenArtifact, onResolveApproval, onSendMessage, onTraceStageEvent, onStageContextChange }: {
   isActive: boolean; 
   isConnecting: boolean;
   onEndCall: () => void;
@@ -7587,21 +8060,29 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
   ) => Promise<void>;
   onSendMessage: (text: string, options?: SendMessageOptions) => Promise<void>;
   onTraceStageEvent: (event: string, metadata?: Record<string, unknown>) => void;
+  onStageContextChange: (context: SendMessageOptions["googleActionContext"]) => void;
 }) => {
   const videoPreviewRef = useRef<HTMLVideoElement | null>(null);
   const stageVideoPreviewRef = useRef<HTMLVideoElement | null>(null);
   const wasVoiceCallActiveRef = useRef(false);
   const lastTracedStageCandidateKeyRef = useRef<string | null>(null);
   const lastTracedStageSurfaceKeyRef = useRef<string | null>(null);
+  const lastAutoStageSurfaceKeyRef = useRef<string | null>(null);
   const [debugPanelOpen, setDebugPanelOpen] = useState(false);
   const [dismissedStageSurfaceKey, setDismissedStageSurfaceKey] = useState<string | null>(
     null,
   );
+  const [voiceStageSelectionMode, setVoiceStageSelectionMode] = useState<
+    "auto" | "manual" | "dismissed"
+  >("auto");
   const [pinnedVoiceStageSurfaceKey, setPinnedVoiceStageSurfaceKey] = useState<
     string | null
   >(null);
   const [pinnedVoiceStageBaselineRecency, setPinnedVoiceStageBaselineRecency] =
     useState<number | null>(null);
+  const [lastAutoSwitchReason, setLastAutoSwitchReason] = useState<string | null>(
+    null,
+  );
 
   const voiceStageCandidates = useMemo(
     () => buildVoiceStageCandidates(messages, liveTaskSnapshots),
@@ -7623,6 +8104,15 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
     return defaultVoiceStageSurface;
   }, [defaultVoiceStageSurface, pinnedVoiceStageSurfaceKey, voiceStageCandidates]);
   const voiceStageSurfaceKey = voiceStageSurface?.surfaceKey ?? null;
+  const voiceStageRailCandidates = useMemo(
+    () =>
+      buildVoiceStageSurfaceRailCandidates(
+        voiceStageCandidates,
+        voiceStageSurfaceKey,
+        4,
+      ),
+    [voiceStageCandidates, voiceStageSurfaceKey],
+  );
   const voiceStageCandidateTraceKey = useMemo(
     () =>
       voiceStageCandidates
@@ -7634,9 +8124,7 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
     [voiceStageCandidates],
   );
   const isVoiceCanvasVisible = Boolean(
-    isActive &&
-      voiceStageSurface &&
-      voiceStageSurface.surfaceKey !== dismissedStageSurfaceKey,
+    isActive && voiceStageSurface && voiceStageSelectionMode !== "dismissed",
   );
 
   useEffect(() => {
@@ -7653,6 +8141,9 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
     if (isActive && !wasActive) {
       wasVoiceCallActiveRef.current = true;
       setDismissedStageSurfaceKey(voiceStageSurfaceKey);
+      setVoiceStageSelectionMode("dismissed");
+      setPinnedVoiceStageSurfaceKey(null);
+      setPinnedVoiceStageBaselineRecency(null);
       onTraceStageEvent("session_started", {
         baselineSurfaceKey: voiceStageSurfaceKey,
         baselineSurface: summarizeVoiceStageSurface(voiceStageSurface),
@@ -7663,24 +8154,17 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
     if (!isActive && wasActive) {
       wasVoiceCallActiveRef.current = false;
       setDismissedStageSurfaceKey(null);
+      setVoiceStageSelectionMode("auto");
       setPinnedVoiceStageSurfaceKey(null);
       setPinnedVoiceStageBaselineRecency(null);
+      setLastAutoSwitchReason(null);
+      lastAutoStageSurfaceKeyRef.current = null;
       onTraceStageEvent("session_ended", {
         finalSurfaceKey: voiceStageSurfaceKey,
         finalSurface: summarizeVoiceStageSurface(voiceStageSurface),
       });
     }
   }, [isActive, onTraceStageEvent, voiceStageSurface, voiceStageSurfaceKey]);
-
-  useEffect(() => {
-    if (!voiceStageSurfaceKey) {
-      setDismissedStageSurfaceKey(null);
-      return;
-    }
-    if (voiceStageSurfaceKey !== dismissedStageSurfaceKey) {
-      setDismissedStageSurfaceKey(null);
-    }
-  }, [dismissedStageSurfaceKey, voiceStageSurfaceKey]);
 
   useEffect(() => {
     if (!pinnedVoiceStageSurfaceKey) return;
@@ -7690,6 +8174,9 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
     if (!pinnedStillVisible) {
       setPinnedVoiceStageSurfaceKey(null);
       setPinnedVoiceStageBaselineRecency(null);
+      setVoiceStageSelectionMode((current) =>
+        current === "dismissed" ? current : "auto",
+      );
     }
   }, [pinnedVoiceStageSurfaceKey, voiceStageCandidates]);
 
@@ -7711,6 +8198,7 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
     ) {
       setPinnedVoiceStageSurfaceKey(null);
       setPinnedVoiceStageBaselineRecency(null);
+      setVoiceStageSelectionMode("auto");
       onTraceStageEvent("surface_selection_cleared", {
         reason: "newer_surface_available",
         previousSurface: summarizeVoiceStageSurface(pinnedCandidate),
@@ -7724,6 +8212,91 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
     pinnedVoiceStageSurfaceKey,
     voiceStageCandidates,
   ]);
+
+  const buildVoiceStageGoogleActionContext = useCallback(() => {
+    if (!voiceStageSurface) return null;
+    const taskGoogleContext =
+      voiceStageSurface.kind === "task" ? voiceStageSurface.card.googleContext ?? null : null;
+    const taskConnector =
+      voiceStageSurface.kind === "task"
+        ? taskGoogleContext?.connector ??
+          voiceStageSurface.card.googleActionPreview?.connector ??
+          voiceStageSurface.card.googleActionResult?.connector ??
+          null
+        : null;
+    const connector =
+      voiceStageSurface.kind === "task"
+        ? taskConnector
+        : voiceStageSurface.kind === "calendar_session"
+          ? "calendar"
+          : voiceStageSurface.kind === "compose_session"
+            ? "gmail"
+            : voiceStageSurface.ambiguity.connector;
+    if (!connector) return null;
+
+    const candidateTargetIds = Array.from(
+      new Set(
+        voiceStageCandidates.flatMap((candidate) => {
+          if (candidate.connector !== connector) return [];
+          if (candidate.kind === "task") return [candidate.card.taskId];
+          if (candidate.kind === "email_ambiguity") {
+            return candidate.ambiguity.candidates.map((entry) => entry.taskId);
+          }
+          return [];
+        }),
+      ),
+    );
+
+    const action =
+      voiceStageSurface.kind === "task"
+        ? taskGoogleContext?.action ??
+          (taskConnector === "gmail"
+            ? voiceStageSurface.card.googleActionPreview?.proposedEmail?.sendAfterApproval ||
+                voiceStageSurface.card.googleActionResult?.status === "draft_created"
+              ? "send"
+              : "revise"
+            : voiceStageSurface.card.googleActionPreview?.kind === "calendar_update" ||
+                voiceStageSurface.card.googleActionResult?.status === "event_updated"
+              ? "update"
+              : "create")
+        : voiceStageSurface.kind === "calendar_session"
+          ? "create"
+          : voiceStageSurface.kind === "compose_session"
+            ? "revise"
+            : voiceStageSurface.ambiguity.action;
+    const selectionReason =
+      voiceStageSelectionMode === "manual"
+        ? "manual_selection"
+        : ((taskGoogleContext?.selectionReason ?? voiceStageSurface.selectionReason) as
+            | GoogleActionTargetContextMetadata["selectionReason"]
+            | undefined) ?? "latest_actionable";
+
+    return {
+      connector,
+      action,
+      actionableTargetId:
+        voiceStageSurface.kind === "task"
+          ? taskGoogleContext?.actionableTargetId ?? voiceStageSurface.card.taskId
+          : null,
+      candidateTargetIds,
+      sourceTurnId:
+        taskGoogleContext?.sourceTurnId ??
+        voiceStageSurface.message.turnId ??
+        null,
+      selectionReason,
+      surfaceKey: voiceStageSurface.surfaceKey,
+      selectionMode: isVoiceCanvasVisible ? voiceStageSelectionMode : "dismissed",
+    } satisfies NonNullable<SendMessageOptions["googleActionContext"]>;
+  }, [
+    isVoiceCanvasVisible,
+    voiceStageCandidates,
+    voiceStageSelectionMode,
+    voiceStageSurface,
+  ]);
+
+  useEffect(() => {
+    onStageContextChange(buildVoiceStageGoogleActionContext());
+  }, [buildVoiceStageGoogleActionContext, onStageContextChange]);
 
   useEffect(() => {
     if (lastTracedStageCandidateKeyRef.current === voiceStageCandidateTraceKey) {
@@ -7773,21 +8346,44 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
   }, [onTraceStageEvent, voiceStageSurface]);
 
   useEffect(() => {
+    if (voiceStageSelectionMode !== "auto" || !voiceStageSurface) {
+      return;
+    }
+    if (lastAutoStageSurfaceKeyRef.current === voiceStageSurface.surfaceKey) {
+      return;
+    }
+    const reason =
+      voiceStageSurface.selectionReason ||
+      (voiceStageSurface.kind === "email_ambiguity"
+        ? "ambiguity_required"
+        : "latest_actionable");
+    setLastAutoSwitchReason(reason);
+    onTraceStageEvent("surface_auto_switched", {
+      previousSurfaceKey: lastAutoStageSurfaceKeyRef.current,
+      nextSurfaceKey: voiceStageSurface.surfaceKey,
+      reason,
+      nextSurface: summarizeVoiceStageSurface(voiceStageSurface),
+    });
+    lastAutoStageSurfaceKeyRef.current = voiceStageSurface.surfaceKey;
+  }, [onTraceStageEvent, voiceStageSelectionMode, voiceStageSurface]);
+
+  useEffect(() => {
     if (!voiceStageSurfaceKey) return;
     onTraceStageEvent(isVoiceCanvasVisible ? "surface_visible" : "surface_hidden", {
       surfaceKey: voiceStageSurfaceKey,
-      dismissed: dismissedStageSurfaceKey === voiceStageSurfaceKey,
+      dismissed: voiceStageSelectionMode === "dismissed",
     });
   }, [
-    dismissedStageSurfaceKey,
     isVoiceCanvasVisible,
     onTraceStageEvent,
+    voiceStageSelectionMode,
     voiceStageSurfaceKey,
   ]);
 
   const dismissVoiceCanvas = () => {
     if (!voiceStageSurface) return;
     setDismissedStageSurfaceKey(voiceStageSurface.surfaceKey);
+    setVoiceStageSelectionMode("dismissed");
     onTraceStageEvent("surface_dismissed", {
       surfaceKind: voiceStageSurface.kind,
       surfaceKey: voiceStageSurface.surfaceKey,
@@ -7796,6 +8392,7 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
 
   const reopenVoiceCanvas = () => {
     setDismissedStageSurfaceKey(null);
+    setVoiceStageSelectionMode("auto");
     onTraceStageEvent("surface_reopened", {
       surfaceKind: voiceStageSurface?.kind ?? null,
       surfaceKey: voiceStageSurface?.surfaceKey ?? null,
@@ -7837,12 +8434,18 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
     text: string,
     options?: SendMessageOptions,
   ) => {
+    const googleActionContext =
+      options?.googleActionContext ?? buildVoiceStageGoogleActionContext();
     onTraceStageEvent("message_sent", {
       surfaceKey: voiceStageSurface?.surfaceKey ?? null,
       textPreview: text.slice(0, 160),
+      googleActionContext,
     });
     try {
-      await onSendMessage(text, options);
+      await onSendMessage(text, {
+        ...options,
+        googleActionContext,
+      });
     } catch (error) {
       onTraceStageEvent("message_failed", {
         surfaceKey: voiceStageSurface?.surfaceKey ?? null,
@@ -7856,6 +8459,7 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
   const handleSelectVoiceStageSurface = (candidate: VoiceStageCandidate) => {
     setPinnedVoiceStageSurfaceKey(candidate.surfaceKey);
     setPinnedVoiceStageBaselineRecency(defaultVoiceStageSurface?.recencyRank ?? candidate.recencyRank);
+    setVoiceStageSelectionMode("manual");
     onTraceStageEvent("surface_selected", {
       previousSurface: summarizeVoiceStageSurface(voiceStageSurface),
       selectedSurface: summarizeVoiceStageSurface(candidate),
@@ -7863,31 +8467,40 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
     });
   };
 
+  const activeVoiceStageSummary = voiceStageSurface
+    ? getVoiceStageCandidateSummary(voiceStageSurface)
+    : null;
+
   const voiceStageTitle =
     voiceStageSurface?.kind === "task"
-      ? voiceStageSurface.card.googleActionPreview?.connector === "gmail"
-        ? "Zee Mail"
-        : voiceStageSurface.card.googleActionPreview?.connector === "calendar"
-          ? "Zee Calendar"
-          : "Zee Canvas"
+      ? activeVoiceStageSummary?.title ??
+        (voiceStageSurface.card.googleActionPreview?.connector === "gmail"
+          ? "Zee Mail"
+          : voiceStageSurface.card.googleActionPreview?.connector === "calendar"
+            ? "Zee Calendar"
+            : "Zee Canvas")
       : voiceStageSurface?.kind === "calendar_session"
         ? "Event In Progress"
-      : voiceStageSurface?.kind === "compose_session"
-        ? "Draft In Progress"
-        : voiceStageSurface?.kind === "email_ambiguity"
-          ? "Choose The Email"
-          : "Voice Canvas";
+        : voiceStageSurface?.kind === "compose_session"
+          ? "Draft In Progress"
+          : voiceStageSurface?.kind === "email_ambiguity"
+            ? voiceStageSurface.ambiguity.connector === "calendar"
+              ? "Choose The Event"
+              : "Choose The Email"
+            : "Voice Canvas";
 
   const voiceStageSubtitle =
     voiceStageSurface?.kind === "task"
-      ? voiceStageSurface.card.title
+      ? activeVoiceStageSummary?.detail ?? voiceStageSurface.card.title
       : voiceStageSurface?.kind === "calendar_session"
         ? "Zee is collecting the missing event details."
-      : voiceStageSurface?.kind === "compose_session"
-        ? "Zee is shaping a draft from your voice instructions."
-        : voiceStageSurface?.kind === "email_ambiguity"
-          ? "Zee needs one quick clarification before acting."
-          : "Task-ready surface";
+        : voiceStageSurface?.kind === "compose_session"
+          ? "Zee is shaping a draft from your voice instructions."
+          : voiceStageSurface?.kind === "email_ambiguity"
+            ? voiceStageSurface.ambiguity.connector === "calendar"
+              ? "Zee needs one quick event clarification before acting."
+              : "Zee needs one quick draft clarification before acting."
+            : "Task-ready surface";
 
   return (
     <motion.div 
@@ -8268,6 +8881,9 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
                           {
                             dismissedSurfaceKey: dismissedStageSurfaceKey,
                             pinnedSurfaceKey: pinnedVoiceStageSurfaceKey,
+                            selectionMode: voiceStageSelectionMode,
+                            lastAutoSwitchReason,
+                            googleActionContext: buildVoiceStageGoogleActionContext(),
                             activeSurface: summarizeVoiceStageSurface(
                               voiceStageSurface,
                             ),
@@ -8400,7 +9016,9 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
                   }}
                   data-testid="button-voice-stage-open-canvas"
                 >
-                  Open canvas
+                  {activeVoiceStageSummary?.title
+                    ? `Open ${activeVoiceStageSummary.title}`
+                    : "Open canvas"}
                 </button>
               </div>
             ) : null}
@@ -8458,7 +9076,7 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
                     initial={{ opacity: 0, y: 12, scale: 0.98 }}
                     animate={{ opacity: 1, y: 0, scale: 1 }}
                     transition={{ duration: 0.2, ease: "easeOut" }}
-                    className="relative h-[55vh] max-h-[500px] w-full max-w-[380px] overflow-hidden rounded-[2rem] border shadow-2xl"
+                    className="relative h-[clamp(20rem,50vh,29rem)] w-full max-w-[392px] overflow-hidden rounded-[2rem] border shadow-2xl"
                     style={{
                       borderColor:
                         "color-mix(in srgb, var(--app-soft-card-border) 78%, transparent)",
@@ -8540,7 +9158,7 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
                         </div>
                       </div>
 
-                      {voiceStageCandidates.length > 1 ? (
+                      {voiceStageRailCandidates.length > 1 ? (
                         <div
                           className="border-b px-3 py-2"
                           style={{
@@ -8552,22 +9170,21 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
                             className="mb-1.5 text-[9px] font-semibold uppercase tracking-[0.18em]"
                             style={{ color: "var(--app-on-dark-muted)" }}
                           >
-                            Recent
+                            Recent surfaces
                           </div>
                           <div className="flex gap-2 overflow-x-auto pb-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-                            {voiceStageCandidates.slice(0, 6).map((candidate, index) => {
+                            {voiceStageRailCandidates.map((candidate, index) => {
                               const candidateSummary = getVoiceStageCandidateSummary(candidate);
                               const isSelected =
                                 candidate.surfaceKey === voiceStageSurface?.surfaceKey;
-                              const compactLabel = `${candidateSummary.title} • ${candidateSummary.detail}`;
                               return (
                                 <button
                                   key={candidate.surfaceKey}
                                   type="button"
                                   onClick={() => handleSelectVoiceStageSurface(candidate)}
-                                  className="min-w-0 shrink-0 rounded-full border px-3 py-1.5 text-left transition-colors hover:opacity-90"
+                                  className="min-w-0 shrink-0 rounded-full border px-3 py-2 text-left transition-colors hover:opacity-90"
                                   style={{
-                                    width: "min(13rem, 58vw)",
+                                    width: "min(15rem, 68vw)",
                                     borderColor: isSelected
                                       ? "color-mix(in srgb, var(--app-accent) 42%, rgba(255,255,255,0.28))"
                                       : "rgba(255,255,255,0.16)",
@@ -8591,10 +9208,20 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
                                       />
                                     )}
                                     <div
-                                      className="min-w-0 truncate text-[11px] font-medium"
-                                      style={{ color: isSelected ? "var(--app-on-dark)" : "var(--app-on-dark-muted)" }}
+                                      className="min-w-0 truncate text-[11px]"
+                                      style={{ color: "var(--app-on-dark)" }}
                                     >
-                                      {compactLabel}
+                                      <span className="font-semibold">
+                                        {candidateSummary.title}
+                                      </span>
+                                      {candidateSummary.detail ? (
+                                        <span
+                                          className="ml-1"
+                                          style={{ color: "var(--app-on-dark-muted)" }}
+                                        >
+                                          • {candidateSummary.detail}
+                                        </span>
+                                      ) : null}
                                     </div>
                                   </div>
                                 </button>
@@ -8630,9 +9257,23 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
                               <GoogleEmailAmbiguityCard
                                 ambiguity={voiceStageSurface.ambiguity}
                                 text={voiceStageSurface.text}
-                                onChoose={(selectionPrompt) => {
-                                  void handleVoiceStageSendMessage(selectionPrompt, {
+                                onChoose={(candidate) => {
+                                  onTraceStageEvent("ambiguity_selected", {
+                                    connector: voiceStageSurface.ambiguity.connector,
+                                    action: voiceStageSurface.ambiguity.action,
+                                    selectedTaskId: candidate.taskId,
+                                    surfaceKey: voiceStageSurface.surfaceKey,
+                                  });
+                                  void handleVoiceStageSendMessage(candidate.selectionPrompt, {
                                     ignoreAttachments: true,
+                                    googleActionContext: buildGoogleAmbiguitySelectionContext({
+                                      ambiguity: voiceStageSurface.ambiguity,
+                                      candidate,
+                                      sourceTurnId:
+                                        voiceStageSurface.message.turnId ?? null,
+                                      surfaceKey: voiceStageSurface.surfaceKey,
+                                      selectionMode: "manual",
+                                    }),
                                   });
                                 }}
                                 displayMode="voice_stage"
@@ -10667,13 +11308,23 @@ const TextView = ({
                         session={msg.uiPayload.session}
                         text={msg.uiPayload.text}
                       />
-                    ) : isGoogleEmailAmbiguityPayload(msg.uiPayload) ? (
+                    ) : isGoogleActionAmbiguityPayload(msg.uiPayload) ? (
                       <GoogleEmailAmbiguityCard
                         ambiguity={msg.uiPayload.ambiguity}
                         text={msg.uiPayload.text}
-                        onChoose={(selectionPrompt) => {
-                          void onSendMessage(selectionPrompt, {
+                        onChoose={(candidate) => {
+                          console.log("[GoogleUiTrace]", "chat.google_ambiguity_selected", {
+                            connector: msg.uiPayload.ambiguity.connector,
+                            action: msg.uiPayload.ambiguity.action,
+                            selectedTaskId: candidate.taskId,
+                          });
+                          void onSendMessage(candidate.selectionPrompt, {
                             ignoreAttachments: true,
+                            googleActionContext: buildGoogleAmbiguitySelectionContext({
+                              ambiguity: msg.uiPayload.ambiguity,
+                              candidate,
+                              sourceTurnId: msg.turnId ?? null,
+                            }),
                           });
                         }}
                       />
@@ -10857,22 +11508,24 @@ const TextView = ({
         </div>
       </div>
       {mode === "text" && showJumpToNewest && (
-        <button
-          type="button"
-          onClick={() => {
-            shouldAutoStickRef.current = true;
-            scrollToBottom(true);
-            setShowJumpToNewest(false);
-          }}
-          className="absolute bottom-28 left-1/2 -translate-x-1/2 rounded-full border px-3 py-1 text-xs backdrop-blur-sm"
-          style={{
-            borderColor: "var(--app-soft-card-border)",
-            backgroundColor: "var(--app-soft-card-bg)",
-            color: "var(--app-on-dark)",
-          }}
-        >
-          Jump to newest
-        </button>
+        <div className="pointer-events-none absolute bottom-28 right-4 z-20">
+          <button
+            type="button"
+            onClick={() => {
+              shouldAutoStickRef.current = true;
+              scrollToBottom(true);
+              setShowJumpToNewest(false);
+            }}
+            className="pointer-events-auto rounded-full border px-3 py-1 text-xs backdrop-blur-sm"
+            style={{
+              borderColor: "var(--app-soft-card-border)",
+              backgroundColor: "var(--app-soft-card-bg)",
+              color: "var(--app-on-dark)",
+            }}
+          >
+            Jump to newest
+          </button>
+        </div>
       )}
     </div>
   );
@@ -11673,12 +12326,15 @@ function App() {
   const liveRunIdRef = useRef<string | null>(null);
   const liveStartNonceRef = useRef(0);
   const transcriptQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const sendMessageQueueRef = useRef<Promise<void>>(Promise.resolve());
   const transcriptSeenRef = useRef<Map<string, number>>(new Map());
   const manualLiveStopRef = useRef(false);
   const autoResumeBudgetRef = useRef(1);
   const liveSessionResumptionHandleRef = useRef<string | null>(null);
   const isVideoEnabledRef = useRef(false);
   const cameraFacingModeRef = useRef<CameraFacingMode>("user");
+  const activeVoiceGoogleActionContextRef =
+    useRef<SendMessageOptions["googleActionContext"]>(null);
   const pendingAttachmentsRef = useRef<PendingImageAttachment[]>([]);
   const selectedVoiceRef = useRef<LiveVoiceName>(DEFAULT_LIVE_VOICE);
   const selectedThemeRef = useRef<AppThemeId>(DEFAULT_APP_THEME_ID);
@@ -12420,6 +13076,46 @@ function App() {
     [activeConversationId, logLiveTrace],
   );
 
+  const refreshConversationAfterLiveToolResponse = useCallback(
+    async (conversationId: string) => {
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: getConversationMessagesKey(conversationId),
+        }),
+        queryClient.invalidateQueries({
+          predicate: (query) => {
+            const key = Array.isArray(query.queryKey) ? query.queryKey[0] : query.queryKey;
+            return (
+              typeof key === "string" &&
+              (key === "/api/conversations" || key.startsWith("/api/agent/tasks/"))
+            );
+          },
+        }),
+      ]);
+    },
+    [queryClient],
+  );
+
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    const handleConversationMutated = (event: Event) => {
+      const detail = (event as CustomEvent<{ conversationId?: string }>).detail;
+      const conversationId = detail?.conversationId;
+      if (!conversationId) return;
+      void refreshConversationAfterLiveToolResponse(conversationId);
+    };
+    window.addEventListener(
+      "zee:conversation-mutated",
+      handleConversationMutated as EventListener,
+    );
+    return () => {
+      window.removeEventListener(
+        "zee:conversation-mutated",
+        handleConversationMutated as EventListener,
+      );
+    };
+  }, [refreshConversationAfterLiveToolResponse]);
+
   useEffect(() => {
     if (!isAuthenticated || showOnboarding) return;
     if (conversations && conversations.length > 0) {
@@ -12813,6 +13509,7 @@ function App() {
     attachmentIds: string[];
     optimisticUserId: string;
     optimisticAssistantTurnId: string;
+    googleActionContext?: SendMessageOptions["googleActionContext"];
   }): Promise<{ ackedUserMessageId: string | null }> => {
     const response = await fetch("/api/chat/respond/stream", {
       method: "POST",
@@ -12827,6 +13524,7 @@ function App() {
         persona,
         attachmentIds: params.attachmentIds,
         clientTimeZone: detectClientTimeZone(),
+        googleActionContext: params.googleActionContext ?? undefined,
       }),
     });
 
@@ -13444,6 +14142,7 @@ function App() {
     optimisticUserId: string;
     optimisticAssistantTurnId: string;
     existingUserMessageId?: string | null;
+    googleActionContext?: SendMessageOptions["googleActionContext"];
   }) => {
     const response = await apiRequest("POST", "/api/chat/respond", {
       conversationId: params.conversationId,
@@ -13452,6 +14151,7 @@ function App() {
       attachmentIds: params.attachmentIds,
       clientTimeZone: detectClientTimeZone(),
       existingUserMessageId: params.existingUserMessageId ?? undefined,
+      googleActionContext: params.googleActionContext ?? undefined,
     });
     const payload = (await response.json()) as {
       userMessage: MessageData;
@@ -13481,9 +14181,20 @@ function App() {
     );
   };
 
-  const handleSendMessage = async (text: string, options?: SendMessageOptions) => {
+  const performSendMessage = async (
+    text: string,
+    options?: SendMessageOptions,
+  ) => {
     const trimmed = text.trim();
-    if (isSendingMessageRef.current) return;
+    const sanitizedGoogleActionContext = sanitizeGoogleActionContext(
+      options?.googleActionContext,
+    );
+    if (sanitizedGoogleActionContext) {
+      logLiveTrace("chat.google_action_send.started", {
+        textPreview: trimmed.slice(0, 160),
+        googleActionContext: sanitizedGoogleActionContext,
+      });
+    }
 
     if (quotaSummary && quotaSummary.remaining.text <= 0) {
       setComposerError(
@@ -13568,6 +14279,7 @@ function App() {
           attachmentIds,
           optimisticUserId,
           optimisticAssistantTurnId,
+          googleActionContext: sanitizedGoogleActionContext,
         });
         removePendingAttachmentsByLocalId(readyAttachments.map((item) => item.localId));
         queryClient.invalidateQueries({ queryKey: ["/api/quota/summary"] });
@@ -13602,6 +14314,7 @@ function App() {
             optimisticUserId,
             optimisticAssistantTurnId,
             existingUserMessageId: streamAckedUserMessageId,
+            googleActionContext: sanitizedGoogleActionContext,
           });
           removePendingAttachmentsByLocalId(
             readyAttachments.map((item) => item.localId),
@@ -13669,6 +14382,32 @@ function App() {
         queryKey: ["/api/agent/artifacts?includeArchived=1"],
       });
     }
+  };
+
+  const handleSendMessage = async (text: string, options?: SendMessageOptions) => {
+    const sanitizedGoogleActionContext = sanitizeGoogleActionContext(
+      options?.googleActionContext,
+    );
+    if (sanitizedGoogleActionContext) {
+      logLiveTrace("chat.google_action_send.queued", {
+        textPreview: text.trim().slice(0, 160),
+        googleActionContext: sanitizedGoogleActionContext,
+        queueBusy: isSendingMessageRef.current,
+      });
+    }
+    const nextSend = sendMessageQueueRef.current
+      .catch(() => undefined)
+      .then(() =>
+        performSendMessage(text, {
+          ...options,
+          googleActionContext: sanitizedGoogleActionContext,
+        }),
+      );
+    sendMessageQueueRef.current = nextSend.then(
+      () => undefined,
+      () => undefined,
+    );
+    return nextSend;
   };
 
   const stopLiveSession = async () => {
@@ -14042,6 +14781,15 @@ function App() {
             timeLeft,
             at,
           });
+        },
+        getGoogleActionContext: () =>
+          activeVoiceGoogleActionContextRef.current
+            ? {
+                ...(activeVoiceGoogleActionContextRef.current ?? {}),
+              }
+            : null,
+        onConversationMutated: ({ conversationId: mutatedConversationId }) => {
+          void refreshConversationAfterLiveToolResponse(mutatedConversationId);
         },
       });
 
@@ -14576,6 +15324,9 @@ function App() {
             onResolveApproval={handleResolveTaskApproval}
             onSendMessage={handleSendMessage}
             onTraceStageEvent={traceVoiceStageEvent}
+            onStageContextChange={(context) => {
+              activeVoiceGoogleActionContextRef.current = context;
+            }}
             liveDebug={{
               enabled: liveDebugEnabled,
               state: liveDebugState,

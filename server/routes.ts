@@ -59,10 +59,12 @@ import type {
   GoogleDataFailureCode,
   GoogleActionPreview,
   GoogleActionResult,
+  GoogleActionAmbiguityCandidate,
+  GoogleActionAmbiguityPrompt,
+  GoogleActionTargetConnector,
+  GoogleActionTargetContextMetadata,
   GoogleCalendarSession,
   GoogleComposeSession,
-  GoogleEmailAmbiguityCandidate,
-  GoogleEmailAmbiguityPrompt,
   GooglePersonalContextTimeRange,
   InboxDigestItem,
   MorningBriefFailureCode,
@@ -106,6 +108,7 @@ import {
   approveAndExecuteGoogleActionTask,
   detectGoogleActionTaskIntent,
   type GoogleRecentActionContext,
+  type RecentGoogleActionTask,
   looksLikeGoogleEmailDraftRevisionInstruction,
   prepareGoogleActionTask,
   promotePendingGoogleEmailTaskToSend,
@@ -193,6 +196,27 @@ const memoryItemsQuerySchema = z.object({
   q: z.string().trim().max(120).optional(),
 });
 
+const googleClientActionContextSchema = z.object({
+  connector: z.enum(["gmail", "calendar"]).optional(),
+  action: z.string().trim().min(1).max(40).optional(),
+  actionableTargetId: z.string().trim().min(1).max(120).optional(),
+  candidateTargetIds: z.array(z.string().trim().min(1).max(120)).max(8).optional(),
+  sourceTurnId: z.string().trim().min(1).max(120).optional(),
+  selectionReason: z
+    .enum([
+      "single_candidate",
+      "ambiguity_required",
+      "active_surface",
+      "recent_context",
+      "manual_selection",
+      "latest_actionable",
+      "clarification_session",
+    ])
+    .optional(),
+  surfaceKey: z.string().trim().min(1).max(240).optional(),
+  selectionMode: z.enum(["auto", "manual", "dismissed"]).optional(),
+});
+
 const chatRespondSchema = z
   .object({
     conversationId: z.string().min(1, "conversationId is required"),
@@ -201,6 +225,7 @@ const chatRespondSchema = z
     persona: personaInputSchema.optional(),
     clientTimeZone: z.string().trim().min(1).max(80).optional(),
     existingUserMessageId: z.string().uuid().optional(),
+    googleActionContext: googleClientActionContextSchema.optional(),
   })
   .superRefine((value, ctx) => {
     if (value.text.length === 0 && value.attachmentIds.length === 0) {
@@ -291,6 +316,7 @@ const liveToolResponseSchema = z.object({
     )
     .min(1, "At least one function call is required"),
   clientTimeZone: z.string().trim().min(1).max(80).optional(),
+  googleActionContext: googleClientActionContextSchema.optional(),
 });
 
 const googleScopeModeSchema = z.enum(["read", "write"]);
@@ -6124,10 +6150,29 @@ type GoogleConversationRecentTask = {
   messageIndex: number;
 };
 
-type GoogleConversationEmailAmbiguity = {
+type GoogleClientActionContext = z.infer<typeof googleClientActionContextSchema>;
+
+type GoogleConversationActionAmbiguity = {
   messageId: string;
-  prompt: GoogleEmailAmbiguityPrompt;
+  prompt: GoogleActionAmbiguityPrompt;
 };
+
+type GoogleConversationTaskTarget =
+  | {
+      connector: "gmail" | "calendar";
+      source: "pending";
+      taskId: string;
+      preview: GoogleActionPreview;
+      messageIndex: number;
+    }
+  | {
+      connector: "gmail" | "calendar";
+      source: "recent";
+      taskId: string;
+      preview: GoogleActionPreview;
+      result: GoogleActionResult | null;
+      messageIndex: number;
+    };
 
 type GoogleConversationState = {
   composeSession: {
@@ -6146,7 +6191,8 @@ type GoogleConversationState = {
   recentEmailTask: GoogleConversationRecentTask | null;
   recentCalendarTask: GoogleConversationRecentTask | null;
   emailDraftCandidates: GoogleEmailConversationTaskTarget[];
-  emailAmbiguity: GoogleConversationEmailAmbiguity | null;
+  calendarEventCandidates: GoogleConversationTaskTarget[];
+  actionAmbiguity: GoogleConversationActionAmbiguity | null;
 };
 
 type GoogleEmailConversationTaskTarget =
@@ -6214,36 +6260,40 @@ function isGoogleCalendarSessionPayload(value: unknown): value is GoogleCalendar
   );
 }
 
-function isGoogleEmailAmbiguityCandidatePayload(
+function isGoogleActionAmbiguityCandidatePayload(
   value: unknown,
-): value is GoogleEmailAmbiguityCandidate {
+): value is GoogleActionAmbiguityCandidate {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return false;
   }
   const candidate = value as Record<string, unknown>;
   return (
     typeof candidate.taskId === "string" &&
-    typeof candidate.recipientLabel === "string" &&
-    (candidate.subject === null || typeof candidate.subject === "string") &&
-    (candidate.bodySnippet === null || typeof candidate.bodySnippet === "string") &&
+    (candidate.connector === "gmail" || candidate.connector === "calendar") &&
+    typeof candidate.title === "string" &&
+    (candidate.subtitle === null || typeof candidate.subtitle === "string") &&
+    (candidate.detail === null || typeof candidate.detail === "string") &&
     typeof candidate.statusLabel === "string" &&
     typeof candidate.selectionPrompt === "string"
   );
 }
 
-function isGoogleEmailAmbiguityPromptPayload(
+function isGoogleActionAmbiguityPromptPayload(
   value: unknown,
-): value is GoogleEmailAmbiguityPrompt {
+): value is GoogleActionAmbiguityPrompt {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return false;
   }
   const prompt = value as Record<string, unknown>;
   return (
-    (prompt.action === "send" || prompt.action === "revise") &&
+    (prompt.connector === "gmail" || prompt.connector === "calendar") &&
+    (prompt.action === "send" ||
+      prompt.action === "revise" ||
+      prompt.action === "update") &&
     typeof prompt.instructionText === "string" &&
     Array.isArray(prompt.candidates) &&
     prompt.candidates.every((candidate) =>
-      isGoogleEmailAmbiguityCandidatePayload(candidate),
+      isGoogleActionAmbiguityCandidatePayload(candidate),
     )
   );
 }
@@ -6314,6 +6364,18 @@ function isRecentGoogleCalendarTask(
   );
 }
 
+function isActionableRecentGoogleCalendarTask(
+  preview: GoogleActionPreview | null,
+  result: GoogleActionResult | null,
+): preview is GoogleActionPreview {
+  return Boolean(
+    preview?.connector === "calendar" &&
+      preview.proposedCalendar &&
+      (preview.kind === "calendar_create" || preview.kind === "calendar_update") &&
+      (result?.status === "event_created" || result?.status === "event_updated"),
+  );
+}
+
 function toGoogleRecentActionContext(
   state: GoogleConversationState,
 ): GoogleRecentActionContext {
@@ -6348,6 +6410,79 @@ function formatGoogleEmailRecipientSummaryForDisambiguation(
   return `${list[0]} +${list.length - 1}`;
 }
 
+function formatGoogleCalendarCandidateDateRange(
+  startTime: string | null | undefined,
+  endTime: string | null | undefined,
+): string | null {
+  if (!startTime) return null;
+  const start = new Date(startTime);
+  if (Number.isNaN(start.getTime())) return null;
+  const end = endTime ? new Date(endTime) : null;
+  const sameDay = Boolean(
+    end &&
+      !Number.isNaN(end.getTime()) &&
+      start.getFullYear() === end.getFullYear() &&
+      start.getMonth() === end.getMonth() &&
+      start.getDate() === end.getDate(),
+  );
+  const startLabel = start.toLocaleString("en-US", {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: start.getMinutes() === 0 ? undefined : "2-digit",
+  });
+  if (!end || Number.isNaN(end.getTime())) {
+    return startLabel;
+  }
+  const endLabel = end.toLocaleString("en-US", {
+    month: sameDay ? undefined : "short",
+    day: sameDay ? undefined : "numeric",
+    hour: "numeric",
+    minute: end.getMinutes() === 0 ? undefined : "2-digit",
+  });
+  return `${startLabel} - ${endLabel}`;
+}
+
+function formatGoogleCalendarCandidateTitle(
+  candidate: GoogleConversationTaskTarget,
+): string {
+  return (
+    candidate.preview.proposedCalendar?.title?.trim() ||
+    candidate.preview.calendarEvent?.title?.trim() ||
+    "Calendar event"
+  );
+}
+
+function formatGoogleCalendarCandidateSubtitle(
+  candidate: GoogleConversationTaskTarget,
+): string | null {
+  const startTime =
+    candidate.preview.proposedCalendar?.startTime ??
+    candidate.preview.calendarEvent?.startTime ??
+    null;
+  const endTime =
+    candidate.preview.proposedCalendar?.endTime ??
+    candidate.preview.calendarEvent?.endTime ??
+    null;
+  if (!startTime) return null;
+  return formatGoogleCalendarCandidateDateRange(startTime, endTime);
+}
+
+function formatGoogleCalendarCandidateDetail(
+  candidate: GoogleConversationTaskTarget,
+): string | null {
+  const location =
+    candidate.preview.proposedCalendar?.location ??
+    candidate.preview.calendarEvent?.location ??
+    null;
+  const description =
+    candidate.preview.proposedCalendar?.descriptionPreview ??
+    candidate.preview.calendarEvent?.description ??
+    null;
+  const detail = location?.trim() || description?.trim() || candidate.preview.summary.trim();
+  return detail ? detail.replace(/\s+/g, " ").slice(0, 160) : null;
+}
+
 function buildGoogleEmailCandidateStatusLabel(
   candidate: GoogleEmailConversationTaskTarget,
 ): string {
@@ -6368,7 +6503,7 @@ function buildGoogleEmailAmbiguityOrdinalHint(index: number): string {
 function buildGoogleEmailAmbiguityCandidateFromTarget(
   candidate: GoogleEmailConversationTaskTarget,
   index: number,
-): GoogleEmailAmbiguityCandidate {
+): GoogleActionAmbiguityCandidate {
   const recipientLabel = formatGoogleEmailRecipientSummaryForDisambiguation(
     candidate.preview.proposedEmail?.to,
   );
@@ -6388,13 +6523,43 @@ function buildGoogleEmailAmbiguityCandidateFromTarget(
     : null;
   return {
     taskId: candidate.taskId,
-    recipientLabel,
-    subject,
-    bodySnippet,
+    connector: "gmail",
+    title: recipientLabel,
+    subtitle: subject,
+    detail: bodySnippet,
     statusLabel: buildGoogleEmailCandidateStatusLabel(candidate),
     selectionPrompt: subject
       ? `Use the ${buildGoogleEmailAmbiguityOrdinalHint(index)} draft to ${recipientLabel} with subject ${subject}.`
       : `Use the ${buildGoogleEmailAmbiguityOrdinalHint(index)} draft to ${recipientLabel}.`,
+  };
+}
+
+function buildGoogleCalendarCandidateStatusLabel(
+  candidate: GoogleConversationTaskTarget,
+): string {
+  if (candidate.source === "pending") {
+    return "Needs approval";
+  }
+  return candidate.preview.kind === "calendar_update" ? "Event updated" : "Event created";
+}
+
+function buildGoogleCalendarAmbiguityCandidateFromTarget(
+  candidate: GoogleConversationTaskTarget,
+  index: number,
+): GoogleActionAmbiguityCandidate {
+  const title = formatGoogleCalendarCandidateTitle(candidate);
+  const subtitle = formatGoogleCalendarCandidateSubtitle(candidate);
+  const ordinalHint = buildGoogleEmailAmbiguityOrdinalHint(index);
+  return {
+    taskId: candidate.taskId,
+    connector: "calendar",
+    title,
+    subtitle,
+    detail: formatGoogleCalendarCandidateDetail(candidate),
+    statusLabel: buildGoogleCalendarCandidateStatusLabel(candidate),
+    selectionPrompt: subtitle
+      ? `Use the ${ordinalHint} calendar event ${title} at ${subtitle}.`
+      : `Use the ${ordinalHint} calendar event ${title}.`,
   };
 }
 
@@ -6454,9 +6619,18 @@ function resolveGoogleEmailDraftCandidateFromText(params: {
   }
 
   const ordinalMatchers: Array<{ pattern: RegExp; index: number }> = [
-    { pattern: /\b(?:latest|newest|most recent|current|last one|this one)\b/i, index: 0 },
-    { pattern: /\b(?:older|previous|first one|other one|second one)\b/i, index: 1 },
-    { pattern: /\bthird one\b/i, index: 2 },
+    {
+      pattern:
+        /\b(?:latest|newest|most recent|current|last one|last draft|last email|this one|this draft|this email|latest draft|latest email|latest message|first one|first draft|first email|first message|top one|top draft|top email)\b/i,
+      index: 0,
+    },
+    {
+      pattern:
+        /\b(?:older|previous|older one|other one|other draft|second one|second draft|second email|second message|older draft)\b/i,
+      index: 1,
+    },
+    { pattern: /\bthird(?:\s+(?:one|draft|email|message))?\b/i, index: 2 },
+    { pattern: /\bfourth(?:\s+(?:one|draft|email|message))?\b/i, index: 3 },
   ];
   for (const matcher of ordinalMatchers) {
     if (matcher.pattern.test(normalized) && candidates[matcher.index]) {
@@ -6532,6 +6706,199 @@ function resolveGoogleEmailDraftCandidateFromText(params: {
   return { kind: "ambiguous" };
 }
 
+function dedupeGoogleConversationTaskTargets(
+  candidates: GoogleConversationTaskTarget[],
+): GoogleConversationTaskTarget[] {
+  const seen = new Set<string>();
+  const deduped: GoogleConversationTaskTarget[] = [];
+  for (const candidate of candidates) {
+    if (seen.has(candidate.taskId)) continue;
+    seen.add(candidate.taskId);
+    deduped.push(candidate);
+  }
+  return deduped;
+}
+
+function normalizeGoogleCalendarCandidateMatchText(value: string): string {
+  return normalizeGoogleActionControlText(value)
+    .replace(/[^a-z0-9@.\s:-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function resolveGoogleCalendarTaskCandidateFromText(params: {
+  text: string;
+  candidates: GoogleConversationTaskTarget[];
+}):
+  | {
+      kind: "resolved";
+      candidate: GoogleConversationTaskTarget;
+    }
+  | {
+      kind: "ambiguous";
+    }
+  | {
+      kind: "none";
+    } {
+  const candidates = dedupeGoogleConversationTaskTargets(params.candidates)
+    .filter((candidate) => candidate.connector === "calendar")
+    .slice(0, 4);
+  if (candidates.length === 0) {
+    return { kind: "none" };
+  }
+  if (candidates.length === 1) {
+    return { kind: "resolved", candidate: candidates[0] };
+  }
+
+  const normalized = normalizeGoogleCalendarCandidateMatchText(params.text);
+  if (!normalized) {
+    return { kind: "ambiguous" };
+  }
+
+  const ordinalMatchers: Array<{ pattern: RegExp; index: number }> = [
+    {
+      pattern:
+        /\b(?:latest|newest|most recent|current|last one|last event|last meeting|this one|this event|this meeting|latest event|latest meeting|first one|first event|first meeting|top one|top event|top meeting)\b/i,
+      index: 0,
+    },
+    {
+      pattern:
+        /\b(?:older|previous|older one|other one|other event|other meeting|second one|second event|second meeting)\b/i,
+      index: 1,
+    },
+    { pattern: /\bthird(?:\s+(?:one|event|meeting))?\b/i, index: 2 },
+    { pattern: /\bfourth(?:\s+(?:one|event|meeting))?\b/i, index: 3 },
+  ];
+  for (const matcher of ordinalMatchers) {
+    if (matcher.pattern.test(normalized) && candidates[matcher.index]) {
+      return { kind: "resolved", candidate: candidates[matcher.index] };
+    }
+  }
+
+  const pendingMatches = /\bpending|needs approval|preview\b/i.test(normalized)
+    ? candidates.filter((candidate) => candidate.source === "pending")
+    : [];
+  if (pendingMatches.length === 1) {
+    return { kind: "resolved", candidate: pendingMatches[0] };
+  }
+  if (pendingMatches.length > 1) {
+    return { kind: "ambiguous" };
+  }
+
+  const titleMatches = candidates.filter((candidate) => {
+    const title = normalizeGoogleCalendarCandidateMatchText(
+      formatGoogleCalendarCandidateTitle(candidate),
+    );
+    return Boolean(title && normalized.includes(title));
+  });
+  if (titleMatches.length === 1) {
+    return { kind: "resolved", candidate: titleMatches[0] };
+  }
+  if (titleMatches.length > 1) {
+    return { kind: "ambiguous" };
+  }
+
+  const subtitleMatches = candidates.filter((candidate) => {
+    const subtitle = normalizeGoogleCalendarCandidateMatchText(
+      formatGoogleCalendarCandidateSubtitle(candidate) ?? "",
+    );
+    return Boolean(subtitle && normalized.includes(subtitle));
+  });
+  if (subtitleMatches.length === 1) {
+    return { kind: "resolved", candidate: subtitleMatches[0] };
+  }
+  if (subtitleMatches.length > 1) {
+    return { kind: "ambiguous" };
+  }
+
+  return { kind: "ambiguous" };
+}
+
+function rankGoogleConversationTaskTargets<T extends GoogleConversationTaskTarget>(params: {
+  candidates: T[];
+  clientActionContext?: GoogleClientActionContext | null;
+  connector: GoogleActionTargetConnector;
+  action: "send" | "revise" | "update";
+}): T[] {
+  const activeTaskId = params.clientActionContext?.actionableTargetId ?? null;
+  const activeConnector = params.clientActionContext?.connector ?? null;
+  const prefersManualSelection =
+    params.clientActionContext?.selectionReason === "manual_selection";
+  return [...params.candidates].sort((a, b) => {
+    const aActive = a.taskId === activeTaskId ? 1 : 0;
+    const bActive = b.taskId === activeTaskId ? 1 : 0;
+    if (aActive !== bActive) return bActive - aActive;
+    const aConnector = a.connector === params.connector ? 1 : 0;
+    const bConnector = b.connector === params.connector ? 1 : 0;
+    if (aConnector !== bConnector) return bConnector - aConnector;
+    const aContextConnector = a.connector === activeConnector ? 1 : 0;
+    const bContextConnector = b.connector === activeConnector ? 1 : 0;
+    if (aContextConnector !== bContextConnector) {
+      return bContextConnector - aContextConnector;
+    }
+    if (a.messageIndex !== b.messageIndex) {
+      return b.messageIndex - a.messageIndex;
+    }
+    if (prefersManualSelection && a.source !== b.source) {
+      return a.source === "recent" ? -1 : 1;
+    }
+    if (params.action === "send" && a.source !== b.source) {
+      return a.source === "recent" ? -1 : 1;
+    }
+    if (a.source !== b.source) {
+      return a.source === "pending" ? -1 : 1;
+    }
+    return a.taskId.localeCompare(b.taskId);
+  });
+}
+
+function resolveTargetFromClientActionContext<T extends GoogleConversationTaskTarget>(params: {
+  candidates: T[];
+  clientActionContext?: GoogleClientActionContext | null;
+  connector: GoogleActionTargetConnector;
+}): T | null {
+  const targetTaskId = params.clientActionContext?.actionableTargetId?.trim() ?? "";
+  if (!targetTaskId) {
+    return null;
+  }
+  return (
+    params.candidates.find(
+      (candidate) =>
+        candidate.connector === params.connector && candidate.taskId === targetTaskId,
+    ) ?? null
+  );
+}
+
+function hasExplicitAmbiguitySelectionContext(params: {
+  clientActionContext?: GoogleClientActionContext | null;
+  ambiguity: GoogleActionAmbiguityPrompt;
+}): boolean {
+  const targetTaskId = params.clientActionContext?.actionableTargetId?.trim() ?? "";
+  if (!targetTaskId) {
+    return false;
+  }
+  if (params.clientActionContext?.selectionReason !== "manual_selection") {
+    return false;
+  }
+  if (params.clientActionContext?.connector !== params.ambiguity.connector) {
+    return false;
+  }
+  const candidateIds = new Set(
+    params.ambiguity.candidates.map((candidate) => candidate.taskId),
+  );
+  if (!candidateIds.has(targetTaskId)) {
+    return false;
+  }
+  const hintedCandidateIds = params.clientActionContext?.candidateTargetIds ?? [];
+  if (
+    hintedCandidateIds.length > 0 &&
+    hintedCandidateIds.some((candidateId) => !candidateIds.has(candidateId))
+  ) {
+    return false;
+  }
+  return true;
+}
+
 function looksLikeGoogleEmailAmbiguitySelectionText(text: string): boolean {
   const normalized = normalizeGoogleEmailCandidateMatchText(text);
   if (!normalized) return false;
@@ -6564,10 +6931,12 @@ function resolveLatestGoogleConversationState(messages: Message[]): GoogleConver
     recentEmailTask: null,
     recentCalendarTask: null,
     emailDraftCandidates: [],
-    emailAmbiguity: null,
+    calendarEventCandidates: [],
+    actionAmbiguity: null,
   };
   const seenGoogleTaskIds = new Set<string>();
   const seenEmailDraftTaskIds = new Set<string>();
+  const seenCalendarTaskIds = new Set<string>();
   let hasNewerGoogleActionState = false;
 
   for (let idx = messages.length - 1; idx >= 0; idx -= 1) {
@@ -6577,17 +6946,21 @@ function resolveLatestGoogleConversationState(messages: Message[]): GoogleConver
     }
 
     const payload = message.uiPayload as AgentMessageUiPayload;
-    if (payload.kind === "agent_google_email_ambiguity") {
+    if (
+      payload.kind === "agent_google_email_ambiguity" ||
+      payload.kind === "agent_google_action_ambiguity"
+    ) {
       if (
-        !state.emailAmbiguity &&
+        !state.actionAmbiguity &&
         !state.pendingTask &&
         state.emailDraftCandidates.length === 0 &&
+        state.calendarEventCandidates.length === 0 &&
         !state.composeSession &&
         !state.calendarSession &&
         !hasNewerGoogleActionState &&
-        isGoogleEmailAmbiguityPromptPayload(payload.ambiguity)
+        isGoogleActionAmbiguityPromptPayload(payload.ambiguity)
       ) {
-        state.emailAmbiguity = {
+        state.actionAmbiguity = {
           messageId: message.id,
           prompt: payload.ambiguity,
         };
@@ -6628,6 +7001,23 @@ function resolveLatestGoogleConversationState(messages: Message[]): GoogleConver
           messageIndex: idx,
         });
         seenEmailDraftTaskIds.add(payload.taskId);
+      }
+      if (
+        preview &&
+        isFreshGoogleTaskId &&
+        payload.approval.status === "pending" &&
+        !seenCalendarTaskIds.has(payload.taskId) &&
+        preview.connector === "calendar" &&
+        preview.proposedCalendar
+      ) {
+        state.calendarEventCandidates.push({
+          connector: "calendar",
+          source: "pending",
+          taskId: payload.taskId,
+          preview,
+          messageIndex: idx,
+        });
+        seenCalendarTaskIds.add(payload.taskId);
       }
       continue;
     }
@@ -6698,6 +7088,20 @@ function resolveLatestGoogleConversationState(messages: Message[]): GoogleConver
             result,
             messageIndex: idx,
           };
+        }
+        if (
+          !seenCalendarTaskIds.has(payload.task.id) &&
+          isActionableRecentGoogleCalendarTask(preview, result)
+        ) {
+          state.calendarEventCandidates.push({
+            connector: "calendar",
+            source: "recent",
+            taskId: payload.task.id,
+            preview,
+            result,
+            messageIndex: idx,
+          });
+          seenCalendarTaskIds.add(payload.task.id);
         }
       }
       continue;
@@ -6797,7 +7201,7 @@ function shouldBypassGenericAgentTaskForGoogleAction(params: {
 }): boolean {
   const state = resolveLatestGoogleConversationState(params.conversationMessages);
   const latestEmailTaskTarget = resolveLatestGoogleEmailTaskTarget(state);
-  if (state.emailAmbiguity) {
+  if (state.actionAmbiguity) {
     return true;
   }
   if (state.composeSession) {
@@ -6842,25 +7246,51 @@ function buildCalendarSessionReminder(session: GoogleCalendarSession): string {
     : "I still need what the event should be called before I can prepare it.";
 }
 
+function buildGoogleTargetContextMetadata(params: {
+  connector: GoogleActionTargetConnector;
+  action: string | null;
+  actionableTargetId?: string | null;
+  candidateTargetIds?: string[];
+  sourceTurnId?: string | null;
+  selectionReason?: GoogleActionTargetContextMetadata["selectionReason"];
+  surfaceKey?: string | null;
+  selectionMode?: GoogleActionTargetContextMetadata["selectionMode"];
+}): GoogleActionTargetContextMetadata {
+  return {
+    connector: params.connector,
+    action: params.action,
+    actionableTargetId: params.actionableTargetId ?? null,
+    candidateTargetIds: params.candidateTargetIds ?? [],
+    sourceTurnId: params.sourceTurnId ?? null,
+    selectionReason: params.selectionReason ?? null,
+    surfaceKey: params.surfaceKey ?? null,
+    selectionMode: params.selectionMode ?? null,
+  };
+}
+
 function toGoogleComposeSessionUiPayload(
   session: GoogleComposeSession,
   text: string,
+  googleContext?: GoogleActionTargetContextMetadata | null,
 ): Extract<AgentMessageUiPayload, { kind: "agent_google_compose_session" }> {
   return {
     kind: "agent_google_compose_session",
     session,
     text,
+    googleContext: googleContext ?? null,
   };
 }
 
 function toGoogleCalendarSessionUiPayload(
   session: GoogleCalendarSession,
   text: string,
+  googleContext?: GoogleActionTargetContextMetadata | null,
 ): Extract<AgentMessageUiPayload, { kind: "agent_google_calendar_session" }> {
   return {
     kind: "agent_google_calendar_session",
     session,
     text,
+    googleContext: googleContext ?? null,
   };
 }
 
@@ -6869,13 +7299,18 @@ async function createGoogleComposeSessionAssistantMessage(params: {
   conversationId: string;
   session: GoogleComposeSession;
   text: string;
+  googleContext?: GoogleActionTargetContextMetadata | null;
 }) {
   return params.storage.createMessage({
     conversationId: params.conversationId,
     sender: "assistant",
     text: params.text,
     partIndex: 0,
-    uiPayload: toGoogleComposeSessionUiPayload(params.session, params.text),
+    uiPayload: toGoogleComposeSessionUiPayload(
+      params.session,
+      params.text,
+      params.googleContext,
+    ),
   });
 }
 
@@ -6884,40 +7319,84 @@ async function createGoogleCalendarSessionAssistantMessage(params: {
   conversationId: string;
   session: GoogleCalendarSession;
   text: string;
+  googleContext?: GoogleActionTargetContextMetadata | null;
 }) {
   return params.storage.createMessage({
     conversationId: params.conversationId,
     sender: "assistant",
     text: params.text,
     partIndex: 0,
-    uiPayload: toGoogleCalendarSessionUiPayload(params.session, params.text),
+    uiPayload: toGoogleCalendarSessionUiPayload(
+      params.session,
+      params.text,
+      params.googleContext,
+    ),
   });
 }
 
-function toGoogleEmailAmbiguityUiPayload(
-  ambiguity: GoogleEmailAmbiguityPrompt,
+function toGoogleActionAmbiguityUiPayload(
+  ambiguity: GoogleActionAmbiguityPrompt,
   text: string,
-): Extract<AgentMessageUiPayload, { kind: "agent_google_email_ambiguity" }> {
+  googleContext?: GoogleActionTargetContextMetadata | null,
+): Extract<AgentMessageUiPayload, { kind: "agent_google_action_ambiguity" }> {
   return {
-    kind: "agent_google_email_ambiguity",
+    kind: "agent_google_action_ambiguity",
     ambiguity,
     text,
+    googleContext: googleContext ?? null,
   };
 }
 
-async function createGoogleEmailAmbiguityAssistantMessage(params: {
+async function createGoogleActionAmbiguityAssistantMessage(params: {
   storage: typeof storage;
   conversationId: string;
-  ambiguity: GoogleEmailAmbiguityPrompt;
+  ambiguity: GoogleActionAmbiguityPrompt;
   text: string;
+  googleContext?: GoogleActionTargetContextMetadata | null;
 }) {
   return params.storage.createMessage({
     conversationId: params.conversationId,
     sender: "assistant",
     text: params.text,
     partIndex: 0,
-    uiPayload: toGoogleEmailAmbiguityUiPayload(params.ambiguity, params.text),
+    uiPayload: toGoogleActionAmbiguityUiPayload(
+      params.ambiguity,
+      params.text,
+      params.googleContext,
+    ),
   });
+}
+
+function buildRecentGoogleActionTaskFromTarget(
+  target: GoogleConversationTaskTarget,
+): RecentGoogleActionTask {
+  return {
+    taskId: target.taskId,
+    preview: target.preview,
+    result: "result" in target ? target.result ?? null : null,
+  };
+}
+
+function looksLikeGoogleCalendarFollowUpInstruction(text: string): boolean {
+  const compact = normalizeGoogleActionControlText(text);
+  if (!compact) return false;
+  return (
+    /\b(move|reschedule|change|update|add|set|clear|remove|book|put|block|hold)\b/.test(
+      compact,
+    ) &&
+    (/\b(calendar|meeting|event|appointment)\b/.test(compact) ||
+      /\b(it|that)\b/.test(compact) ||
+      /\b(location|notes?|description)\b/.test(compact) ||
+      /\bto\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)\b/.test(compact))
+  );
+}
+
+function looksLikeGoogleCalendarAmbiguitySelectionText(text: string): boolean {
+  const normalized = normalizeGoogleCalendarCandidateMatchText(text);
+  if (!normalized) return false;
+  return /\b(?:latest|newest|most recent|current|older|previous|first|second|third|pending|created|updated|event|meeting|that one|this one)\b/i.test(
+    normalized,
+  );
 }
 
 function hasGoogleDetailReadIntent(text: string): boolean {
@@ -7171,6 +7650,7 @@ async function handleResolvedGoogleEmailFollowUp(params: {
   instructionText: string;
   targetTaskId: string;
   targetPreview?: GoogleActionPreview | null;
+  googleContext?: GoogleActionTargetContextMetadata | null;
   onEvent?: (event: AgentTaskEvent) => void;
 }) {
   const task = await params.storage.getAgentTaskById(params.targetTaskId);
@@ -7185,17 +7665,30 @@ async function handleResolvedGoogleEmailFollowUp(params: {
         return { handled: false as const };
       }
 
-      await promotePendingGoogleEmailTaskToSend({
+      const promoted = await promotePendingGoogleEmailTaskToSend({
         storage: params.storage,
         taskId: task.id,
         userId: params.userId,
       });
-
-      const approvedTask = await approveAndExecuteGoogleActionTask({
-        storage: params.storage,
-        taskId: task.id,
-        userId: params.userId,
-        onEvent: params.onEvent,
+      await params.storage.createMessage({
+        conversationId: task.conversationId,
+        sender: "assistant",
+        text: "I switched this draft into a send-ready approval. Review it and approve when you're ready.",
+        partIndex: 0,
+        uiPayload: {
+          kind: "agent_task_status",
+          task: promoted.task,
+          text: "Send approval ready",
+          googleActionPreview: promoted.preview,
+          googleContext: buildGoogleTargetContextMetadata({
+            connector: "gmail",
+            action: "send",
+            actionableTargetId: task.id,
+            candidateTargetIds: [task.id],
+            sourceTurnId: params.requestedByMessageId,
+            selectionReason: "manual_selection",
+          }),
+        },
       });
 
       const assistantMessages = await collectRecentAssistantTaskMessages({
@@ -7210,19 +7703,19 @@ async function handleResolvedGoogleEmailFollowUp(params: {
           ? assistantMessages
           : [
               {
-                id: `google-action-approved-${task.id}`,
+                id: `google-action-send-preview-${task.id}`,
                 conversationId: params.conversationId,
                 sender: "assistant",
                 turnId: randomUUID(),
                 partIndex: 0,
-                text: "Approval received. Applying it now.",
+                text: "I switched this draft into a send-ready approval. Review it and approve when you're ready.",
                 createdAt: new Date(),
                 attachments: [],
                 uiPayload: {
                   kind: "agent_task_status",
-                  task: approvedTask,
-                  text: "Approved and running",
-                  googleActionPreview: params.targetPreview ?? null,
+                  task: promoted.task,
+                  text: "Send approval ready",
+                  googleActionPreview: promoted.preview,
                 },
               },
             ];
@@ -7234,11 +7727,11 @@ async function handleResolvedGoogleEmailFollowUp(params: {
         legacyAssistantMessage: makeLegacyAssistantMessage(
           finalizedAssistantMessages,
         ),
-        model: "google_action_task_send_v1",
+        model: "google_action_task_send_promotion_v1",
         decisionPath: "agent_task" as const,
         decisionPathReason: "task_started" as const,
-        awaitingApproval: false,
-        task: approvedTask,
+        awaitingApproval: true,
+        task: promoted.task,
       };
     }
 
@@ -7249,6 +7742,7 @@ async function handleResolvedGoogleEmailFollowUp(params: {
       conversationId: params.conversationId,
       requestedByMessageId: params.requestedByMessageId,
       onEvent: params.onEvent,
+      googleContext: params.googleContext ?? null,
     });
 
     const assistantMessages = await collectRecentAssistantTaskMessages({
@@ -7257,12 +7751,34 @@ async function handleResolvedGoogleEmailFollowUp(params: {
       userId: params.userId,
       userCreatedAt: params.userCreatedAt,
     });
+    const finalizedAssistantMessages =
+      assistantMessages.length > 0
+        ? assistantMessages
+        : [
+            {
+              id: `google-action-send-followup-${run.task.id}`,
+              conversationId: params.conversationId,
+              sender: "assistant",
+              turnId: randomUUID(),
+              partIndex: 0,
+              text: "I prepared a send-ready approval for that draft. Review it and approve when you're ready.",
+              createdAt: new Date(),
+              attachments: [],
+              uiPayload: {
+                kind: "agent_task_status",
+                task: run.task,
+                text: "Send approval ready",
+                googleActionPreview: run.preview,
+                googleContext: params.googleContext ?? null,
+              },
+            },
+          ];
 
     return {
       handled: true as const,
       kind: "ready" as const,
-      assistantMessages,
-      legacyAssistantMessage: makeLegacyAssistantMessage(assistantMessages),
+      assistantMessages: finalizedAssistantMessages,
+      legacyAssistantMessage: makeLegacyAssistantMessage(finalizedAssistantMessages),
       model: "google_action_task_send_followup_v1",
       decisionPath: "agent_task" as const,
       decisionPathReason: "task_started" as const,
@@ -7277,6 +7793,7 @@ async function handleResolvedGoogleEmailFollowUp(params: {
       taskId: task.id,
       userId: params.userId,
       instructionText: params.instructionText,
+      googleContext: params.googleContext ?? null,
     });
 
     const assistantMessages = await collectRecentAssistantTaskMessages({
@@ -7285,12 +7802,34 @@ async function handleResolvedGoogleEmailFollowUp(params: {
       userId: params.userId,
       userCreatedAt: params.userCreatedAt,
     });
+    const finalizedAssistantMessages =
+      assistantMessages.length > 0
+        ? assistantMessages
+        : [
+            {
+              id: `google-action-revision-pending-${revised.task.id}`,
+              conversationId: params.conversationId,
+              sender: "assistant",
+              turnId: randomUUID(),
+              partIndex: 0,
+              text: "I updated the draft preview. Review it and approve when you're ready.",
+              createdAt: new Date(),
+              attachments: [],
+              uiPayload: {
+                kind: "agent_task_status",
+                task: revised.task,
+                text: "Updated draft preview",
+                googleActionPreview: revised.preview,
+                googleContext: params.googleContext ?? null,
+              },
+            },
+          ];
 
     return {
       handled: true as const,
       kind: "ready" as const,
-      assistantMessages,
-      legacyAssistantMessage: makeLegacyAssistantMessage(assistantMessages),
+      assistantMessages: finalizedAssistantMessages,
+      legacyAssistantMessage: makeLegacyAssistantMessage(finalizedAssistantMessages),
       model: "google_action_task_revised_v1",
       decisionPath: "agent_task" as const,
       decisionPathReason: "task_started" as const,
@@ -7307,6 +7846,7 @@ async function handleResolvedGoogleEmailFollowUp(params: {
     requestedByMessageId: params.requestedByMessageId,
     instructionText: params.instructionText,
     onEvent: params.onEvent,
+    googleContext: params.googleContext ?? null,
   });
 
   const assistantMessages = await collectRecentAssistantTaskMessages({
@@ -7315,13 +7855,150 @@ async function handleResolvedGoogleEmailFollowUp(params: {
     userId: params.userId,
     userCreatedAt: params.userCreatedAt,
   });
+  const finalizedAssistantMessages =
+    assistantMessages.length > 0
+      ? assistantMessages
+      : [
+          {
+            id: `google-action-revision-followup-${run.task.id}`,
+            conversationId: params.conversationId,
+            sender: "assistant",
+            turnId: randomUUID(),
+            partIndex: 0,
+            text: "I updated the saved draft preview. Review it and approve when you're ready.",
+            createdAt: new Date(),
+            attachments: [],
+            uiPayload: {
+              kind: "agent_task_status",
+              task: run.task,
+              text: "Updated draft preview",
+              googleActionPreview: run.preview,
+              googleContext: params.googleContext ?? null,
+            },
+          },
+        ];
 
   return {
     handled: true as const,
     kind: "ready" as const,
-    assistantMessages,
-    legacyAssistantMessage: makeLegacyAssistantMessage(assistantMessages),
+    assistantMessages: finalizedAssistantMessages,
+    legacyAssistantMessage: makeLegacyAssistantMessage(finalizedAssistantMessages),
     model: "google_action_task_saved_draft_revision_v1",
+    decisionPath: "agent_task" as const,
+    decisionPathReason: "task_started" as const,
+    awaitingApproval: run.awaitingApproval,
+    task: run.task,
+  };
+}
+
+async function finalizePreparedGoogleActionTask(params: {
+  storage: typeof storage;
+  userId: string;
+  conversationId: string;
+  userMessage: {
+    id: string;
+    createdAt: Date | null;
+  };
+  text: string;
+  preparation: Awaited<ReturnType<typeof prepareGoogleActionTask>>;
+  onEvent?: (event: AgentTaskEvent) => void;
+  googleContext?: GoogleActionTargetContextMetadata | null;
+}) {
+  const { preparation } = params;
+  if (preparation.kind === "none") {
+    return { handled: false as const };
+  }
+
+  if (preparation.kind === "clarify" || preparation.kind === "upgrade_required") {
+    const assistantMessages =
+      preparation.kind === "clarify" && preparation.composeSession
+        ? [
+            await createGoogleComposeSessionAssistantMessage({
+              storage: params.storage,
+              conversationId: params.conversationId,
+              session: preparation.composeSession,
+              text: preparation.message,
+              googleContext: params.googleContext,
+            }),
+          ]
+        : preparation.kind === "clarify" && preparation.calendarSession
+          ? [
+              await createGoogleCalendarSessionAssistantMessage({
+                storage: params.storage,
+                conversationId: params.conversationId,
+                session: preparation.calendarSession,
+                text: preparation.message,
+                googleContext: params.googleContext,
+              }),
+            ]
+          : await storage.createAssistantTurnParts({
+              conversationId: params.conversationId,
+              textParts: [preparation.message],
+            });
+    return {
+      handled: true as const,
+      kind: preparation.kind,
+      assistantMessages,
+      legacyAssistantMessage: makeLegacyAssistantMessage(assistantMessages),
+      model:
+        preparation.kind === "clarify"
+          ? "google_action_clarification_v1"
+          : "google_action_upgrade_required_v1",
+      decisionPath: "companion_reply" as const,
+      decisionPathReason: "companion" as const,
+      awaitingApproval: false,
+      task: null,
+    };
+  }
+
+  const run = await startGoogleActionTaskRun({
+    storage: params.storage,
+    userId: params.userId,
+    conversationId: params.conversationId,
+    prompt: preparation.resolvedPrompt ?? params.text,
+    requestedByMessageId: params.userMessage.id,
+    preview: preparation.preview,
+    plan: preparation.plan,
+    onEvent: params.onEvent,
+    googleContext: params.googleContext,
+  });
+
+  const assistantMessages = await collectRecentAssistantTaskMessages({
+    conversationId: params.conversationId,
+    taskId: run.task.id,
+    userId: params.userId,
+    userCreatedAt: params.userMessage.createdAt,
+  });
+
+  const finalizedAssistantMessages =
+    assistantMessages.length > 0
+      ? assistantMessages
+      : [
+          {
+            id: `google-action-final-${run.task.id}`,
+            conversationId: params.conversationId,
+            sender: "assistant",
+            turnId: randomUUID(),
+            partIndex: 0,
+            text: "I prepared a Google action and need your approval before I continue.",
+            createdAt: new Date(),
+            attachments: [],
+            uiPayload: {
+              kind: "agent_task_status",
+              task: run.task,
+              text: "Approval needed",
+              googleActionPreview: preparation.preview,
+              googleContext: params.googleContext ?? null,
+            },
+          },
+        ];
+
+  return {
+    handled: true as const,
+    kind: "ready" as const,
+    assistantMessages: finalizedAssistantMessages,
+    legacyAssistantMessage: makeLegacyAssistantMessage(finalizedAssistantMessages),
+    model: "google_action_task_v1",
     decisionPath: "agent_task" as const,
     decisionPathReason: "task_started" as const,
     awaitingApproval: run.awaitingApproval,
@@ -7336,11 +8013,13 @@ async function maybeHandleGoogleActionTask(params: {
   conversationMessages: Message[];
   text: string;
   clientTimeZone?: string | null;
+  clientGoogleActionContext?: GoogleClientActionContext | null;
   userMessage: {
     id: string;
     createdAt: Date | null;
   };
   onEvent?: (event: AgentTaskEvent) => void;
+  onTrace?: (event: string, metadata: Record<string, unknown>) => void;
 }) {
   if (!ENABLE_GOOGLE_PERSONAL_CONTEXT_WRITES) {
     return { handled: false as const };
@@ -7349,12 +8028,28 @@ async function maybeHandleGoogleActionTask(params: {
   const googleConversationState = resolveLatestGoogleConversationState(
     params.conversationMessages,
   );
-  const latestEmailTaskTarget = resolveLatestGoogleEmailTaskTarget(
-    googleConversationState,
-  );
+  const recentContext = toGoogleRecentActionContext(googleConversationState);
+  const rankedEmailCandidates = rankGoogleConversationTaskTargets({
+    candidates: googleConversationState.emailDraftCandidates.map((candidate) => ({
+      ...candidate,
+      connector: "gmail" as const,
+    })),
+    clientActionContext: params.clientGoogleActionContext,
+    connector: "gmail",
+    action: isGoogleActionSendMessage(params.text) ? "send" : "revise",
+  });
+  const latestEmailTaskTarget =
+    (rankedEmailCandidates[0] as GoogleEmailConversationTaskTarget | undefined) ??
+    resolveLatestGoogleEmailTaskTarget(googleConversationState);
+  const rankedCalendarCandidates = rankGoogleConversationTaskTargets({
+    candidates: googleConversationState.calendarEventCandidates,
+    clientActionContext: params.clientGoogleActionContext,
+    connector: "calendar",
+    action: "update",
+  });
   const hasOtherGoogleFollowUpIntent = detectGoogleActionTaskIntent(
     params.text,
-    toGoogleRecentActionContext(googleConversationState),
+    recentContext,
   );
   const wantsEmailSendFollowUp =
     Boolean(latestEmailTaskTarget) && isGoogleActionSendMessage(params.text);
@@ -7363,40 +8058,214 @@ async function maybeHandleGoogleActionTask(params: {
     !wantsEmailSendFollowUp &&
     !isGoogleActionApproveMessage(params.text) &&
     !isGoogleActionDeclineMessage(params.text) &&
-    !hasOtherGoogleFollowUpIntent &&
-    looksLikeGoogleEmailDraftRevisionInstruction(params.text);
-  const actionableEmailCandidates = googleConversationState.emailDraftCandidates;
+      !hasOtherGoogleFollowUpIntent &&
+      looksLikeGoogleEmailDraftRevisionInstruction(params.text);
+  const wantsCalendarFollowUp =
+    rankedCalendarCandidates.length > 0 &&
+    !wantsEmailSendFollowUp &&
+    !wantsEmailRevisionFollowUp &&
+    looksLikeGoogleCalendarFollowUpInstruction(params.text);
+  const actionableEmailCandidates =
+    rankedEmailCandidates as GoogleEmailConversationTaskTarget[];
   const emailCandidateResolution = resolveGoogleEmailDraftCandidateFromText({
     text: params.text,
     candidates: actionableEmailCandidates,
   });
-  const looksLikeAmbiguityReply =
+  const calendarCandidateResolution = resolveGoogleCalendarTaskCandidateFromText({
+    text: params.text,
+    candidates: rankedCalendarCandidates,
+  });
+  const looksLikeEmailAmbiguityReply =
     looksLikeGoogleEmailAmbiguitySelectionText(params.text) ||
     isGoogleActionSendMessage(params.text) ||
     looksLikeGoogleEmailDraftRevisionInstruction(params.text);
+  const looksLikeCalendarAmbiguityReply =
+    looksLikeGoogleCalendarAmbiguitySelectionText(params.text) ||
+    looksLikeGoogleCalendarFollowUpInstruction(params.text);
 
-  if (googleConversationState.emailAmbiguity) {
-    if (looksLikeAmbiguityReply && emailCandidateResolution.kind === "resolved") {
+  params.onTrace?.("google.target_resolution", {
+    text: params.text,
+    activeSurfaceKey: params.clientGoogleActionContext?.surfaceKey ?? null,
+    connectorHint: params.clientGoogleActionContext?.connector ?? null,
+    emailCandidateCount: actionableEmailCandidates.length,
+    calendarCandidateCount: rankedCalendarCandidates.length,
+    emailCandidateTaskIds: actionableEmailCandidates.map((candidate) => candidate.taskId),
+    calendarCandidateTaskIds: rankedCalendarCandidates.map((candidate) => candidate.taskId),
+    hasPendingTask: Boolean(googleConversationState.pendingTask),
+    hasComposeSession: Boolean(googleConversationState.composeSession),
+    hasCalendarSession: Boolean(googleConversationState.calendarSession),
+  });
+
+  if (googleConversationState.actionAmbiguity) {
+    const hasExplicitAmbiguitySelection = hasExplicitAmbiguitySelectionContext({
+      clientActionContext: params.clientGoogleActionContext,
+      ambiguity: googleConversationState.actionAmbiguity.prompt,
+    });
+    const contextSelectedEmailTarget = resolveTargetFromClientActionContext({
+      candidates: actionableEmailCandidates,
+      clientActionContext: hasExplicitAmbiguitySelection
+        ? params.clientGoogleActionContext
+        : null,
+      connector: "gmail",
+    });
+    const contextSelectedCalendarTarget = resolveTargetFromClientActionContext({
+      candidates: rankedCalendarCandidates,
+      clientActionContext: hasExplicitAmbiguitySelection
+        ? params.clientGoogleActionContext
+        : null,
+      connector: "calendar",
+    });
+
+    if (
+      params.clientGoogleActionContext?.actionableTargetId &&
+      !hasExplicitAmbiguitySelection
+    ) {
+      params.onTrace?.("google.target_ambiguity_context_ignored", {
+        connector: googleConversationState.actionAmbiguity.prompt.connector,
+        action: googleConversationState.actionAmbiguity.prompt.action,
+        activeTargetId: params.clientGoogleActionContext.actionableTargetId,
+        selectionReason: params.clientGoogleActionContext.selectionReason ?? null,
+        candidateTargetIds:
+          googleConversationState.actionAmbiguity.prompt.candidates.map(
+            (candidate) => candidate.taskId,
+          ),
+      });
+    }
+
+    if (
+      googleConversationState.actionAmbiguity.prompt.connector === "gmail" &&
+      looksLikeEmailAmbiguityReply &&
+      (contextSelectedEmailTarget || emailCandidateResolution.kind === "resolved")
+    ) {
+      const selectedEmailTarget =
+        contextSelectedEmailTarget ??
+        (emailCandidateResolution.kind === "resolved"
+          ? emailCandidateResolution.candidate
+          : null);
+      if (!selectedEmailTarget) {
+        return { handled: false as const };
+      }
+      params.onTrace?.("google.target_ambiguity_resolved", {
+        connector: "gmail",
+        action: googleConversationState.actionAmbiguity.prompt.action,
+        selectedTaskId: selectedEmailTarget.taskId,
+        resolutionKind: contextSelectedEmailTarget
+          ? "client_action_context"
+          : emailCandidateResolution.kind,
+      });
+      const googleContext = buildGoogleTargetContextMetadata({
+        connector: "gmail",
+        action:
+          googleConversationState.actionAmbiguity.prompt.action === "send"
+            ? "send"
+            : "revise",
+        actionableTargetId: selectedEmailTarget.taskId,
+        candidateTargetIds:
+          googleConversationState.actionAmbiguity.prompt.candidates.map(
+            (candidate) => candidate.taskId,
+          ),
+        sourceTurnId: params.userMessage.id,
+        selectionReason: "manual_selection",
+        surfaceKey: params.clientGoogleActionContext?.surfaceKey ?? null,
+        selectionMode: params.clientGoogleActionContext?.selectionMode ?? "manual",
+      });
       return handleResolvedGoogleEmailFollowUp({
         storage: params.storage,
         userId: params.userId,
         conversationId: params.conversationId,
         requestedByMessageId: params.userMessage.id,
         userCreatedAt: params.userMessage.createdAt,
-        action: googleConversationState.emailAmbiguity.prompt.action,
-        instructionText: googleConversationState.emailAmbiguity.prompt.instructionText,
-        targetTaskId: emailCandidateResolution.candidate.taskId,
-        targetPreview: emailCandidateResolution.candidate.preview,
+        action:
+          googleConversationState.actionAmbiguity.prompt.action === "send"
+            ? "send"
+            : "revise",
+        instructionText:
+          googleConversationState.actionAmbiguity.prompt.instructionText,
+        targetTaskId: selectedEmailTarget.taskId,
+        targetPreview: selectedEmailTarget.preview,
+        googleContext,
         onEvent: params.onEvent,
       });
     }
 
-    if (looksLikeAmbiguityReply) {
-      const assistantMessage = await createGoogleEmailAmbiguityAssistantMessage({
+    if (
+      googleConversationState.actionAmbiguity.prompt.connector === "calendar" &&
+      looksLikeCalendarAmbiguityReply &&
+      (contextSelectedCalendarTarget ||
+        calendarCandidateResolution.kind === "resolved")
+    ) {
+      const selectedTarget =
+        contextSelectedCalendarTarget ??
+        (calendarCandidateResolution.kind === "resolved"
+          ? calendarCandidateResolution.candidate
+          : null);
+      if (!selectedTarget) {
+        return { handled: false as const };
+      }
+      params.onTrace?.("google.target_ambiguity_resolved", {
+        connector: "calendar",
+        action: googleConversationState.actionAmbiguity.prompt.action,
+        selectedTaskId: selectedTarget.taskId,
+        resolutionKind: contextSelectedCalendarTarget
+          ? "client_action_context"
+          : calendarCandidateResolution.kind,
+      });
+      const googleContext = buildGoogleTargetContextMetadata({
+        connector: "calendar",
+        action: googleConversationState.actionAmbiguity.prompt.action,
+        actionableTargetId: selectedTarget.taskId,
+        candidateTargetIds: rankedCalendarCandidates.map((candidate) => candidate.taskId),
+        sourceTurnId: params.userMessage.id,
+        selectionReason: "manual_selection",
+        surfaceKey: params.clientGoogleActionContext?.surfaceKey ?? null,
+        selectionMode: params.clientGoogleActionContext?.selectionMode ?? "manual",
+      });
+      const preparation = await prepareGoogleActionTask({
+        storage: params.storage,
+        userId: params.userId,
+        text: googleConversationState.actionAmbiguity.prompt.instructionText,
+        clientTimeZone: params.clientTimeZone ?? null,
+        recentContext: {
+          ...recentContext,
+          recentCalendarTask: buildRecentGoogleActionTaskFromTarget(selectedTarget),
+        },
+      });
+      return finalizePreparedGoogleActionTask({
+        storage: params.storage,
+        userId: params.userId,
+        conversationId: params.conversationId,
+        userMessage: params.userMessage,
+        text: params.text,
+        preparation,
+        onEvent: params.onEvent,
+        googleContext,
+      });
+    }
+
+    if (
+      (googleConversationState.actionAmbiguity.prompt.connector === "gmail" &&
+        looksLikeEmailAmbiguityReply) ||
+      (googleConversationState.actionAmbiguity.prompt.connector === "calendar" &&
+        looksLikeCalendarAmbiguityReply)
+    ) {
+      const connector = googleConversationState.actionAmbiguity.prompt.connector;
+      const assistantMessage = await createGoogleActionAmbiguityAssistantMessage({
         storage: params.storage,
         conversationId: params.conversationId,
-        ambiguity: googleConversationState.emailAmbiguity.prompt,
-        text: "I found more than one recent draft. Which one did you mean?",
+        ambiguity: googleConversationState.actionAmbiguity.prompt,
+        text:
+          connector === "gmail"
+            ? "I found more than one recent draft. Which email did you mean?"
+            : "I found more than one recent calendar event. Which one did you mean?",
+        googleContext: buildGoogleTargetContextMetadata({
+          connector,
+          action: googleConversationState.actionAmbiguity.prompt.action,
+          candidateTargetIds:
+            googleConversationState.actionAmbiguity.prompt.candidates.map(
+              (candidate) => candidate.taskId,
+            ),
+          selectionReason: "ambiguity_required",
+        }),
       });
       const assistantMessages = [assistantMessage];
       return {
@@ -7404,7 +8273,10 @@ async function maybeHandleGoogleActionTask(params: {
         kind: "clarify" as const,
         assistantMessages,
         legacyAssistantMessage: makeLegacyAssistantMessage(assistantMessages),
-        model: "google_action_email_ambiguity_v1",
+        model:
+          connector === "gmail"
+            ? "google_action_email_ambiguity_v1"
+            : "google_action_calendar_ambiguity_v1",
         decisionPath: "companion_reply" as const,
         decisionPathReason: "companion" as const,
         awaitingApproval: false,
@@ -7418,7 +8290,8 @@ async function maybeHandleGoogleActionTask(params: {
       actionableEmailCandidates.length > 1 &&
       emailCandidateResolution.kind !== "resolved"
     ) {
-      const ambiguity: GoogleEmailAmbiguityPrompt = {
+      const ambiguity: GoogleActionAmbiguityPrompt = {
+        connector: "gmail",
         action: wantsEmailSendFollowUp ? "send" : "revise",
         instructionText: params.text,
         candidates: actionableEmailCandidates
@@ -7427,13 +8300,26 @@ async function maybeHandleGoogleActionTask(params: {
             buildGoogleEmailAmbiguityCandidateFromTarget(candidate, index),
           ),
       };
-      const assistantMessage = await createGoogleEmailAmbiguityAssistantMessage({
+      params.onTrace?.("google.target_ambiguity_requested", {
+        connector: "gmail",
+        action: ambiguity.action,
+        candidateTaskIds: ambiguity.candidates.map((candidate) => candidate.taskId),
+      });
+      const assistantMessage = await createGoogleActionAmbiguityAssistantMessage({
         storage: params.storage,
         conversationId: params.conversationId,
         ambiguity,
         text: wantsEmailSendFollowUp
           ? "I found a couple of drafts I could send. Which email did you mean?"
           : "I found a couple of recent drafts. Which email should I update?",
+        googleContext: buildGoogleTargetContextMetadata({
+          connector: "gmail",
+          action: ambiguity.action,
+          candidateTargetIds: ambiguity.candidates.map((candidate) => candidate.taskId),
+          selectionReason: "ambiguity_required",
+          surfaceKey: params.clientGoogleActionContext?.surfaceKey ?? null,
+          selectionMode: params.clientGoogleActionContext?.selectionMode ?? null,
+        }),
       });
       const assistantMessages = [assistantMessage];
       return {
@@ -7453,6 +8339,44 @@ async function maybeHandleGoogleActionTask(params: {
       emailCandidateResolution.kind === "resolved"
         ? emailCandidateResolution.candidate
         : latestEmailTaskTarget;
+    if (
+      params.clientGoogleActionContext?.actionableTargetId &&
+      params.clientGoogleActionContext.actionableTargetId !== resolvedTarget.taskId
+    ) {
+      params.onTrace?.("google.target_context_mismatch", {
+        connector: "gmail",
+        action: wantsEmailSendFollowUp ? "send" : "revise",
+        activeTargetId: params.clientGoogleActionContext.actionableTargetId,
+        resolvedTargetId: resolvedTarget.taskId,
+        resolutionKind: emailCandidateResolution.kind,
+      });
+    }
+    params.onTrace?.("google.target_resolved", {
+      connector: "gmail",
+      action: wantsEmailSendFollowUp ? "send" : "revise",
+      selectedTaskId: resolvedTarget.taskId,
+      selectionReason:
+        emailCandidateResolution.kind === "resolved"
+          ? "manual_selection"
+          : params.clientGoogleActionContext?.actionableTargetId === resolvedTarget.taskId
+            ? "active_surface"
+            : "single_candidate",
+    });
+    const googleContext = buildGoogleTargetContextMetadata({
+      connector: "gmail",
+      action: wantsEmailSendFollowUp ? "send" : "revise",
+      actionableTargetId: resolvedTarget.taskId,
+      candidateTargetIds: actionableEmailCandidates.map((candidate) => candidate.taskId),
+      sourceTurnId: params.userMessage.id,
+      selectionReason:
+        emailCandidateResolution.kind === "resolved"
+          ? "manual_selection"
+          : params.clientGoogleActionContext?.actionableTargetId === resolvedTarget.taskId
+            ? "active_surface"
+            : "single_candidate",
+      surfaceKey: params.clientGoogleActionContext?.surfaceKey ?? null,
+      selectionMode: params.clientGoogleActionContext?.selectionMode ?? null,
+    });
     return handleResolvedGoogleEmailFollowUp({
       storage: params.storage,
       userId: params.userId,
@@ -7463,8 +8387,122 @@ async function maybeHandleGoogleActionTask(params: {
       instructionText: params.text,
       targetTaskId: resolvedTarget.taskId,
       targetPreview: resolvedTarget.preview,
+      googleContext,
       onEvent: params.onEvent,
     });
+  }
+
+  if (wantsCalendarFollowUp) {
+    if (
+      rankedCalendarCandidates.length > 1 &&
+      calendarCandidateResolution.kind !== "resolved"
+    ) {
+      const ambiguity: GoogleActionAmbiguityPrompt = {
+        connector: "calendar",
+        action: "update",
+        instructionText: params.text,
+        candidates: rankedCalendarCandidates
+          .slice(0, 3)
+          .map((candidate, index) =>
+            buildGoogleCalendarAmbiguityCandidateFromTarget(candidate, index),
+          ),
+      };
+      params.onTrace?.("google.target_ambiguity_requested", {
+        connector: "calendar",
+        action: ambiguity.action,
+        candidateTaskIds: ambiguity.candidates.map((candidate) => candidate.taskId),
+      });
+      const assistantMessage = await createGoogleActionAmbiguityAssistantMessage({
+        storage: params.storage,
+        conversationId: params.conversationId,
+        ambiguity,
+        text: "I found a couple of recent calendar events. Which one should I update?",
+        googleContext: buildGoogleTargetContextMetadata({
+          connector: "calendar",
+          action: "update",
+          candidateTargetIds: ambiguity.candidates.map((candidate) => candidate.taskId),
+          selectionReason: "ambiguity_required",
+          surfaceKey: params.clientGoogleActionContext?.surfaceKey ?? null,
+          selectionMode: params.clientGoogleActionContext?.selectionMode ?? null,
+        }),
+      });
+      const assistantMessages = [assistantMessage];
+      return {
+        handled: true as const,
+        kind: "clarify" as const,
+        assistantMessages,
+        legacyAssistantMessage: makeLegacyAssistantMessage(assistantMessages),
+        model: "google_action_calendar_ambiguity_v1",
+        decisionPath: "companion_reply" as const,
+        decisionPathReason: "companion" as const,
+        awaitingApproval: false,
+        task: null,
+      };
+    }
+
+    const resolvedCalendarTarget =
+      calendarCandidateResolution.kind === "resolved"
+        ? calendarCandidateResolution.candidate
+        : rankedCalendarCandidates[0] ?? null;
+    if (resolvedCalendarTarget) {
+      if (
+        params.clientGoogleActionContext?.actionableTargetId &&
+        params.clientGoogleActionContext.actionableTargetId !==
+          resolvedCalendarTarget.taskId
+      ) {
+        params.onTrace?.("google.target_context_mismatch", {
+          connector: "calendar",
+          action: "update",
+          activeTargetId: params.clientGoogleActionContext.actionableTargetId,
+          resolvedTargetId: resolvedCalendarTarget.taskId,
+          resolutionKind: calendarCandidateResolution.kind,
+        });
+      }
+      const googleContext = buildGoogleTargetContextMetadata({
+        connector: "calendar",
+        action: "update",
+        actionableTargetId: resolvedCalendarTarget.taskId,
+        candidateTargetIds: rankedCalendarCandidates.map((candidate) => candidate.taskId),
+        sourceTurnId: params.userMessage.id,
+        selectionReason:
+          calendarCandidateResolution.kind === "resolved"
+            ? "manual_selection"
+            : params.clientGoogleActionContext?.actionableTargetId ===
+                resolvedCalendarTarget.taskId
+              ? "active_surface"
+              : "single_candidate",
+        surfaceKey: params.clientGoogleActionContext?.surfaceKey ?? null,
+        selectionMode: params.clientGoogleActionContext?.selectionMode ?? null,
+      });
+      params.onTrace?.("google.target_resolved", {
+        connector: "calendar",
+        action: "update",
+        selectedTaskId: resolvedCalendarTarget.taskId,
+        selectionReason: googleContext.selectionReason,
+      });
+      const preparation = await prepareGoogleActionTask({
+        storage: params.storage,
+        userId: params.userId,
+        text: params.text,
+        clientTimeZone: params.clientTimeZone ?? null,
+        recentContext: {
+          ...recentContext,
+          recentCalendarTask: buildRecentGoogleActionTaskFromTarget(
+            resolvedCalendarTarget,
+          ),
+        },
+      });
+      return finalizePreparedGoogleActionTask({
+        storage: params.storage,
+        userId: params.userId,
+        conversationId: params.conversationId,
+        userMessage: params.userMessage,
+        text: params.text,
+        preparation,
+        onEvent: params.onEvent,
+        googleContext,
+      });
+    }
   }
 
   if (googleConversationState.pendingTask) {
@@ -7553,11 +8591,52 @@ async function maybeHandleGoogleActionTask(params: {
       }
 
       if (wantsSend) {
-        await promotePendingGoogleEmailTaskToSend({
+        const promoted = await promotePendingGoogleEmailTaskToSend({
           storage: params.storage,
           taskId: task.id,
           userId: params.userId,
         });
+        await params.storage.createMessage({
+          conversationId: task.conversationId,
+          sender: "assistant",
+          text: "I switched this draft into a send-ready approval. Review it and approve when you're ready.",
+          partIndex: 0,
+          uiPayload: {
+            kind: "agent_task_status",
+            task: promoted.task,
+            text: "Send approval ready",
+            googleActionPreview: promoted.preview,
+              googleContext: buildGoogleTargetContextMetadata({
+                connector: "gmail",
+                action: "send",
+                actionableTargetId: task.id,
+                candidateTargetIds: [task.id],
+                sourceTurnId: params.userMessage.id,
+                selectionReason: "active_surface",
+                surfaceKey: params.clientGoogleActionContext?.surfaceKey ?? null,
+                selectionMode: params.clientGoogleActionContext?.selectionMode ?? null,
+              }),
+            },
+          });
+
+        const assistantMessages = await collectRecentAssistantTaskMessages({
+          conversationId: params.conversationId,
+          taskId: task.id,
+          userId: params.userId,
+          userCreatedAt: params.userMessage.createdAt,
+        });
+
+        return {
+          handled: true as const,
+          kind: "ready" as const,
+          assistantMessages,
+          legacyAssistantMessage: makeLegacyAssistantMessage(assistantMessages),
+          model: "google_action_task_send_promotion_v1",
+          decisionPath: "agent_task" as const,
+          decisionPathReason: "task_started" as const,
+          awaitingApproval: true,
+          task: promoted.task,
+        };
       }
 
       const approvedTask = await approveAndExecuteGoogleActionTask({
@@ -7614,6 +8693,16 @@ async function maybeHandleGoogleActionTask(params: {
     }
 
     if (wantsDraftRevision) {
+      const googleContext = buildGoogleTargetContextMetadata({
+        connector: "gmail",
+        action: "revise",
+        actionableTargetId: googleConversationState.pendingTask.taskId,
+        candidateTargetIds: [googleConversationState.pendingTask.taskId],
+        sourceTurnId: params.userMessage.id,
+        selectionReason: "active_surface",
+        surfaceKey: params.clientGoogleActionContext?.surfaceKey ?? null,
+        selectionMode: params.clientGoogleActionContext?.selectionMode ?? null,
+      });
       return handleResolvedGoogleEmailFollowUp({
         storage: params.storage,
         userId: params.userId,
@@ -7624,6 +8713,7 @@ async function maybeHandleGoogleActionTask(params: {
         instructionText: params.text,
         targetTaskId: googleConversationState.pendingTask.taskId,
         targetPreview: googleConversationState.pendingTask.preview,
+        googleContext,
         onEvent: params.onEvent,
       });
     }
@@ -7742,104 +8832,51 @@ async function maybeHandleGoogleActionTask(params: {
     clientTimeZone: params.clientTimeZone ?? null,
     composeSession,
     calendarSession,
-    recentContext: toGoogleRecentActionContext(googleConversationState),
+    recentContext,
   });
-
-  if (preparation.kind === "none") {
-    return { handled: false as const };
-  }
-
-  if (preparation.kind === "clarify" || preparation.kind === "upgrade_required") {
-    const assistantMessages =
-      preparation.kind === "clarify" && preparation.composeSession
-        ? [
-            await createGoogleComposeSessionAssistantMessage({
-              storage: params.storage,
-              conversationId: params.conversationId,
-              session: preparation.composeSession,
-              text: preparation.message,
-            }),
-          ]
-        : preparation.kind === "clarify" && preparation.calendarSession
-          ? [
-              await createGoogleCalendarSessionAssistantMessage({
-                storage: params.storage,
-                conversationId: params.conversationId,
-                session: preparation.calendarSession,
-                text: preparation.message,
-              }),
-            ]
-        : await storage.createAssistantTurnParts({
-            conversationId: params.conversationId,
-            textParts: [preparation.message],
-          });
-    return {
-      handled: true as const,
-      kind: preparation.kind,
-      assistantMessages,
-      legacyAssistantMessage: makeLegacyAssistantMessage(assistantMessages),
-      model:
-        preparation.kind === "clarify"
-          ? "google_action_clarification_v1"
-          : "google_action_upgrade_required_v1",
-      decisionPath: "companion_reply" as const,
-      decisionPathReason: "companion" as const,
-      awaitingApproval: false,
-      task: null,
-    };
-  }
-
-  const run = await startGoogleActionTaskRun({
+  return finalizePreparedGoogleActionTask({
     storage: params.storage,
     userId: params.userId,
     conversationId: params.conversationId,
-    prompt: preparation.resolvedPrompt ?? params.text,
-    requestedByMessageId: params.userMessage.id,
-    preview: preparation.preview,
-    plan: preparation.plan,
+    userMessage: params.userMessage,
+    text: params.text,
+    preparation,
     onEvent: params.onEvent,
+    googleContext:
+      preparation.kind === "ready"
+        ? buildGoogleTargetContextMetadata({
+            connector: preparation.preview.connector,
+            action:
+              preparation.preview.connector === "gmail"
+                ? preparation.preview.proposedEmail?.sendAfterApproval
+                  ? "send"
+                  : "revise"
+                : preparation.preview.kind === "calendar_update"
+                  ? "update"
+                  : "create",
+            actionableTargetId: params.clientGoogleActionContext?.actionableTargetId ?? null,
+            sourceTurnId: params.userMessage.id,
+            selectionReason: params.clientGoogleActionContext?.selectionReason ?? "latest_actionable",
+            surfaceKey: params.clientGoogleActionContext?.surfaceKey ?? null,
+            selectionMode: params.clientGoogleActionContext?.selectionMode ?? null,
+          })
+        : params.clientGoogleActionContext
+          ? buildGoogleTargetContextMetadata({
+              connector:
+                params.clientGoogleActionContext.connector ?? "gmail",
+              action: params.clientGoogleActionContext.action ?? null,
+              actionableTargetId:
+                params.clientGoogleActionContext.actionableTargetId ?? null,
+              candidateTargetIds:
+                params.clientGoogleActionContext.candidateTargetIds ?? [],
+              sourceTurnId: params.clientGoogleActionContext.sourceTurnId ?? null,
+              selectionReason:
+                params.clientGoogleActionContext.selectionReason ?? "latest_actionable",
+              surfaceKey: params.clientGoogleActionContext.surfaceKey ?? null,
+              selectionMode: params.clientGoogleActionContext.selectionMode ?? null,
+            })
+          : null,
   });
-
-  const assistantMessages = await collectRecentAssistantTaskMessages({
-    conversationId: params.conversationId,
-    taskId: run.task.id,
-    userId: params.userId,
-    userCreatedAt: params.userMessage.createdAt,
-  });
-
-  const finalizedAssistantMessages =
-    assistantMessages.length > 0
-      ? assistantMessages
-      : [
-          {
-            id: `google-action-final-${run.task.id}`,
-            conversationId: params.conversationId,
-            sender: "assistant",
-            turnId: randomUUID(),
-            partIndex: 0,
-            text: "I prepared a Google action and need your approval before I continue.",
-            createdAt: new Date(),
-            attachments: [],
-            uiPayload: {
-              kind: "agent_task_status",
-              task: run.task,
-              text: "Approval needed",
-              googleActionPreview: preparation.preview,
-            },
-          },
-        ];
-
-  return {
-    handled: true as const,
-    kind: "ready" as const,
-    assistantMessages: finalizedAssistantMessages,
-    legacyAssistantMessage: makeLegacyAssistantMessage(finalizedAssistantMessages),
-    model: "google_action_task_v1",
-    decisionPath: "agent_task" as const,
-    decisionPathReason: "task_started" as const,
-    awaitingApproval: run.awaitingApproval,
-    task: run.task,
-  };
 }
 
 function longestDelimiterPrefixSuffix(buffer: string): number {
@@ -11920,15 +12957,20 @@ export async function registerRoutes(
               hasCalendarSession: Boolean(googleConversationState.calendarSession),
               calendarSessionStatus:
                 googleConversationState.calendarSession?.session.status ?? null,
-              hasEmailAmbiguity: Boolean(googleConversationState.emailAmbiguity),
+              hasActionAmbiguity: Boolean(googleConversationState.actionAmbiguity),
+              ambiguityConnector:
+                googleConversationState.actionAmbiguity?.prompt.connector ?? null,
               ambiguityCandidateCount:
-                googleConversationState.emailAmbiguity?.prompt.candidates.length ??
+                googleConversationState.actionAmbiguity?.prompt.candidates.length ??
                 0,
               recentEmailTaskId: recentContext.recentEmailTask?.taskId ?? null,
               recentCalendarTaskId:
                 recentContext.recentCalendarTask?.taskId ?? null,
               emailDraftCandidateCount:
                 googleConversationState.emailDraftCandidates.length,
+              calendarEventCandidateCount:
+                googleConversationState.calendarEventCandidates.length,
+              googleActionContext: parsed.googleActionContext ?? null,
             });
 
             const googleActionOutcome = await maybeHandleGoogleActionTask({
@@ -11938,11 +12980,15 @@ export async function registerRoutes(
               conversationMessages,
               text: requestText,
               clientTimeZone: actionTimeZone,
+              clientGoogleActionContext: parsed.googleActionContext ?? null,
               userMessage: {
                 id:
                   latestUserMessage?.id ??
                   `live-google-action-${randomUUID()}`,
                 createdAt: latestUserMessage?.createdAt ?? new Date(),
+              },
+              onTrace: (event, metadata) => {
+                trace(req, event, metadata);
               },
             });
 
@@ -13514,9 +14560,13 @@ export async function registerRoutes(
         conversationMessages: existingConversationMessages,
         text: parsed.text,
         clientTimeZone: parsed.clientTimeZone ?? null,
+        clientGoogleActionContext: parsed.googleActionContext ?? null,
         userMessage: {
           id: userMessage.id,
           createdAt: userMessage.createdAt,
+        },
+        onTrace: (event, metadata) => {
+          trace(req, event, metadata);
         },
       });
       if (googleActionOutcome.handled) {
@@ -15022,12 +16072,16 @@ export async function registerRoutes(
         conversationMessages: existingConversationMessages,
         text: parsed.text,
         clientTimeZone: parsed.clientTimeZone ?? null,
+        clientGoogleActionContext: parsed.googleActionContext ?? null,
         userMessage: {
           id: userMessage.id,
           createdAt: userMessage.createdAt,
         },
         onEvent: (event: AgentTaskEvent) => {
           writeEvent(event as unknown as Record<string, unknown>);
+        },
+        onTrace: (event, metadata) => {
+          trace(req, event, metadata);
         },
       });
       if (googleActionOutcome.handled) {

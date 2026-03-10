@@ -5,6 +5,7 @@ import type {
   AgentStepSummary,
   GoogleActionPreview,
   GoogleActionResult,
+  GoogleActionTargetContextMetadata,
   GoogleCalendarSession,
   GoogleCalendarEventDetail,
   GoogleComposeSession,
@@ -654,10 +655,11 @@ function buildGoogleCalendarPreview(params: {
   description: string | null;
   originalEvent?: GoogleCalendarEventDetail | null;
 }): GoogleActionPreview {
+  const cleanedTitle = sanitizeGoogleCalendarTitle(params.title);
   const summary =
     params.kind === "calendar_update"
-      ? `Update "${params.originalEvent?.title ?? params.title}" on your calendar.`
-      : `Create "${params.title}" on your calendar.`;
+      ? `Update ${params.originalEvent?.title?.trim() || cleanedTitle}.`
+      : `Create ${cleanedTitle}.`;
 
   return {
     kind: params.kind,
@@ -667,7 +669,7 @@ function buildGoogleCalendarPreview(params: {
     requiresWriteAccess: true,
     calendarEvent: params.originalEvent ?? null,
     proposedCalendar: {
-      title: params.title,
+      title: cleanedTitle,
       startTime: params.startTime,
       endTime: params.endTime,
       location: params.location,
@@ -1080,11 +1082,28 @@ function inferCalendarCreateTitle(
     .replace(/\bat\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)\b/gi, " ")
     .replace(matchedDateText ? new RegExp(matchedDateText.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i") : /$^/, " ")
     .replace(/\b(?:it|that|this|something|anything)\b/gi, " ")
+    .replace(/\b(?:on|for)\s+my\b/gi, " ")
+    .replace(/\bon\s+calendar\b/gi, " ")
+    .replace(/[?]+$/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 
   if (!title) return null;
-  return title.length >= 2 ? title : null;
+  const sanitizedTitle = sanitizeGoogleCalendarTitle(title);
+  return sanitizedTitle.length >= 2 ? sanitizedTitle : null;
+}
+
+function sanitizeGoogleCalendarTitle(value: string | null | undefined): string {
+  return normalizeText(value)
+    .replace(/\bon\s+my\s+calendar\b/gi, " ")
+    .replace(/\bon\s+your\s+calendar\b/gi, " ")
+    .replace(/\b(?:for|in)\s+my\s+calendar\b/gi, " ")
+    .replace(/\b(?:for|in)\s+your\s+calendar\b/gi, " ")
+    .replace(/^[`"'“”‘’]+/, "")
+    .replace(/[`"'“”‘’]+$/g, "")
+    .replace(/[?]+$/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function matchReplyTarget(text: string): string | null {
@@ -1561,7 +1580,7 @@ export async function prepareGoogleActionTask(params: {
     const preview: GoogleActionPreview = {
       kind: "calendar_create",
       title: "Create calendar event",
-      summary: `Create "${title}" on your calendar.`,
+      summary: `Create ${title}.`,
       connector: "calendar",
       requiresWriteAccess: true,
       proposedCalendar: {
@@ -1726,7 +1745,7 @@ export async function prepareGoogleActionTask(params: {
     const preview: GoogleActionPreview = {
       kind: "calendar_update",
       title: "Update calendar event",
-      summary: `Update "${existingDetail.title}" on your calendar.`,
+      summary: `Update ${existingDetail.title}.`,
       connector: "calendar",
       requiresWriteAccess: true,
       calendarEvent: existingDetail,
@@ -1774,6 +1793,7 @@ export async function startGoogleActionTaskRun(params: {
   preview: GoogleActionPreview;
   plan: StoredGoogleActionPlan;
   onEvent?: (event: AgentTaskEvent) => void;
+  googleContext?: GoogleActionTargetContextMetadata | null;
 }): Promise<{ task: AgentTaskSummary; awaitingApproval: true }> {
   const task = await params.storage.createAgentTask({
     userId: params.userId,
@@ -1857,6 +1877,7 @@ export async function startGoogleActionTaskRun(params: {
       task: taskSummary,
       text: "Preview ready",
       googleActionPreview: params.preview,
+      googleContext: params.googleContext ?? null,
     },
   });
   await createAssistantUiMessage({
@@ -1869,6 +1890,7 @@ export async function startGoogleActionTaskRun(params: {
       approval: approvalSummary,
       text: "Approval needed",
       googleActionPreview: params.preview,
+      googleContext: params.googleContext ?? null,
     },
   });
 
@@ -2179,7 +2201,7 @@ export async function promotePendingGoogleEmailTaskToSend(params: {
   storage: IStorage;
   taskId: string;
   userId: string;
-}): Promise<AgentTaskSummary> {
+}): Promise<{ task: AgentTaskSummary; preview: GoogleActionPreview }> {
   const task = await params.storage.getAgentTaskById(params.taskId);
   if (!task || task.userId !== params.userId) {
     throw new Error("Task not found");
@@ -2191,7 +2213,10 @@ export async function promotePendingGoogleEmailTaskToSend(params: {
       plan.execution.kind !== "email_reply") ||
     plan.execution.sendAfterApproval
   ) {
-    return toTaskSummary(task);
+    return {
+      task: toTaskSummary(task),
+      preview: plan.preview,
+    };
   }
 
   const next = buildSendVariantFromPlan(plan);
@@ -2201,7 +2226,10 @@ export async function promotePendingGoogleEmailTaskToSend(params: {
     status: task.status,
     plan: next.plan,
   });
-  return toTaskSummary(updated ?? task);
+  return {
+    task: toTaskSummary(updated ?? task),
+    preview: next.preview,
+  };
 }
 
 export async function startFollowUpGoogleEmailSendTask(params: {
@@ -2211,14 +2239,15 @@ export async function startFollowUpGoogleEmailSendTask(params: {
   conversationId: string;
   requestedByMessageId: string;
   onEvent?: (event: AgentTaskEvent) => void;
-}): Promise<{ task: AgentTaskSummary; awaitingApproval: true }> {
+  googleContext?: GoogleActionTargetContextMetadata | null;
+}): Promise<{ task: AgentTaskSummary; awaitingApproval: true; preview: GoogleActionPreview }> {
   const task = await params.storage.getAgentTaskById(params.taskId);
   if (!task || task.userId !== params.userId) {
     throw new Error("Task not found");
   }
 
   const next = buildSendVariantFromPlan(taskPlanFromTask(task));
-  return startGoogleActionTaskRun({
+  const run = await startGoogleActionTaskRun({
     storage: params.storage,
     userId: params.userId,
     conversationId: params.conversationId,
@@ -2227,7 +2256,12 @@ export async function startFollowUpGoogleEmailSendTask(params: {
     preview: next.preview,
     plan: next.plan,
     onEvent: params.onEvent,
+    googleContext: params.googleContext ?? null,
   });
+  return {
+    ...run,
+    preview: next.preview,
+  };
 }
 
 export async function startFollowUpGoogleEmailRevisionTask(params: {
@@ -2238,7 +2272,8 @@ export async function startFollowUpGoogleEmailRevisionTask(params: {
   requestedByMessageId: string;
   instructionText: string;
   onEvent?: (event: AgentTaskEvent) => void;
-}): Promise<{ task: AgentTaskSummary; awaitingApproval: true }> {
+  googleContext?: GoogleActionTargetContextMetadata | null;
+}): Promise<{ task: AgentTaskSummary; awaitingApproval: true; preview: GoogleActionPreview }> {
   const task = await params.storage.getAgentTaskById(params.taskId);
   if (!task || task.userId !== params.userId) {
     throw new Error("Task not found");
@@ -2262,6 +2297,7 @@ export async function startFollowUpGoogleEmailRevisionTask(params: {
     preview: next.preview,
     plan: next.plan,
     onEvent: params.onEvent,
+    googleContext: params.googleContext ?? null,
   });
 
   await createAssistantUiMessage({
@@ -2273,10 +2309,14 @@ export async function startFollowUpGoogleEmailRevisionTask(params: {
       task: run.task,
       text: "Updated draft preview",
       googleActionPreview: next.preview,
+      googleContext: params.googleContext ?? null,
     },
   });
 
-  return run;
+  return {
+    ...run,
+    preview: next.preview,
+  };
 }
 
 export async function revisePendingGoogleEmailTask(params: {
@@ -2284,6 +2324,7 @@ export async function revisePendingGoogleEmailTask(params: {
   taskId: string;
   userId: string;
   instructionText: string;
+  googleContext?: GoogleActionTargetContextMetadata | null;
 }): Promise<{ task: AgentTaskSummary; preview: GoogleActionPreview }> {
   const task = await params.storage.getAgentTaskById(params.taskId);
   if (!task || task.userId !== params.userId) {
@@ -2321,6 +2362,7 @@ export async function revisePendingGoogleEmailTask(params: {
       task: taskSummary,
       text: "Updated draft preview",
       googleActionPreview: next.preview,
+      googleContext: params.googleContext ?? null,
     },
   });
 
@@ -2690,7 +2732,7 @@ export async function approveAndExecuteGoogleActionTask(params: {
         kind: plan.execution.kind,
         connector: "calendar",
         status: "event_created",
-        summary: `Created "${created.title}" on your calendar.`,
+        summary: `Created ${created.title}.`,
         eventId: created.eventId,
       };
     } else {
@@ -2718,7 +2760,7 @@ export async function approveAndExecuteGoogleActionTask(params: {
         kind: plan.execution.kind,
         connector: "calendar",
         status: "event_updated",
-        summary: `Updated "${updated.title}" on your calendar.`,
+        summary: `Updated ${updated.title}.`,
         eventId: updated.eventId,
       };
     }

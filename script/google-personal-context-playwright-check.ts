@@ -71,6 +71,26 @@ async function main(): Promise<void> {
       userAgent:
         "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1",
     });
+    page.on("console", (message) => {
+      const text = message.text();
+      if (
+        message.type() === "error" ||
+        message.type() === "warning" ||
+        /chat\.|google_ambiguity|pageerror/i.test(text)
+      ) {
+        console.log(`[google-context-browser:${message.type()}] ${text}`);
+      }
+    });
+    page.on("pageerror", (error) => {
+      console.log(`[google-context-browser:pageerror] ${error.message}`);
+    });
+    page.on("request", (request) => {
+      if (request.url().includes("/api/chat/respond")) {
+        console.log(
+          `[google-context-browser:request] ${request.method()} ${request.url()}`,
+        );
+      }
+    });
 
     console.log("[google-context-check] login");
     await login(page, args);
@@ -639,14 +659,24 @@ async function verifyCalendarClarificationCardFlow(
   );
   assert.match(
     calendarCardText,
-    /(needs approval|approve|sat|mar)/i,
-    "Expected the resolved calendar approval card to show its preview state",
+    /(needs approval|create event|create calendar event|approve)/i,
+    "Expected the resolved calendar approval card to show approval-backed preview controls",
+  );
+  assert.equal(
+    await calendarCard.getAttribute("data-agent-task-status"),
+    "approval_required",
+    "Expected the clarification follow-up to resolve into an approval-required calendar task card",
   );
 
-  await calendarCard
+  const primaryAction = calendarCard
     .getByTestId("button-google-calendar-primary-action")
-    .last()
-    .waitFor({ state: "visible", timeout: 10_000 });
+    .last();
+  await primaryAction.waitFor({ state: "visible", timeout: 10_000 });
+  assert.match(
+    (await primaryAction.innerText()).trim(),
+    /create event|create calendar event|update event/i,
+    "Expected the resolved calendar card to expose a primary approval action",
+  );
 
   await page.screenshot({
     path: resolve(outputDir, "google-personal-context-calendar-clarification-card.png"),
@@ -706,39 +736,47 @@ async function verifySavedDraftSendFollowUpFlow(
     /who should i send it to/i,
     "Saved draft follow-up should not fall back into a fresh recipient prompt",
   );
+  assert.match(
+    sendFollowUpReply,
+    /which email|which one/i,
+    "Multiple draft candidates should require an explicit send ambiguity choice instead of guessing",
+  );
 
-  if (/which email|which one/i.test(sendFollowUpReply)) {
-    const ambiguityCard = page.locator('[data-testid="google-email-ambiguity-card"]').last();
-    await ambiguityCard.waitFor({ state: "visible", timeout: 20_000 });
-    assert.match(
-      await ambiguityCard.innerText(),
-      /team@soulnests\.com/i,
-      "Expected send ambiguity card to include the latest saved draft recipient",
-    );
+  const ambiguityCard = page.locator('[data-testid="google-email-ambiguity-card"]').last();
+  await ambiguityCard.waitFor({ state: "visible", timeout: 20_000 });
+  assert.equal(
+    await ambiguityCard.getAttribute("data-ambiguity-action"),
+    "send",
+    "Expected the send follow-up ambiguity card to stay in send mode",
+  );
+  assert.match(
+    await ambiguityCard.innerText(),
+    /team@soulnests\.com/i,
+    "Expected send ambiguity card to include the latest saved draft recipient",
+  );
 
-    const ambiguityChoice = ambiguityCard
-      .locator('[data-testid^="button-google-email-ambiguity-"]')
-      .filter({ hasText: "team@soulnests.com" })
-      .first();
-    await ambiguityChoice.waitFor({ state: "visible", timeout: 20_000 });
-    await ambiguityChoice.evaluate((button) => {
-      (button as HTMLButtonElement).click();
-    });
-    await page.waitForTimeout(200);
+  const ambiguityChoice = ambiguityCard
+    .locator('[data-testid^="button-google-email-ambiguity-"]')
+    .filter({ hasText: "team@soulnests.com" })
+    .first();
+  await ambiguityChoice.waitFor({ state: "visible", timeout: 20_000 });
+  await ambiguityChoice.evaluate((button) => {
+    (button as HTMLButtonElement).click();
+  });
+  await page.waitForTimeout(600);
 
-    const resolvedSendReply = await waitForLatestAssistantReply({
-      page,
-      baseUrl,
-      conversationId,
-      previousAssistantCount: beforeSendPromptAssistantCount + 1,
-      timeoutMs: 45_000,
-    });
-    assert.match(
-      resolvedSendReply,
-      /send email|review it and approve|approve if you want me to apply it/i,
-      "Choosing a draft from the send ambiguity card should continue the send approval flow",
-    );
-  }
+  const resolvedSendReply = await waitForLatestAssistantReply({
+    page,
+    baseUrl,
+    conversationId,
+    previousAssistantCount: beforeSendPromptAssistantCount + 1,
+    timeoutMs: 45_000,
+  });
+  assert.match(
+    resolvedSendReply,
+    /send email|review it and approve|approve if you want me to apply it/i,
+    "Choosing a draft from the send ambiguity card should continue the send approval flow",
+  );
 
   const sendUnifiedCard = page.locator('[data-testid="agent-unified-task-card"]').last();
   await sendUnifiedCard.waitFor({ state: "visible", timeout: 20_000 });
@@ -925,6 +963,11 @@ async function verifyAmbiguousDraftFollowUpFlow(
 
   const ambiguityCard = page.locator('[data-testid="google-email-ambiguity-card"]').last();
   await ambiguityCard.waitFor({ state: "visible", timeout: 20_000 });
+  assert.equal(
+    await ambiguityCard.getAttribute("data-ambiguity-action"),
+    "revise",
+    "Expected the draft-follow-up ambiguity card to stay in revise mode",
+  );
   const ambiguityText = await ambiguityCard.innerText();
   assert.match(
     ambiguityText,
@@ -942,26 +985,21 @@ async function verifyAmbiguousDraftFollowUpFlow(
     .filter({ hasText: "team@soulnests.com" })
     .first();
   await ambiguityChoice.waitFor({ state: "visible", timeout: 20_000 });
-  await ambiguityChoice.evaluate((button) => {
-    (button as HTMLButtonElement).click();
+  await ambiguityChoice.evaluate((element) => {
+    (element as HTMLButtonElement).click();
   });
-  await page.waitForTimeout(200);
-
-  const revisedReply = await waitForLatestAssistantReply({
-    page,
-    baseUrl,
-    conversationId,
-    previousAssistantCount: previousAssistantCount + 1,
-    timeoutMs: 45_000,
-  });
-  assert.match(
-    revisedReply,
-    /updated the (saved )?draft preview|review it and approve/i,
-    "Choosing a draft from the ambiguity card should continue the Gmail revision flow",
-  );
+  await page.waitForTimeout(600);
 
   const revisedUnifiedCard = page.locator('[data-testid="agent-unified-task-card"]').last();
   await revisedUnifiedCard.waitFor({ state: "visible", timeout: 20_000 });
+  await page.waitForFunction(() => {
+    const cards = Array.from(
+      document.querySelectorAll('[data-testid="agent-unified-task-card"]'),
+    );
+    const latestCard = cards[cards.length - 1];
+    const text = latestCard?.textContent ?? "";
+    return /team@soulnests\.com/i.test(text) && /march 12|hang out/i.test(text);
+  });
   const revisedCardText = await revisedUnifiedCard.innerText();
   assert.match(
     revisedCardText,
@@ -972,6 +1010,25 @@ async function verifyAmbiguousDraftFollowUpFlow(
     revisedCardText,
     /march 12|hang out/i,
     "Expected the selected draft to reflect the requested follow-up edit",
+  );
+
+  const assistantMessages = await fetchConversationMessages(page, baseUrl, conversationId);
+  const latestRelevantAssistantText =
+    [...assistantMessages]
+      .reverse()
+      .find(
+        (message) =>
+          message.sender === "assistant" &&
+          typeof message.text === "string" &&
+          message.text.trim().length > 0 &&
+          /updated the (saved )?draft preview|review it and approve/i.test(
+            message.text,
+          ),
+      )?.text ?? "";
+  assert.match(
+    latestRelevantAssistantText,
+    /updated the (saved )?draft preview|review it and approve/i,
+    "Choosing a draft from the ambiguity card should continue the Gmail revision flow",
   );
 
   await page.screenshot({
@@ -1019,11 +1076,30 @@ async function verifyRecentCalendarFollowUpFlow(
     timeoutMs: 45_000,
   });
 
-  assert.doesNotMatch(
-    followUpReply,
-    /tell me which calendar event/i,
-    "Recent calendar follow-up should not ask the user to restate the event target",
-  );
+  if (/which one should i update|which event did you mean/i.test(followUpReply)) {
+    const ambiguityCard = page.locator('[data-testid="google-email-ambiguity-card"]').last();
+    await ambiguityCard.waitFor({ state: "visible", timeout: 20_000 });
+    assert.equal(
+      await ambiguityCard.getAttribute("data-ambiguity-action"),
+      "update",
+      "Expected the calendar follow-up ambiguity card to stay in update mode",
+    );
+    const ambiguityChoice = ambiguityCard
+      .locator('[data-testid^="button-google-email-ambiguity-"]')
+      .filter({ hasText: /lunch with alex/i })
+      .first();
+    await ambiguityChoice.waitFor({ state: "visible", timeout: 20_000 });
+    await ambiguityChoice.evaluate((element) => {
+      (element as HTMLButtonElement).click();
+    });
+    await page.waitForTimeout(600);
+  } else {
+    assert.doesNotMatch(
+      followUpReply,
+      /tell me which calendar event/i,
+      "Recent calendar follow-up should not ask the user to restate the event target",
+    );
+  }
 
   const updateCalendarCard = page.locator('[data-google-calendar-card="true"]').last();
   await updateCalendarCard.waitFor({ state: "visible", timeout: 20_000 });

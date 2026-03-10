@@ -109,6 +109,20 @@ export interface GeminiLiveVoiceSessionCallbacks {
   onDebugState?: (state: LiveVoiceDebugState) => void;
   onSessionResumption?: (event: LiveSessionResumptionEvent) => void;
   onGoAway?: (event: LiveGoAwayEvent) => void;
+  getGoogleActionContext?: () => {
+    connector?: "gmail" | "calendar";
+    action?: string | null;
+    actionableTargetId?: string | null;
+    candidateTargetIds?: string[];
+    sourceTurnId?: string | null;
+    selectionReason?: string | null;
+    surfaceKey?: string | null;
+    selectionMode?: "auto" | "manual" | "dismissed";
+  } | null;
+  onConversationMutated?: (event: {
+    conversationId: string;
+    source: "live_tool_response";
+  }) => void;
 }
 
 export interface GeminiLiveVoiceSessionStartParams {
@@ -122,6 +136,10 @@ export interface GeminiLiveVoiceSessionStartParams {
   morningBriefFunctionCallingEnabled?: boolean;
   googlePersonalContextFunctionCallingEnabled?: boolean;
 }
+
+type LiveGoogleActionContextHint = ReturnType<
+  NonNullable<GeminiLiveVoiceSessionCallbacks["getGoogleActionContext"]>
+>;
 
 const INPUT_SAMPLE_RATE = 16000;
 const OUTPUT_SAMPLE_RATE = 24000;
@@ -537,7 +555,8 @@ const LIVE_DEBUG_STATE_EMIT_MIN_INTERVAL_MS = parseClientPositiveInt(
 const LIVE_WEB_SEARCH_SIGNAL_PATTERN =
   /\b(search|look up|google|latest|current|today|news|headline|what happened|updates?|did you see|last super bowl|super\s*bowl|score|standings?|who won)\b/i;
 const LIVE_EMAIL_SIGNAL_PATTERN = /\b(email|emails|inbox|unread|mail|gmail)\b/i;
-const LIVE_EMAIL_ACTION_PATTERN = /\b(reply|respond|draft|write|send)\b/i;
+const LIVE_EMAIL_ACTION_PATTERN =
+  /\b(reply|respond|draft|write|send|edit|change|update|revise|rewrite|short(?:en|er)?|lengthen|longer|warmer|friendlier|recipient|subject)\b/i;
 const LIVE_EMAIL_DETAIL_PATTERN =
   /\b(full|thread|details?|detail|read more|show me|before i reply)\b/i;
 const LIVE_CALENDAR_SIGNAL_PATTERN =
@@ -550,6 +569,10 @@ const LIVE_CALENDAR_FOLLOWUP_TIME_PATTERN =
   /\b(tomorrow|tomor+ow|tomore|tmrw|rest\s+of\s+the\s+week|later\s+this\s+week|this\s+week|next\s+week|next\s+7\s+days|next\s+few\s+days|weekend)\b/i;
 const LIVE_CALENDAR_FOLLOWUP_REQUEST_PATTERN =
   /\b(how\s+about|what\s+about|check(\s+again)?|look(\s+again)?|can\s+you\s+check|what\s+do\s+i\s+have|do\s+i\s+have|am\s+i\s+free|anything\s+on)\b/i;
+const LIVE_EMAIL_CONTEXT_FOLLOWUP_PATTERN =
+  /\b(send(?:\s+it|\s+that|\s+this)?|approve|looks\s+good|go\s+ahead|make\s+it|edit|change|update|revise|rewrite|short(?:en|er)?|lengthen|longer|warmer|friendlier|recipient|subject|to\s+field|email\s+address|send\s+to|change\s+the\s+to)\b|[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i;
+const LIVE_CALENDAR_CONTEXT_FOLLOWUP_PATTERN =
+  /\b(book|put|add|create|schedule|hold|block(?:\s+off)?|move|reschedule|change|update|location|title|call\s+it|notes?|description|time|that\s+time|that\s+meeting|that\s+event|today|tomor+ow|tomore|tmrw|this\s+week|next\s+week|weekend|monday|tuesday|wednesday|thursday|friday|saturday|sunday|january|february|march|april|may|june|july|august|september|october|november|december)\b|\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}(?::\d{2})?\s*(?:am|pm)\b/i;
 const ENABLE_MORNING_BRIEF_VOICE_MODE = parseClientBoolean(
   liveClientEnv.VITE_ENABLE_MORNING_BRIEF_VOICE_MODE,
   false,
@@ -687,6 +710,7 @@ type CalendarNudgeTimeRange = "today" | "tomorrow" | "this_week" | "next_7_days"
 
 function classifyLivePersonalContextIntent(
   text: string,
+  activeGoogleActionContext?: LiveGoogleActionContextHint | null,
 ): LivePersonalContextIntent | null {
   const hasEmailIntent = LIVE_EMAIL_SIGNAL_PATTERN.test(text);
   const hasCalendarIntent =
@@ -696,6 +720,14 @@ function classifyLivePersonalContextIntent(
   if (hasEmailIntent && hasCalendarIntent) return "both";
   if (hasEmailIntent) return "email";
   if (hasCalendarIntent) return "calendar";
+  if (activeGoogleActionContext?.connector === "gmail") {
+    return LIVE_EMAIL_CONTEXT_FOLLOWUP_PATTERN.test(text) ? "email" : null;
+  }
+  if (activeGoogleActionContext?.connector === "calendar") {
+    return LIVE_CALENDAR_CONTEXT_FOLLOWUP_PATTERN.test(text)
+      ? "calendar"
+      : null;
+  }
   return null;
 }
 
@@ -749,19 +781,32 @@ function inferPersonalContextLoadingLabel(
 function buildPersonalContextToolInstruction(
   query: string,
   intent: LivePersonalContextIntent,
+  activeGoogleActionContext?: LiveGoogleActionContextHint | null,
 ): string {
   const calendarTimeRange = inferCalendarTimeRangeForNudge(query);
+  const hasEmailActionIntent =
+    LIVE_EMAIL_ACTION_PATTERN.test(query) ||
+    (activeGoogleActionContext?.connector === "gmail" &&
+      LIVE_EMAIL_CONTEXT_FOLLOWUP_PATTERN.test(query));
+  const hasCalendarActionIntent =
+    LIVE_CALENDAR_ACTION_PATTERN.test(query) ||
+    (activeGoogleActionContext?.connector === "calendar" &&
+      LIVE_CALENDAR_CONTEXT_FOLLOWUP_PATTERN.test(query));
   if (intent === "both") {
     return `Call get_user_emails with {"refresh": true} and get_calendar_events with {"timeRange":"${calendarTimeRange}","timezone":"user_local","refresh": true} before answering.`;
   }
-  if (intent === "email" && LIVE_EMAIL_ACTION_PATTERN.test(query)) {
-    return 'Call prepare_google_email_action with {"request":"<full user request>"} before answering.';
+  if (intent === "email" && hasEmailActionIntent) {
+    return activeGoogleActionContext?.connector === "gmail"
+      ? 'Call prepare_google_email_action with {"request":"<full user request>"} before answering. This follow-up refers to the current Zee Mail draft/card, so do not answer conversationally or start a fresh draft unless the tool says more info is needed.'
+      : 'Call prepare_google_email_action with {"request":"<full user request>"} before answering. Do not answer conversationally instead of using the Gmail action tool.';
   }
   if (intent === "email" && LIVE_EMAIL_DETAIL_PATTERN.test(query)) {
     return 'Call get_email_thread_detail with {"query":"<full user request>"} before answering.';
   }
-  if (intent === "calendar" && LIVE_CALENDAR_ACTION_PATTERN.test(query)) {
-    return 'Call prepare_google_calendar_action with {"request":"<full user request>","timezone":"user_local"} before answering.';
+  if (intent === "calendar" && hasCalendarActionIntent) {
+    return activeGoogleActionContext?.connector
+      ? 'Call prepare_google_calendar_action with {"request":"<full user request>","timezone":"user_local"} before answering. This may be a follow-up to the current task context, so do not answer conversationally instead of using the calendar action tool.'
+      : 'Call prepare_google_calendar_action with {"request":"<full user request>","timezone":"user_local"} before answering. Do not answer conversationally instead of using the calendar action tool.';
   }
   if (intent === "calendar" && LIVE_CALENDAR_DETAIL_PATTERN.test(query)) {
     return `Call get_calendar_event_detail with {"query":"<full user request>","timeRange":"${calendarTimeRange}","timezone":"user_local"} before answering.`;
@@ -3872,7 +3917,11 @@ export class GeminiLiveVoiceSession {
     if (sender === "user") {
       this.markUserSpeechWindowTranscriptReceived(text.length);
     }
-    const personalContextIntent = classifyLivePersonalContextIntent(text);
+    const activeGoogleActionContext = this.callbacks.getGoogleActionContext?.() ?? null;
+    const personalContextIntent = classifyLivePersonalContextIntent(
+      text,
+      activeGoogleActionContext,
+    );
 
     if (
       sender === "user" &&
@@ -3890,6 +3939,7 @@ export class GeminiLiveVoiceSession {
         textLength: text.length,
         intent: personalContextIntent,
         detectedText: text.slice(0, 120),
+        activeGoogleActionContext,
       });
     }
 
@@ -3901,7 +3951,11 @@ export class GeminiLiveVoiceSession {
       !this.personalContextNudgeSentThisTurn
     ) {
       this.personalContextNudgeSentThisTurn = true;
-      this.sendPersonalContextToolNudge(text, personalContextIntent);
+      this.sendPersonalContextToolNudge(
+        text,
+        personalContextIntent,
+        activeGoogleActionContext,
+      );
     }
     if (
       sender === "user" &&
@@ -3913,6 +3967,7 @@ export class GeminiLiveVoiceSession {
         intent: personalContextIntent,
         reason: "google_personal_context_function_calling_disabled",
         detectedText: text.slice(0, 120),
+        activeGoogleActionContext,
         liveGooglePersonalContextFunctionCallingEnabled:
           this.liveGooglePersonalContextFunctionCallingEnabled,
         liveFunctionCallingEnabled: this.liveFunctionCallingEnabled,
@@ -4173,12 +4228,14 @@ export class GeminiLiveVoiceSession {
     });
 
     try {
+      const googleActionContext = this.callbacks.getGoogleActionContext?.() ?? null;
       this.debug("live.tool_call.forwarding", {
         endpoint: "/api/live/tool-response",
         conversationId: this.conversationId,
         functionNames: normalizedCalls.map((c) => c.name),
         hasEmailCall,
         hasCalendarCall,
+        googleActionContext,
       });
       const response = await fetch("/api/live/tool-response", {
         method: "POST",
@@ -4191,6 +4248,7 @@ export class GeminiLiveVoiceSession {
           functionCalls: normalizedCalls,
           clientTimeZone:
             Intl.DateTimeFormat().resolvedOptions().timeZone || undefined,
+          googleActionContext: googleActionContext ?? undefined,
         }),
       });
 
@@ -4319,6 +4377,12 @@ export class GeminiLiveVoiceSession {
           : 0,
         elapsedMs: Date.now() - toolCallStartedAt,
       });
+      if (this.conversationId) {
+        this.callbacks.onConversationMutated?.({
+          conversationId: this.conversationId,
+          source: "live_tool_response",
+        });
+      }
     } catch (error) {
       this.debug("live.tool_call.failed", {
         message: error instanceof Error ? error.message : String(error),
@@ -4358,11 +4422,16 @@ export class GeminiLiveVoiceSession {
   private sendPersonalContextToolNudge(
     userTranscript: string,
     intent: LivePersonalContextIntent,
+    activeGoogleActionContext?: LiveGoogleActionContextHint | null,
   ): void {
     const query = normalizeText(userTranscript);
     if (!query) return;
 
-    const toolInstruction = buildPersonalContextToolInstruction(query, intent);
+    const toolInstruction = buildPersonalContextToolInstruction(
+      query,
+      intent,
+      activeGoogleActionContext,
+    );
 
     const sent = this.sendClientContentSafely(
       {
@@ -4370,12 +4439,17 @@ export class GeminiLiveVoiceSession {
         turnComplete: true,
       },
       "live.google_context.nudge_failed",
-      { textLength: query.length, intent },
+      {
+        textLength: query.length,
+        intent,
+        activeGoogleActionContext,
+      },
     );
     if (sent) {
       this.debug("live.google_context.nudge_sent", {
         textLength: query.length,
         intent,
+        activeGoogleActionContext,
       });
     }
   }

@@ -425,20 +425,47 @@ export interface GoogleCalendarSession {
   followUpPrompt: string;
 }
 
-export interface GoogleEmailAmbiguityCandidate {
+export type GoogleActionTargetConnector = "gmail" | "calendar";
+
+export type GoogleActionTargetSelectionReason =
+  | "single_candidate"
+  | "ambiguity_required"
+  | "active_surface"
+  | "recent_context"
+  | "manual_selection"
+  | "latest_actionable"
+  | "clarification_session";
+
+export interface GoogleActionTargetContextMetadata {
+  connector: GoogleActionTargetConnector;
+  action: string | null;
+  actionableTargetId?: string | null;
+  candidateTargetIds?: string[];
+  sourceTurnId?: string | null;
+  selectionReason?: GoogleActionTargetSelectionReason | null;
+  surfaceKey?: string | null;
+  selectionMode?: "auto" | "manual" | "dismissed" | null;
+}
+
+export interface GoogleActionAmbiguityCandidate {
   taskId: string;
-  recipientLabel: string;
-  subject: string | null;
-  bodySnippet: string | null;
+  connector: GoogleActionTargetConnector;
+  title: string;
+  subtitle: string | null;
+  detail: string | null;
   statusLabel: string;
   selectionPrompt: string;
 }
 
-export interface GoogleEmailAmbiguityPrompt {
-  action: "send" | "revise";
+export interface GoogleActionAmbiguityPrompt {
+  connector: GoogleActionTargetConnector;
+  action: "send" | "revise" | "update";
   instructionText: string;
-  candidates: GoogleEmailAmbiguityCandidate[];
+  candidates: GoogleActionAmbiguityCandidate[];
 }
+
+export type GoogleEmailAmbiguityCandidate = GoogleActionAmbiguityCandidate;
+export type GoogleEmailAmbiguityPrompt = GoogleActionAmbiguityPrompt;
 
 export type ArtifactRenderEngine = "json_render";
 
@@ -535,6 +562,7 @@ export type AgentMessageUiPayload =
       text: string;
       googleActionPreview?: GoogleActionPreview | null;
       googleActionResult?: GoogleActionResult | null;
+      googleContext?: GoogleActionTargetContextMetadata | null;
     }
   | {
       kind: "agent_approval";
@@ -542,21 +570,31 @@ export type AgentMessageUiPayload =
       approval: AgentApprovalSummary;
       text: string;
       googleActionPreview?: GoogleActionPreview | null;
+      googleContext?: GoogleActionTargetContextMetadata | null;
     }
   | {
       kind: "agent_google_compose_session";
       session: GoogleComposeSession;
       text: string;
+      googleContext?: GoogleActionTargetContextMetadata | null;
     }
   | {
       kind: "agent_google_calendar_session";
       session: GoogleCalendarSession;
       text: string;
+      googleContext?: GoogleActionTargetContextMetadata | null;
     }
   | {
       kind: "agent_google_email_ambiguity";
-      ambiguity: GoogleEmailAmbiguityPrompt;
+      ambiguity: GoogleActionAmbiguityPrompt;
       text: string;
+      googleContext?: GoogleActionTargetContextMetadata | null;
+    }
+  | {
+      kind: "agent_google_action_ambiguity";
+      ambiguity: GoogleActionAmbiguityPrompt;
+      text: string;
+      googleContext?: GoogleActionTargetContextMetadata | null;
     }
   | {
       kind: "agent_artifact";
