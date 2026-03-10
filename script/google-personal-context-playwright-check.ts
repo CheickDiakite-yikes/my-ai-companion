@@ -110,8 +110,12 @@ async function main(): Promise<void> {
     await upsertGoogleIntegrationFixture(args.email, "write");
     console.log("[google-context-check] write-enabled status");
     await verifyWriteEnabledGoogleAssistantState(page, args.outputDir);
+    console.log("[google-context-check] compose phrasing coverage");
+    await verifyComposeForRecipientPhrasingFlow(page, args.baseUrl, args.outputDir);
     console.log("[google-context-check] approval card compose");
     await verifyApprovalCardComposeFlow(page, args.baseUrl, args.outputDir);
+    console.log("[google-context-check] existing draft selection");
+    await verifyExistingDraftSelectionFlow(page, args.baseUrl, args.email, args.outputDir);
     console.log("[google-context-check] calendar clarification card");
     await verifyCalendarClarificationCardFlow(page, args.baseUrl, args.outputDir);
     console.log("[google-context-check] saved-draft revision follow-up");
@@ -403,6 +407,54 @@ async function verifyUpgradeRequiredComposeFlow(
     /(gmail write access|upgrade google permissions|upgrade google access)/i,
     "Compose flow should request a Google access upgrade when write scopes are missing",
   );
+}
+
+async function verifyComposeForRecipientPhrasingFlow(
+  page: Page,
+  baseUrl: string,
+  outputDir: string,
+): Promise<void> {
+  const conversationId = await resolveActiveConversationId(page, baseUrl);
+  const beforeMessages = await fetchConversationMessages(page, baseUrl, conversationId);
+  const previousAssistantCount = beforeMessages.filter(
+    (message) => message.sender === "assistant",
+  ).length;
+
+  await page
+    .getByTestId("input-message")
+    .fill("okay lets create an email for contact@cheickdiakite.com");
+  await page.getByTestId("input-message").press("Enter");
+
+  const clarifyReply = await waitForLatestAssistantReply({
+    page,
+    baseUrl,
+    conversationId,
+    previousAssistantCount,
+    timeoutMs: 45_000,
+  });
+  assert.match(
+    clarifyReply,
+    /what should the email say|i can draft that to contact@cheickdiakite\.com/i,
+    'Expected "create an email for ..." phrasing to stay in the structured compose flow',
+  );
+
+  const composeSessionCard = page.locator('[data-testid="google-compose-session-card"]').last();
+  await composeSessionCard.waitFor({ state: "visible", timeout: 20_000 });
+  assert.equal(
+    await composeSessionCard.getAttribute("data-compose-status"),
+    "awaiting_body",
+    "Expected recipient-only phrasing to create an awaiting_body compose session",
+  );
+  assert.match(
+    await composeSessionCard.innerText(),
+    /contact@cheickdiakite\.com/i,
+    "Expected the compose session card to carry the provided recipient",
+  );
+
+  await page.screenshot({
+    path: resolve(outputDir, "google-personal-context-compose-for-phrasing.png"),
+    fullPage: true,
+  });
 }
 
 async function verifyApprovalCardComposeFlow(
@@ -837,13 +889,43 @@ async function verifySavedDraftRevisionFollowUpFlow(
     previousAssistantCount,
     timeoutMs: 45_000,
   });
+
+  let revisionAssistantCount = previousAssistantCount;
+  if (/which email should i update|which email did you mean/i.test(revisionReply)) {
+    const ambiguityCard = page.locator('[data-testid="google-email-ambiguity-card"]').last();
+    await ambiguityCard.waitFor({ state: "visible", timeout: 20_000 });
+    const ambiguityChoice = ambiguityCard
+      .locator('[data-testid^="button-google-email-ambiguity-"]')
+      .filter({ hasText: "team@soulnests.com" })
+      .first();
+    await ambiguityChoice.waitFor({ state: "visible", timeout: 20_000 });
+    await ambiguityChoice.evaluate((button) => {
+      (button as HTMLButtonElement).click();
+    });
+    await page.waitForTimeout(600);
+    revisionAssistantCount = previousAssistantCount + 1;
+  } else {
+    assert.match(
+      revisionReply,
+      /updated the saved draft preview|updated the draft preview|review it and approve/i,
+      "Saved draft follow-up edits should create a revised approval flow",
+    );
+  }
+
+  const latestRevisionReply = await waitForLatestAssistantReply({
+    page,
+    baseUrl,
+    conversationId,
+    previousAssistantCount: revisionAssistantCount,
+    timeoutMs: 45_000,
+  });
   assert.match(
-    revisionReply,
+    latestRevisionReply,
     /updated the saved draft preview|updated the draft preview|review it and approve/i,
     "Saved draft follow-up edits should create a revised approval flow",
   );
   assert.doesNotMatch(
-    revisionReply,
+    latestRevisionReply,
     /who should i send it to|what should the email say/i,
     "Saved draft follow-up edits should not fall back into compose-session clarification",
   );
@@ -923,6 +1005,72 @@ async function verifySavedDraftRevisionFollowUpFlow(
 
   await page.screenshot({
     path: resolve(outputDir, "google-personal-context-saved-draft-revision-follow-up.png"),
+    fullPage: true,
+  });
+}
+
+async function verifyExistingDraftSelectionFlow(
+  page: Page,
+  baseUrl: string,
+  email: string,
+  outputDir: string,
+): Promise<void> {
+  const conversationId = await resolveActiveConversationId(page, baseUrl);
+  await seedCustomSavedDraftTaskFixture({
+    email,
+    conversationId,
+    recipient: "zorovt18@gmail.com",
+    subject: "Catch up on the 15th?",
+    bodyText: "Hey, can we catch up on the 15th?",
+  });
+  await seedCustomSavedDraftTaskFixture({
+    email,
+    conversationId,
+    recipient: "zorovt18@gmail.com",
+    subject: "Quick hello",
+    bodyText: "Just wanted to say hello.",
+  });
+  await page.reload({ waitUntil: "networkidle" });
+
+  const beforeMessages = await fetchConversationMessages(page, baseUrl, conversationId);
+  const previousAssistantCount = beforeMessages.filter(
+    (message) => message.sender === "assistant",
+  ).length;
+
+  await page
+    .getByTestId("input-message")
+    .fill("yeah lets do the catch up on the 15th one we were working on");
+  await page.getByTestId("input-message").press("Enter");
+
+  const selectionReply = await waitForLatestAssistantReply({
+    page,
+    baseUrl,
+    conversationId,
+    previousAssistantCount,
+    timeoutMs: 45_000,
+  });
+  assert.match(
+    selectionReply,
+    /pulled up that draft|review, edit, or send it|review it and approve/i,
+    "Selecting an existing draft by subject should surface a real Gmail card",
+  );
+
+  const selectedCard = page.locator('[data-google-email-card="true"]').last();
+  await selectedCard.waitFor({ state: "visible", timeout: 20_000 });
+  const selectedCardText = await selectedCard.innerText();
+  assert.match(
+    selectedCardText,
+    /zorovt18@gmail\.com/i,
+    "Expected the selected draft card to target the matching recipient",
+  );
+  assert.match(
+    selectedCardText,
+    /catch up on the 15th/i,
+    "Expected the selected draft card to match the requested saved draft",
+  );
+
+  await page.screenshot({
+    path: resolve(outputDir, "google-personal-context-existing-draft-selection.png"),
     fullPage: true,
   });
 }
@@ -1325,25 +1473,41 @@ async function seedSavedDraftTaskFixture(
   email: string,
   conversationId: string,
 ): Promise<void> {
+  await seedCustomSavedDraftTaskFixture({
+    email,
+    conversationId,
+    recipient: "team@soulnests.com",
+    subject: "Quick note",
+    bodyText: "hi team just wanted to say hello",
+  });
+}
+
+async function seedCustomSavedDraftTaskFixture(params: {
+  email: string;
+  conversationId: string;
+  recipient: string;
+  subject: string;
+  bodyText: string;
+}): Promise<void> {
   const [user] = await db
     .select({ id: users.id })
     .from(users)
-    .where(eq(users.email, email))
+    .where(eq(users.email, params.email))
     .limit(1);
-  assert.ok(user?.id, `Expected to find user for ${email}`);
+  assert.ok(user?.id, `Expected to find user for ${params.email}`);
 
-  const prompt = "draft an email to team@soulnests.com saying hi team just wanted to say hello";
+  const prompt = `draft an email to ${params.recipient} saying ${params.bodyText}`;
   const preview = {
     kind: "email_compose" as const,
     title: "Create email draft",
-    summary: "Create an email draft to team@soulnests.com.",
+    summary: `Create an email draft to ${params.recipient}.`,
     connector: "gmail" as const,
     requiresWriteAccess: true,
     proposedEmail: {
-      to: ["team@soulnests.com"],
+      to: [params.recipient],
       cc: [],
-      subject: "Quick note",
-      bodyPreview: "hi team just wanted to say hello",
+      subject: params.subject,
+      bodyPreview: params.bodyText,
       sendAfterApproval: false,
     },
   };
@@ -1353,17 +1517,17 @@ async function seedSavedDraftTaskFixture(
     execution: {
       kind: "email_compose" as const,
       sendAfterApproval: false,
-      to: ["team@soulnests.com"],
+      to: [params.recipient],
       cc: [],
-      subject: "Quick note",
-      bodyText: "hi team just wanted to say hello",
+      subject: params.subject,
+      bodyText: params.bodyText,
     },
   };
   const completedAt = new Date();
 
   const task = await storage.createAgentTask({
     userId: user.id,
-    conversationId,
+    conversationId: params.conversationId,
     status: "completed",
     riskLevel: "high",
     taskKind: "google_action",
@@ -1374,9 +1538,9 @@ async function seedSavedDraftTaskFixture(
   });
 
   await storage.createMessage({
-    conversationId,
+    conversationId: params.conversationId,
     sender: "assistant",
-    text: "Created a Gmail draft to team@soulnests.com.",
+    text: `Created a Gmail draft to ${params.recipient}.`,
     partIndex: 0,
     uiPayload: {
       kind: "agent_task_status",
@@ -1398,7 +1562,7 @@ async function seedSavedDraftTaskFixture(
         kind: "email_compose",
         connector: "gmail",
         status: "draft_created",
-        summary: "Created a Gmail draft to team@soulnests.com.",
+        summary: `Created a Gmail draft to ${params.recipient}.`,
         draftId: `fixture-draft-${task.id}`,
         messageId: `fixture-message-${task.id}`,
         threadId: null,

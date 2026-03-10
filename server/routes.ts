@@ -6903,7 +6903,7 @@ function looksLikeGoogleEmailAmbiguitySelectionText(text: string): boolean {
   const normalized = normalizeGoogleEmailCandidateMatchText(text);
   if (!normalized) return false;
   if (
-    /^(?:draft|write|send|reply|respond)\s+(?:an?\s+)?(?:email|message)\b/i.test(
+    /^(?:(?:draft|write|send|create|make)\s+(?:an?\s+)?(?:email|message)(?:\s+draft)?|(?:create|make)\s+(?:an?\s+)?draft(?:\s+(?:email|message))?|reply|respond)\b/i.test(
       normalized,
     )
   ) {
@@ -6913,8 +6913,24 @@ function looksLikeGoogleEmailAmbiguitySelectionText(text: string): boolean {
     Boolean(extractGoogleEmailAddressForMatching(normalized)) ||
     /\b(?:latest|newest|most recent|current|older|previous|other|first|second|third|pending|saved|draft|preview|that one|this one)\b/i.test(
       normalized,
-    )
+    ) ||
+    /\b(?:use|choose|pick|stick with|go with|show|open|pull up|bring up|working on)\b/i.test(
+      normalized,
+    ) ||
+    /\bthe\s+.+\s+one\b/i.test(normalized)
   );
+}
+
+function looksLikeGoogleEmailDraftSelectionText(text: string): boolean {
+  if (
+    isGoogleActionSendMessage(text) ||
+    isGoogleActionApproveMessage(text) ||
+    isGoogleActionDeclineMessage(text) ||
+    looksLikeGoogleEmailDraftRevisionInstruction(text)
+  ) {
+    return false;
+  }
+  return looksLikeGoogleEmailAmbiguitySelectionText(text);
 }
 
 function resolveLatestGoogleEmailTaskTarget(
@@ -7891,6 +7907,66 @@ async function handleResolvedGoogleEmailFollowUp(params: {
   };
 }
 
+async function surfaceResolvedGoogleEmailTarget(params: {
+  storage: typeof storage;
+  userId: string;
+  conversationId: string;
+  target: GoogleEmailConversationTaskTarget;
+  googleContext?: GoogleActionTargetContextMetadata | null;
+}) {
+  const task = await params.storage.getAgentTaskById(params.target.taskId);
+  if (!task || task.userId !== params.userId) {
+    return { handled: false as const };
+  }
+
+  const pendingApproval =
+    task.status === "approval_required"
+      ? await params.storage.getPendingAgentApproval(task.id)
+      : null;
+
+  const assistantText = pendingApproval
+    ? "I pulled up that draft. Review it and approve when you're ready."
+    : "I pulled up that draft so you can review, edit, or send it.";
+
+  const assistantMessage = await params.storage.createMessage({
+    conversationId: params.conversationId,
+    sender: "assistant",
+    text: assistantText,
+    partIndex: 0,
+    uiPayload: pendingApproval
+      ? {
+          kind: "agent_approval",
+          taskId: task.id,
+          approval: toAgentApprovalSummary(pendingApproval),
+          text: "Approval needed",
+          googleActionPreview: params.target.preview,
+          googleContext: params.googleContext ?? null,
+        }
+      : {
+          kind: "agent_task_status",
+          task: toAgentTaskSummary(task),
+          text: "Draft selected",
+          googleActionPreview: params.target.preview,
+          googleActionResult:
+            "result" in params.target ? params.target.result ?? null : null,
+          googleContext: params.googleContext ?? null,
+        },
+  });
+
+  const assistantMessages = [assistantMessage];
+  return {
+    handled: true as const,
+    kind: "ready" as const,
+    assistantMessages,
+    legacyAssistantMessage: makeLegacyAssistantMessage(assistantMessages),
+    model: "google_action_task_selected_v1",
+    decisionPath: "agent_task" as const,
+    decisionPathReason: "task_started" as const,
+    awaitingApproval: Boolean(pendingApproval),
+    task: toAgentTaskSummary(task),
+  };
+}
+
 async function finalizePreparedGoogleActionTask(params: {
   storage: typeof storage;
   userId: string;
@@ -8053,6 +8129,8 @@ async function maybeHandleGoogleActionTask(params: {
   );
   const wantsEmailSendFollowUp =
     Boolean(latestEmailTaskTarget) && isGoogleActionSendMessage(params.text);
+  const actionableEmailCandidates =
+    rankedEmailCandidates as GoogleEmailConversationTaskTarget[];
   const wantsEmailRevisionFollowUp =
     Boolean(latestEmailTaskTarget) &&
     !wantsEmailSendFollowUp &&
@@ -8060,13 +8138,20 @@ async function maybeHandleGoogleActionTask(params: {
     !isGoogleActionDeclineMessage(params.text) &&
       !hasOtherGoogleFollowUpIntent &&
       looksLikeGoogleEmailDraftRevisionInstruction(params.text);
+  const wantsEmailSelectionFollowUp =
+    actionableEmailCandidates.length > 0 &&
+    !wantsEmailSendFollowUp &&
+    !wantsEmailRevisionFollowUp &&
+    !isGoogleActionApproveMessage(params.text) &&
+    !isGoogleActionDeclineMessage(params.text) &&
+    !hasOtherGoogleFollowUpIntent &&
+    looksLikeGoogleEmailDraftSelectionText(params.text);
   const wantsCalendarFollowUp =
     rankedCalendarCandidates.length > 0 &&
     !wantsEmailSendFollowUp &&
     !wantsEmailRevisionFollowUp &&
+    !wantsEmailSelectionFollowUp &&
     looksLikeGoogleCalendarFollowUpInstruction(params.text);
-  const actionableEmailCandidates =
-    rankedEmailCandidates as GoogleEmailConversationTaskTarget[];
   const emailCandidateResolution = resolveGoogleEmailDraftCandidateFromText({
     text: params.text,
     candidates: actionableEmailCandidates,
@@ -8389,6 +8474,93 @@ async function maybeHandleGoogleActionTask(params: {
       targetPreview: resolvedTarget.preview,
       googleContext,
       onEvent: params.onEvent,
+    });
+  }
+
+  if (latestEmailTaskTarget && wantsEmailSelectionFollowUp) {
+    if (
+      actionableEmailCandidates.length > 1 &&
+      emailCandidateResolution.kind !== "resolved"
+    ) {
+      const ambiguity: GoogleActionAmbiguityPrompt = {
+        connector: "gmail",
+        action: "revise",
+        instructionText: params.text,
+        candidates: actionableEmailCandidates
+          .slice(0, 3)
+          .map((candidate, index) =>
+            buildGoogleEmailAmbiguityCandidateFromTarget(candidate, index),
+          ),
+      };
+      params.onTrace?.("google.target_ambiguity_requested", {
+        connector: "gmail",
+        action: "revise",
+        candidateTaskIds: ambiguity.candidates.map((candidate) => candidate.taskId),
+      });
+      const assistantMessage = await createGoogleActionAmbiguityAssistantMessage({
+        storage: params.storage,
+        conversationId: params.conversationId,
+        ambiguity,
+        text: "I found a couple of recent drafts. Which email did you mean?",
+        googleContext: buildGoogleTargetContextMetadata({
+          connector: "gmail",
+          action: ambiguity.action,
+          candidateTargetIds: ambiguity.candidates.map((candidate) => candidate.taskId),
+          selectionReason: "ambiguity_required",
+          surfaceKey: params.clientGoogleActionContext?.surfaceKey ?? null,
+          selectionMode: params.clientGoogleActionContext?.selectionMode ?? null,
+        }),
+      });
+      const assistantMessages = [assistantMessage];
+      return {
+        handled: true as const,
+        kind: "clarify" as const,
+        assistantMessages,
+        legacyAssistantMessage: makeLegacyAssistantMessage(assistantMessages),
+        model: "google_action_email_ambiguity_v1",
+        decisionPath: "companion_reply" as const,
+        decisionPathReason: "companion" as const,
+        awaitingApproval: false,
+        task: null,
+      };
+    }
+
+    const resolvedTarget =
+      emailCandidateResolution.kind === "resolved"
+        ? emailCandidateResolution.candidate
+        : latestEmailTaskTarget;
+    params.onTrace?.("google.target_resolved", {
+      connector: "gmail",
+      action: "select",
+      selectedTaskId: resolvedTarget.taskId,
+      selectionReason:
+        emailCandidateResolution.kind === "resolved"
+          ? "manual_selection"
+          : params.clientGoogleActionContext?.actionableTargetId === resolvedTarget.taskId
+            ? "active_surface"
+            : "single_candidate",
+    });
+    const googleContext = buildGoogleTargetContextMetadata({
+      connector: "gmail",
+      action: "revise",
+      actionableTargetId: resolvedTarget.taskId,
+      candidateTargetIds: actionableEmailCandidates.map((candidate) => candidate.taskId),
+      sourceTurnId: params.userMessage.id,
+      selectionReason:
+        emailCandidateResolution.kind === "resolved"
+          ? "manual_selection"
+          : params.clientGoogleActionContext?.actionableTargetId === resolvedTarget.taskId
+            ? "active_surface"
+            : "single_candidate",
+      surfaceKey: params.clientGoogleActionContext?.surfaceKey ?? null,
+      selectionMode: params.clientGoogleActionContext?.selectionMode ?? null,
+    });
+    return surfaceResolvedGoogleEmailTarget({
+      storage: params.storage,
+      userId: params.userId,
+      conversationId: params.conversationId,
+      target: resolvedTarget,
+      googleContext,
     });
   }
 

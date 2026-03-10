@@ -225,6 +225,14 @@ function inferLiteralEmailBodyText(input: string): string | null {
   return match?.[1]?.trim() ?? null;
 }
 
+function looksLikeGoogleEmailComposeRequest(input: string): boolean {
+  const normalized = normalizeText(input);
+  if (!normalized) return false;
+  return /\b(?:(?:draft|write|send|create|make)\s+(?:an?\s+)?(?:email|message)(?:\s+draft)?|(?:create|make)\s+(?:an?\s+)?draft(?:\s+(?:email|message))?)\b/i.test(
+    normalized,
+  );
+}
+
 function inferEmailSubject(input: string): string | null {
   const normalized = normalizeText(input);
   const match = normalized.match(/\babout\s+(.+?)(?:\s+(?:saying|that)\s+.+)?$/i);
@@ -233,12 +241,14 @@ function inferEmailSubject(input: string): string | null {
 
 function stripComposeLeadIn(input: string): string {
   return normalizeText(input)
+    .replace(/^\s*(?:okay|ok|alright|all right|sure|yeah|yep)\s+(?:lets|let's)\s+/i, "")
     .replace(/^\s*(?:can|could|would|will)\s+you\s+/i, "")
     .replace(/^\s*please\s+/i, "")
     .replace(
       /^\s*(?:create|make)\s+(?:an?\s+)?(?:(?:email|message)\s+draft|draft(?:\s+(?:email|message))?)\b/i,
       "",
     )
+    .replace(/^\s*(?:create|make)\s+(?:an?\s+)?(?:email|message)\b/i, "")
     .replace(
       /^\s*(?:draft|write|send)\s+(?:an?\s+)?(?:email|message)\b/i,
       "",
@@ -259,13 +269,13 @@ function inferDraftInstructionText(input: string): string | null {
   }
 
   const afterRecipientMatch = composeTail.match(
-    /^to\s+\S+@\S+\s+(.+)$/i,
+    /^(?:to|for)\s+\S+@\S+\s+(.+)$/i,
   );
   if (afterRecipientMatch?.[1]) {
     return afterRecipientMatch[1].trim();
   }
 
-  const plainTail = composeTail.replace(/^to\s+\S+@\S+/i, "").trim();
+  const plainTail = composeTail.replace(/^(?:to|for)\s+\S+@\S+/i, "").trim();
   return plainTail.length > 0 ? plainTail : null;
 }
 
@@ -308,6 +318,9 @@ function buildComposeContinuationPrompt(params: {
       followUpText,
     )
   ) {
+    return null;
+  }
+  if (detectGoogleActionTaskIntent(followUpText, null)) {
     return null;
   }
 
@@ -398,6 +411,9 @@ function buildCalendarContinuationPrompt(params: {
       followUpText,
     )
   ) {
+    return null;
+  }
+  if (detectGoogleActionTaskIntent(followUpText, null)) {
     return null;
   }
 
@@ -1117,7 +1133,7 @@ function matchReplyTarget(text: string): string | null {
 function matchComposeTarget(text: string): string | null {
   const normalized = normalizeText(text);
   const match = normalized.match(
-    /\b(?:(?:draft|write|send)\s+(?:an?\s+)?(?:email|message)|(?:create|make)\s+(?:an?\s+)?(?:(?:email|message)\s+draft|draft(?:\s+(?:email|message))?))\s+to\s+(.+?)(?:\s+(?:about|saying|that)\b|$)/i,
+    /\b(?:(?:draft|write|send|create|make)\s+(?:an?\s+)?(?:email|message)(?:\s+draft)?|(?:create|make)\s+(?:an?\s+)?draft(?:\s+(?:email|message))?)\s+(?:to|for)\s+(.+?)(?:\s+(?:about|regarding|saying|that)\b|$)/i,
   );
   return normalizeText(match?.[1] ?? null);
 }
@@ -1376,7 +1392,7 @@ export async function prepareGoogleActionTask(params: {
     };
   }
 
-  if (/\b(?:draft|write|send)\b/i.test(rawText) && /\b(?:email|message)\b/i.test(rawText)) {
+  if (looksLikeGoogleEmailComposeRequest(rawText)) {
     const composeTarget = matchComposeTarget(rawText);
     const recipientEmail = composeTarget ? extractEmailAddress(composeTarget) : null;
     const subjectHint = inferEmailSubject(rawText);
