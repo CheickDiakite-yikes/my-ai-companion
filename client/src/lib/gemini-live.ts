@@ -85,6 +85,11 @@ export interface LiveVoiceDebugState {
   compatibilityIsStandalonePwa: boolean;
   speechProfileMode: "desktop_default" | "mobile_relaxed";
   speechProfileThresholdScale: number;
+  pendingGoogleReadVoiceSummarySource: "immediate" | "fallback" | null;
+  pendingGoogleReadVoiceSummaryToolNames: string[];
+  pendingGoogleReadVoiceSummarySentAt: number | null;
+  pendingGoogleReadVoiceSummaryDeadlineAt: number | null;
+  lastGoogleReadVoiceSummaryTimeoutAt: number | null;
 }
 
 export interface LiveSessionResumptionEvent {
@@ -141,6 +146,15 @@ type LiveGoogleActionContextHint = ReturnType<
   NonNullable<GeminiLiveVoiceSessionCallbacks["getGoogleActionContext"]>
 >;
 
+type PendingGoogleReadVoiceSummary = {
+  digestTexts: string[];
+  toolNames: string[];
+  source: "immediate" | "fallback";
+  sentAtMs: number;
+  deadlineAtMs: number;
+  assistantActivitySnapshotAtMs: number;
+};
+
 const INPUT_SAMPLE_RATE = 16000;
 const OUTPUT_SAMPLE_RATE = 24000;
 const VIDEO_FRAME_INTERVAL_MS = 1000;
@@ -149,6 +163,7 @@ const VIDEO_PERMISSION_TIMEOUT_MS = 12000;
 const TRANSCRIPT_DUPLICATE_WINDOW_MS = 1500;
 const TRANSCRIPT_FLUSH_DEBOUNCE_MS = 900;
 const TRANSCRIPT_OVERLAP_MIN_CHARS = 6;
+const GOOGLE_READ_VOICE_SUMMARY_ACK_TIMEOUT_MS = 5000;
 
 function parseClientPositiveInt(
   value: unknown,
@@ -1446,6 +1461,9 @@ export class GeminiLiveVoiceSession {
       }
     | null = null;
   private googleReadVoiceFallbackTimeout: number | null = null;
+  private googleReadVoiceSummaryAckTimeout: number | null = null;
+  private pendingGoogleReadVoiceSummary: PendingGoogleReadVoiceSummary | null = null;
+  private lastGoogleReadVoiceSummaryTimeoutAt: number | null = null;
   private webSearchGroundedThisTurn = false;
   private webSearchNudgeSentThisTurn = false;
   private pendingTranscriptBySender: Record<TranscriptSender, string> = {
@@ -1638,6 +1656,8 @@ export class GeminiLiveVoiceSession {
     this.personalContextNudgeSentThisTurn = false;
     this.pendingPersonalContextReadFallback = null;
     this.clearGoogleReadVoiceFallbackTimeout();
+    this.clearPendingGoogleReadVoiceSummary();
+    this.lastGoogleReadVoiceSummaryTimeoutAt = null;
     this.webSearchGroundedThisTurn = false;
     this.webSearchNudgeSentThisTurn = false;
     this.debug("live.feature_gates", {
@@ -1994,8 +2014,10 @@ export class GeminiLiveVoiceSession {
     this.personalContextNudgeSentThisTurn = false;
     this.pendingPersonalContextReadFallback = null;
     this.clearGoogleReadVoiceFallbackTimeout();
+    this.clearPendingGoogleReadVoiceSummary();
     this.webSearchGroundedThisTurn = false;
     this.webSearchNudgeSentThisTurn = false;
+    this.lastGoogleReadVoiceSummaryTimeoutAt = null;
     this.compatibilityProfile = resolveSharedLiveAudioCompatibilityProfile();
     this.speechDetectionProfile = {
       mode: "desktop_default",
@@ -2268,6 +2290,16 @@ export class GeminiLiveVoiceSession {
       compatibilityIsStandalonePwa: this.compatibilityProfile.isStandalonePwa,
       speechProfileMode: this.speechDetectionProfile.mode,
       speechProfileThresholdScale: this.speechDetectionProfile.thresholdScale,
+      pendingGoogleReadVoiceSummarySource:
+        this.pendingGoogleReadVoiceSummary?.source ?? null,
+      pendingGoogleReadVoiceSummaryToolNames:
+        this.pendingGoogleReadVoiceSummary?.toolNames ?? [],
+      pendingGoogleReadVoiceSummarySentAt:
+        this.pendingGoogleReadVoiceSummary?.sentAtMs ?? null,
+      pendingGoogleReadVoiceSummaryDeadlineAt:
+        this.pendingGoogleReadVoiceSummary?.deadlineAtMs ?? null,
+      lastGoogleReadVoiceSummaryTimeoutAt:
+        this.lastGoogleReadVoiceSummaryTimeoutAt,
     };
   }
 
@@ -2661,6 +2693,173 @@ export class GeminiLiveVoiceSession {
     }
   }
 
+  private clearGoogleReadVoiceSummaryAckTimeout(): void {
+    if (this.googleReadVoiceSummaryAckTimeout !== null) {
+      window.clearTimeout(this.googleReadVoiceSummaryAckTimeout);
+      this.googleReadVoiceSummaryAckTimeout = null;
+    }
+  }
+
+  private clearPendingGoogleReadVoiceSummary(reason?: string): void {
+    const hadPendingSummary = Boolean(this.pendingGoogleReadVoiceSummary);
+    this.clearGoogleReadVoiceSummaryAckTimeout();
+    this.pendingGoogleReadVoiceSummary = null;
+    if (hadPendingSummary && reason) {
+      this.debug("live.google_context.voice_read_summary_cleared", {
+        reason,
+      });
+    }
+    if (hadPendingSummary) {
+      this.emitDebugState(true);
+    }
+  }
+
+  private reportClientError(event: string, data: Record<string, unknown>): void {
+    try {
+      fetch("/api/live/client-error", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          event,
+          data: {
+            ...data,
+            conversationId: this.conversationId,
+            userAgent:
+              typeof navigator !== "undefined" ? navigator.userAgent : null,
+          },
+        }),
+      }).catch(() => {});
+    } catch {
+      // Best-effort only.
+    }
+  }
+
+  private describeGoogleReadVoiceSummaryScope(toolNames: string[]): string {
+    const hasEmailScope = toolNames.some((name) =>
+      ["get_user_emails", "get_email_thread_detail"].includes(name),
+    );
+    const hasCalendarScope = toolNames.some((name) =>
+      ["get_calendar_events", "get_calendar_event_detail"].includes(name),
+    );
+    if (hasEmailScope && hasCalendarScope) {
+      return "your inbox and calendar";
+    }
+    if (hasEmailScope) {
+      return "your inbox";
+    }
+    if (hasCalendarScope) {
+      return "your calendar";
+    }
+    return "your Google info";
+  }
+
+  private startGoogleReadVoiceSummaryWatchdog(params: {
+    digestTexts: string[];
+    toolNames: string[];
+    source: "immediate" | "fallback";
+    assistantActivitySnapshotAtMs: number;
+  }): void {
+    this.clearGoogleReadVoiceSummaryAckTimeout();
+    const now = Date.now();
+    const pendingSummary: PendingGoogleReadVoiceSummary = {
+      digestTexts: params.digestTexts,
+      toolNames: params.toolNames,
+      source: params.source,
+      sentAtMs: now,
+      deadlineAtMs: now + GOOGLE_READ_VOICE_SUMMARY_ACK_TIMEOUT_MS,
+      assistantActivitySnapshotAtMs: params.assistantActivitySnapshotAtMs,
+    };
+    this.pendingGoogleReadVoiceSummary = pendingSummary;
+    this.debug("live.google_context.voice_read_summary_watchdog_started", {
+      source: params.source,
+      toolNames: params.toolNames,
+      digestCount: params.digestTexts.length,
+      deadlineAtMs: pendingSummary.deadlineAtMs,
+    });
+    this.emitDebugState(true);
+    this.googleReadVoiceSummaryAckTimeout = window.setTimeout(() => {
+      this.googleReadVoiceSummaryAckTimeout = null;
+      const activeSummary = this.pendingGoogleReadVoiceSummary;
+      if (!activeSummary || activeSummary.sentAtMs !== pendingSummary.sentAtMs) {
+        return;
+      }
+      if (
+        this.assistantTurnActive ||
+        this.lastAssistantActivityAtMs > activeSummary.assistantActivitySnapshotAtMs
+      ) {
+        this.debug("live.google_context.voice_read_summary_timeout_skipped_assistant_active", {
+          source: activeSummary.source,
+          toolNames: activeSummary.toolNames,
+          assistantTurnActive: this.assistantTurnActive,
+          lastAssistantActivityAtMs: this.lastAssistantActivityAtMs,
+          assistantActivitySnapshotAtMs:
+            activeSummary.assistantActivitySnapshotAtMs,
+        });
+        this.clearPendingGoogleReadVoiceSummary(
+          "assistant_activity_detected_before_timeout",
+        );
+        return;
+      }
+
+      const scope = this.describeGoogleReadVoiceSummaryScope(
+        activeSummary.toolNames,
+      );
+      const preview = activeSummary.digestTexts.join(" ").trim().slice(0, 280);
+      this.lastGoogleReadVoiceSummaryTimeoutAt = Date.now();
+      this.debug("live.google_context.voice_read_summary_timeout", {
+        source: activeSummary.source,
+        toolNames: activeSummary.toolNames,
+        digestCount: activeSummary.digestTexts.length,
+        digestPreview: preview,
+        socketState: this.getSessionSocketReadyState(),
+        sessionReadyForRealtimeInput: this.sessionReadyForRealtimeInput,
+        assistantTurnActive: this.assistantTurnActive,
+        speechState: this.speechState,
+        lastAssistantActivityAtMs: this.lastAssistantActivityAtMs,
+      });
+      this.reportClientError("live.google_context.voice_read_summary_timeout", {
+        source: activeSummary.source,
+        toolNames: activeSummary.toolNames,
+        digestCount: activeSummary.digestTexts.length,
+        digestPreview: preview,
+        socketState: this.getSessionSocketReadyState(),
+        sessionReadyForRealtimeInput: this.sessionReadyForRealtimeInput,
+        assistantTurnActive: this.assistantTurnActive,
+        speechState: this.speechState,
+        lastAssistantActivityAtMs: this.lastAssistantActivityAtMs,
+      });
+      this.emitWebSearchStatus("grounded", "Summary ready in chat");
+      this.emitError(
+        new Error(
+          `I checked ${scope}, but my voice reply stalled. Swipe up to see the summary in chat.`,
+        ),
+      );
+      this.clearPendingGoogleReadVoiceSummary("timed_out_without_assistant_output");
+    }, GOOGLE_READ_VOICE_SUMMARY_ACK_TIMEOUT_MS);
+  }
+
+  private acknowledgeGoogleReadVoiceSummary(
+    source: "audio" | "transcript",
+    metadata: {
+      audioPartCount: number;
+      hasOutputTranscription: boolean;
+    },
+  ): void {
+    if (!this.pendingGoogleReadVoiceSummary) {
+      return;
+    }
+    this.debug("live.google_context.voice_read_summary_acknowledged", {
+      source: this.pendingGoogleReadVoiceSummary.source,
+      toolNames: this.pendingGoogleReadVoiceSummary.toolNames,
+      via: source,
+      ...metadata,
+    });
+    this.clearPendingGoogleReadVoiceSummary(
+      source === "audio" ? "assistant_audio_received" : "assistant_transcript_received",
+    );
+  }
+
   private sendGoogleReadVoiceSummary(params: {
     digestTexts: string[];
     toolNames: string[];
@@ -2672,7 +2871,7 @@ export class GeminiLiveVoiceSession {
     }
     const sent = this.sendClientContentSafely(
       {
-        turns: `Using the verified Google results you just received, say this aloud naturally and briefly right now. Do not ask the user to wait. Verified summary: ${spokenSummary}`,
+        turns: `Using the verified Google results you just received, respond out loud right now in 1 to 3 short sentences. Start speaking immediately, do not call tools again, and do not ask the user to wait. Verified summary: ${spokenSummary}`,
         turnComplete: true,
       },
       "live.google_context.nudge_failed",
@@ -2698,6 +2897,14 @@ export class GeminiLiveVoiceSession {
         spokenSummaryLength: spokenSummary.length,
       },
     );
+    if (sent) {
+      this.startGoogleReadVoiceSummaryWatchdog({
+        digestTexts: params.digestTexts,
+        toolNames: params.toolNames,
+        source: params.source,
+        assistantActivitySnapshotAtMs: this.lastAssistantActivityAtMs,
+      });
+    }
     return sent;
   }
 
@@ -4203,6 +4410,13 @@ export class GeminiLiveVoiceSession {
           reason: "assistant_output_received",
         });
       }
+      this.acknowledgeGoogleReadVoiceSummary(
+        audioPartCount > 0 ? "audio" : "transcript",
+        {
+          audioPartCount,
+          hasOutputTranscription: Boolean(serverContent.outputTranscription?.text),
+        },
+      );
     }
 
     if (
