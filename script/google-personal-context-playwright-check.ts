@@ -141,6 +141,8 @@ async function main(): Promise<void> {
     await verifyRecentCalendarFollowUpFlow(page, args.baseUrl, args.email, args.outputDir);
     console.log("[google-context-check] manual draft editor");
     await verifyManualDraftEditorFlow(page, args.baseUrl, args.email, args.outputDir);
+    console.log("[google-context-check] manual draft delete");
+    await verifyManualDraftDeleteFlow(page, args.baseUrl, args.email, args.outputDir);
     console.log("[google-context-check] manual calendar editor");
     await verifyManualCalendarEditorFlow(page, args.baseUrl, args.email, args.outputDir);
 
@@ -828,6 +830,20 @@ async function verifySavedDraftSendFollowUpFlow(
   await ambiguityChoice.evaluate((button) => {
     (button as HTMLButtonElement).click();
   });
+  const ambiguitySelectionStatus = ambiguityCard.getByTestId(
+    "google-email-ambiguity-selection-status",
+  );
+  await ambiguitySelectionStatus.waitFor({ state: "visible", timeout: 20_000 });
+  assert.match(
+    await ambiguitySelectionStatus.innerText(),
+    /pulling up|selected/i,
+    "Choosing an ambiguity option should immediately show a locked selection state",
+  );
+  assert.equal(
+    await ambiguityChoice.isDisabled(),
+    true,
+    "Chosen ambiguity options should be disabled after selection to prevent repeated clicks",
+  );
   await page.waitForTimeout(600);
 
   const resolvedSendReply = await waitForLatestAssistantReply({
@@ -1463,6 +1479,20 @@ async function verifyAmbiguousDraftFollowUpFlow(
   await ambiguityChoice.evaluate((element) => {
     (element as HTMLButtonElement).click();
   });
+  const ambiguitySelectionStatus = ambiguityCard.getByTestId(
+    "google-email-ambiguity-selection-status",
+  );
+  await ambiguitySelectionStatus.waitFor({ state: "visible", timeout: 20_000 });
+  assert.match(
+    await ambiguitySelectionStatus.innerText(),
+    /pulling up|selected/i,
+    "Choosing a draft to revise should immediately lock the ambiguity card",
+  );
+  assert.equal(
+    await ambiguityChoice.isDisabled(),
+    true,
+    "Ambiguity options should be disabled after the user picks one draft",
+  );
   await page.waitForTimeout(600);
 
   const revisedUnifiedCard = page.locator('[data-testid="agent-unified-task-card"]').last();
@@ -1722,6 +1752,86 @@ async function verifyManualDraftEditorFlow(
 
   await page.screenshot({
     path: resolve(outputDir, "google-personal-context-manual-draft-editor.png"),
+    fullPage: true,
+  });
+}
+
+async function verifyManualDraftDeleteFlow(
+  page: Page,
+  baseUrl: string,
+  email: string,
+  outputDir: string,
+): Promise<void> {
+  const conversationId = await resolveActiveConversationId(page, baseUrl);
+  await seedSavedDraftTaskFixture(email, conversationId);
+  await page.reload({ waitUntil: "networkidle" });
+
+  const seededCard = page.locator('[data-testid="agent-unified-task-card"]').last();
+  await seededCard.waitFor({ state: "visible", timeout: 20_000 });
+  assert.match(
+    await seededCard.innerText(),
+    /team@soulnests\.com/i,
+    "Expected a saved Gmail draft before deleting it",
+  );
+
+  const beforeMessages = await fetchConversationMessages(page, baseUrl, conversationId);
+  const previousAssistantCount = beforeMessages.filter(
+    (message) => message.sender === "assistant",
+  ).length;
+
+  const openDraftButton = page.getByTestId("button-google-email-open-draft").last();
+  await openDraftButton.waitFor({ state: "visible", timeout: 20_000 });
+  await openDraftButton.evaluate((button) => {
+    (button as HTMLButtonElement).click();
+  });
+
+  const draftDialog = page.getByTestId("google-email-draft-dialog");
+  await draftDialog.waitFor({ state: "visible", timeout: 20_000 });
+
+  const deleteButton = page.getByTestId("button-google-email-delete-draft");
+  await deleteButton.waitFor({ state: "visible", timeout: 20_000 });
+  await deleteButton.evaluate((button) => {
+    (button as HTMLButtonElement).click();
+  });
+  assert.match(
+    await deleteButton.innerText(),
+    /confirm delete/i,
+    "Deleting a Gmail draft should require an explicit confirmation click",
+  );
+  await deleteButton.evaluate((button) => {
+    (button as HTMLButtonElement).click();
+  });
+  await page.waitForFunction(() => {
+    const button = document.querySelector(
+      '[data-testid="button-google-email-delete-draft"]',
+    ) as HTMLButtonElement | null;
+    return button?.textContent?.includes("Deleting") ?? false;
+  });
+
+  const deleteReply = await waitForLatestAssistantReply({
+    page,
+    baseUrl,
+    conversationId,
+    previousAssistantCount,
+    timeoutMs: 45_000,
+  });
+  assert.match(
+    deleteReply,
+    /deleted your gmail draft/i,
+    "Deleting a saved draft should surface a completion reply",
+  );
+
+  const deletedCard = page.locator('[data-testid="agent-unified-task-card"]').last();
+  await deletedCard.waitFor({ state: "visible", timeout: 20_000 });
+  const deletedCardText = await deletedCard.innerText();
+  assert.match(
+    deletedCardText,
+    /draft deleted|deleted your gmail draft/i,
+    "Expected the Gmail card to show the deleted draft status after confirmation",
+  );
+
+  await page.screenshot({
+    path: resolve(outputDir, "google-personal-context-manual-draft-delete.png"),
     fullPage: true,
   });
 }

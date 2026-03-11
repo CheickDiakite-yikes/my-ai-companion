@@ -11,7 +11,7 @@ import type {
   GoogleComposeSession,
   GoogleEmailThreadDetail,
 } from "@shared/agent";
-import type { AgentTask, AgentApproval, AgentStep } from "@shared/schema";
+import type { AgentTask, AgentApproval, AgentStep, Message } from "@shared/schema";
 import type { IStorage } from "./storage";
 import { generateStructuredJson } from "./gemini";
 import { authStorage } from "./replit_integrations/auth/storage";
@@ -23,6 +23,7 @@ import {
   GOOGLE_GMAIL_SEND_SCOPE,
   createGmailDraft,
   createGoogleCalendarEvent,
+  deleteGmailDraft,
   fetchGmailThreadDetail,
   fetchGoogleCalendarEventDetail,
   resolveGoogleAccessTokenForUser,
@@ -72,6 +73,66 @@ export type RecentGoogleActionTask = {
   preview: GoogleActionPreview;
   result: GoogleActionResult | null;
 };
+
+function getGoogleActionPreviewOrNull(value: unknown): GoogleActionPreview | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const preview = value as Record<string, unknown>;
+  if (
+    typeof preview.kind !== "string" ||
+    typeof preview.title !== "string" ||
+    typeof preview.summary !== "string" ||
+    (preview.connector !== "gmail" && preview.connector !== "calendar")
+  ) {
+    return null;
+  }
+  return value as GoogleActionPreview;
+}
+
+function getGoogleActionResultOrNull(value: unknown): GoogleActionResult | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const result = value as Record<string, unknown>;
+  if (
+    typeof result.kind !== "string" ||
+    typeof result.summary !== "string" ||
+    (result.connector !== "gmail" && result.connector !== "calendar") ||
+    typeof result.status !== "string"
+  ) {
+    return null;
+  }
+  return value as GoogleActionResult;
+}
+
+function getLatestGoogleTaskStatusForTask(
+  messages: Message[],
+  taskId: string,
+): { preview: GoogleActionPreview | null; result: GoogleActionResult | null } {
+  let preview: GoogleActionPreview | null = null;
+  let result: GoogleActionResult | null = null;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const payload = messages[index]?.uiPayload as Record<string, unknown> | null | undefined;
+    if (!payload || payload.kind !== "agent_task_status") {
+      continue;
+    }
+    const task = payload.task as Record<string, unknown> | null | undefined;
+    if (!task || typeof task.id !== "string" || task.id !== taskId) {
+      continue;
+    }
+    if (!preview) {
+      preview = getGoogleActionPreviewOrNull(payload.googleActionPreview ?? null);
+    }
+    if (!result) {
+      result = getGoogleActionResultOrNull(payload.googleActionResult ?? null);
+    }
+    if (preview && result) {
+      break;
+    }
+  }
+  return { preview, result };
+}
 
 export type GoogleRecentActionContext = {
   recentEmailTask?: RecentGoogleActionTask | null;
@@ -2972,6 +3033,104 @@ export async function applyStructuredGoogleEmailDraftEdit(params: {
     task: run.task,
     preview: next.preview,
     awaitingApproval: run.awaitingApproval,
+  };
+}
+
+export async function deleteStructuredGoogleEmailDraft(params: {
+  storage: IStorage;
+  taskId: string;
+  userId: string;
+}): Promise<{
+  task: AgentTaskSummary;
+  preview: GoogleActionPreview;
+  result: GoogleActionResult;
+}> {
+  const task = await params.storage.getAgentTaskById(params.taskId);
+  if (!task || task.userId !== params.userId) {
+    throw new Error("Task not found");
+  }
+
+  const plan = taskPlanFromTask(task);
+  if (!isEmailDraftRevisionCandidatePreview(plan.preview)) {
+    throw new Error("Task is not a deletable email draft");
+  }
+  if (task.status === "approval_required") {
+    throw new Error("Draft must be saved to Gmail before it can be deleted");
+  }
+
+  const latestTaskState = getLatestGoogleTaskStatusForTask(
+    await params.storage.getMessages(task.conversationId),
+    task.id,
+  );
+  const latestPreview = latestTaskState.preview ?? plan.preview;
+  const latestResult = latestTaskState.result;
+
+  if (latestResult?.status === "draft_deleted") {
+    throw new Error("Draft already deleted");
+  }
+  if (latestResult?.status !== "draft_created" || !latestResult.draftId?.trim()) {
+    throw new Error("Only saved Gmail drafts can be deleted");
+  }
+
+  const auth = await resolveGoogleAccessTokenForUser({
+    userId: params.userId,
+    storage: params.storage,
+    requiredScopes: [GOOGLE_GMAIL_COMPOSE_SCOPE],
+  });
+  if (!auth.ok) {
+    throw new Error(
+      "Google Gmail write access is no longer available. Reconnect Google in Profile and retry.",
+    );
+  }
+
+  await deleteGmailDraft({
+    accessToken: auth.accessToken,
+    draftId: latestResult.draftId.trim(),
+  });
+
+  const refreshedTask =
+    (await params.storage.updateAgentTaskStatus({
+      taskId: task.id,
+      status: "completed",
+      completedAt: new Date(),
+    })) ?? task;
+  const taskSummary = toTaskSummary(refreshedTask);
+  const result: GoogleActionResult = {
+    kind: latestPreview.kind,
+    connector: "gmail",
+    status: "draft_deleted",
+    summary: `Deleted your Gmail draft to ${
+      latestPreview.proposedEmail?.to.join(", ") || "the selected recipient"
+    }.`,
+    draftId: latestResult.draftId.trim(),
+    messageId: latestResult.messageId ?? null,
+    threadId: latestResult.threadId ?? null,
+  };
+
+  await createAssistantUiMessage({
+    storage: params.storage,
+    conversationId: task.conversationId,
+    text: result.summary,
+    uiPayload: {
+      kind: "agent_task_status",
+      task: taskSummary,
+      text: "Draft deleted",
+      googleActionPreview: latestPreview,
+      googleActionResult: result,
+      googleContext: {
+        connector: "gmail",
+        action: "revise",
+        actionableTargetId: null,
+        candidateTargetIds: [],
+        selectionReason: "manual_selection",
+      },
+    },
+  });
+
+  return {
+    task: taskSummary,
+    preview: latestPreview,
+    result,
   };
 }
 

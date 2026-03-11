@@ -8,6 +8,7 @@ import type {
   InboxDigestItem,
 } from "@shared/agent";
 import type { GoogleIntegration } from "@shared/schema";
+import { randomUUID } from "node:crypto";
 import type { IStorage } from "./storage";
 import {
   decryptGoogleToken,
@@ -185,6 +186,13 @@ export const GOOGLE_CALENDAR_EVENTS_READONLY_SCOPE =
   "https://www.googleapis.com/auth/calendar.events.readonly";
 export const GOOGLE_CALENDAR_EVENTS_WRITE_SCOPE =
   "https://www.googleapis.com/auth/calendar.events";
+
+const ENABLE_GOOGLE_FIXTURE_MODE =
+  process.env.ENABLE_GOOGLE_FIXTURE_MODE?.trim().toLowerCase() === "true";
+
+function isFixtureGoogleAccessToken(accessToken: string): boolean {
+  return ENABLE_GOOGLE_FIXTURE_MODE && accessToken.startsWith("fixture-access-token-");
+}
 
 const GOOGLE_COMBINED_HINT_PATTERN =
   /\b(what should i know|anything important|key (emails?|messages?|events?)|overview of (my\s+)?(day|week))\b/i;
@@ -1479,6 +1487,14 @@ export async function createGmailDraft(params: {
   inReplyTo?: string | null;
   references?: string | null;
 }): Promise<{ draftId: string; threadId: string | null; messageId: string | null }> {
+  if (isFixtureGoogleAccessToken(params.accessToken)) {
+    const suffix = randomUUID();
+    return {
+      draftId: `fixture-draft-${suffix}`,
+      threadId: params.threadId ?? `fixture-thread-${suffix}`,
+      messageId: `fixture-message-${suffix}`,
+    };
+  }
   const response = await fetch(GMAIL_DRAFTS_ENDPOINT, {
     method: "POST",
     headers: {
@@ -1518,6 +1534,40 @@ export async function createGmailDraft(params: {
   };
 }
 
+export async function deleteGmailDraft(params: {
+  accessToken: string;
+  draftId: string;
+}): Promise<void> {
+  if (isFixtureGoogleAccessToken(params.accessToken)) {
+    return;
+  }
+  const response = await fetch(
+    `${GMAIL_DRAFTS_ENDPOINT}/${encodeURIComponent(params.draftId)}`,
+    {
+      method: "DELETE",
+      headers: {
+        Authorization: `Bearer ${params.accessToken}`,
+      },
+    },
+  );
+
+  if (response.ok || response.status === 204) {
+    return;
+  }
+
+  let message = "";
+  try {
+    const payload = (await response.json()) as { error?: { message?: string } };
+    message = payload.error?.message?.trim() ?? "";
+  } catch {
+    message = (await response.text()).trim();
+  }
+
+  throw new Error(
+    message || `Failed to delete Gmail draft (status ${response.status})`,
+  );
+}
+
 export async function sendGmailMessage(params: {
   accessToken: string;
   to: string[];
@@ -1528,6 +1578,13 @@ export async function sendGmailMessage(params: {
   inReplyTo?: string | null;
   references?: string | null;
 }): Promise<{ messageId: string | null; threadId: string | null }> {
+  if (isFixtureGoogleAccessToken(params.accessToken)) {
+    const suffix = randomUUID();
+    return {
+      messageId: `fixture-message-${suffix}`,
+      threadId: params.threadId ?? `fixture-thread-${suffix}`,
+    };
+  }
   const response = await fetch(GMAIL_SEND_ENDPOINT, {
     method: "POST",
     headers: {

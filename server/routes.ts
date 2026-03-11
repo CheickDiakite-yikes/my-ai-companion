@@ -104,6 +104,7 @@ import {
 } from "./agent-runtime";
 import {
   applyStructuredGoogleCalendarEventEdit,
+  deleteStructuredGoogleEmailDraft,
   applyStructuredGoogleEmailDraftEdit,
   approveAndExecuteGoogleActionTask,
   detectGoogleActionTaskIntent,
@@ -247,6 +248,10 @@ const googleEmailDraftEditSchema = z.object({
   to: z.string().trim().min(1).max(2000),
   subject: z.string().max(300),
   bodyText: z.string().trim().min(1).max(20000),
+});
+
+const googleEmailDraftDeleteSchema = z.object({
+  confirm: z.literal(true),
 });
 
 const googleCalendarEventEditSchema = z
@@ -11515,6 +11520,85 @@ export async function registerRoutes(
                 ? 400
                 : 500;
         traceError(req, "agent.task.google_email_edit.failed", error, {
+          taskId: req.params.taskId,
+          elapsedMs: elapsedMs(startedAt),
+        });
+        return res.status(status).json({
+          message,
+          traceId: getTraceId(req),
+        });
+      }
+    },
+  );
+
+  app.post(
+    "/api/agent/tasks/:taskId/google-email-delete",
+    isAuthenticated,
+    async (req: any, res) => {
+      const startedAt = Date.now();
+      try {
+        googleEmailDraftDeleteSchema.parse(req.body ?? {});
+        const task = await storage.getAgentTaskById(req.params.taskId);
+        if (!task || task.userId !== req.session.userId) {
+          return res.status(404).json({
+            message: "Task not found",
+            traceId: getTraceId(req),
+          });
+        }
+        if (
+          task.taskKind !== "google_action" ||
+          !ENABLE_GOOGLE_PERSONAL_CONTEXT_WRITES
+        ) {
+          return res.status(410).json({
+            message: "Google assistant write actions are disabled in this environment.",
+            traceId: getTraceId(req),
+          });
+        }
+
+        trace(req, "agent.task.google_email_delete.started", {
+          taskId: task.id,
+          elapsedMs: elapsedMs(startedAt),
+        });
+
+        const result = await deleteStructuredGoogleEmailDraft({
+          storage,
+          taskId: task.id,
+          userId: req.session.userId,
+        });
+
+        trace(req, "agent.task.google_email_delete.completed", {
+          taskId: result.task.id,
+          status: result.task.status,
+          resultStatus: result.result.status,
+          elapsedMs: elapsedMs(startedAt),
+        });
+
+        return res.status(200).json({
+          traceId: getTraceId(req),
+          task: result.task,
+          preview: result.preview,
+          result: result.result,
+        });
+      } catch (error) {
+        if (error instanceof z.ZodError) {
+          return res.status(400).json({
+            message: error.issues[0]?.message ?? "Invalid Gmail draft delete request",
+            traceId: getTraceId(req),
+          });
+        }
+        const message =
+          error instanceof Error ? error.message : "Failed to delete Gmail draft";
+        const status =
+          message === "Task not found"
+            ? 404
+            : message === "Draft already deleted"
+              ? 409
+              : message === "Task is not a deletable email draft" ||
+                  message === "Only saved Gmail drafts can be deleted" ||
+                  message === "Draft must be saved to Gmail before it can be deleted"
+                ? 400
+                : 500;
+        traceError(req, "agent.task.google_email_delete.failed", error, {
           taskId: req.params.taskId,
           elapsedMs: elapsedMs(startedAt),
         });

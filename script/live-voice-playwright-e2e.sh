@@ -22,6 +22,7 @@ if [[ -f .env ]]; then
 fi
 
 export GOOGLE_INTEGRATION_ENCRYPTION_KEY="${GOOGLE_INTEGRATION_ENCRYPTION_KEY:-codex-google-context-playwright-local-key-2026}"
+export ENABLE_GOOGLE_FIXTURE_MODE="${ENABLE_GOOGLE_FIXTURE_MODE:-true}"
 
 SERVER_PID=""
 TMP_FILES=()

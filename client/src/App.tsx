@@ -1458,6 +1458,8 @@ function getGoogleEmailTaskStatusLabel(params: {
     ? "Failed"
     : params.googleActionResult?.status === "email_sent"
       ? "Sent"
+      : params.googleActionResult?.status === "draft_deleted"
+        ? "Draft deleted"
       : params.googleActionResult?.status === "draft_created"
         ? "Draft saved"
         : params.approvalPending
@@ -2713,12 +2715,14 @@ function GoogleCalendarSessionCard(props: {
 function GoogleEmailAmbiguityCard(props: {
   ambiguity: GoogleActionAmbiguityPrompt;
   text: string;
-  onChoose: (candidate: GoogleActionAmbiguityCandidate) => void;
+  onChoose: (candidate: GoogleActionAmbiguityCandidate) => Promise<void>;
   displayMode?: "chat" | "voice_stage";
 }) {
   const isVoiceStage = props.displayMode === "voice_stage";
   const isCalendar = props.ambiguity.connector === "calendar";
   const chooseLockRef = useRef<string | null>(null);
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [selectionState, setSelectionState] = useState<"idle" | "submitting" | "selected">("idle");
   const actionLabel = isCalendar
     ? "Choose an event to update"
     : props.ambiguity.action === "send"
@@ -2729,18 +2733,31 @@ function GoogleEmailAmbiguityCard(props: {
     : props.ambiguity.action === "send"
       ? "Tap the email you want Zee to send next."
       : "Tap the email you want Zee to revise.";
-  const handleChoose = useCallback((candidate: GoogleActionAmbiguityCandidate) => {
-    if (chooseLockRef.current === candidate.taskId) {
+  const selectedCandidate = selectedTaskId
+    ? props.ambiguity.candidates.find((candidate) => candidate.taskId === selectedTaskId) ?? null
+    : null;
+  const handleChoose = useCallback(async (candidate: GoogleActionAmbiguityCandidate) => {
+    if (selectionState !== "idle" || chooseLockRef.current) {
       return;
     }
     chooseLockRef.current = candidate.taskId;
-    props.onChoose(candidate);
-    window.setTimeout(() => {
-      if (chooseLockRef.current === candidate.taskId) {
-        chooseLockRef.current = null;
-      }
-    }, 300);
-  }, [props]);
+    setSelectedTaskId(candidate.taskId);
+    setSelectionState("submitting");
+    try {
+      await props.onChoose(candidate);
+      setSelectionState("selected");
+    } catch (error) {
+      console.error("[GoogleUiTrace]", "ambiguity.selection_failed", {
+        connector: props.ambiguity.connector,
+        action: props.ambiguity.action,
+        selectedTaskId: candidate.taskId,
+        error: getErrorMessage(error),
+      });
+      chooseLockRef.current = null;
+      setSelectedTaskId(null);
+      setSelectionState("idle");
+    }
+  }, [props, selectionState]);
 
   return (
     <div
@@ -2750,6 +2767,8 @@ function GoogleEmailAmbiguityCard(props: {
       )}
       data-testid="google-email-ambiguity-card"
       data-ambiguity-action={props.ambiguity.action}
+      data-ambiguity-selection-state={selectionState}
+      data-selected-task-id={selectedTaskId ?? ""}
     >
       {!isVoiceStage ? (
         <div className="flex items-start gap-2">
@@ -2812,20 +2831,35 @@ function GoogleEmailAmbiguityCard(props: {
             <button
               key={candidate.taskId}
               type="button"
-              onClick={() => handleChoose(candidate)}
+              onClick={() => {
+                void handleChoose(candidate);
+              }}
               onKeyDown={(event) => {
                 if (event.key !== "Enter" && event.key !== " ") {
                   return;
                 }
                 event.preventDefault();
                 event.stopPropagation();
-                handleChoose(candidate);
+                void handleChoose(candidate);
               }}
-              className="relative z-[2] w-full rounded-[1rem] border px-3 py-3 text-left transition-colors hover:opacity-90 pointer-events-auto"
+              disabled={selectionState !== "idle"}
+              aria-disabled={selectionState !== "idle"}
+              className={cn(
+                "relative z-[2] w-full rounded-[1rem] border px-3 py-3 text-left transition-colors pointer-events-auto",
+                selectionState === "idle" ? "hover:opacity-90" : "cursor-default",
+              )}
               style={{
-                borderColor: "rgba(255,255,255,0.22)",
-                backgroundColor: "rgba(255,255,255,0.76)",
+                borderColor:
+                  candidate.taskId === selectedTaskId
+                    ? "rgba(90, 206, 180, 0.45)"
+                    : "rgba(255,255,255,0.22)",
+                backgroundColor:
+                  candidate.taskId === selectedTaskId
+                    ? "rgba(222,255,246,0.9)"
+                    : "rgba(255,255,255,0.76)",
                 color: "#173b40",
+                opacity:
+                  selectionState !== "idle" && candidate.taskId !== selectedTaskId ? 0.58 : 1,
               }}
               data-testid={`button-google-email-ambiguity-${candidate.taskId}`}
             >
@@ -2849,12 +2883,50 @@ function GoogleEmailAmbiguityCard(props: {
                     color: "#4c666a",
                   }}
                 >
-                  {candidate.statusLabel}
+                  {candidate.taskId === selectedTaskId && selectionState === "submitting"
+                    ? "Selecting..."
+                    : candidate.taskId === selectedTaskId && selectionState === "selected"
+                      ? "Selected"
+                      : candidate.statusLabel}
                 </span>
               </div>
             </button>
           ))}
         </div>
+
+        {selectedCandidate ? (
+          <div
+            className={cn(
+              "rounded-[1rem] border px-3 text-[12px]",
+              isVoiceStage ? "mt-2 py-2" : "mt-3 py-2.5",
+            )}
+            style={{
+              borderColor:
+                selectionState === "selected"
+                  ? "rgba(90, 206, 180, 0.35)"
+                  : "rgba(255,255,255,0.2)",
+              backgroundColor:
+                selectionState === "selected"
+                  ? "rgba(220,255,244,0.78)"
+                  : "rgba(255,255,255,0.66)",
+              color: selectionState === "selected" ? "#1f4e47" : "#5f7274",
+            }}
+            data-testid="google-email-ambiguity-selection-status"
+          >
+            <span className="flex items-center gap-2">
+              {selectionState === "submitting" ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <CheckCircle2 className="h-3.5 w-3.5" />
+              )}
+              <span>
+                {selectionState === "submitting"
+                  ? `Pulling up ${selectedCandidate.title}…`
+                  : `Selected ${selectedCandidate.title}. Scroll to the latest draft below.`}
+              </span>
+            </span>
+          </div>
+        ) : null}
 
         <div
           className={cn(
@@ -2867,7 +2939,9 @@ function GoogleEmailAmbiguityCard(props: {
             color: "#5f7274",
           }}
         >
-          {helperText} You can also reply with the title, recipient, or subject.
+          {selectedCandidate
+            ? "Need a different one? Ask Zee for the options again, or say the title, recipient, or subject."
+            : `${helperText} You can also reply with the title, recipient, or subject.`}
         </div>
       </div>
     </div>
@@ -2905,6 +2979,7 @@ function GoogleEmailAssistantTaskCard(props: {
     proposedEmail.bodyPreview ?? "",
   );
   const [draftEditError, setDraftEditError] = useState<string | null>(null);
+  const [deleteConfirmArmed, setDeleteConfirmArmed] = useState(false);
 
   useEffect(() => {
     setIsCollapsed(shouldDefaultCollapsed);
@@ -2919,7 +2994,13 @@ function GoogleEmailAssistantTaskCard(props: {
   const canEditDraft = Boolean(
     !props.failure &&
       props.card.status !== "cancelled" &&
-      props.googleActionResult?.status !== "email_sent",
+      props.googleActionResult?.status !== "email_sent" &&
+      props.googleActionResult?.status !== "draft_deleted",
+  );
+  const canDeleteSavedDraft = Boolean(
+    !props.failure &&
+      props.googleActionResult?.status === "draft_created" &&
+      props.googleActionResult?.draftId,
   );
   const hasManualDraftChanges =
     draftToInput.trim() !== currentTo.trim() ||
@@ -2932,6 +3013,7 @@ function GoogleEmailAssistantTaskCard(props: {
       setDraftSubjectInput(currentSubject);
       setDraftBodyInput(currentBody);
       setDraftEditError(null);
+      setDeleteConfirmArmed(false);
       setIsDraftEditorMode(editMode && canEditDraft);
     },
     [canEditDraft, currentBody, currentSubject, currentTo],
@@ -2943,6 +3025,7 @@ function GoogleEmailAssistantTaskCard(props: {
       setDraftSubjectInput(currentSubject);
       setDraftBodyInput(currentBody);
       setDraftEditError(null);
+      setDeleteConfirmArmed(false);
     }
   }, [
     currentBody,
@@ -2989,6 +3072,54 @@ function GoogleEmailAssistantTaskCard(props: {
       ]);
     },
   });
+  const deleteDraftMutation = useMutation({
+    mutationFn: async () => {
+      console.log("[GoogleUiTrace]", "chat.google_email_delete.started", {
+        taskId: props.card.taskId,
+      });
+      const response = await apiRequest(
+        "POST",
+        `/api/agent/tasks/${props.card.taskId}/google-email-delete`,
+        { confirm: true },
+      );
+      return response.json();
+    },
+    onSuccess: async () => {
+      console.log("[GoogleUiTrace]", "chat.google_email_delete.completed", {
+        taskId: props.card.taskId,
+      });
+      await Promise.all([
+        queryClient.invalidateQueries({
+          predicate: (query) => {
+            const key = Array.isArray(query.queryKey) ? query.queryKey[0] : query.queryKey;
+            return (
+              typeof key === "string" &&
+              (key === "/api/conversations" ||
+                key.startsWith("/api/conversations/") ||
+                key.startsWith("/api/agent/tasks/"))
+            );
+          },
+        }),
+        queryClient.refetchQueries({
+          predicate: (query) => {
+            const key = Array.isArray(query.queryKey) ? query.queryKey[0] : query.queryKey;
+            return (
+              typeof key === "string" &&
+              (key.startsWith("/api/conversations/") ||
+                key.startsWith("/api/agent/tasks/"))
+            );
+          },
+          type: "active",
+        }),
+      ]);
+    },
+    onError: (error) => {
+      console.error("[GoogleUiTrace]", "chat.google_email_delete.failed", {
+        taskId: props.card.taskId,
+        error: getErrorMessage(error),
+      });
+    },
+  });
 
   const statusLabel = getGoogleEmailTaskStatusLabel({
     failure: props.failure,
@@ -3005,11 +3136,15 @@ function GoogleEmailAssistantTaskCard(props: {
     props.card.summaryText ||
     "";
   const effectiveStatusLabel =
-    props.isResolvingApproval && props.approvalProgressLabel
+    deleteDraftMutation.isPending
+      ? "Deleting..."
+      : props.isResolvingApproval && props.approvalProgressLabel
       ? props.approvalProgressLabel
       : statusLabel;
   const statusTone: "pending" | "ready" | "cancelled" = props.failure
     ? "cancelled"
+    : props.googleActionResult?.status === "draft_deleted"
+      ? "cancelled"
     : props.googleActionResult
       ? "ready"
       : "pending";
@@ -3061,6 +3196,24 @@ function GoogleEmailAssistantTaskCard(props: {
       });
       setIsDraftDialogOpen(false);
       setIsDraftEditorMode(false);
+    } catch (error) {
+      setDraftEditError(getErrorMessage(error));
+    }
+  };
+
+  const handleDeleteDraft = async () => {
+    if (!deleteConfirmArmed) {
+      setDeleteConfirmArmed(true);
+      setDraftEditError(null);
+      return;
+    }
+    setDraftEditError(null);
+    try {
+      await deleteDraftMutation.mutateAsync();
+      setIsDraftDialogOpen(false);
+      setIsDraftEditorMode(false);
+      setDeleteConfirmArmed(false);
+      setIsCollapsed(true);
     } catch (error) {
       setDraftEditError(getErrorMessage(error));
     }
@@ -3325,10 +3478,14 @@ function GoogleEmailAssistantTaskCard(props: {
                 subject={proposedEmail.subject}
                 bodyPreview={proposedEmail.bodyPreview}
                 statusLabel={
-                  props.isResolvingApproval && props.approvalProgressLabel
+                  deleteDraftMutation.isPending
+                    ? "Deleting..."
+                    : props.isResolvingApproval && props.approvalProgressLabel
                     ? props.approvalProgressLabel
                     : props.googleActionResult?.status === "email_sent"
                       ? "Sent"
+                      : props.googleActionResult?.status === "draft_deleted"
+                        ? "Draft deleted"
                       : props.googleActionResult?.status === "draft_created"
                         ? "Draft saved"
                         : proposedEmail.sendAfterApproval
@@ -3336,12 +3493,16 @@ function GoogleEmailAssistantTaskCard(props: {
                           : "Draft preview"
                 }
                 helperText={
-                  props.isResolvingApproval && props.approvalProgressLabel
+                  deleteDraftMutation.isPending
+                    ? "Deleting this Gmail draft..."
+                    : props.isResolvingApproval && props.approvalProgressLabel
                     ? proposedEmail.sendAfterApproval
                       ? "Sending your email through Gmail..."
                       : "Saving this draft to Gmail..."
                     : props.googleActionResult?.status === "email_sent"
                       ? "This email was sent through Gmail."
+                      : props.googleActionResult?.status === "draft_deleted"
+                        ? "This Gmail draft was deleted."
                       : props.googleActionResult?.status === "draft_created"
                         ? "This draft was saved to Gmail."
                         : getGoogleEmailPreviewHelper(proposedEmail)
@@ -3604,7 +3765,7 @@ function GoogleEmailAssistantTaskCard(props: {
                   type="button"
                   variant="ghost"
                   onClick={() => resetDraftDialog(false)}
-                  disabled={saveDraftEditMutation.isPending}
+                  disabled={saveDraftEditMutation.isPending || deleteDraftMutation.isPending}
                   data-testid="button-google-email-cancel-draft-edit"
                 >
                   Cancel
@@ -3612,7 +3773,11 @@ function GoogleEmailAssistantTaskCard(props: {
                 <Button
                   type="button"
                   onClick={() => void handleSaveDraftEdit()}
-                  disabled={saveDraftEditMutation.isPending || !hasManualDraftChanges}
+                  disabled={
+                    saveDraftEditMutation.isPending ||
+                    deleteDraftMutation.isPending ||
+                    !hasManualDraftChanges
+                  }
                   data-testid="button-google-email-save-draft-edit"
                 >
                   {saveDraftEditMutation.isPending ? "Saving..." : "Save changes"}
@@ -3620,10 +3785,32 @@ function GoogleEmailAssistantTaskCard(props: {
               </>
             ) : (
               <>
+                {canDeleteSavedDraft ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    onClick={() => void handleDeleteDraft()}
+                    disabled={deleteDraftMutation.isPending}
+                    data-testid="button-google-email-delete-draft"
+                    style={{
+                      color: deleteConfirmArmed ? "#fecaca" : "var(--app-on-dark-muted)",
+                    }}
+                  >
+                    {deleteDraftMutation.isPending
+                      ? "Deleting..."
+                      : deleteConfirmArmed
+                        ? "Confirm delete"
+                        : "Delete draft"}
+                  </Button>
+                ) : null}
                 <Button
                   type="button"
                   variant="ghost"
-                  onClick={() => setIsDraftDialogOpen(false)}
+                  onClick={() => {
+                    setDeleteConfirmArmed(false);
+                    setIsDraftDialogOpen(false);
+                  }}
+                  disabled={deleteDraftMutation.isPending}
                   data-testid="button-google-email-close-draft"
                 >
                   Done
@@ -3633,8 +3820,10 @@ function GoogleEmailAssistantTaskCard(props: {
                     type="button"
                     onClick={() => {
                       setDraftEditError(null);
+                      setDeleteConfirmArmed(false);
                       setIsDraftEditorMode(true);
                     }}
+                    disabled={deleteDraftMutation.isPending}
                     data-testid="button-google-email-edit-draft"
                   >
                     Edit draft
@@ -9382,14 +9571,14 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
                               <GoogleEmailAmbiguityCard
                                 ambiguity={voiceStageSurface.ambiguity}
                                 text={voiceStageSurface.text}
-                                onChoose={(candidate) => {
+                                onChoose={async (candidate) => {
                                   onTraceStageEvent("ambiguity_selected", {
                                     connector: voiceStageSurface.ambiguity.connector,
                                     action: voiceStageSurface.ambiguity.action,
                                     selectedTaskId: candidate.taskId,
                                     surfaceKey: voiceStageSurface.surfaceKey,
                                   });
-                                  void handleVoiceStageSendMessage(candidate.selectionPrompt, {
+                                  await handleVoiceStageSendMessage(candidate.selectionPrompt, {
                                     ignoreAttachments: true,
                                     googleActionContext: buildGoogleAmbiguitySelectionContext({
                                       ambiguity: voiceStageSurface.ambiguity,
@@ -11451,13 +11640,16 @@ const TextView = ({
                       <GoogleEmailAmbiguityCard
                         ambiguity={msg.uiPayload.ambiguity}
                         text={msg.uiPayload.text}
-                        onChoose={(candidate) => {
+                        onChoose={async (candidate) => {
                           console.log("[GoogleUiTrace]", "chat.google_ambiguity_selected", {
                             connector: msg.uiPayload.ambiguity.connector,
                             action: msg.uiPayload.ambiguity.action,
                             selectedTaskId: candidate.taskId,
                           });
-                          void onSendMessage(candidate.selectionPrompt, {
+                          shouldAutoStickRef.current = true;
+                          setShowJumpToNewest(false);
+                          scrollToBottom(true);
+                          await onSendMessage(candidate.selectionPrompt, {
                             ignoreAttachments: true,
                             googleActionContext: buildGoogleAmbiguitySelectionContext({
                               ambiguity: msg.uiPayload.ambiguity,
@@ -11465,6 +11657,11 @@ const TextView = ({
                               sourceTurnId: msg.turnId ?? null,
                             }),
                           });
+                          window.setTimeout(() => {
+                            shouldAutoStickRef.current = true;
+                            setShowJumpToNewest(false);
+                            scrollToBottom(true);
+                          }, 120);
                         }}
                       />
                     ) : isAgentTaskStatusPayload(msg.uiPayload) ? (

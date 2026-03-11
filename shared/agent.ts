@@ -380,6 +380,7 @@ export interface GoogleActionResult {
   status:
     | "detail_ready"
     | "draft_created"
+    | "draft_deleted"
     | "email_sent"
     | "event_created"
     | "event_updated";
