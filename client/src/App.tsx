@@ -9303,6 +9303,77 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
                         {" "}
                         {liveDebug.state?.goAwayTimeLeft ?? "none"}
                       </div>
+                      <div className="mt-3 grid gap-2 md:grid-cols-2">
+                        <div className="rounded-2xl border px-3 py-2"
+                          style={{
+                            borderColor:
+                              "color-mix(in srgb, var(--app-soft-card-border) 72%, transparent)",
+                          }}
+                        >
+                          <div className="text-[10px] uppercase tracking-[0.18em]" style={{ color: "var(--app-on-dark-muted)" }}>
+                            Google Read Pending
+                          </div>
+                          <div className="mt-1 font-medium">
+                            {liveDebug.state?.pendingGoogleReadVoiceSummarySource
+                              ? `${liveDebug.state.pendingGoogleReadVoiceSummarySource} · ${
+                                  liveDebug.state.pendingGoogleReadVoiceSummaryToolNames.join(", ") ||
+                                  "unknown"
+                                }`
+                              : "none"}
+                          </div>
+                          <div className="mt-1 text-[10px]" style={{ color: "var(--app-on-dark-muted)" }}>
+                            deadline:
+                            {" "}
+                            {liveDebug.state?.pendingGoogleReadVoiceSummaryDeadlineAt
+                              ? new Date(
+                                  liveDebug.state.pendingGoogleReadVoiceSummaryDeadlineAt,
+                                ).toLocaleTimeString()
+                              : "none"}
+                          </div>
+                        </div>
+                        <div className="rounded-2xl border px-3 py-2"
+                          style={{
+                            borderColor:
+                              "color-mix(in srgb, var(--app-soft-card-border) 72%, transparent)",
+                          }}
+                        >
+                          <div className="text-[10px] uppercase tracking-[0.18em]" style={{ color: "var(--app-on-dark-muted)" }}>
+                            Audio Delivery
+                          </div>
+                          <div className="mt-1 font-medium">
+                            last audio:
+                            {" "}
+                            {liveDebug.state?.lastAssistantAudioActivityAt
+                              ? new Date(
+                                  liveDebug.state.lastAssistantAudioActivityAt,
+                                ).toLocaleTimeString()
+                              : "none"}
+                          </div>
+                          <div className="mt-1 text-[10px]" style={{ color: "var(--app-on-dark-muted)" }}>
+                            active nodes:
+                            {" "}
+                            {liveDebug.state?.activePlaybackNodes ?? 0}
+                          </div>
+                          <div className="mt-1 text-[10px]" style={{ color: "var(--app-on-dark-muted)" }}>
+                            transcript-only:
+                            {" "}
+                            {liveDebug.state?.lastGoogleReadVoiceSummaryTranscriptOnlyAt
+                              ? new Date(
+                                  liveDebug.state.lastGoogleReadVoiceSummaryTranscriptOnlyAt,
+                                ).toLocaleTimeString()
+                              : "none"}
+                          </div>
+                          <div className="mt-1 text-[10px]" style={{ color: "var(--app-on-dark-muted)" }}>
+                            last timeout:
+                            {" "}
+                            {liveDebug.state?.lastGoogleReadVoiceSummaryTimeoutAt
+                              ? new Date(
+                                  liveDebug.state.lastGoogleReadVoiceSummaryTimeoutAt,
+                                ).toLocaleTimeString()
+                              : "none"}
+                          </div>
+                        </div>
+                      </div>
                     </div>
 
                     <div className="grid gap-3 md:grid-cols-2">

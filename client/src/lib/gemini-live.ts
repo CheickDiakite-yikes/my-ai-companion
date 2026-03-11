@@ -2949,6 +2949,15 @@ export class GeminiLiveVoiceSession {
         toolNames,
         reason: "speech_synthesis_api_missing",
       });
+      this.reportClientError(
+        "live.google_context.voice_read_summary_browser_tts_unavailable",
+        {
+          toolNames,
+          reason: "speech_synthesis_api_missing",
+          speechState: this.speechState,
+          activePlaybackNodes: this.activePlaybackNodes.size,
+        },
+      );
       return Promise.resolve(false);
     }
 
