@@ -157,6 +157,7 @@ type PendingGoogleReadVoiceSummary = {
   deadlineAtMs: number;
   assistantActivitySnapshotAtMs: number;
   assistantAudioSnapshotAtMs: number;
+  retryCount: number;
 };
 
 const INPUT_SAMPLE_RATE = 16000;
@@ -168,6 +169,8 @@ const TRANSCRIPT_DUPLICATE_WINDOW_MS = 1500;
 const TRANSCRIPT_FLUSH_DEBOUNCE_MS = 900;
 const TRANSCRIPT_OVERLAP_MIN_CHARS = 6;
 const GOOGLE_READ_VOICE_SUMMARY_ACK_TIMEOUT_MS = 5000;
+const GOOGLE_READ_VOICE_SUMMARY_RETRY_TIMEOUT_MS = 3500;
+const GOOGLE_READ_VOICE_SUMMARY_MAX_RETRIES = 2;
 
 function parseClientPositiveInt(
   value: unknown,
@@ -213,6 +216,10 @@ type MicCaptureAttemptFailure = {
 };
 
 const liveClientEnv = (import.meta.env as Record<string, unknown>) ?? {};
+const ENABLE_LIVE_GOOGLE_READ_BROWSER_TTS_FALLBACK = parseClientBoolean(
+  liveClientEnv.VITE_ENABLE_LIVE_GOOGLE_READ_BROWSER_TTS_FALLBACK,
+  false,
+);
 
 function resolveLiveAudioCompatibilityProfile(): LiveAudioCompatibilityProfile {
   const userAgent =
@@ -2801,6 +2808,7 @@ export class GeminiLiveVoiceSession {
     toolNames: string[];
     source: "immediate" | "fallback";
     assistantActivitySnapshotAtMs: number;
+    retryCount: number;
   }): void {
     this.clearGoogleReadVoiceSummaryAckTimeout();
     this.lastGoogleReadVoiceSummaryTranscriptOnlyAt = null;
@@ -2810,9 +2818,14 @@ export class GeminiLiveVoiceSession {
       toolNames: params.toolNames,
       source: params.source,
       sentAtMs: now,
-      deadlineAtMs: now + GOOGLE_READ_VOICE_SUMMARY_ACK_TIMEOUT_MS,
+      deadlineAtMs:
+        now +
+        (params.retryCount > 0
+          ? GOOGLE_READ_VOICE_SUMMARY_RETRY_TIMEOUT_MS
+          : GOOGLE_READ_VOICE_SUMMARY_ACK_TIMEOUT_MS),
       assistantActivitySnapshotAtMs: params.assistantActivitySnapshotAtMs,
       assistantAudioSnapshotAtMs: this.lastAssistantAudioActivityAtMs,
+      retryCount: params.retryCount,
     };
     this.pendingGoogleReadVoiceSummary = pendingSummary;
     this.debug("live.google_context.voice_read_summary_watchdog_started", {
@@ -2820,6 +2833,7 @@ export class GeminiLiveVoiceSession {
       toolNames: params.toolNames,
       digestCount: params.digestTexts.length,
       deadlineAtMs: pendingSummary.deadlineAtMs,
+      retryCount: params.retryCount,
     });
     this.emitDebugState(true);
     this.googleReadVoiceSummaryAckTimeout = window.setTimeout(() => {
@@ -2864,6 +2878,7 @@ export class GeminiLiveVoiceSession {
         toolNames: activeSummary.toolNames,
         digestCount: activeSummary.digestTexts.length,
         digestPreview: preview,
+        retryCount: activeSummary.retryCount,
         socketState: this.getSessionSocketReadyState(),
         sessionReadyForRealtimeInput: this.sessionReadyForRealtimeInput,
         assistantTurnActive: this.assistantTurnActive,
@@ -2879,6 +2894,7 @@ export class GeminiLiveVoiceSession {
         toolNames: activeSummary.toolNames,
         digestCount: activeSummary.digestTexts.length,
         digestPreview: preview,
+        retryCount: activeSummary.retryCount,
         socketState: this.getSessionSocketReadyState(),
         sessionReadyForRealtimeInput: this.sessionReadyForRealtimeInput,
         assistantTurnActive: this.assistantTurnActive,
@@ -2889,18 +2905,55 @@ export class GeminiLiveVoiceSession {
           this.lastGoogleReadVoiceSummaryTranscriptOnlyAt,
         activePlaybackNodes: this.activePlaybackNodes.size,
       });
-      const browserTtsStarted = await this.trySpeakGoogleReadSummaryWithBrowserTts(
-        activeSummary.digestTexts,
-        activeSummary.toolNames,
-      );
-      if (browserTtsStarted) {
-        this.emitWebSearchStatus("grounded", "Speaking summary…");
-        this.clearPendingGoogleReadVoiceSummary(
-          "browser_tts_started_after_timeout",
+      if (activeSummary.retryCount < GOOGLE_READ_VOICE_SUMMARY_MAX_RETRIES) {
+        this.emitWebSearchStatus("searching", "Finishing voice summary…");
+        this.debug("live.google_context.voice_read_summary_retry_started", {
+          source: activeSummary.source,
+          toolNames: activeSummary.toolNames,
+          retryCount: activeSummary.retryCount + 1,
+          previousRetryCount: activeSummary.retryCount,
+        });
+        const retrySent = this.sendGoogleReadVoiceSummary({
+          digestTexts: activeSummary.digestTexts,
+          toolNames: activeSummary.toolNames,
+          source: "fallback",
+          retryCount: activeSummary.retryCount + 1,
+        });
+        if (retrySent) {
+          return;
+        }
+        this.debug("live.google_context.voice_read_summary_retry_send_failed", {
+          source: activeSummary.source,
+          toolNames: activeSummary.toolNames,
+          retryCount: activeSummary.retryCount + 1,
+        });
+      }
+      if (this.shouldAllowGoogleReadBrowserTtsFallback()) {
+        const browserTtsStarted = await this.trySpeakGoogleReadSummaryWithBrowserTts(
+          activeSummary.digestTexts,
+          activeSummary.toolNames,
         );
-        return;
+        if (browserTtsStarted) {
+          this.emitWebSearchStatus("grounded", "Speaking summary…");
+          this.clearPendingGoogleReadVoiceSummary(
+            "browser_tts_started_after_timeout",
+          );
+          return;
+        }
+      } else {
+        this.debug("live.google_context.voice_read_summary_browser_tts_suppressed", {
+          source: activeSummary.source,
+          toolNames: activeSummary.toolNames,
+          retryCount: activeSummary.retryCount,
+          reason: "disabled_for_normal_voice_mode",
+        });
       }
       this.emitWebSearchStatus("grounded", "Summary ready in chat");
+      this.debug("live.google_context.voice_read_summary_failed_no_audio_after_retries", {
+        source: activeSummary.source,
+        toolNames: activeSummary.toolNames,
+        retryCount: activeSummary.retryCount,
+      });
       this.emitError(
         new Error(
           `I checked ${scope}, but my voice reply stalled. Swipe up to see the summary in chat.`,
@@ -2930,6 +2983,20 @@ export class GeminiLiveVoiceSession {
     this.clearPendingGoogleReadVoiceSummary(
       source === "audio" ? "assistant_audio_received" : "assistant_transcript_received",
     );
+  }
+
+  private shouldAllowGoogleReadBrowserTtsFallback(): boolean {
+    if (ENABLE_LIVE_GOOGLE_READ_BROWSER_TTS_FALLBACK) {
+      return true;
+    }
+    if (typeof window === "undefined") {
+      return false;
+    }
+    try {
+      return new URLSearchParams(window.location.search).get("liveDebug") === "1";
+    } catch {
+      return false;
+    }
   }
 
   private trySpeakGoogleReadSummaryWithBrowserTts(
@@ -3036,14 +3103,19 @@ export class GeminiLiveVoiceSession {
     digestTexts: string[];
     toolNames: string[];
     source: "immediate" | "fallback";
+    retryCount: number;
   }): boolean {
     const spokenSummary = params.digestTexts.join(" ").trim();
     if (!spokenSummary) {
       return false;
     }
+    const turns =
+      params.retryCount > 0
+        ? `The user is still waiting for your spoken Google summary. Speak out loud immediately in 1 to 2 short sentences using the active voice. Do not call tools again, do not ask the user to wait, and do not restate that you checked. Verified summary: ${spokenSummary}`
+        : `Using the verified Google results you just received, respond out loud right now in 1 to 3 short sentences. Start speaking immediately, do not call tools again, and do not ask the user to wait. Verified summary: ${spokenSummary}`;
     const sent = this.sendClientContentSafely(
       {
-        turns: `Using the verified Google results you just received, respond out loud right now in 1 to 3 short sentences. Start speaking immediately, do not call tools again, and do not ask the user to wait. Verified summary: ${spokenSummary}`,
+        turns,
         turnComplete: true,
       },
       "live.google_context.nudge_failed",
@@ -3067,6 +3139,7 @@ export class GeminiLiveVoiceSession {
         toolNames: params.toolNames,
         digestCount: params.digestTexts.length,
         spokenSummaryLength: spokenSummary.length,
+        retryCount: params.retryCount,
       },
     );
     if (sent) {
@@ -3075,6 +3148,7 @@ export class GeminiLiveVoiceSession {
         toolNames: params.toolNames,
         source: params.source,
         assistantActivitySnapshotAtMs: this.lastAssistantActivityAtMs,
+        retryCount: params.retryCount,
       });
     }
     return sent;
@@ -3105,6 +3179,7 @@ export class GeminiLiveVoiceSession {
         digestTexts: params.digestTexts,
         toolNames: params.toolNames,
         source: "fallback",
+        retryCount: 1,
       });
     }, 1200);
   }
@@ -3354,6 +3429,7 @@ export class GeminiLiveVoiceSession {
           digestTexts: chatDigestTexts,
           toolNames: effectiveToolNames,
           source: "immediate",
+          retryCount: 0,
         });
       }
       this.scheduleGoogleReadVoiceFallback({
