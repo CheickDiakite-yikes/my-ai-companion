@@ -112,8 +112,65 @@ type StepState = {
   onEvent?: (event: AgentTaskEvent) => void;
 };
 
+type GoogleActionAiRoutingResult = {
+  route:
+    | "none"
+    | "email_compose"
+    | "email_reply"
+    | "calendar_create"
+    | "calendar_update";
+  normalizedPrompt: string | null;
+  confidence: "low" | "medium" | "high";
+  reason: string | null;
+};
+
+const DEFAULT_GOOGLE_ACTION_ROUTER_MODEL = "gemini-3-flash-preview";
+
+function parseBooleanFlag(input: string | undefined, fallback: boolean): boolean {
+  if (input == null) return fallback;
+  const normalized = input.trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "off"].includes(normalized)) return false;
+  return fallback;
+}
+
+const ENABLE_GOOGLE_ACTION_AI_ROUTER = parseBooleanFlag(
+  process.env.ENABLE_GOOGLE_ACTION_AI_ROUTER,
+  true,
+);
+const GOOGLE_ACTION_ROUTER_MODEL =
+  process.env.GOOGLE_ACTION_ROUTER_MODEL?.trim() ||
+  process.env.GEMINI_TEXT_MODEL?.trim() ||
+  DEFAULT_GOOGLE_ACTION_ROUTER_MODEL;
+
 function normalizeText(input: string | null | undefined): string {
   return (input ?? "").replace(/\s+/g, " ").trim();
+}
+
+function normalizeGoogleActionAiRoute(
+  value: unknown,
+): GoogleActionAiRoutingResult["route"] {
+  if (
+    value === "email_compose" ||
+    value === "email_reply" ||
+    value === "calendar_create" ||
+    value === "calendar_update"
+  ) {
+    return value;
+  }
+  return "none";
+}
+
+function normalizeGoogleActionAiConfidence(
+  value: unknown,
+): GoogleActionAiRoutingResult["confidence"] {
+  if (typeof value === "number") {
+    if (value >= 0.8) return "high";
+    if (value >= 0.45) return "medium";
+    return "low";
+  }
+  if (value === "medium" || value === "high") return value;
+  return "low";
 }
 
 function toTaskSummary(task: AgentTask): AgentTaskSummary {
@@ -345,6 +402,13 @@ function buildComposeContinuationPrompt(params: {
     if (!params.session.recipientEmail) {
       return null;
     }
+    const correctedRecipient = inferComposeRecipientCorrection(followUpText);
+    if (correctedRecipient) {
+      const subjectPart = params.session.subject
+        ? ` about ${params.session.subject}`
+        : "";
+      return `draft an email to ${correctedRecipient}${subjectPart}`;
+    }
     const subjectPart = params.session.subject
       ? ` about ${params.session.subject}`
       : "";
@@ -446,6 +510,213 @@ function buildCalendarContinuationPrompt(params: {
   }
 
   return null;
+}
+
+function summarizeRecentGoogleActionTask(
+  task: RecentGoogleActionTask | null | undefined,
+): Record<string, unknown> | null {
+  if (!task) return null;
+  if (task.preview.connector === "gmail") {
+    return {
+      taskId: task.taskId,
+      connector: "gmail",
+      recipient: task.preview.proposedEmail?.to?.[0] ?? null,
+      subject: task.preview.proposedEmail?.subject ?? null,
+      status: task.result?.status ?? null,
+      summary: task.preview.summary,
+    };
+  }
+  return {
+    taskId: task.taskId,
+    connector: "calendar",
+    title:
+      task.preview.proposedCalendar?.title ??
+      task.preview.calendarEvent?.title ??
+      null,
+    startTime:
+      task.preview.proposedCalendar?.startTime ??
+      task.preview.calendarEvent?.startTime ??
+      null,
+    status: task.result?.status ?? null,
+    summary: task.preview.summary,
+  };
+}
+
+function shouldAttemptGoogleActionAiRouting(params: {
+  text: string;
+  composeSession?: GoogleComposeSession | null;
+  calendarSession?: GoogleCalendarSession | null;
+  recentContext?: GoogleRecentActionContext | null;
+  deterministicIntentDetected: boolean;
+}): boolean {
+  if (!ENABLE_GOOGLE_ACTION_AI_ROUTER) return false;
+  const normalized = normalizeText(params.text);
+  if (!normalized) return false;
+  if (
+    /^(?:yes|yeah|yep|sure|ok|okay|approve|send|cancel|stop|never mind|nevermind|nope|nah)\b/i.test(
+      normalized,
+    )
+  ) {
+    return false;
+  }
+  if (
+    params.composeSession &&
+    (params.composeSession.status === "awaiting_body" ||
+      params.composeSession.status === "awaiting_recipient")
+  ) {
+    return true;
+  }
+  if (
+    params.calendarSession &&
+    (params.calendarSession.status === "awaiting_datetime" ||
+      params.calendarSession.status === "awaiting_title")
+  ) {
+    return true;
+  }
+  if (params.deterministicIntentDetected) return false;
+  return (
+    Boolean(extractEmailAddress(normalized)) ||
+    /\b(create|start|draft|write|reply|respond|send|schedule|book|add|put|move|reschedule|update|recipient|subject|body)\b/i.test(
+      normalized,
+    ) ||
+    /^(?:new|fresh|another)\s+(?:email|draft|calendar event|event)\b/i.test(
+      normalized,
+    ) ||
+    /\b(?:same one|that one|latest draft|latest email|book that|put that on my calendar)\b/i.test(
+      normalized,
+    ) ||
+    Boolean(params.recentContext?.recentEmailTask) ||
+    Boolean(params.recentContext?.recentCalendarTask)
+  );
+}
+
+function inferComposeRecipientCorrection(input: string): string | null {
+  const normalized = normalizeText(input);
+  const recipientEmail = extractEmailAddress(normalized);
+  if (!recipientEmail) return null;
+  if (
+    /\b(?:ask|say|tell|mention|write|body|message)\b/i.test(normalized) &&
+    !/\b(?:to|instead|recipient|change|switch|update|make)\b/i.test(normalized)
+  ) {
+    return null;
+  }
+  if (
+    normalized === recipientEmail ||
+    /^(?:to\s+)?[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$/i.test(normalized) ||
+    /\b(?:to|instead|recipient|change|switch|update|make)\b/i.test(normalized)
+  ) {
+    return recipientEmail;
+  }
+  return null;
+}
+
+async function maybeResolveGoogleActionPromptWithAi(params: {
+  text: string;
+  composeSession?: GoogleComposeSession | null;
+  calendarSession?: GoogleCalendarSession | null;
+  recentContext?: GoogleRecentActionContext | null;
+  deterministicIntentDetected: boolean;
+}): Promise<GoogleActionAiRoutingResult | null> {
+  if (!shouldAttemptGoogleActionAiRouting(params)) {
+    return null;
+  }
+
+  const normalized = normalizeText(params.text);
+  try {
+    const structured = await generateStructuredJson({
+      model: GOOGLE_ACTION_ROUTER_MODEL,
+      systemInstruction: [
+        "You normalize Zee user's Gmail and Google Calendar requests into one explicit command for a deterministic parser.",
+        'Return strict JSON with keys "route", "normalizedPrompt", "confidence", and "reason".',
+        'Allowed route values: "none", "email_compose", "email_reply", "calendar_create", "calendar_update".',
+        "normalizedPrompt must be a single plain-text instruction, or null when route is none.",
+        'Prefer the active compose or calendar session when one exists. If the user is continuing a draft or event clarification, do not switch to older history.',
+        "If the user is clearly starting a fresh email, output a fresh compose command and do not rewrite it as a revision to an older saved draft.",
+        "If the user provides body text for an active draft, preserve the active recipient in normalizedPrompt.",
+        "If the user provides a new recipient while a draft is active, update the recipient in normalizedPrompt instead of treating it as body text.",
+        "If the user is answering an active calendar clarification, preserve the event title or time already in session as needed.",
+        "Do not invent recipients, dates, event titles, or thread targets that are not in the user text or active session context.",
+        "Do not choose an existing recent draft or event unless the user explicitly asks to revise, send, or update an existing one.",
+        'Example normalized prompts: "draft an email to cheick@soulnests.com asking if he is free any time in April", "create a calendar event Lunch with Alex on Saturday at 1pm", "update the calendar event Lunch with Alex add location Blue Bottle", "reply to Sarah saying I can do Thursday at 2pm".',
+      ].join("\n"),
+      userPrompt: JSON.stringify(
+        {
+          userText: normalized,
+          deterministicIntentDetected: params.deterministicIntentDetected,
+          activeComposeSession:
+            params.composeSession &&
+            (params.composeSession.status === "awaiting_body" ||
+              params.composeSession.status === "awaiting_recipient")
+              ? {
+                  status: params.composeSession.status,
+                  recipientEmail: params.composeSession.recipientEmail,
+                  subject: params.composeSession.subject,
+                  bodyPreview: params.composeSession.bodyPreview,
+                }
+              : null,
+          activeCalendarSession:
+            params.calendarSession &&
+            (params.calendarSession.status === "awaiting_datetime" ||
+              params.calendarSession.status === "awaiting_title")
+              ? {
+                  status: params.calendarSession.status,
+                  title: params.calendarSession.title,
+                  startTime: params.calendarSession.startTime,
+                  endTime: params.calendarSession.endTime,
+                  location: params.calendarSession.location,
+                }
+              : null,
+          recentContext: {
+            recentEmailTask: summarizeRecentGoogleActionTask(
+              params.recentContext?.recentEmailTask,
+            ),
+            recentCalendarTask: summarizeRecentGoogleActionTask(
+              params.recentContext?.recentCalendarTask,
+            ),
+          },
+        },
+        null,
+        2,
+      ),
+      enableGoogleSearchGrounding: false,
+    });
+    const raw = stripJsonFence(structured.text);
+    const parsed = JSON.parse(raw) as {
+      route?: unknown;
+      normalizedPrompt?: unknown;
+      confidence?: unknown;
+      reason?: unknown;
+    };
+    const route = normalizeGoogleActionAiRoute(parsed.route);
+    const normalizedPrompt =
+      typeof parsed.normalizedPrompt === "string" &&
+      normalizeText(parsed.normalizedPrompt).length > 0
+        ? normalizeText(parsed.normalizedPrompt)
+        : null;
+    const confidence = normalizeGoogleActionAiConfidence(parsed.confidence);
+    const reason =
+      typeof parsed.reason === "string" && normalizeText(parsed.reason).length > 0
+        ? normalizeText(parsed.reason)
+        : null;
+    if (route === "none" || !normalizedPrompt || confidence === "low") {
+      return null;
+    }
+    console.log(
+      `[google-action-ai-router] route=${route} confidence=${confidence} normalized=${normalizedPrompt} reason=${reason ?? "n/a"}`,
+    );
+    return {
+      route,
+      normalizedPrompt,
+      confidence,
+      reason,
+    };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.warn(
+      `[google-action-ai-router] fallback to deterministic parser: ${errorMessage}`,
+    );
+    return null;
+  }
 }
 
 function stripJsonFence(input: string): string {
@@ -1376,7 +1647,23 @@ export async function prepareGoogleActionTask(params: {
   recentContext?: GoogleRecentActionContext | null;
 }): Promise<GoogleActionTaskPreparation> {
   let rawText = normalizeText(params.text);
+  const originalText = rawText;
+  const deterministicIntentDetected = detectGoogleActionTaskIntent(
+    rawText,
+    params.recentContext ?? null,
+  );
+  const aiResolvedPrompt = await maybeResolveGoogleActionPromptWithAi({
+    text: rawText,
+    composeSession: params.composeSession,
+    calendarSession: params.calendarSession,
+    recentContext: params.recentContext ?? null,
+    deterministicIntentDetected,
+  });
+  if (aiResolvedPrompt?.normalizedPrompt) {
+    rawText = aiResolvedPrompt.normalizedPrompt;
+  }
   const resolvedFromComposeSession =
+    !aiResolvedPrompt?.normalizedPrompt &&
     params.composeSession &&
     (params.composeSession.status === "awaiting_body" ||
       params.composeSession.status === "awaiting_recipient")
@@ -1386,6 +1673,7 @@ export async function prepareGoogleActionTask(params: {
         })
       : null;
   const resolvedFromCalendarSession =
+    !aiResolvedPrompt?.normalizedPrompt &&
     !resolvedFromComposeSession &&
     params.calendarSession &&
     (params.calendarSession.status === "awaiting_datetime" ||
@@ -1396,11 +1684,18 @@ export async function prepareGoogleActionTask(params: {
         })
       : null;
   const resolvedContinuationPrompt =
-    resolvedFromComposeSession ?? resolvedFromCalendarSession;
+    aiResolvedPrompt?.normalizedPrompt ??
+    resolvedFromComposeSession ??
+    resolvedFromCalendarSession;
   if (resolvedContinuationPrompt) {
     rawText = resolvedContinuationPrompt;
   }
   if (!detectGoogleActionTaskIntent(rawText, params.recentContext ?? null)) {
+    if (aiResolvedPrompt) {
+      console.warn(
+        `[google-action-ai-router] normalized prompt did not pass deterministic intent detection: input=${originalText} normalized=${aiResolvedPrompt.normalizedPrompt}`,
+      );
+    }
     return { kind: "none" };
   }
 

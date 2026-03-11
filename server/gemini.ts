@@ -3468,9 +3468,10 @@ export async function generateStructuredJson(input: {
   systemInstruction: string;
   userPrompt: string;
   enableGoogleSearchGrounding?: boolean;
+  model?: string;
 }): Promise<{ text: string; googleSearchGroundingUsed: boolean }> {
   const ai = getGeminiClient();
-  const model = resolveTextModel();
+  const model = normalizeModelId(input.model ?? resolveTextModel());
   const useGrounding = input.enableGoogleSearchGrounding ?? true;
 
   console.log(`🔧 [GEMINI STRUCTURED] model=${model} grounding=${useGrounding}`);

@@ -123,6 +123,12 @@ async function main(): Promise<void> {
       args.email,
       args.outputDir,
     );
+    console.log("[google-context-check] ai compose recipient correction");
+    await verifyAiComposeRecipientCorrectionFlow(
+      page,
+      args.baseUrl,
+      args.outputDir,
+    );
     console.log("[google-context-check] calendar clarification card");
     await verifyCalendarClarificationCardFlow(page, args.baseUrl, args.outputDir);
     console.log("[google-context-check] saved-draft revision follow-up");
@@ -1288,6 +1294,110 @@ async function verifyFreshComposeOverridesHistoryFlow(
 
   await page.screenshot({
     path: resolve(outputDir, "google-personal-context-fresh-compose-overrides-history.png"),
+    fullPage: true,
+  });
+}
+
+async function verifyAiComposeRecipientCorrectionFlow(
+  page: Page,
+  baseUrl: string,
+  outputDir: string,
+): Promise<void> {
+  const conversationId = await resolveActiveConversationId(page, baseUrl);
+  await page.reload({ waitUntil: "networkidle" });
+
+  let messages = await fetchConversationMessages(page, baseUrl, conversationId);
+  let previousAssistantCount = messages.filter(
+    (message) => message.sender === "assistant",
+  ).length;
+
+  await page
+    .getByTestId("input-message")
+    .fill("draft an email to zorovt18@gmail.com");
+  await page.getByTestId("input-message").press("Enter");
+
+  const composeReply = await waitForLatestAssistantReply({
+    page,
+    baseUrl,
+    conversationId,
+    previousAssistantCount,
+    timeoutMs: 45_000,
+  });
+  assert.match(
+    composeReply,
+    /what should the email say|i can draft that to zorovt18@gmail\.com/i,
+    "Expected the draft request to open an awaiting-body compose session",
+  );
+
+  let composeSessionCard = page.locator('[data-testid="google-compose-session-card"]').last();
+  await composeSessionCard.waitFor({ state: "visible", timeout: 20_000 });
+  assert.match(
+    await composeSessionCard.innerText(),
+    /zorovt18@gmail\.com/i,
+    "Expected the compose session to start with the original recipient",
+  );
+
+  messages = await fetchConversationMessages(page, baseUrl, conversationId);
+  previousAssistantCount = messages.filter((message) => message.sender === "assistant").length;
+
+  await page
+    .getByTestId("input-message")
+    .fill("actually make that to cheick@soulnests.com instead");
+  await page.getByTestId("input-message").press("Enter");
+
+  const recipientCorrectionReply = await waitForLatestAssistantReply({
+    page,
+    baseUrl,
+    conversationId,
+    previousAssistantCount,
+    timeoutMs: 45_000,
+  });
+  assert.match(
+    recipientCorrectionReply,
+    /what should the email say|i can draft that to cheick@soulnests\.com/i,
+    "Expected the active compose session to update the recipient instead of treating it as body text",
+  );
+  assert.doesNotMatch(
+    recipientCorrectionReply,
+    /zorovt18@gmail\.com/i,
+    "Expected the recipient correction to replace the original recipient in the active draft",
+  );
+
+  composeSessionCard = page.locator('[data-testid="google-compose-session-card"]').last();
+  await composeSessionCard.waitFor({ state: "visible", timeout: 20_000 });
+  assert.equal(
+    await composeSessionCard.getAttribute("data-compose-status"),
+    "awaiting_body",
+    "Expected recipient correction to keep the draft in awaiting-body state",
+  );
+  const composeSessionText = await composeSessionCard.innerText();
+  assert.match(
+    composeSessionText,
+    /cheick@soulnests\.com/i,
+    "Expected the corrected recipient to be reflected in the active compose session card",
+  );
+  assert.doesNotMatch(
+    composeSessionText,
+    /zorovt18@gmail\.com/i,
+    "Expected the original recipient to be replaced in the compose session card",
+  );
+
+  messages = await fetchConversationMessages(page, baseUrl, conversationId);
+  previousAssistantCount = messages.filter((message) => message.sender === "assistant").length;
+
+  await page.getByTestId("input-message").fill("never mind");
+  await page.getByTestId("input-message").press("Enter");
+
+  await waitForLatestAssistantReply({
+    page,
+    baseUrl,
+    conversationId,
+    previousAssistantCount,
+    timeoutMs: 45_000,
+  });
+
+  await page.screenshot({
+    path: resolve(outputDir, "google-personal-context-ai-compose-recipient-correction.png"),
     fullPage: true,
   });
 }
