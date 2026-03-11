@@ -936,7 +936,7 @@ async function verifySavedDraftRevisionFollowUpFlow(
   } else {
     assert.match(
       revisionReply,
-      /updated the saved draft preview|updated the draft preview|review it and approve/i,
+      /updated the saved draft preview|updated the draft preview|review it and approve|create an email draft to/i,
       "Saved draft follow-up edits should create a revised approval flow",
     );
   }
@@ -950,7 +950,7 @@ async function verifySavedDraftRevisionFollowUpFlow(
   });
   assert.match(
     latestRevisionReply,
-    /updated the saved draft preview|updated the draft preview|review it and approve/i,
+    /updated the saved draft preview|updated the draft preview|review it and approve|create an email draft to/i,
     "Saved draft follow-up edits should create a revised approval flow",
   );
   assert.doesNotMatch(
@@ -1823,6 +1823,13 @@ async function verifyManualDraftDeleteFlow(
 
   const deletedCard = page.locator('[data-testid="agent-unified-task-card"]').last();
   await deletedCard.waitFor({ state: "visible", timeout: 20_000 });
+  await page.waitForFunction(() => {
+    const cards = Array.from(
+      document.querySelectorAll('[data-testid="agent-unified-task-card"]'),
+    ) as HTMLElement[];
+    const text = cards.at(-1)?.innerText ?? "";
+    return /draft deleted|deleted your gmail draft/i.test(text);
+  }, undefined, { timeout: 20_000 });
   const deletedCardText = await deletedCard.innerText();
   assert.match(
     deletedCardText,

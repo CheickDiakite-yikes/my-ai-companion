@@ -3233,8 +3233,8 @@ function GoogleEmailAssistantTaskCard(props: {
       >
         <div className="space-y-2 px-1">
           {!isVoiceStage ? (
-            <div className="flex flex-wrap items-start justify-between gap-2.5">
-              <div className="flex min-w-0 flex-1 items-start gap-2.5">
+            <div className="space-y-2.5">
+              <div className="flex items-center justify-between gap-2">
                 <div
                   className="inline-flex h-fit shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em]"
                   style={{
@@ -3246,79 +3246,113 @@ function GoogleEmailAssistantTaskCard(props: {
                   <Mail className="h-3.5 w-3.5" />
                   Zee Mail
                 </div>
-                <div className="min-w-0 flex-1 space-y-0.5 pt-0.5">
+                <div className="ml-auto flex shrink-0 items-center gap-2">
+                  <span
+                    className="rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide"
+                    style={{
+                      borderColor: statusToneStyles.borderColor,
+                      backgroundColor: statusToneStyles.backgroundColor,
+                      color: statusToneStyles.textColor,
+                    }}
+                  >
+                    {effectiveStatusLabel}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setIsCollapsed((value) => !value)}
+                    className="rounded-full border p-2 transition-colors hover:opacity-90"
+                    style={{
+                      borderColor: "rgba(255,255,255,0.18)",
+                      backgroundColor: "rgba(255,255,255,0.08)",
+                      color: "var(--app-on-dark-muted)",
+                    }}
+                    data-testid="button-google-email-collapse"
+                    aria-label={isCollapsed ? "Expand email card" : "Collapse email card"}
+                  >
+                    <motion.div
+                      animate={{ rotate: isCollapsed ? 0 : 180 }}
+                      transition={{ duration: 0.2 }}
+                    >
+                      <ChevronDown className="h-3.5 w-3.5" />
+                    </motion.div>
+                  </button>
+                </div>
+              </div>
+              <div className="min-w-0 space-y-1">
+                <p
+                  className="truncate text-[15px] font-semibold leading-tight"
+                  style={{ color: "var(--app-on-dark)" }}
+                >
+                  {emailHeaderTitle}
+                </p>
+                {emailHeaderSummary ? (
                   <p
-                    className="truncate text-[15px] font-semibold leading-tight"
+                    className="line-clamp-2 text-[11px] leading-4"
+                    style={{ color: "var(--app-on-dark-muted)" }}
+                  >
+                    {emailHeaderSummary}
+                  </p>
+                ) : null}
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <div
+                  className="text-[10px] font-semibold uppercase tracking-[0.16em]"
+                  style={{ color: "var(--app-on-dark-muted)" }}
+                >
+                  Email task
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  <span
+                    className="rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide"
+                    style={{
+                      borderColor: statusToneStyles.borderColor,
+                      backgroundColor: statusToneStyles.backgroundColor,
+                      color: statusToneStyles.textColor,
+                    }}
+                  >
+                    {effectiveStatusLabel}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setIsCollapsed((value) => !value)}
+                    className="rounded-full border p-2 transition-colors hover:opacity-90"
+                    style={{
+                      borderColor: "rgba(255,255,255,0.18)",
+                      backgroundColor: "rgba(255,255,255,0.08)",
+                      color: "var(--app-on-dark-muted)",
+                    }}
+                    data-testid="button-google-email-collapse"
+                    aria-label={isCollapsed ? "Expand email card" : "Collapse email card"}
+                  >
+                    <motion.div
+                      animate={{ rotate: isCollapsed ? 0 : 180 }}
+                      transition={{ duration: 0.2 }}
+                    >
+                      <ChevronDown className="h-3.5 w-3.5" />
+                    </motion.div>
+                  </button>
+                </div>
+              </div>
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0 flex-1">
+                  <p
+                    className="truncate text-sm font-semibold"
                     style={{ color: "var(--app-on-dark)" }}
                   >
                     {emailHeaderTitle}
                   </p>
                   {emailHeaderSummary ? (
                     <p
-                      className="truncate text-[11px] leading-4"
+                      className="line-clamp-2 text-[11px] leading-4"
                       style={{ color: "var(--app-on-dark-muted)" }}
                     >
                       {emailHeaderSummary}
                     </p>
                   ) : null}
                 </div>
-              </div>
-              <div className="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-2">
-                {canOpenDraftDialog ? (
-                  <button
-                    type="button"
-                    onClick={() => handleOpenDraftDialog(canEditDraft)}
-                    className="rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide transition-colors hover:opacity-90"
-                    style={{
-                      borderColor: "rgba(255,255,255,0.18)",
-                      backgroundColor: "rgba(255,255,255,0.08)",
-                      color: "var(--app-on-dark-muted)",
-                    }}
-                    data-testid="button-google-email-header-open-draft"
-                  >
-                    {canEditDraft ? "Edit" : "Open"}
-                  </button>
-                ) : null}
-                <span
-                  className="rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide"
-                  style={{
-                    borderColor: statusToneStyles.borderColor,
-                    backgroundColor: statusToneStyles.backgroundColor,
-                    color: statusToneStyles.textColor,
-                  }}
-                >
-                  {effectiveStatusLabel}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setIsCollapsed((value) => !value)}
-                  className="rounded-full border p-2 transition-colors hover:opacity-90"
-                  style={{
-                    borderColor: "rgba(255,255,255,0.18)",
-                    backgroundColor: "rgba(255,255,255,0.08)",
-                    color: "var(--app-on-dark-muted)",
-                  }}
-                  data-testid="button-google-email-collapse"
-                  aria-label={isCollapsed ? "Expand email card" : "Collapse email card"}
-                >
-                  <motion.div
-                    animate={{ rotate: isCollapsed ? 0 : 180 }}
-                    transition={{ duration: 0.2 }}
-                  >
-                    <ChevronDown className="h-3.5 w-3.5" />
-                  </motion.div>
-                </button>
-              </div>
-            </div>
-          ) : (
-            <div className="flex items-start justify-between gap-3">
-              <div
-                className="text-[10px] font-semibold uppercase tracking-[0.16em]"
-                style={{ color: "var(--app-on-dark-muted)" }}
-              >
-                Email task
-              </div>
-              <div className="flex shrink-0 items-center gap-2">
                 {showHeaderQuickOpen ? (
                   <button
                     type="button"
@@ -3337,35 +3371,6 @@ function GoogleEmailAssistantTaskCard(props: {
                     </span>
                   </button>
                 ) : null}
-                <span
-                  className="rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide"
-                  style={{
-                    borderColor: statusToneStyles.borderColor,
-                    backgroundColor: statusToneStyles.backgroundColor,
-                    color: statusToneStyles.textColor,
-                  }}
-                >
-                  {effectiveStatusLabel}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setIsCollapsed((value) => !value)}
-                  className="rounded-full border p-2 transition-colors hover:opacity-90"
-                  style={{
-                    borderColor: "rgba(255,255,255,0.18)",
-                    backgroundColor: "rgba(255,255,255,0.08)",
-                    color: "var(--app-on-dark-muted)",
-                  }}
-                  data-testid="button-google-email-collapse"
-                  aria-label={isCollapsed ? "Expand email card" : "Collapse email card"}
-                >
-                  <motion.div
-                    animate={{ rotate: isCollapsed ? 0 : 180 }}
-                    transition={{ duration: 0.2 }}
-                  >
-                    <ChevronDown className="h-3.5 w-3.5" />
-                  </motion.div>
-                </button>
               </div>
             </div>
           )}
@@ -3534,7 +3539,7 @@ function GoogleEmailAssistantTaskCard(props: {
                 }
                 testId="google-email-preview-card"
               />
-              {canOpenDraftDialog ? (
+              {canOpenDraftDialog && isCollapsed ? (
                 <div className="mt-2 flex justify-end px-1">
                   <button
                     type="button"
@@ -4103,8 +4108,8 @@ function GoogleCalendarAssistantTaskCard(props: {
       >
         <div className="space-y-2 px-1">
           {!isVoiceStage ? (
-            <div className="flex flex-wrap items-start justify-between gap-2.5">
-              <div className="flex min-w-0 flex-1 items-start gap-2.5">
+            <div className="space-y-2.5">
+              <div className="flex items-center justify-between gap-2">
                 <div
                   className="inline-flex h-fit shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.16em]"
                   style={{
@@ -4116,79 +4121,113 @@ function GoogleCalendarAssistantTaskCard(props: {
                   <CalendarDays className="h-3.5 w-3.5" />
                   Zee Calendar
                 </div>
-                <div className="min-w-0 flex-1 space-y-0.5 pt-0.5">
+                <div className="ml-auto flex shrink-0 items-center gap-2">
+                  <span
+                    className="rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide"
+                    style={{
+                      borderColor: statusToneStyles.borderColor,
+                      backgroundColor: statusToneStyles.backgroundColor,
+                      color: statusToneStyles.textColor,
+                    }}
+                  >
+                    {effectiveStatusLabel}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setIsCollapsed((value) => !value)}
+                    className="rounded-full border p-2 transition-colors hover:opacity-90"
+                    style={{
+                      borderColor: "rgba(255,255,255,0.18)",
+                      backgroundColor: "rgba(255,255,255,0.08)",
+                      color: "var(--app-on-dark-muted)",
+                    }}
+                    data-testid="button-google-calendar-collapse"
+                    aria-label={isCollapsed ? "Expand calendar card" : "Collapse calendar card"}
+                  >
+                    <motion.div
+                      animate={{ rotate: isCollapsed ? 0 : 180 }}
+                      transition={{ duration: 0.2 }}
+                    >
+                      <ChevronDown className="h-3.5 w-3.5" />
+                    </motion.div>
+                  </button>
+                </div>
+              </div>
+              <div className="min-w-0 space-y-1">
+                <p
+                  className="truncate text-[15px] font-semibold leading-tight"
+                  style={{ color: "var(--app-on-dark)" }}
+                >
+                  {calendarHeaderTitle}
+                </p>
+                {calendarHeaderSummary ? (
                   <p
-                    className="truncate text-[15px] font-semibold leading-tight"
+                    className="line-clamp-2 text-[11px] leading-4"
+                    style={{ color: "var(--app-on-dark-muted)" }}
+                  >
+                    {calendarHeaderSummary}
+                  </p>
+                ) : null}
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <div
+                  className="text-[10px] font-semibold uppercase tracking-[0.16em]"
+                  style={{ color: "var(--app-on-dark-muted)" }}
+                >
+                  Calendar task
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  <span
+                    className="rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide"
+                    style={{
+                      borderColor: statusToneStyles.borderColor,
+                      backgroundColor: statusToneStyles.backgroundColor,
+                      color: statusToneStyles.textColor,
+                    }}
+                  >
+                    {effectiveStatusLabel}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setIsCollapsed((value) => !value)}
+                    className="rounded-full border p-2 transition-colors hover:opacity-90"
+                    style={{
+                      borderColor: "rgba(255,255,255,0.18)",
+                      backgroundColor: "rgba(255,255,255,0.08)",
+                      color: "var(--app-on-dark-muted)",
+                    }}
+                    data-testid="button-google-calendar-collapse"
+                    aria-label={isCollapsed ? "Expand calendar card" : "Collapse calendar card"}
+                  >
+                    <motion.div
+                      animate={{ rotate: isCollapsed ? 0 : 180 }}
+                      transition={{ duration: 0.2 }}
+                    >
+                      <ChevronDown className="h-3.5 w-3.5" />
+                    </motion.div>
+                  </button>
+                </div>
+              </div>
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0 flex-1">
+                  <p
+                    className="truncate text-sm font-semibold"
                     style={{ color: "var(--app-on-dark)" }}
                   >
                     {calendarHeaderTitle}
                   </p>
                   {calendarHeaderSummary ? (
                     <p
-                      className="truncate text-[11px] leading-4"
+                      className="line-clamp-2 text-[11px] leading-4"
                       style={{ color: "var(--app-on-dark-muted)" }}
                     >
                       {calendarHeaderSummary}
                     </p>
                   ) : null}
                 </div>
-              </div>
-              <div className="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-2">
-                {canOpenEventDialog ? (
-                  <button
-                    type="button"
-                    onClick={() => handleOpenEventDialog(canEditEvent)}
-                    className="rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide transition-colors hover:opacity-90"
-                    style={{
-                      borderColor: "rgba(255,255,255,0.18)",
-                      backgroundColor: "rgba(255,255,255,0.08)",
-                      color: "var(--app-on-dark-muted)",
-                    }}
-                    data-testid="button-google-calendar-header-open-event"
-                  >
-                    {canEditEvent ? "Edit" : "Open"}
-                  </button>
-                ) : null}
-                <span
-                  className="rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide"
-                  style={{
-                    borderColor: statusToneStyles.borderColor,
-                    backgroundColor: statusToneStyles.backgroundColor,
-                    color: statusToneStyles.textColor,
-                  }}
-                >
-                  {effectiveStatusLabel}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setIsCollapsed((value) => !value)}
-                  className="rounded-full border p-2 transition-colors hover:opacity-90"
-                  style={{
-                    borderColor: "rgba(255,255,255,0.18)",
-                    backgroundColor: "rgba(255,255,255,0.08)",
-                    color: "var(--app-on-dark-muted)",
-                  }}
-                  data-testid="button-google-calendar-collapse"
-                  aria-label={isCollapsed ? "Expand calendar card" : "Collapse calendar card"}
-                >
-                  <motion.div
-                    animate={{ rotate: isCollapsed ? 0 : 180 }}
-                    transition={{ duration: 0.2 }}
-                  >
-                    <ChevronDown className="h-3.5 w-3.5" />
-                  </motion.div>
-                </button>
-              </div>
-            </div>
-          ) : (
-            <div className="flex items-start justify-between gap-3">
-              <div
-                className="text-[10px] font-semibold uppercase tracking-[0.16em]"
-                style={{ color: "var(--app-on-dark-muted)" }}
-              >
-                Calendar task
-              </div>
-              <div className="flex shrink-0 items-center gap-2">
                 {showHeaderQuickOpen ? (
                   <button
                     type="button"
@@ -4207,35 +4246,6 @@ function GoogleCalendarAssistantTaskCard(props: {
                     </span>
                   </button>
                 ) : null}
-                <span
-                  className="rounded-full border px-2.5 py-1 text-[10px] font-semibold tracking-wide"
-                  style={{
-                    borderColor: statusToneStyles.borderColor,
-                    backgroundColor: statusToneStyles.backgroundColor,
-                    color: statusToneStyles.textColor,
-                  }}
-                >
-                  {effectiveStatusLabel}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setIsCollapsed((value) => !value)}
-                  className="rounded-full border p-2 transition-colors hover:opacity-90"
-                  style={{
-                    borderColor: "rgba(255,255,255,0.18)",
-                    backgroundColor: "rgba(255,255,255,0.08)",
-                    color: "var(--app-on-dark-muted)",
-                  }}
-                  data-testid="button-google-calendar-collapse"
-                  aria-label={isCollapsed ? "Expand calendar card" : "Collapse calendar card"}
-                >
-                  <motion.div
-                    animate={{ rotate: isCollapsed ? 0 : 180 }}
-                    transition={{ duration: 0.2 }}
-                  >
-                    <ChevronDown className="h-3.5 w-3.5" />
-                  </motion.div>
-                </button>
               </div>
             </div>
           )}
@@ -4404,7 +4414,7 @@ function GoogleCalendarAssistantTaskCard(props: {
                 }
                 testId="google-calendar-preview-card"
               />
-              {canOpenEventDialog ? (
+              {canOpenEventDialog && isCollapsed ? (
                 <div className="mt-2 flex justify-end px-1">
                   <button
                     type="button"
