@@ -1,0 +1,51 @@
+<svg width="1600" height="900" viewBox="0 0 1600 900" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="80" y1="80" x2="1520" y2="820" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#1E1012"/>
+      <stop offset="0.5" stop-color="#2E1915"/>
+      <stop offset="1" stop-color="#0F090A"/>
+    </linearGradient>
+    <radialGradient id="halo" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(1120 360) rotate(137) scale(620 420)">
+      <stop stop-color="#F3C982" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#F3C982" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="panel" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#F4CF94" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#F4CF94" stop-opacity="0.05"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1600" height="900" rx="34" fill="url(#bg)"/>
+  <rect x="86" y="82" width="1428" height="736" rx="30" stroke="#F1C987" stroke-opacity="0.18"/>
+  <ellipse cx="1100" cy="350" rx="520" ry="320" fill="url(#halo)"/>
+
+  <rect x="150" y="170" width="880" height="560" rx="24" fill="url(#panel)" stroke="#F1C987" stroke-opacity="0.25"/>
+
+  <g opacity="0.78">
+    <rect x="1035" y="210" width="380" height="8" rx="4" fill="#F4CD8D" fill-opacity="0.58"/>
+    <rect x="1035" y="246" width="300" height="8" rx="4" fill="#F4CD8D" fill-opacity="0.38"/>
+    <rect x="1035" y="282" width="340" height="8" rx="4" fill="#F4CD8D" fill-opacity="0.28"/>
+    <rect x="1035" y="318" width="250" height="8" rx="4" fill="#F4CD8D" fill-opacity="0.21"/>
+  </g>
+
+  <text x="210" y="255" fill="#F9E6C6" font-size="26" font-family="DM Sans, sans-serif" letter-spacing="4">ZEE RESEARCH ARCHIVE</text>
+  <text x="210" y="332" fill="#FFF2DB" font-size="72" font-family="Outfit, sans-serif" font-weight="700">Platform Paper 0</text>
+  <text x="210" y="405" fill="#FFDFAF" font-size="34" font-family="Outfit, sans-serif" font-weight="500">Companion OS Architecture</text>
+
+  <text x="210" y="492" fill="#FFE3BC" fill-opacity="0.88" font-size="26" font-family="DM Sans, sans-serif">Memory graph, route controls, voice reliability,</text>
+  <text x="210" y="532" fill="#FFE3BC" fill-opacity="0.88" font-size="26" font-family="DM Sans, sans-serif">and production guardrails from field evidence.</text>
+
+  <g opacity="0.86">
+    <rect x="210" y="592" width="294" height="58" rx="29" fill="#F1C987" fill-opacity="0.17" stroke="#F1C987" stroke-opacity="0.4"/>
+    <text x="247" y="629" fill="#FCEACF" font-size="24" font-family="DM Sans, sans-serif" font-weight="700">February 2026</text>
+  </g>
+
+  <rect x="1068" y="476" width="280" height="190" rx="20" fill="#0F0A0A" fill-opacity="0.45" stroke="#F1C987" stroke-opacity="0.23"/>
+  <text x="1100" y="532" fill="#FCE7C5" font-size="20" font-family="DM Sans, sans-serif" letter-spacing="2">CONTROLS</text>
+  <text x="1100" y="574" fill="#F4D7B3" font-size="19" font-family="DM Sans, sans-serif">Route Integrity</text>
+  <text x="1100" y="606" fill="#F4D7B3" font-size="19" font-family="DM Sans, sans-serif">Memory Hygiene</text>
+  <text x="1100" y="638" fill="#F4D7B3" font-size="19" font-family="DM Sans, sans-serif">Temporal Anchoring</text>
+
+  <circle cx="1432" cy="768" r="9" fill="#F1C987" fill-opacity="0.52"/>
+  <line x1="1180" y1="768" x2="1410" y2="768" stroke="#F1C987" stroke-opacity="0.25"/>
+</svg>

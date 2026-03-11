@@ -1,0 +1,120 @@
+{
+  "noiseTrace": [],
+  "speechTrace": [],
+  "interruptTrace": [
+    {
+      "at": 1773193782384,
+      "event": "live.assistant.interrupt_button_pressed",
+      "metadata": {
+        "raw": "{runId: live-f1a3aa80-60be-454c-8818-440d7fa0e843, source: voice_view_button, speechState: idle, manualActivityActive: false, interruptPending: false}"
+      }
+    },
+    {
+      "at": 1773193782384,
+      "event": "live.assistant.interrupt_button_pressed",
+      "metadata": {
+        "raw": "{runId: live-f1a3aa80-60be-454c-8818-440d7fa0e843, reason: voice_view_button, assistantWindowActive: false, manualActivityActive: false, interruptPending: false}"
+      }
+    },
+    {
+      "at": 1773193782384,
+      "event": "live.assistant.interrupt_ignored_no_assistant_audio",
+      "metadata": {
+        "raw": "{runId: live-f1a3aa80-60be-454c-8818-440d7fa0e843, reason: voice_view_button, manualActivityActive: false, interruptPending: false}"
+      }
+    },
+    {
+      "at": 1773193782384,
+      "event": "live.assistant.interrupt_ignored",
+      "metadata": {
+        "raw": "{runId: live-f1a3aa80-60be-454c-8818-440d7fa0e843, source: voice_view_button, speechState: idle, manualActivityActive: false, interruptPending: false}"
+      }
+    }
+  ],
+  "voiceStageTrace": [
+    {
+      "at": 1773193788551,
+      "event": "voice.stage.candidate_snapshot",
+      "metadata": {
+        "raw": "{runId: live-f1a3aa80-60be-454c-8818-440d7fa0e843, conversationId: 7a581119-ba39-4925-9165-d847772a757f, totalCandidates: 4, canvasVisible: true, dismissedSurfaceKey: null}"
+      }
+    },
+    {
+      "at": 1773193788551,
+      "event": "voice.stage.surface_resolved",
+      "metadata": {
+        "raw": "{runId: live-f1a3aa80-60be-454c-8818-440d7fa0e843, conversationId: 7a581119-ba39-4925-9165-d847772a757f, surfaceKind: task, surfaceKey: task:8b43c0fb-5dc2-4834-967f-48bad7914777:approval_required:pending:none:calendar_create, taskId: 8b43c0fb-5dc2-4834-967f-48bad7914777}"
+      }
+    },
+    {
+      "at": 1773193788551,
+      "event": "voice.stage.surface_auto_switched",
+      "metadata": {
+        "raw": "{runId: live-f1a3aa80-60be-454c-8818-440d7fa0e843, conversationId: 7a581119-ba39-4925-9165-d847772a757f, previousSurfaceKey: task:26843987-0cca-4032-b837-8cbab0bb1055:approval_required:pending:none:email_compose, nextSurfaceKey: task:8b43c0fb-5dc2-4834-967f-48bad7914777:approval_required:pending:none:calendar_create, reason: active_surface}"
+      }
+    },
+    {
+      "at": 1773193788551,
+      "event": "voice.stage.surface_visible",
+      "metadata": {
+        "raw": "{runId: live-f1a3aa80-60be-454c-8818-440d7fa0e843, conversationId: 7a581119-ba39-4925-9165-d847772a757f, surfaceKey: task:8b43c0fb-5dc2-4834-967f-48bad7914777:approval_required:pending:none:calendar_create, dismissed: false}"
+      }
+    },
+    {
+      "at": 1773193789140,
+      "event": "voice.stage.surface_selected",
+      "metadata": {
+        "raw": "{runId: live-f1a3aa80-60be-454c-8818-440d7fa0e843, conversationId: 7a581119-ba39-4925-9165-d847772a757f, previousSurface: Object, selectedSurface: Object, selectionMode: manual}"
+      }
+    },
+    {
+      "at": 1773193789144,
+      "event": "voice.stage.surface_resolved",
+      "metadata": {
+        "raw": "{runId: live-f1a3aa80-60be-454c-8818-440d7fa0e843, conversationId: 7a581119-ba39-4925-9165-d847772a757f, surfaceKind: task, surfaceKey: task:26843987-0cca-4032-b837-8cbab0bb1055:approval_required:pending:none:email_compose, taskId: 26843987-0cca-4032-b837-8cbab0bb1055}"
+      }
+    },
+    {
+      "at": 1773193789145,
+      "event": "voice.stage.surface_visible",
+      "metadata": {
+        "raw": "{runId: live-f1a3aa80-60be-454c-8818-440d7fa0e843, conversationId: 7a581119-ba39-4925-9165-d847772a757f, surfaceKey: task:26843987-0cca-4032-b837-8cbab0bb1055:approval_required:pending:none:email_compose, dismissed: false}"
+      }
+    },
+    {
+      "at": 1773193789572,
+      "event": "voice.stage.surface_dismissed",
+      "metadata": {
+        "raw": "{runId: live-f1a3aa80-60be-454c-8818-440d7fa0e843, conversationId: 7a581119-ba39-4925-9165-d847772a757f, surfaceKind: task, surfaceKey: task:26843987-0cca-4032-b837-8cbab0bb1055:approval_required:pending:none:email_compose}"
+      }
+    },
+    {
+      "at": 1773193789580,
+      "event": "voice.stage.surface_hidden",
+      "metadata": {
+        "raw": "{runId: live-f1a3aa80-60be-454c-8818-440d7fa0e843, conversationId: 7a581119-ba39-4925-9165-d847772a757f, surfaceKey: task:26843987-0cca-4032-b837-8cbab0bb1055:approval_required:pending:none:email_compose, dismissed: true}"
+      }
+    },
+    {
+      "at": 1773193789663,
+      "event": "voice.stage.surface_reopened",
+      "metadata": {
+        "raw": "{runId: live-f1a3aa80-60be-454c-8818-440d7fa0e843, conversationId: 7a581119-ba39-4925-9165-d847772a757f, surfaceKind: task, surfaceKey: task:26843987-0cca-4032-b837-8cbab0bb1055:approval_required:pending:none:email_compose}"
+      }
+    },
+    {
+      "at": 1773193789667,
+      "event": "voice.stage.surface_auto_switched",
+      "metadata": {
+        "raw": "{runId: live-f1a3aa80-60be-454c-8818-440d7fa0e843, conversationId: 7a581119-ba39-4925-9165-d847772a757f, previousSurfaceKey: task:8b43c0fb-5dc2-4834-967f-48bad7914777:approval_required:pending:none:calendar_create, nextSurfaceKey: task:26843987-0cca-4032-b837-8cbab0bb1055:approval_required:pending:none:email_compose, reason: manual_selection}"
+      }
+    },
+    {
+      "at": 1773193789667,
+      "event": "voice.stage.surface_visible",
+      "metadata": {
+        "raw": "{runId: live-f1a3aa80-60be-454c-8818-440d7fa0e843, conversationId: 7a581119-ba39-4925-9165-d847772a757f, surfaceKey: task:26843987-0cca-4032-b837-8cbab0bb1055:approval_required:pending:none:email_compose, dismissed: false}"
+      }
+    }
+  ]
+}

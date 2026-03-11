@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000" viewBox="0 0 1600 1000" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1e1312"/>
+      <stop offset="55%" stop-color="#2c1815"/>
+      <stop offset="100%" stop-color="#140e0d"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0%" stop-color="#f3c678" stop-opacity="0.28"/>
+      <stop offset="100%" stop-color="#f3c678" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="card" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#3b2722"/>
+      <stop offset="100%" stop-color="#2a1d1a"/>
+    </linearGradient>
+    <filter id="soft" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="12" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <rect width="1600" height="1000" fill="url(#bg)"/>
+  <circle cx="780" cy="510" r="290" fill="url(#glow)"/>
+
+  <text x="800" y="95" text-anchor="middle" fill="#fbe6be" font-family="Georgia, 'Times New Roman', serif" font-size="48" font-weight="700">
+    ZeeMe Companion Continuity Stack
+  </text>
+  <text x="800" y="132" text-anchor="middle" fill="#d8b88a" font-family="Inter, Arial, sans-serif" font-size="21">
+    Voice + Text + Memory + Trust Boundaries in One Runtime
+  </text>
+
+  <rect x="110" y="265" rx="26" ry="26" width="360" height="188" fill="url(#card)" stroke="#cda873" stroke-opacity="0.44" stroke-width="2"/>
+  <text x="290" y="324" text-anchor="middle" fill="#f8ddb0" font-family="Inter, Arial, sans-serif" font-size="30" font-weight="700">User Interaction</text>
+  <text x="290" y="368" text-anchor="middle" fill="#e2c08f" font-family="Inter, Arial, sans-serif" font-size="22">Voice sessions</text>
+  <text x="290" y="400" text-anchor="middle" fill="#e2c08f" font-family="Inter, Arial, sans-serif" font-size="22">Text chat turns</text>
+
+  <rect x="560" y="225" rx="30" ry="30" width="480" height="280" fill="url(#card)" stroke="#e2bc82" stroke-opacity="0.62" stroke-width="2.4"/>
+  <text x="800" y="285" text-anchor="middle" fill="#ffebc8" font-family="Inter, Arial, sans-serif" font-size="34" font-weight="700">Context Composition Core</text>
+  <text x="800" y="336" text-anchor="middle" fill="#e7c99a" font-family="Inter, Arial, sans-serif" font-size="24">Active thread + cross-chat + profile facts</text>
+  <text x="800" y="372" text-anchor="middle" fill="#e7c99a" font-family="Inter, Arial, sans-serif" font-size="24">Timezone anchor + safety filtering</text>
+  <text x="800" y="440" text-anchor="middle" fill="#f5d6a5" font-family="Inter, Arial, sans-serif" font-size="21">Output: model-ready memory block</text>
+
+  <rect x="1130" y="265" rx="26" ry="26" width="360" height="188" fill="url(#card)" stroke="#cda873" stroke-opacity="0.44" stroke-width="2"/>
+  <text x="1310" y="324" text-anchor="middle" fill="#f8ddb0" font-family="Inter, Arial, sans-serif" font-size="30" font-weight="700">Model Layer</text>
+  <text x="1310" y="368" text-anchor="middle" fill="#e2c08f" font-family="Inter, Arial, sans-serif" font-size="22">Gemini text orchestration</text>
+  <text x="1310" y="400" text-anchor="middle" fill="#e2c08f" font-family="Inter, Arial, sans-serif" font-size="22">Gemini live native audio</text>
+
+  <rect x="320" y="605" rx="22" ry="22" width="320" height="150" fill="url(#card)" stroke="#b89463" stroke-opacity="0.38" stroke-width="1.8"/>
+  <text x="480" y="661" text-anchor="middle" fill="#f0d1a0" font-family="Inter, Arial, sans-serif" font-size="28" font-weight="700">Persistence</text>
+  <text x="480" y="700" text-anchor="middle" fill="#deb786" font-family="Inter, Arial, sans-serif" font-size="21">Postgres messages</text>
+  <text x="480" y="730" text-anchor="middle" fill="#deb786" font-family="Inter, Arial, sans-serif" font-size="21">preferences + memory</text>
+
+  <rect x="760" y="605" rx="22" ry="22" width="320" height="150" fill="url(#card)" stroke="#b89463" stroke-opacity="0.38" stroke-width="1.8"/>
+  <text x="920" y="661" text-anchor="middle" fill="#f0d1a0" font-family="Inter, Arial, sans-serif" font-size="28" font-weight="700">Safety Controls</text>
+  <text x="920" y="700" text-anchor="middle" fill="#deb786" font-family="Inter, Arial, sans-serif" font-size="21">Prompt privacy boundary</text>
+  <text x="920" y="730" text-anchor="middle" fill="#deb786" font-family="Inter, Arial, sans-serif" font-size="21">message-purpose filtering</text>
+
+  <rect x="1200" y="605" rx="22" ry="22" width="280" height="150" fill="url(#card)" stroke="#b89463" stroke-opacity="0.38" stroke-width="1.8"/>
+  <text x="1340" y="661" text-anchor="middle" fill="#f0d1a0" font-family="Inter, Arial, sans-serif" font-size="28" font-weight="700">UX Output</text>
+  <text x="1340" y="700" text-anchor="middle" fill="#deb786" font-family="Inter, Arial, sans-serif" font-size="21">Calm response pacing</text>
+  <text x="1340" y="730" text-anchor="middle" fill="#deb786" font-family="Inter, Arial, sans-serif" font-size="21">Continuous thread feel</text>
+
+  <path d="M470 359 L560 359" stroke="#f1cb8d" stroke-width="3" marker-end="url(#arrow)"/>
+  <path d="M1040 359 L1130 359" stroke="#f1cb8d" stroke-width="3" marker-end="url(#arrow)"/>
+  <path d="M800 505 L800 605" stroke="#f1cb8d" stroke-width="3" marker-end="url(#arrow)"/>
+  <path d="M640 680 L760 680" stroke="#cda873" stroke-width="2.4" marker-end="url(#arrow2)"/>
+  <path d="M1080 680 L1200 680" stroke="#cda873" stroke-width="2.4" marker-end="url(#arrow2)"/>
+
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L9,3 z" fill="#f1cb8d"/>
+    </marker>
+    <marker id="arrow2" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L9,3 z" fill="#cda873"/>
+    </marker>
+  </defs>
+
+  <text x="800" y="880" text-anchor="middle" fill="#caa676" font-family="Inter, Arial, sans-serif" font-size="18">
+    Case-study figure: companion continuity architecture
+  </text>
+</svg>

@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#151010"/>
+      <stop offset="52%" stop-color="#2a1a19"/>
+      <stop offset="100%" stop-color="#120d0e"/>
+    </linearGradient>
+    <radialGradient id="pulse" cx="0.75" cy="0.3" r="0.65">
+      <stop offset="0%" stop-color="#e9be78" stop-opacity="0.24"/>
+      <stop offset="100%" stop-color="#e9be78" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="1600" height="900" fill="url(#bg)"/>
+  <rect width="1600" height="900" fill="url(#pulse)"/>
+
+  <rect x="120" y="100" width="1360" height="700" rx="28" fill="#241817" stroke="#cca368" stroke-opacity="0.4" stroke-width="2"/>
+
+  <text x="190" y="190" fill="#d9b784" font-family="Inter, Arial, sans-serif" font-size="18" letter-spacing="5">RELIABILITY WHITEPAPER</text>
+  <text x="190" y="258" fill="#fbe8c7" font-family="Georgia, 'Times New Roman', serif" font-size="62" font-weight="700">Failure Taxonomy &</text>
+  <text x="190" y="324" fill="#fbe8c7" font-family="Georgia, 'Times New Roman', serif" font-size="62" font-weight="700">Forensic Recovery Gates</text>
+  <text x="190" y="382" fill="#e4c395" font-family="Inter, Arial, sans-serif" font-size="27">A companion-grade reliability blueprint for ZeeMe runtime operations</text>
+
+  <g opacity="0.95">
+    <rect x="190" y="430" width="360" height="98" rx="16" fill="#32231f" stroke="#d6af75" stroke-opacity="0.45"/>
+    <text x="220" y="480" fill="#f3d3a2" font-family="Inter, Arial, sans-serif" font-size="24">1 · Detection</text>
+    <text x="220" y="512" fill="#e4bf8c" font-family="Inter, Arial, sans-serif" font-size="18">trace + route metadata capture</text>
+
+    <rect x="590" y="430" width="360" height="98" rx="16" fill="#32231f" stroke="#d6af75" stroke-opacity="0.45"/>
+    <text x="620" y="480" fill="#f3d3a2" font-family="Inter, Arial, sans-serif" font-size="24">2 · Classification</text>
+    <text x="620" y="512" fill="#e4bf8c" font-family="Inter, Arial, sans-serif" font-size="18">routing / memory / voice / UI class</text>
+
+    <rect x="990" y="430" width="360" height="98" rx="16" fill="#32231f" stroke="#d6af75" stroke-opacity="0.45"/>
+    <text x="1020" y="480" fill="#f3d3a2" font-family="Inter, Arial, sans-serif" font-size="24">3 · Remediation</text>
+    <text x="1020" y="512" fill="#e4bf8c" font-family="Inter, Arial, sans-serif" font-size="18">patch contract + replay + gate</text>
+
+    <path d="M550 479H590" stroke="#e8c188" stroke-width="3"/>
+    <path d="M950 479H990" stroke="#e8c188" stroke-width="3"/>
+    <path d="M585 479l-9 8v-16l9 8z" fill="#e8c188"/>
+    <path d="M985 479l-9 8v-16l9 8z" fill="#e8c188"/>
+  </g>
+
+  <rect x="190" y="570" width="1160" height="170" rx="18" fill="#181111" fill-opacity="0.45" stroke="#c89e64" stroke-opacity="0.35"/>
+  <text x="230" y="620" fill="#f0cf9e" font-family="Inter, Arial, sans-serif" font-size="24">Operational Doctrine</text>
+  <text x="230" y="660" fill="#e2bc8a" font-family="Inter, Arial, sans-serif" font-size="22">No release without deterministic repro of high-severity incidents.</text>
+  <text x="230" y="694" fill="#e2bc8a" font-family="Inter, Arial, sans-serif" font-size="22">No trust claims without observable route reasons and failure codes.</text>
+
+  <text x="190" y="770" fill="#c39a62" font-family="Inter, Arial, sans-serif" font-size="18">Figure C · Reliability whitepaper publication cover</text>
+</svg>
