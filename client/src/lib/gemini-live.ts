@@ -2661,6 +2661,46 @@ export class GeminiLiveVoiceSession {
     }
   }
 
+  private sendGoogleReadVoiceSummary(params: {
+    digestTexts: string[];
+    toolNames: string[];
+    source: "immediate" | "fallback";
+  }): boolean {
+    const spokenSummary = params.digestTexts.join(" ").trim();
+    if (!spokenSummary) {
+      return false;
+    }
+    const sent = this.sendClientContentSafely(
+      {
+        turns: `Using the verified Google results you just received, say this aloud naturally and briefly right now. Do not ask the user to wait. Verified summary: ${spokenSummary}`,
+        turnComplete: true,
+      },
+      "live.google_context.nudge_failed",
+      {
+        source:
+          params.source === "immediate"
+            ? "google_read_voice_immediate"
+            : "google_read_voice_fallback",
+        toolNames: params.toolNames,
+      },
+    );
+    this.debug(
+      sent
+        ? params.source === "immediate"
+          ? "live.google_context.voice_read_summary_sent"
+          : "live.google_context.voice_fallback_sent"
+        : params.source === "immediate"
+          ? "live.google_context.voice_read_summary_send_failed"
+          : "live.google_context.voice_fallback_send_failed",
+      {
+        toolNames: params.toolNames,
+        digestCount: params.digestTexts.length,
+        spokenSummaryLength: spokenSummary.length,
+      },
+    );
+    return sent;
+  }
+
   private scheduleGoogleReadVoiceFallback(params: {
     digestTexts: string[];
     toolNames: string[];
@@ -2682,32 +2722,11 @@ export class GeminiLiveVoiceSession {
         });
         return;
       }
-
-      const spokenSummary = params.digestTexts.join(" ").trim();
-      if (!spokenSummary) {
-        return;
-      }
-      const sent = this.sendClientContentSafely(
-        {
-          turns: `Using the verified Google results you just received, say this aloud naturally and briefly right now. Do not ask the user to wait. Verified summary: ${spokenSummary}`,
-          turnComplete: true,
-        },
-        "live.google_context.nudge_failed",
-        {
-          source: "google_read_voice_fallback",
-          toolNames: params.toolNames,
-        },
-      );
-      this.debug(
-        sent
-          ? "live.google_context.voice_fallback_sent"
-          : "live.google_context.voice_fallback_send_failed",
-        {
-          toolNames: params.toolNames,
-          digestCount: params.digestTexts.length,
-          spokenSummaryLength: spokenSummary.length,
-        },
-      );
+      this.sendGoogleReadVoiceSummary({
+        digestTexts: params.digestTexts,
+        toolNames: params.toolNames,
+        source: "fallback",
+      });
     }, 1200);
   }
 
@@ -2871,10 +2890,19 @@ export class GeminiLiveVoiceSession {
     const hasReroutedToolResponse = resolvedFunctionCalls.some(
       (entry) => entry.rerouted && entry.effectiveName !== entry.requestedName,
     );
+    const hasReadOnlyGoogleTool = effectiveToolNames.some((name) =>
+      LIVE_GOOGLE_PERSONAL_CONTEXT_READ_TOOL_NAMES.has(name),
+    );
+    const hasGoogleActionTool = effectiveToolNames.some(
+      (name) =>
+        name === "prepare_google_email_action" ||
+        name === "prepare_google_calendar_action",
+    );
     if (
       params.forwardFunctionResponsesToSession &&
       functionResponses.length > 0 &&
-      !hasReroutedToolResponse
+      !hasReroutedToolResponse &&
+      !(params.allowGoogleReadVoiceFallback && hasReadOnlyGoogleTool && !hasGoogleActionTool)
     ) {
       this.sendToolResponseSafely(
         functionResponses as Array<Record<string, unknown>>,
@@ -2882,10 +2910,15 @@ export class GeminiLiveVoiceSession {
     } else if (
       params.forwardFunctionResponsesToSession &&
       functionResponses.length > 0 &&
-      hasReroutedToolResponse
+      (hasReroutedToolResponse ||
+        (params.allowGoogleReadVoiceFallback &&
+          hasReadOnlyGoogleTool &&
+          !hasGoogleActionTool))
     ) {
-      this.debug("live.tool_call.response_not_forwarded_due_to_reroute", {
+      this.debug("live.tool_call.response_not_forwarded", {
         resolvedFunctionCalls,
+        hasReadOnlyGoogleTool,
+        hasGoogleActionTool,
       });
     }
 
@@ -2932,14 +2965,18 @@ export class GeminiLiveVoiceSession {
       );
     }
 
-    const hasReadOnlyGoogleTool = effectiveToolNames.some((name) =>
-      LIVE_GOOGLE_PERSONAL_CONTEXT_READ_TOOL_NAMES.has(name),
-    );
     if (
       params.allowGoogleReadVoiceFallback &&
       hasReadOnlyGoogleTool &&
       chatDigestTexts.length > 0
     ) {
+      if (!hasGoogleActionTool) {
+        this.sendGoogleReadVoiceSummary({
+          digestTexts: chatDigestTexts,
+          toolNames: effectiveToolNames,
+          source: "immediate",
+        });
+      }
       this.scheduleGoogleReadVoiceFallback({
         digestTexts: chatDigestTexts,
         toolNames: effectiveToolNames,
