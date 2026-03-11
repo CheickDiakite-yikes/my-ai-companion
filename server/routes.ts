@@ -1686,6 +1686,97 @@ function renderGooglePersonalContextBlock(params: {
   return lines.join("\\n");
 }
 
+function buildLiveEmailReadSummary(params: {
+  inboxHighlights: InboxDigestItem[];
+  unreadOnly: boolean;
+  sinceDays: number;
+}): string {
+  const windowLabel = params.sinceDays === 1 ? "the last day" : `the last ${params.sinceDays} days`;
+  const intro = params.unreadOnly
+    ? `I checked your unread emails from ${windowLabel}.`
+    : `I checked your recent emails from ${windowLabel}.`;
+  if (params.inboxHighlights.length === 0) {
+    return params.unreadOnly
+      ? `${intro} You do not have any unread emails there right now.`
+      : `${intro} I did not find any recent inbox messages there right now.`;
+  }
+
+  const countLabel =
+    params.inboxHighlights.length === 1
+      ? "1 message"
+      : `${params.inboxHighlights.length} messages`;
+  const highlights = params.inboxHighlights.slice(0, 3).map((item) => {
+    const snippet = item.snippet.trim().replace(/\s+/g, " ");
+    const snippetSuffix = snippet ? `, ${snippet}` : "";
+    return `from ${item.from} about ${item.subject}${snippetSuffix}`;
+  });
+
+  const lead = params.unreadOnly
+    ? `${intro} You have ${countLabel}.`
+    : `${intro} I found ${countLabel}.`;
+  const nextStep =
+    params.inboxHighlights.length > 0
+      ? "I can read a full thread or draft a reply next if you want."
+      : "";
+  return `${lead} ${highlights.join("; ")}. ${nextStep}`.trim();
+}
+
+function buildLiveEmailThreadSummary(params: {
+  thread: GoogleEmailThreadDetail;
+  nextBestAction?: string | null;
+}): string {
+  const latestMessage =
+    params.thread.messages[params.thread.messages.length - 1] ?? null;
+  const latestSender =
+    latestMessage?.from?.name?.trim() ||
+    latestMessage?.from?.email?.trim() ||
+    "the sender";
+  const latestSnippet =
+    latestMessage?.snippet?.trim() ||
+    params.thread.latestSnippet?.trim() ||
+    "No preview text was available.";
+  const nextStep = params.nextBestAction?.trim() ?? "I can draft a reply next if you want.";
+  return `I opened the thread about ${params.thread.subject}. The latest message is from ${latestSender}: ${latestSnippet}. ${nextStep}`;
+}
+
+function buildLiveCalendarReadSummary(params: {
+  events: CalendarEventItem[];
+  timeRange: GooglePersonalContextTimeRange;
+}): string {
+  const timeRangeLabel =
+    params.timeRange === "tomorrow"
+      ? "tomorrow"
+      : params.timeRange === "this_week"
+        ? "this week"
+        : params.timeRange === "next_7_days"
+          ? "the next 7 days"
+          : "today";
+  if (params.events.length === 0) {
+    return `I checked your calendar for ${timeRangeLabel}. You do not have anything scheduled there right now.`;
+  }
+  const countLabel =
+    params.events.length === 1 ? "1 event" : `${params.events.length} events`;
+  const highlights = params.events.slice(0, 3).map((event) => {
+    const locationSuffix = event.location ? ` at ${event.location}` : "";
+    return `${event.title} from ${event.startTime} to ${event.endTime}${locationSuffix}`;
+  });
+  return `I checked your calendar for ${timeRangeLabel}. You have ${countLabel}: ${highlights.join("; ")}. I can open one up or help you move it next.`;
+}
+
+function buildLiveCalendarEventSummary(params: {
+  event: GoogleCalendarEventDetail;
+  nextBestAction?: string | null;
+}): string {
+  const locationSuffix = params.event.location ? ` at ${params.event.location}` : "";
+  const description =
+    params.event.description?.trim() ||
+    `${params.event.title} runs from ${params.event.startTime} to ${params.event.endTime}${locationSuffix}.`;
+  const nextStep =
+    params.nextBestAction?.trim() ||
+    "I can update the time, location, or notes with your approval.";
+  return `I opened ${params.event.title}, scheduled from ${params.event.startTime} to ${params.event.endTime}${locationSuffix}. ${description} ${nextStep}`;
+}
+
 async function prepareGooglePersonalContextForChat(params: {
   req: any;
   userId: string;
@@ -12787,20 +12878,25 @@ export async function registerRoutes(
             });
 
             if (!auth.ok) {
+              const authMessage =
+                auth.code === "google_scope_missing"
+                  ? "Google email permission is missing. Reconnect Google in Profile settings."
+                  : auth.code === "google_token_refresh_failed"
+                    ? "Google session expired. Reconnect in Profile settings."
+                    : "Google is not connected. Connect your account in Profile settings.";
               functionResponses.push({
                 id: functionCall.id,
                 name: functionCall.name,
                 response: {
                   error: {
                     code: auth.code,
-                    message:
-                      auth.code === "google_scope_missing"
-                        ? "Google email permission is missing. Reconnect Google in Profile settings."
-                        : auth.code === "google_token_refresh_failed"
-                          ? "Google session expired. Reconnect in Profile settings."
-                          : "Google is not connected. Connect your account in Profile settings.",
+                    message: authMessage,
                   },
                 },
+              });
+              chatDigests.push({
+                sender: "assistant",
+                text: authMessage,
               });
               webSearchEvents.push({
                 status: "grounded",
@@ -12847,6 +12943,14 @@ export async function registerRoutes(
                   },
                 },
               });
+              chatDigests.push({
+                sender: "assistant",
+                text: buildLiveEmailReadSummary({
+                  inboxHighlights,
+                  unreadOnly,
+                  sinceDays,
+                }),
+              });
               webSearchEvents.push({
                 status: "grounded",
                 label: "Inbox checked",
@@ -12884,6 +12988,10 @@ export async function registerRoutes(
                       : undefined,
                   },
                 },
+              });
+              chatDigests.push({
+                sender: "assistant",
+                text: message,
               });
               webSearchEvents.push({
                 status: "grounded",
@@ -12927,20 +13035,25 @@ export async function registerRoutes(
               requiredScopes: [GOOGLE_GMAIL_READONLY_SCOPE],
             });
             if (!auth.ok) {
+              const authMessage =
+                auth.code === "google_scope_missing"
+                  ? "Google email permission is missing. Reconnect Google in Profile settings."
+                  : auth.code === "google_token_refresh_failed"
+                    ? "Google session expired. Reconnect in Profile settings."
+                    : "Google is not connected. Connect your account in Profile settings.";
               functionResponses.push({
                 id: functionCall.id,
                 name: functionCall.name,
                 response: {
                   error: {
                     code: auth.code,
-                    message:
-                      auth.code === "google_scope_missing"
-                        ? "Google email permission is missing. Reconnect Google in Profile settings."
-                        : auth.code === "google_token_refresh_failed"
-                          ? "Google session expired. Reconnect in Profile settings."
-                          : "Google is not connected. Connect your account in Profile settings.",
+                    message: authMessage,
                   },
                 },
+              });
+              chatDigests.push({
+                sender: "assistant",
+                text: authMessage,
               });
               webSearchEvents.push({
                 status: "grounded",
@@ -12963,17 +13076,22 @@ export async function registerRoutes(
                     });
               const threadId = matches[0]?.threadId ?? null;
               if (!threadId) {
+                const notFoundMessage = query
+                  ? `I couldn't find an email thread matching "${query}".`
+                  : "I couldn't find a recent email thread to expand.";
                 functionResponses.push({
                   id: functionCall.id,
                   name: functionCall.name,
                   response: {
                     error: {
                       code: "email_thread_not_found",
-                      message: query
-                        ? `I couldn't find an email thread matching "${query}".`
-                        : "I couldn't find a recent email thread to expand.",
+                      message: notFoundMessage,
                     },
                   },
+                });
+                chatDigests.push({
+                  sender: "assistant",
+                  text: notFoundMessage,
                 });
                 webSearchEvents.push({
                   status: "grounded",
@@ -12999,6 +13117,13 @@ export async function registerRoutes(
                   },
                 },
               });
+              chatDigests.push({
+                sender: "assistant",
+                text: buildLiveEmailThreadSummary({
+                  thread,
+                  nextBestAction,
+                }),
+              });
               webSearchEvents.push({
                 status: "grounded",
                 label: "Email details ready",
@@ -13011,15 +13136,21 @@ export async function registerRoutes(
               });
             } catch (error) {
               const fetchIssue = classifyGoogleFetchIssue(error, "gmail");
+              const failureMessage =
+                "Could not retrieve that Gmail thread right now. Please try again shortly.";
               functionResponses.push({
                 id: functionCall.id,
                 name: functionCall.name,
                 response: {
                   error: {
                     code: fetchIssue?.kind ?? "google_fetch_failed",
-                    message: "Could not retrieve that Gmail thread right now. Please try again shortly.",
+                    message: failureMessage,
                   },
                 },
+              });
+              chatDigests.push({
+                sender: "assistant",
+                text: failureMessage,
               });
               webSearchEvents.push({
                 status: "grounded",
@@ -13074,20 +13205,25 @@ export async function registerRoutes(
             });
 
             if (!auth.ok) {
+              const authMessage =
+                auth.code === "google_scope_missing"
+                  ? "Google Calendar permission is missing. Reconnect Google in Profile settings."
+                  : auth.code === "google_token_refresh_failed"
+                    ? "Google session expired. Reconnect in Profile settings."
+                    : "Google is not connected. Connect your account in Profile settings.";
               functionResponses.push({
                 id: functionCall.id,
                 name: functionCall.name,
                 response: {
                   error: {
                     code: auth.code,
-                    message:
-                      auth.code === "google_scope_missing"
-                        ? "Google Calendar permission is missing. Reconnect Google in Profile settings."
-                        : auth.code === "google_token_refresh_failed"
-                          ? "Google session expired. Reconnect in Profile settings."
-                          : "Google is not connected. Connect your account in Profile settings.",
+                    message: authMessage,
                   },
                 },
+              });
+              chatDigests.push({
+                sender: "assistant",
+                text: authMessage,
               });
               webSearchEvents.push({
                 status: "grounded",
@@ -13136,6 +13272,13 @@ export async function registerRoutes(
                   },
                 },
               });
+              chatDigests.push({
+                sender: "assistant",
+                text: buildLiveCalendarReadSummary({
+                  events,
+                  timeRange,
+                }),
+              });
               webSearchEvents.push({
                 status: "grounded",
                 label: "Calendar checked",
@@ -13172,6 +13315,10 @@ export async function registerRoutes(
                       : undefined,
                   },
                 },
+              });
+              chatDigests.push({
+                sender: "assistant",
+                text: message,
               });
               webSearchEvents.push({
                 status: "grounded",
@@ -13228,20 +13375,25 @@ export async function registerRoutes(
               requiredScopes: [GOOGLE_CALENDAR_EVENTS_READONLY_SCOPE],
             });
             if (!auth.ok) {
+              const authMessage =
+                auth.code === "google_scope_missing"
+                  ? "Google Calendar permission is missing. Reconnect Google in Profile settings."
+                  : auth.code === "google_token_refresh_failed"
+                    ? "Google session expired. Reconnect in Profile settings."
+                    : "Google is not connected. Connect your account in Profile settings.";
               functionResponses.push({
                 id: functionCall.id,
                 name: functionCall.name,
                 response: {
                   error: {
                     code: auth.code,
-                    message:
-                      auth.code === "google_scope_missing"
-                        ? "Google Calendar permission is missing. Reconnect Google in Profile settings."
-                        : auth.code === "google_token_refresh_failed"
-                          ? "Google session expired. Reconnect in Profile settings."
-                          : "Google is not connected. Connect your account in Profile settings.",
+                    message: authMessage,
                   },
                 },
+              });
+              chatDigests.push({
+                sender: "assistant",
+                text: authMessage,
               });
               webSearchEvents.push({
                 status: "grounded",
@@ -13268,17 +13420,22 @@ export async function registerRoutes(
                     });
               const eventId = matches[0]?.eventId ?? null;
               if (!eventId) {
+                const notFoundMessage = query
+                  ? `I couldn't find a calendar event matching "${query}".`
+                  : "I couldn't find an upcoming event to expand.";
                 functionResponses.push({
                   id: functionCall.id,
                   name: functionCall.name,
                   response: {
                     error: {
                       code: "calendar_event_not_found",
-                      message: query
-                        ? `I couldn't find a calendar event matching "${query}".`
-                        : "I couldn't find an upcoming event to expand.",
+                      message: notFoundMessage,
                     },
                   },
+                });
+                chatDigests.push({
+                  sender: "assistant",
+                  text: notFoundMessage,
                 });
                 webSearchEvents.push({
                   status: "grounded",
@@ -13302,6 +13459,14 @@ export async function registerRoutes(
                   },
                 },
               });
+              chatDigests.push({
+                sender: "assistant",
+                text: buildLiveCalendarEventSummary({
+                  event,
+                  nextBestAction:
+                    "I can move this event or update its details with your approval.",
+                }),
+              });
               webSearchEvents.push({
                 status: "grounded",
                 label: "Calendar details ready",
@@ -13316,16 +13481,21 @@ export async function registerRoutes(
               });
             } catch (error) {
               const fetchIssue = classifyGoogleFetchIssue(error, "calendar");
+              const failureMessage =
+                "Could not retrieve that calendar event right now. Please try again shortly.";
               functionResponses.push({
                 id: functionCall.id,
                 name: functionCall.name,
                 response: {
                   error: {
                     code: fetchIssue?.kind ?? "google_fetch_failed",
-                    message:
-                      "Could not retrieve that calendar event right now. Please try again shortly.",
+                    message: failureMessage,
                   },
                 },
+              });
+              chatDigests.push({
+                sender: "assistant",
+                text: failureMessage,
               });
               webSearchEvents.push({
                 status: "grounded",

@@ -164,6 +164,21 @@ async function main(): Promise<void> {
     const conversationId = await resolveActiveConversationId(page, args.baseUrl);
     await upsertGoogleIntegrationFixture(args.email, "write");
 
+    const emailReadDigest = await requestLiveGoogleReadSummary(page, args.baseUrl, {
+      conversationId,
+      functionName: "get_user_emails",
+      args: {
+        refresh: true,
+        unreadOnly: true,
+        sinceDays: 3,
+      },
+    });
+    assert.match(
+      emailReadDigest,
+      /(checked your unread emails|unread emails|read a full thread|draft a reply)/i,
+      "Expected live email-read requests to produce a user-facing digest summary",
+    );
+
     await prepareLiveGoogleAction(page, args.baseUrl, {
       conversationId,
       functionName: "prepare_google_calendar_action",
@@ -469,6 +484,52 @@ async function prepareLiveGoogleAction(
     message: functionResponse?.response?.result?.message ?? null,
     taskId: functionResponse?.response?.result?.taskId ?? null,
   };
+}
+
+async function requestLiveGoogleReadSummary(
+  page: Page,
+  baseUrl: string,
+  params: {
+    conversationId: string;
+    functionName:
+      | "get_user_emails"
+      | "get_email_thread_detail"
+      | "get_calendar_events"
+      | "get_calendar_event_detail";
+    args: Record<string, unknown>;
+  },
+): Promise<string> {
+  const functionId = randomUUID();
+  const response = await page.request.post(`${baseUrl}/api/live/tool-response`, {
+    data: {
+      conversationId: params.conversationId,
+      clientTimeZone: "America/New_York",
+      functionCalls: [
+        {
+          id: functionId,
+          name: params.functionName,
+          args: params.args,
+        },
+      ],
+    },
+  });
+  assert.equal(
+    response.ok(),
+    true,
+    `Expected live tool-response to succeed for ${params.functionName}`,
+  );
+  const payload = (await response.json()) as {
+    chatDigests?: Array<{ text?: string }>;
+  };
+  const digestText =
+    payload.chatDigests
+      ?.map((digest) => (typeof digest?.text === "string" ? digest.text.trim() : ""))
+      .find((text) => text.length > 0) ?? "";
+  assert.ok(
+    digestText.length > 0,
+    `Expected ${params.functionName} to return at least one chat digest`,
+  );
+  return digestText;
 }
 
 async function finalizePreparedGoogleEmailDraftFixture(

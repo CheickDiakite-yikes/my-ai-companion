@@ -817,6 +817,75 @@ function buildPersonalContextToolInstruction(
   return 'Call get_user_emails with {"refresh": true} before answering.';
 }
 
+function isReadOnlyPersonalContextIntent(
+  query: string,
+  intent: LivePersonalContextIntent,
+  activeGoogleActionContext?: LiveGoogleActionContextHint | null,
+): boolean {
+  const hasEmailActionIntent =
+    LIVE_EMAIL_ACTION_PATTERN.test(query) ||
+    (activeGoogleActionContext?.connector === "gmail" &&
+      LIVE_EMAIL_CONTEXT_FOLLOWUP_PATTERN.test(query));
+  const hasCalendarActionIntent =
+    LIVE_CALENDAR_ACTION_PATTERN.test(query) ||
+    (activeGoogleActionContext?.connector === "calendar" &&
+      LIVE_CALENDAR_CONTEXT_FOLLOWUP_PATTERN.test(query));
+  const hasEmailDetailIntent = LIVE_EMAIL_DETAIL_PATTERN.test(query);
+  const hasCalendarDetailIntent = LIVE_CALENDAR_DETAIL_PATTERN.test(query);
+  if (intent === "both") {
+    return !hasEmailActionIntent && !hasCalendarActionIntent;
+  }
+  if (intent === "email") {
+    return !hasEmailActionIntent && !hasEmailDetailIntent;
+  }
+  return !hasCalendarActionIntent && !hasCalendarDetailIntent;
+}
+
+function inferEmailSinceDaysForRead(query: string): number {
+  const normalized = normalizeText(query).toLowerCase();
+  if (/\b(today|since today|this morning|this afternoon|tonight)\b/.test(normalized)) {
+    return 1;
+  }
+  if (/\b(yesterday|last 2 days|past 2 days)\b/.test(normalized)) {
+    return 2;
+  }
+  if (/\b(this week|week|recent|lately|latest)\b/.test(normalized)) {
+    return 7;
+  }
+  return 3;
+}
+
+function buildDirectPersonalContextReadFunctionCalls(
+  query: string,
+  intent: LivePersonalContextIntent,
+): Array<{ id: string; name: string; args: Record<string, unknown> }> {
+  const calls: Array<{ id: string; name: string; args: Record<string, unknown> }> = [];
+  const normalized = normalizeText(query).toLowerCase();
+  if (intent === "email" || intent === "both") {
+    calls.push({
+      id: crypto.randomUUID(),
+      name: "get_user_emails",
+      args: {
+        refresh: true,
+        unreadOnly: /\bunread\b/.test(normalized),
+        sinceDays: inferEmailSinceDaysForRead(normalized),
+      },
+    });
+  }
+  if (intent === "calendar" || intent === "both") {
+    calls.push({
+      id: crypto.randomUUID(),
+      name: "get_calendar_events",
+      args: {
+        refresh: true,
+        timeRange: inferCalendarTimeRangeForNudge(query),
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
+      },
+    });
+  }
+  return calls;
+}
+
 const LIVE_GOOGLE_PERSONAL_CONTEXT_TOOL_NAMES = new Set([
   "get_user_emails",
   "get_email_thread_detail",
@@ -824,6 +893,13 @@ const LIVE_GOOGLE_PERSONAL_CONTEXT_TOOL_NAMES = new Set([
   "get_calendar_event_detail",
   "prepare_google_email_action",
   "prepare_google_calendar_action",
+]);
+
+const LIVE_GOOGLE_PERSONAL_CONTEXT_READ_TOOL_NAMES = new Set([
+  "get_user_emails",
+  "get_email_thread_detail",
+  "get_calendar_events",
+  "get_calendar_event_detail",
 ]);
 
 function extractToolCallNames(toolCallPayload: unknown): string[] {
@@ -1362,6 +1438,14 @@ export class GeminiLiveVoiceSession {
   private pendingPersonalContextTurn = false;
   private personalContextToolCalledThisTurn = false;
   private personalContextNudgeSentThisTurn = false;
+  private pendingPersonalContextReadFallback:
+    | {
+        text: string;
+        intent: LivePersonalContextIntent;
+        activeGoogleActionContext: LiveGoogleActionContextHint | null;
+      }
+    | null = null;
+  private googleReadVoiceFallbackTimeout: number | null = null;
   private webSearchGroundedThisTurn = false;
   private webSearchNudgeSentThisTurn = false;
   private pendingTranscriptBySender: Record<TranscriptSender, string> = {
@@ -1552,6 +1636,8 @@ export class GeminiLiveVoiceSession {
     this.pendingPersonalContextTurn = false;
     this.personalContextToolCalledThisTurn = false;
     this.personalContextNudgeSentThisTurn = false;
+    this.pendingPersonalContextReadFallback = null;
+    this.clearGoogleReadVoiceFallbackTimeout();
     this.webSearchGroundedThisTurn = false;
     this.webSearchNudgeSentThisTurn = false;
     this.debug("live.feature_gates", {
@@ -1906,6 +1992,8 @@ export class GeminiLiveVoiceSession {
     this.pendingPersonalContextTurn = false;
     this.personalContextToolCalledThisTurn = false;
     this.personalContextNudgeSentThisTurn = false;
+    this.pendingPersonalContextReadFallback = null;
+    this.clearGoogleReadVoiceFallbackTimeout();
     this.webSearchGroundedThisTurn = false;
     this.webSearchNudgeSentThisTurn = false;
     this.compatibilityProfile = resolveSharedLiveAudioCompatibilityProfile();
@@ -2563,6 +2651,304 @@ export class GeminiLiveVoiceSession {
         functionResponseCount: functionResponses.length,
       });
       return false;
+    }
+  }
+
+  private clearGoogleReadVoiceFallbackTimeout(): void {
+    if (this.googleReadVoiceFallbackTimeout !== null) {
+      window.clearTimeout(this.googleReadVoiceFallbackTimeout);
+      this.googleReadVoiceFallbackTimeout = null;
+    }
+  }
+
+  private scheduleGoogleReadVoiceFallback(params: {
+    digestTexts: string[];
+    toolNames: string[];
+    assistantActivitySnapshotAtMs: number;
+  }): void {
+    this.clearGoogleReadVoiceFallbackTimeout();
+    if (params.digestTexts.length === 0) return;
+    this.googleReadVoiceFallbackTimeout = window.setTimeout(() => {
+      this.googleReadVoiceFallbackTimeout = null;
+      if (
+        this.assistantTurnActive ||
+        this.lastAssistantActivityAtMs > params.assistantActivitySnapshotAtMs
+      ) {
+        this.debug("live.google_context.voice_fallback_skipped_assistant_active", {
+          toolNames: params.toolNames,
+          assistantTurnActive: this.assistantTurnActive,
+          lastAssistantActivityAtMs: this.lastAssistantActivityAtMs,
+          assistantActivitySnapshotAtMs: params.assistantActivitySnapshotAtMs,
+        });
+        return;
+      }
+
+      const spokenSummary = params.digestTexts.join(" ").trim();
+      if (!spokenSummary) {
+        return;
+      }
+      const sent = this.sendClientContentSafely(
+        {
+          turns: `Using the verified Google results you just received, say this aloud naturally and briefly right now. Do not ask the user to wait. Verified summary: ${spokenSummary}`,
+          turnComplete: true,
+        },
+        "live.google_context.nudge_failed",
+        {
+          source: "google_read_voice_fallback",
+          toolNames: params.toolNames,
+        },
+      );
+      this.debug(
+        sent
+          ? "live.google_context.voice_fallback_sent"
+          : "live.google_context.voice_fallback_send_failed",
+        {
+          toolNames: params.toolNames,
+          digestCount: params.digestTexts.length,
+          spokenSummaryLength: spokenSummary.length,
+        },
+      );
+    }, 1200);
+  }
+
+  private async requestLiveToolResponse(
+    normalizedCalls: Array<{ id: string; name: string; args: Record<string, unknown> }>,
+  ): Promise<{
+    traceId?: unknown;
+    functionResponses?: unknown;
+    chatDigests?: unknown;
+    webSearchEvents?: unknown;
+  }> {
+    const googleActionContext = this.callbacks.getGoogleActionContext?.() ?? null;
+    this.debug("live.tool_call.forwarding", {
+      endpoint: "/api/live/tool-response",
+      conversationId: this.conversationId,
+      functionNames: normalizedCalls.map((c) => c.name),
+      googleActionContext,
+    });
+    const response = await fetch("/api/live/tool-response", {
+      method: "POST",
+      credentials: "include",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        conversationId: this.conversationId,
+        functionCalls: normalizedCalls,
+        clientTimeZone:
+          Intl.DateTimeFormat().resolvedOptions().timeZone || undefined,
+        googleActionContext: googleActionContext ?? undefined,
+      }),
+    });
+
+    if (!response.ok) {
+      let failureMessage = `Live tool-response request failed (${response.status})`;
+      try {
+        const errorPayload = (await response.json()) as {
+          message?: unknown;
+          traceId?: unknown;
+        };
+        const message =
+          typeof errorPayload.message === "string"
+            ? errorPayload.message
+            : null;
+        const traceId =
+          typeof errorPayload.traceId === "string"
+            ? errorPayload.traceId
+            : null;
+        this.debug("live.tool_call.http_failed", {
+          status: response.status,
+          traceId,
+          message,
+        });
+        if (message) {
+          failureMessage = `${failureMessage}: ${message}`;
+        }
+      } catch {
+        // Preserve base failure message.
+      }
+      throw new Error(failureMessage);
+    }
+
+    return (await response.json()) as {
+      traceId?: unknown;
+      functionResponses?: unknown;
+      chatDigests?: unknown;
+      webSearchEvents?: unknown;
+    };
+  }
+
+  private applyLiveToolResponsePayload(params: {
+    payload: {
+      traceId?: unknown;
+      functionResponses?: unknown;
+      chatDigests?: unknown;
+      webSearchEvents?: unknown;
+    };
+    normalizedCalls: Array<{ id: string; name: string; args: Record<string, unknown> }>;
+    toolCallStartedAt: number;
+    forwardFunctionResponsesToSession: boolean;
+    allowGoogleReadVoiceFallback: boolean;
+  }): void {
+    const functionResponses = Array.isArray(params.payload.functionResponses)
+      ? params.payload.functionResponses
+      : [];
+    const functionResponseSummary = functionResponses.map((entry) => {
+      const responseObject =
+        entry && typeof entry === "object"
+          ? (entry as { response?: unknown; name?: unknown; id?: unknown })
+          : null;
+      const errorObject =
+        responseObject?.response &&
+        typeof responseObject.response === "object" &&
+        (responseObject.response as { error?: unknown }).error &&
+        typeof (responseObject.response as { error?: unknown }).error === "object"
+          ? ((responseObject.response as {
+              error: { code?: unknown; message?: unknown };
+            }).error ?? null)
+          : null;
+      return {
+        id: typeof responseObject?.id === "string" ? responseObject.id : null,
+        name:
+          typeof responseObject?.name === "string" ? responseObject.name : null,
+        status: errorObject ? "error" : "ok",
+        code: typeof errorObject?.code === "string" ? errorObject.code : null,
+        message:
+          typeof errorObject?.message === "string" ? errorObject.message : null,
+      };
+    });
+    if (
+      params.forwardFunctionResponsesToSession &&
+      functionResponses.length > 0
+    ) {
+      this.sendToolResponseSafely(
+        functionResponses as Array<Record<string, unknown>>,
+      );
+    }
+
+    const chatDigestTexts: string[] = [];
+    if (Array.isArray(params.payload.chatDigests)) {
+      for (const digest of params.payload.chatDigests) {
+        const text =
+          digest &&
+          typeof digest === "object" &&
+          typeof (digest as { text?: unknown }).text === "string"
+            ? ((digest as { text: string }).text ?? "").trim()
+            : "";
+        if (!text) continue;
+        chatDigestTexts.push(text);
+        this.callbacks.onMorningBriefDigest?.({ text });
+      }
+    }
+
+    if (Array.isArray(params.payload.webSearchEvents)) {
+      for (const event of params.payload.webSearchEvents) {
+        const status =
+          event &&
+          typeof event === "object" &&
+          typeof (event as { status?: unknown }).status === "string"
+            ? ((event as { status: string }).status as
+                | "searching"
+                | "grounded"
+                | "idle")
+            : null;
+        const label =
+          event &&
+          typeof event === "object" &&
+          typeof (event as { label?: unknown }).label === "string"
+            ? (event as { label: string }).label
+            : undefined;
+        if (!status) continue;
+        this.emitWebSearchStatus(status, label);
+      }
+    } else {
+      const hasError = functionResponseSummary.some((entry) => entry.status === "error");
+      this.emitWebSearchStatus(
+        "grounded",
+        hasError ? "Completed with issues" : "Context ready",
+      );
+    }
+
+    const normalizedToolNames = params.normalizedCalls.map((call) => call.name);
+    const hasReadOnlyGoogleTool = normalizedToolNames.some((name) =>
+      LIVE_GOOGLE_PERSONAL_CONTEXT_READ_TOOL_NAMES.has(name),
+    );
+    if (
+      params.allowGoogleReadVoiceFallback &&
+      hasReadOnlyGoogleTool &&
+      chatDigestTexts.length > 0
+    ) {
+      this.scheduleGoogleReadVoiceFallback({
+        digestTexts: chatDigestTexts,
+        toolNames: normalizedToolNames,
+        assistantActivitySnapshotAtMs: this.lastAssistantActivityAtMs,
+      });
+    }
+
+    this.debug("live.tool_call.responded", {
+      functionCount: params.normalizedCalls.length,
+      traceId:
+        typeof params.payload.traceId === "string" ? params.payload.traceId : null,
+      responses: functionResponseSummary,
+      chatDigestCount: chatDigestTexts.length,
+      webSearchEventCount: Array.isArray(params.payload.webSearchEvents)
+        ? params.payload.webSearchEvents.length
+        : 0,
+      elapsedMs: Date.now() - params.toolCallStartedAt,
+      forwardedToSession: params.forwardFunctionResponsesToSession,
+    });
+    if (this.conversationId) {
+      this.callbacks.onConversationMutated?.({
+        conversationId: this.conversationId,
+        source: "live_tool_response",
+      });
+    }
+  }
+
+  private async runDirectPersonalContextReadFallback(reason: "model_no_tool_call"): Promise<void> {
+    if (!this.pendingPersonalContextReadFallback || !this.conversationId) {
+      return;
+    }
+    const fallback = this.pendingPersonalContextReadFallback;
+    if (
+      !isReadOnlyPersonalContextIntent(
+        fallback.text,
+        fallback.intent,
+        fallback.activeGoogleActionContext,
+      )
+    ) {
+      return;
+    }
+    const normalizedCalls = buildDirectPersonalContextReadFunctionCalls(
+      fallback.text,
+      fallback.intent,
+    );
+    if (normalizedCalls.length === 0) {
+      return;
+    }
+    const startedAt = Date.now();
+    this.debug("live.google_context.direct_fallback_triggered", {
+      reason,
+      intent: fallback.intent,
+      functionNames: normalizedCalls.map((call) => call.name),
+      textLength: fallback.text.length,
+    });
+    try {
+      const payload = await this.requestLiveToolResponse(normalizedCalls);
+      this.applyLiveToolResponsePayload({
+        payload,
+        normalizedCalls,
+        toolCallStartedAt: startedAt,
+        forwardFunctionResponsesToSession: false,
+        allowGoogleReadVoiceFallback: true,
+      });
+    } catch (error) {
+      this.debug("live.google_context.direct_fallback_failed", {
+        reason,
+        message: error instanceof Error ? error.message : String(error),
+        functionNames: normalizedCalls.map((call) => call.name),
+      });
+      this.emitWebSearchStatus("idle");
     }
   }
 
@@ -3607,6 +3993,7 @@ export class GeminiLiveVoiceSession {
     if (hasPersonalContextToolCall) {
       this.personalContextToolCalledThisTurn = true;
       this.pendingPersonalContextTurn = false;
+      this.pendingPersonalContextReadFallback = null;
       this.debug("live.google_context.tool_call_detected", {
         toolCallNames,
       });
@@ -3810,7 +4197,7 @@ export class GeminiLiveVoiceSession {
                 ? "model_ignored_nudge_and_tools"
                 : "model_did_not_use_available_tools",
         });
-        this.emitWebSearchStatus("idle");
+        void this.runDirectPersonalContextReadFallback("model_no_tool_call");
       }
       if (
         this.liveGoogleSearchEnabled &&
@@ -3823,6 +4210,7 @@ export class GeminiLiveVoiceSession {
       this.pendingPersonalContextTurn = false;
       this.personalContextToolCalledThisTurn = false;
       this.personalContextNudgeSentThisTurn = false;
+      this.pendingPersonalContextReadFallback = null;
       this.webSearchGroundedThisTurn = false;
       this.webSearchNudgeSentThisTurn = false;
       this.assistantTurnActive = false;
@@ -3956,6 +4344,18 @@ export class GeminiLiveVoiceSession {
         personalContextIntent,
         activeGoogleActionContext,
       );
+    }
+    if (
+      sender === "user" &&
+      this.liveGooglePersonalContextFunctionCallingEnabled &&
+      personalContextIntent &&
+      transcript.finished
+    ) {
+      this.pendingPersonalContextReadFallback = {
+        text,
+        intent: personalContextIntent,
+        activeGoogleActionContext,
+      };
     }
     if (
       sender === "user" &&
@@ -4228,161 +4628,14 @@ export class GeminiLiveVoiceSession {
     });
 
     try {
-      const googleActionContext = this.callbacks.getGoogleActionContext?.() ?? null;
-      this.debug("live.tool_call.forwarding", {
-        endpoint: "/api/live/tool-response",
-        conversationId: this.conversationId,
-        functionNames: normalizedCalls.map((c) => c.name),
-        hasEmailCall,
-        hasCalendarCall,
-        googleActionContext,
+      const payload = await this.requestLiveToolResponse(normalizedCalls);
+      this.applyLiveToolResponsePayload({
+        payload,
+        normalizedCalls,
+        toolCallStartedAt,
+        forwardFunctionResponsesToSession: true,
+        allowGoogleReadVoiceFallback: true,
       });
-      const response = await fetch("/api/live/tool-response", {
-        method: "POST",
-        credentials: "include",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          conversationId: this.conversationId,
-          functionCalls: normalizedCalls,
-          clientTimeZone:
-            Intl.DateTimeFormat().resolvedOptions().timeZone || undefined,
-          googleActionContext: googleActionContext ?? undefined,
-        }),
-      });
-
-      if (!response.ok) {
-        let failureMessage = `Live tool-response request failed (${response.status})`;
-        try {
-          const errorPayload = (await response.json()) as {
-            message?: unknown;
-            traceId?: unknown;
-          };
-          const message =
-            typeof errorPayload.message === "string"
-              ? errorPayload.message
-              : null;
-          const traceId =
-            typeof errorPayload.traceId === "string"
-              ? errorPayload.traceId
-              : null;
-          this.debug("live.tool_call.http_failed", {
-            status: response.status,
-            traceId,
-            message,
-          });
-          if (message) {
-            failureMessage = `${failureMessage}: ${message}`;
-          }
-        } catch {
-          // no-op: preserve base failure message
-        }
-        throw new Error(failureMessage);
-      }
-
-      const payload = (await response.json()) as {
-        traceId?: unknown;
-        functionResponses?: unknown;
-        chatDigests?: unknown;
-        webSearchEvents?: unknown;
-      };
-
-      const functionResponses = Array.isArray(payload.functionResponses)
-        ? payload.functionResponses
-        : [];
-      const functionResponseSummary = functionResponses.map((entry) => {
-        const responseObject =
-          entry && typeof entry === "object"
-            ? (entry as { response?: unknown; name?: unknown; id?: unknown })
-            : null;
-        const errorObject =
-          responseObject?.response &&
-          typeof responseObject.response === "object" &&
-          (responseObject.response as { error?: unknown }).error &&
-          typeof (responseObject.response as { error?: unknown }).error ===
-            "object"
-            ? ((responseObject.response as {
-                error: { code?: unknown; message?: unknown };
-              }).error ?? null)
-            : null;
-        return {
-          id: typeof responseObject?.id === "string" ? responseObject.id : null,
-          name:
-            typeof responseObject?.name === "string" ? responseObject.name : null,
-          status: errorObject ? "error" : "ok",
-          code: typeof errorObject?.code === "string" ? errorObject.code : null,
-          message:
-            typeof errorObject?.message === "string" ? errorObject.message : null,
-        };
-      });
-      if (functionResponses.length > 0) {
-        this.sendToolResponseSafely(
-          functionResponses as Array<Record<string, unknown>>,
-        );
-      }
-
-      if (Array.isArray(payload.chatDigests)) {
-        for (const digest of payload.chatDigests) {
-          const text =
-            digest &&
-            typeof digest === "object" &&
-            typeof (digest as { text?: unknown }).text === "string"
-              ? ((digest as { text: string }).text ?? "").trim()
-              : "";
-          if (!text) continue;
-          this.callbacks.onMorningBriefDigest?.({ text });
-        }
-      }
-
-      if (Array.isArray(payload.webSearchEvents)) {
-        for (const event of payload.webSearchEvents) {
-          const status =
-            event &&
-            typeof event === "object" &&
-            typeof (event as { status?: unknown }).status === "string"
-              ? ((event as { status: string }).status as
-                  | "searching"
-                  | "grounded"
-                  | "idle")
-              : null;
-          const label =
-            event &&
-            typeof event === "object" &&
-            typeof (event as { label?: unknown }).label === "string"
-              ? (event as { label: string }).label
-              : undefined;
-          if (!status) continue;
-          this.emitWebSearchStatus(status, label);
-        }
-      } else {
-        const hasError = functionResponseSummary.some(
-          (entry) => entry.status === "error",
-        );
-        this.emitWebSearchStatus(
-          "grounded",
-          hasError ? "Completed with issues" : "Context ready",
-        );
-      }
-
-      this.debug("live.tool_call.responded", {
-        functionCount: normalizedCalls.length,
-        traceId: typeof payload.traceId === "string" ? payload.traceId : null,
-        responses: functionResponseSummary,
-        chatDigestCount: Array.isArray(payload.chatDigests)
-          ? payload.chatDigests.length
-          : 0,
-        webSearchEventCount: Array.isArray(payload.webSearchEvents)
-          ? payload.webSearchEvents.length
-          : 0,
-        elapsedMs: Date.now() - toolCallStartedAt,
-      });
-      if (this.conversationId) {
-        this.callbacks.onConversationMutated?.({
-          conversationId: this.conversationId,
-          source: "live_tool_response",
-        });
-      }
     } catch (error) {
       this.debug("live.tool_call.failed", {
         message: error instanceof Error ? error.message : String(error),

@@ -1112,6 +1112,31 @@ export async function fetchGmailInboxDigest(params: {
   const maxThreads = Math.max(1, Math.min(20, Math.floor(params.maxThreads)));
   const sinceDays = clamp(Math.floor(params.sinceDays ?? 3), 1, 14);
   const unreadOnly = params.unreadOnly ?? false;
+  if (isFixtureGoogleAccessToken(params.accessToken)) {
+    return [
+      {
+        threadId: "fixture-thread-inbox-1",
+        from: "Alex Rivera <alex@example.com>",
+        subject: unreadOnly ? "Lunch this Saturday?" : "Lunch this Saturday?",
+        snippet: "Want to grab lunch around 1 if you're free?",
+        urgency: "high",
+      },
+      {
+        threadId: "fixture-thread-inbox-2",
+        from: "Soul Nests <team@soulnests.com>",
+        subject: "Quick product sync",
+        snippet: "Checking if you have 20 minutes this week to talk through the latest build.",
+        urgency: "medium",
+      },
+      {
+        threadId: "fixture-thread-inbox-3",
+        from: "Cheick <cheick@soulnests.com>",
+        subject: "April plans?",
+        snippet: "Would love to catch up and see what your schedule looks like next month.",
+        urgency: "medium",
+      },
+    ].slice(0, maxThreads);
+  }
   const queryText = unreadOnly
     ? `in:inbox is:unread newer_than:${sinceDays}d -category:promotions -category:social`
     : `in:inbox newer_than:${sinceDays}d -category:promotions -category:social`;
@@ -1251,6 +1276,17 @@ export async function searchGmailInboxDigest(params: {
   if (!queryText) {
     return [];
   }
+  if (isFixtureGoogleAccessToken(params.accessToken)) {
+    const queryLower = queryText.toLowerCase();
+    return (
+      await fetchGmailInboxDigest({
+        accessToken: params.accessToken,
+        maxThreads,
+      })
+    ).filter((item) =>
+      `${item.from} ${item.subject} ${item.snippet}`.toLowerCase().includes(queryLower),
+    );
+  }
 
   gmailLog("INFO", "search.start", {
     maxThreads,
@@ -1367,6 +1403,45 @@ export async function fetchGmailThreadDetail(params: {
   const threadId = params.threadId.trim();
   if (!threadId) {
     throw new Error("threadId is required");
+  }
+  if (isFixtureGoogleAccessToken(params.accessToken)) {
+    return {
+      threadId,
+      subject: threadId.includes("3") ? "April plans?" : "Lunch this Saturday?",
+      participants: [
+        { name: "Alex Rivera", email: "alex@example.com", raw: "Alex Rivera <alex@example.com>" },
+        { name: "Cheick", email: "cheick@soulnests.com", raw: "Cheick <cheick@soulnests.com>" },
+      ],
+      latestMessageId: `fixture-message-${threadId}`,
+      latestSnippet:
+        "Want to grab lunch around 1 if you're free? I can do Saturday or Sunday.",
+      latestSentAt: new Date().toISOString(),
+      attachmentNames: [],
+      messages: [
+        {
+          messageId: `fixture-message-${threadId}`,
+          from: {
+            name: "Alex Rivera",
+            email: "alex@example.com",
+            raw: "Alex Rivera <alex@example.com>",
+          },
+          to: [
+            {
+              name: "Cheick",
+              email: "cheick@soulnests.com",
+              raw: "Cheick <cheick@soulnests.com>",
+            },
+          ],
+          cc: [],
+          subject: threadId.includes("3") ? "April plans?" : "Lunch this Saturday?",
+          snippet:
+            "Want to grab lunch around 1 if you're free? I can do Saturday or Sunday.",
+          bodyText:
+            "Hey Cheick,\n\nWant to grab lunch around 1 if you're free? I can do Saturday or Sunday.\n\nAlex",
+          sentAt: new Date().toISOString(),
+        },
+      ],
+    };
   }
 
   gmailLog("INFO", "thread.fetch.start", { threadId });
@@ -1658,6 +1733,32 @@ export async function fetchGoogleCalendarEvents(params: {
   const startedAt = Date.now();
   const timezone = resolveGoogleContextTimeZone(params.timezone);
   const maxEvents = clamp(Math.floor(params.maxEvents ?? 15), 1, 30);
+  if (isFixtureGoogleAccessToken(params.accessToken)) {
+    return [
+      {
+        eventId: "fixture-calendar-event-1",
+        title: "Lunch with Alex",
+        startTime: "Saturday, March 14 at 1:00 PM",
+        endTime: "Saturday, March 14 at 2:00 PM",
+        isAllDay: false,
+        location: "Blue Bottle",
+        description: "Catch-up lunch",
+        attendeesCount: 2,
+        status: "confirmed",
+      },
+      {
+        eventId: "fixture-calendar-event-2",
+        title: "Investor check-in",
+        startTime: "Monday, March 16 at 10:00 AM",
+        endTime: "Monday, March 16 at 10:30 AM",
+        isAllDay: false,
+        location: null,
+        description: "Weekly sync",
+        attendeesCount: 3,
+        status: "confirmed",
+      },
+    ].slice(0, maxEvents);
+  }
   const { timeMin, timeMax } = resolveCalendarTimeRange({
     timeRange: params.timeRange,
     timezone,
@@ -1834,6 +1935,28 @@ export async function fetchGoogleCalendarEventDetail(params: {
   timezone: string;
 }): Promise<GoogleCalendarEventDetail> {
   const timezone = resolveGoogleContextTimeZone(params.timezone);
+  if (isFixtureGoogleAccessToken(params.accessToken)) {
+    return {
+      eventId: params.eventId,
+      title: params.eventId.includes("2") ? "Investor check-in" : "Lunch with Alex",
+      startTime:
+        params.eventId.includes("2")
+          ? "Monday, March 16 at 10:00 AM"
+          : "Saturday, March 14 at 1:00 PM",
+      endTime:
+        params.eventId.includes("2")
+          ? "Monday, March 16 at 10:30 AM"
+          : "Saturday, March 14 at 2:00 PM",
+      isAllDay: false,
+      location: params.eventId.includes("2") ? null : "Blue Bottle",
+      description: params.eventId.includes("2") ? "Weekly sync" : "Catch-up lunch",
+      attendeesCount: params.eventId.includes("2") ? 3 : 2,
+      attendees: params.eventId.includes("2")
+        ? ["Investor Team", "Zorro", "Alex"]
+        : ["Alex", "Zorro"],
+      status: "confirmed",
+    };
+  }
   const response = await fetch(
     `${GOOGLE_CALENDAR_EVENTS_ENDPOINT}/${encodeURIComponent(params.eventId)}`,
     {
@@ -1862,6 +1985,26 @@ export async function searchGoogleCalendarEvents(params: {
 }): Promise<GoogleCalendarEventDetail[]> {
   const timezone = resolveGoogleContextTimeZone(params.timezone);
   const maxEvents = clamp(Math.floor(params.maxEvents ?? 10), 1, 20);
+  if (isFixtureGoogleAccessToken(params.accessToken)) {
+    const queryLower = params.query.trim().toLowerCase();
+    return (
+      await Promise.all(
+        ["fixture-calendar-event-1", "fixture-calendar-event-2"].map((eventId) =>
+          fetchGoogleCalendarEventDetail({
+            accessToken: params.accessToken,
+            eventId,
+            timezone,
+          }),
+        ),
+      )
+    )
+      .filter((event) =>
+        `${event.title} ${event.description ?? ""} ${event.location ?? ""}`
+          .toLowerCase()
+          .includes(queryLower),
+      )
+      .slice(0, maxEvents);
+  }
   const { timeMin, timeMax } = resolveCalendarTimeRange({
     timeRange: params.timeRange ?? "next_7_days",
     timezone,
