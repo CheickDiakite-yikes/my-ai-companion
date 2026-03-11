@@ -2716,6 +2716,7 @@ export class GeminiLiveVoiceSession {
   ): Promise<{
     traceId?: unknown;
     functionResponses?: unknown;
+    resolvedFunctionCalls?: unknown;
     chatDigests?: unknown;
     webSearchEvents?: unknown;
   }> {
@@ -2773,6 +2774,7 @@ export class GeminiLiveVoiceSession {
     return (await response.json()) as {
       traceId?: unknown;
       functionResponses?: unknown;
+      resolvedFunctionCalls?: unknown;
       chatDigests?: unknown;
       webSearchEvents?: unknown;
     };
@@ -2782,6 +2784,7 @@ export class GeminiLiveVoiceSession {
     payload: {
       traceId?: unknown;
       functionResponses?: unknown;
+      resolvedFunctionCalls?: unknown;
       chatDigests?: unknown;
       webSearchEvents?: unknown;
     };
@@ -2817,13 +2820,73 @@ export class GeminiLiveVoiceSession {
           typeof errorObject?.message === "string" ? errorObject.message : null,
       };
     });
+    const resolvedFunctionCalls = Array.isArray(params.payload.resolvedFunctionCalls)
+      ? params.payload.resolvedFunctionCalls
+          .map((entry) => {
+            const record =
+              entry && typeof entry === "object"
+                ? (entry as {
+                    id?: unknown;
+                    requestedName?: unknown;
+                    effectiveName?: unknown;
+                    rerouted?: unknown;
+                    rerouteReason?: unknown;
+                  })
+                : null;
+            const id = typeof record?.id === "string" ? record.id : null;
+            const requestedName =
+              typeof record?.requestedName === "string" ? record.requestedName : null;
+            const effectiveName =
+              typeof record?.effectiveName === "string" ? record.effectiveName : null;
+            if (!id || !requestedName || !effectiveName) {
+              return null;
+            }
+            return {
+              id,
+              requestedName,
+              effectiveName,
+              rerouted: record?.rerouted === true,
+              rerouteReason:
+                typeof record?.rerouteReason === "string"
+                  ? record.rerouteReason
+                  : null,
+            };
+          })
+          .filter(
+            (
+              entry,
+            ): entry is {
+              id: string;
+              requestedName: string;
+              effectiveName: string;
+              rerouted: boolean;
+              rerouteReason: string | null;
+            } => Boolean(entry),
+          )
+      : [];
+    const effectiveToolNames =
+      resolvedFunctionCalls.length > 0
+        ? resolvedFunctionCalls.map((entry) => entry.effectiveName)
+        : params.normalizedCalls.map((call) => call.name);
+    const hasReroutedToolResponse = resolvedFunctionCalls.some(
+      (entry) => entry.rerouted && entry.effectiveName !== entry.requestedName,
+    );
     if (
       params.forwardFunctionResponsesToSession &&
-      functionResponses.length > 0
+      functionResponses.length > 0 &&
+      !hasReroutedToolResponse
     ) {
       this.sendToolResponseSafely(
         functionResponses as Array<Record<string, unknown>>,
       );
+    } else if (
+      params.forwardFunctionResponsesToSession &&
+      functionResponses.length > 0 &&
+      hasReroutedToolResponse
+    ) {
+      this.debug("live.tool_call.response_not_forwarded_due_to_reroute", {
+        resolvedFunctionCalls,
+      });
     }
 
     const chatDigestTexts: string[] = [];
@@ -2869,8 +2932,7 @@ export class GeminiLiveVoiceSession {
       );
     }
 
-    const normalizedToolNames = params.normalizedCalls.map((call) => call.name);
-    const hasReadOnlyGoogleTool = normalizedToolNames.some((name) =>
+    const hasReadOnlyGoogleTool = effectiveToolNames.some((name) =>
       LIVE_GOOGLE_PERSONAL_CONTEXT_READ_TOOL_NAMES.has(name),
     );
     if (
@@ -2880,7 +2942,7 @@ export class GeminiLiveVoiceSession {
     ) {
       this.scheduleGoogleReadVoiceFallback({
         digestTexts: chatDigestTexts,
-        toolNames: normalizedToolNames,
+        toolNames: effectiveToolNames,
         assistantActivitySnapshotAtMs: this.lastAssistantActivityAtMs,
       });
     }
@@ -2895,7 +2957,9 @@ export class GeminiLiveVoiceSession {
         ? params.payload.webSearchEvents.length
         : 0,
       elapsedMs: Date.now() - params.toolCallStartedAt,
-      forwardedToSession: params.forwardFunctionResponsesToSession,
+      forwardedToSession:
+        params.forwardFunctionResponsesToSession && !hasReroutedToolResponse,
+      resolvedFunctionCalls,
     });
     if (this.conversationId) {
       this.callbacks.onConversationMutated?.({

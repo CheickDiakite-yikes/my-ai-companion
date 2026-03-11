@@ -179,6 +179,33 @@ async function main(): Promise<void> {
       "Expected live email-read requests to produce a user-facing digest summary",
     );
 
+    const misroutedEmailReadDigest =
+      await requestLiveGoogleReadSummaryViaMisroutedAction(page, args.baseUrl, {
+        conversationId,
+        functionName: "prepare_google_email_action",
+        request: "what unread emails do I have?",
+        expectedEffectiveName: "get_user_emails",
+      });
+    assert.match(
+      misroutedEmailReadDigest,
+      /(checked your unread emails|unread emails)/i,
+      "Expected misrouted live email-read requests to recover to the inbox-read digest",
+    );
+
+    const misroutedCalendarReadDigest =
+      await requestLiveGoogleReadSummaryViaMisroutedAction(page, args.baseUrl, {
+        conversationId,
+        functionName: "prepare_google_calendar_action",
+        request: "what do I have on my calendar today?",
+        timezone: "America/New_York",
+        expectedEffectiveName: "get_calendar_events",
+      });
+    assert.match(
+      misroutedCalendarReadDigest,
+      /(checked your calendar|calendar for today|scheduled there right now)/i,
+      "Expected misrouted live calendar-read requests to recover to the calendar-read digest",
+    );
+
     await prepareLiveGoogleAction(page, args.baseUrl, {
       conversationId,
       functionName: "prepare_google_calendar_action",
@@ -528,6 +555,76 @@ async function requestLiveGoogleReadSummary(
   assert.ok(
     digestText.length > 0,
     `Expected ${params.functionName} to return at least one chat digest`,
+  );
+  return digestText;
+}
+
+async function requestLiveGoogleReadSummaryViaMisroutedAction(
+  page: Page,
+  baseUrl: string,
+  params: {
+    conversationId: string;
+    functionName: "prepare_google_email_action" | "prepare_google_calendar_action";
+    request: string;
+    timezone?: string;
+    expectedEffectiveName:
+      | "get_user_emails"
+      | "get_email_thread_detail"
+      | "get_calendar_events"
+      | "get_calendar_event_detail";
+  },
+): Promise<string> {
+  const functionId = randomUUID();
+  const response = await page.request.post(`${baseUrl}/api/live/tool-response`, {
+    data: {
+      conversationId: params.conversationId,
+      clientTimeZone: params.timezone ?? "America/New_York",
+      functionCalls: [
+        {
+          id: functionId,
+          name: params.functionName,
+          args: {
+            request: params.request,
+            ...(params.timezone ? { timezone: params.timezone } : {}),
+          },
+        },
+      ],
+    },
+  });
+  assert.equal(
+    response.ok(),
+    true,
+    `Expected live tool-response to succeed for misrouted ${params.functionName}`,
+  );
+  const payload = (await response.json()) as {
+    resolvedFunctionCalls?: Array<{
+      id?: string;
+      requestedName?: string;
+      effectiveName?: string;
+      rerouted?: boolean;
+    }>;
+    chatDigests?: Array<{ text?: string }>;
+  };
+  const resolvedCall = payload.resolvedFunctionCalls?.find(
+    (entry) => entry?.id === functionId,
+  );
+  assert.equal(
+    resolvedCall?.effectiveName,
+    params.expectedEffectiveName,
+    `Expected misrouted ${params.functionName} to recover as ${params.expectedEffectiveName}`,
+  );
+  assert.equal(
+    resolvedCall?.rerouted,
+    true,
+    `Expected misrouted ${params.functionName} call to be marked rerouted`,
+  );
+  const digestText =
+    payload.chatDigests
+      ?.map((digest) => (typeof digest?.text === "string" ? digest.text.trim() : ""))
+      .find((text) => text.length > 0) ?? "";
+  assert.ok(
+    digestText.length > 0,
+    `Expected misrouted ${params.functionName} to return at least one chat digest`,
   );
   return digestText;
 }

@@ -1777,6 +1777,117 @@ function buildLiveCalendarEventSummary(params: {
   return `I opened ${params.event.title}, scheduled from ${params.event.startTime} to ${params.event.endTime}${locationSuffix}. ${description} ${nextStep}`;
 }
 
+type LiveMisroutedGoogleReadResolution =
+  | {
+      effectiveName: "get_user_emails";
+      effectiveArgs: Record<string, unknown>;
+      reason:
+        | "email_read_summary"
+        | "email_read_summary_unread";
+    }
+  | {
+      effectiveName: "get_email_thread_detail";
+      effectiveArgs: Record<string, unknown>;
+      reason: "email_read_detail";
+    }
+  | {
+      effectiveName: "get_calendar_events";
+      effectiveArgs: Record<string, unknown>;
+      reason: "calendar_read_summary";
+    }
+  | {
+      effectiveName: "get_calendar_event_detail";
+      effectiveArgs: Record<string, unknown>;
+      reason: "calendar_read_detail";
+    };
+
+function normalizeLiveGoogleReadText(input: string | null | undefined): string {
+  return (input ?? "").replace(/\s+/g, " ").trim();
+}
+
+function looksLikeLiveEmailActionRequest(text: string): boolean {
+  return /\b(draft|reply|respond|send|compose|write|create|revise|edit|rewrite|forward|delete|discard)\b/i.test(
+    text,
+  );
+}
+
+function looksLikeLiveCalendarActionRequest(text: string): boolean {
+  return /\b(create|add|book|schedule|put|move|reschedule|update|change|edit|delete|remove|cancel|block(?:\s+off)?|hold)\b/i.test(
+    text,
+  );
+}
+
+function resolveMisroutedLiveGoogleReadRequest(params: {
+  functionName: string;
+  requestText: string;
+  clientTimeZone?: string | null;
+}): LiveMisroutedGoogleReadResolution | null {
+  const normalized = normalizeLiveGoogleReadText(params.requestText);
+  if (!normalized) return null;
+
+  const intent = detectGooglePersonalContextIntent(normalized);
+  const hasDetailReadIntent = hasGoogleDetailReadIntent(normalized);
+  const timeZone = resolveGoogleContextTimeZone(params.clientTimeZone ?? null);
+
+  if (
+    params.functionName === "prepare_google_email_action" &&
+    intent.emailIntent &&
+    !intent.calendarIntent &&
+    !looksLikeLiveEmailActionRequest(normalized)
+  ) {
+    if (hasDetailReadIntent) {
+      const query = buildGoogleEmailDetailLookupQuery(normalized) || normalized;
+      return {
+        effectiveName: "get_email_thread_detail",
+        effectiveArgs: { query },
+        reason: "email_read_detail",
+      };
+    }
+    return {
+      effectiveName: "get_user_emails",
+      effectiveArgs: {
+        refresh: true,
+        unreadOnly: intent.emailUnreadOnly,
+        sinceDays: intent.emailSinceDays,
+      },
+      reason: intent.emailUnreadOnly
+        ? "email_read_summary_unread"
+        : "email_read_summary",
+    };
+  }
+
+  if (
+    params.functionName === "prepare_google_calendar_action" &&
+    intent.calendarIntent &&
+    !intent.emailIntent &&
+    !looksLikeLiveCalendarActionRequest(normalized)
+  ) {
+    if (hasDetailReadIntent) {
+      const query = buildGoogleCalendarDetailLookupQuery(normalized) || normalized;
+      return {
+        effectiveName: "get_calendar_event_detail",
+        effectiveArgs: {
+          query,
+          timeRange: intent.timeRange,
+          timezone: timeZone,
+        },
+        reason: "calendar_read_detail",
+      };
+    }
+    return {
+      effectiveName: "get_calendar_events",
+      effectiveArgs: {
+        refresh: true,
+        timeRange: intent.timeRange,
+        timezone: timeZone,
+      },
+      reason: "calendar_read_summary",
+    };
+  }
+
+  return null;
+}
+
 async function prepareGooglePersonalContextForChat(params: {
   req: any;
   userId: string;
@@ -12590,6 +12701,13 @@ export async function registerRoutes(
           name: string;
           response: Record<string, unknown>;
         }> = [];
+        const resolvedFunctionCalls: Array<{
+          id: string;
+          requestedName: string;
+          effectiveName: string;
+          rerouted: boolean;
+          rerouteReason?: string;
+        }> = [];
         const chatDigests: Array<{
           text: string;
           sender: "assistant";
@@ -12682,14 +12800,42 @@ export async function registerRoutes(
         }
 
         for (const functionCall of parsed.functionCalls) {
-          const args = parseFunctionCallArgs(functionCall.args);
+          const parsedArgs = parseFunctionCallArgs(functionCall.args);
+          const readReroute = resolveMisroutedLiveGoogleReadRequest({
+            functionName: functionCall.name,
+            requestText:
+              typeof parsedArgs.request === "string" ? parsedArgs.request : "",
+            clientTimeZone: parsed.clientTimeZone ?? null,
+          });
+          const effectiveFunctionName =
+            readReroute?.effectiveName ?? functionCall.name;
+          const args = readReroute?.effectiveArgs ?? parsedArgs;
+          resolvedFunctionCalls.push({
+            id: functionCall.id,
+            requestedName: functionCall.name,
+            effectiveName: effectiveFunctionName,
+            rerouted: Boolean(readReroute),
+            ...(readReroute ? { rerouteReason: readReroute.reason } : {}),
+          });
           trace(req, "live.tool.call.received", {
             conversationId: conversation.id,
             functionId: functionCall.id,
             functionName: functionCall.name,
+            effectiveFunctionName,
             argKeys: Object.keys(args),
+            reroutedToRead: Boolean(readReroute),
+            rerouteReason: readReroute?.reason ?? null,
           });
-          if (functionCall.name === "get_morning_brief") {
+          if (readReroute) {
+            trace(req, "live.tool.call.rerouted_to_read", {
+              conversationId: conversation.id,
+              functionId: functionCall.id,
+              requestedName: functionCall.name,
+              effectiveFunctionName,
+              rerouteReason: readReroute.reason,
+            });
+          }
+          if (effectiveFunctionName === "get_morning_brief") {
             webSearchEvents.push({
               status: "searching",
               label: "Searching live sources…",
@@ -12787,7 +12933,7 @@ export async function registerRoutes(
             continue;
           }
 
-          if (functionCall.name === "get_inbox_digest") {
+          if (effectiveFunctionName === "get_inbox_digest") {
             webSearchEvents.push({
               status: "searching",
               label: "Checking inbox highlights…",
@@ -12847,7 +12993,7 @@ export async function registerRoutes(
             continue;
           }
 
-          if (functionCall.name === "get_user_emails") {
+          if (effectiveFunctionName === "get_user_emails") {
             const emailToolStartedAt = Date.now();
             webSearchEvents.push({
               status: "searching",
@@ -13019,7 +13165,7 @@ export async function registerRoutes(
             continue;
           }
 
-          if (functionCall.name === "get_email_thread_detail") {
+          if (effectiveFunctionName === "get_email_thread_detail") {
             const detailStartedAt = Date.now();
             webSearchEvents.push({
               status: "searching",
@@ -13166,7 +13312,7 @@ export async function registerRoutes(
             continue;
           }
 
-          if (functionCall.name === "get_calendar_events") {
+          if (effectiveFunctionName === "get_calendar_events") {
             const calendarToolStartedAt = Date.now();
             webSearchEvents.push({
               status: "searching",
@@ -13346,7 +13492,7 @@ export async function registerRoutes(
             continue;
           }
 
-          if (functionCall.name === "get_calendar_event_detail") {
+          if (effectiveFunctionName === "get_calendar_event_detail") {
             const detailStartedAt = Date.now();
             webSearchEvents.push({
               status: "searching",
@@ -13514,8 +13660,8 @@ export async function registerRoutes(
           }
 
           if (
-            functionCall.name === "prepare_google_email_action" ||
-            functionCall.name === "prepare_google_calendar_action"
+            effectiveFunctionName === "prepare_google_email_action" ||
+            effectiveFunctionName === "prepare_google_calendar_action"
           ) {
             const actionStartedAt = Date.now();
             if (
@@ -13579,6 +13725,7 @@ export async function registerRoutes(
               conversationId: conversation.id,
               requestText,
               functionName: functionCall.name,
+              effectiveFunctionName,
               timezone: actionTimeZone,
               hasPendingTask: Boolean(googleConversationState.pendingTask),
               pendingTaskId: googleConversationState.pendingTask?.taskId ?? null,
@@ -13639,6 +13786,7 @@ export async function registerRoutes(
                 conversationId: conversation.id,
                 requestText,
                 functionName: functionCall.name,
+                effectiveFunctionName,
                 timezone: actionTimeZone,
                 elapsedMs: elapsedMs(actionStartedAt),
               });
@@ -13688,6 +13836,7 @@ export async function registerRoutes(
               conversationId: conversation.id,
               requestText,
               functionName: functionCall.name,
+              effectiveFunctionName,
               outcomeKind: googleActionOutcome.kind,
               responseStatus,
               taskId: googleActionOutcome.task?.id ?? null,
@@ -13717,6 +13866,7 @@ export async function registerRoutes(
           conversationId: conversation.id,
           functionCount: parsed.functionCalls.length,
           responseCount: functionResponses.length,
+          resolvedFunctionCalls,
           digestCount: chatDigests.length,
           functionOutcomeSummary: functionResponses.map((entry) => {
             const error =
@@ -13742,6 +13892,7 @@ export async function registerRoutes(
         return res.status(200).json({
           traceId: getTraceId(req),
           functionResponses,
+          resolvedFunctionCalls,
           chatDigests,
           webSearchEvents,
         });
