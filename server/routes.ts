@@ -1721,6 +1721,28 @@ function buildLiveEmailReadSummary(params: {
   return `${lead} ${highlights.join("; ")}. ${nextStep}`.trim();
 }
 
+function buildLiveEmailLookupLabel(params: {
+  unreadOnly: boolean;
+  sinceDays: number;
+}): { searching: string; grounded: string } {
+  if (params.unreadOnly) {
+    return {
+      searching: "Checking unread emails…",
+      grounded: "Unread email summary ready",
+    };
+  }
+  if (params.sinceDays <= 3) {
+    return {
+      searching: "Checking recent emails…",
+      grounded: "Recent emails checked",
+    };
+  }
+  return {
+    searching: "Checking your inbox…",
+    grounded: "Inbox checked",
+  };
+}
+
 function buildLiveEmailThreadSummary(params: {
   thread: GoogleEmailThreadDetail;
   nextBestAction?: string | null;
@@ -1761,6 +1783,33 @@ function buildLiveCalendarReadSummary(params: {
     return `${event.title} from ${event.startTime} to ${event.endTime}${locationSuffix}`;
   });
   return `I checked your calendar for ${timeRangeLabel}. You have ${countLabel}: ${highlights.join("; ")}. I can open one up or help you move it next.`;
+}
+
+function buildLiveCalendarLookupLabel(
+  timeRange: GooglePersonalContextTimeRange,
+): { searching: string; grounded: string } {
+  if (timeRange === "tomorrow") {
+    return {
+      searching: "Checking tomorrow's calendar…",
+      grounded: "Tomorrow's calendar checked",
+    };
+  }
+  if (timeRange === "this_week") {
+    return {
+      searching: "Checking this week's calendar…",
+      grounded: "This week's calendar checked",
+    };
+  }
+  if (timeRange === "next_7_days") {
+    return {
+      searching: "Checking upcoming calendar events…",
+      grounded: "Upcoming calendar checked",
+    };
+  }
+  return {
+    searching: "Checking your calendar…",
+    grounded: "Calendar checked",
+  };
 }
 
 function buildLiveCalendarEventSummary(params: {
@@ -12995,10 +13044,6 @@ export async function registerRoutes(
 
           if (effectiveFunctionName === "get_user_emails") {
             const emailToolStartedAt = Date.now();
-            webSearchEvents.push({
-              status: "searching",
-              label: "Retrieving your emails…",
-            });
             const maxThreads =
               typeof args.maxThreads === "number" && Number.isFinite(args.maxThreads)
                 ? Math.max(1, Math.min(20, Math.floor(args.maxThreads)))
@@ -13008,6 +13053,14 @@ export async function registerRoutes(
                 ? Math.max(1, Math.min(14, Math.floor(args.sinceDays)))
                 : 3;
             const unreadOnly = args.unreadOnly === true;
+            const emailLookupLabel = buildLiveEmailLookupLabel({
+              unreadOnly,
+              sinceDays,
+            });
+            webSearchEvents.push({
+              status: "searching",
+              label: emailLookupLabel.searching,
+            });
 
             trace(req, "live.tool.emails.start", {
               conversationId: conversation.id,
@@ -13099,7 +13152,7 @@ export async function registerRoutes(
               });
               webSearchEvents.push({
                 status: "grounded",
-                label: "Inbox checked",
+                label: emailLookupLabel.grounded,
               });
               trace(req, "live.tool.emails.success", {
                 conversationId: conversation.id,
@@ -13314,10 +13367,6 @@ export async function registerRoutes(
 
           if (effectiveFunctionName === "get_calendar_events") {
             const calendarToolStartedAt = Date.now();
-            webSearchEvents.push({
-              status: "searching",
-              label: "Retrieving your calendar…",
-            });
             const timeRangeRaw =
               typeof args.timeRange === "string" ? args.timeRange : "today";
             const timeRange: GooglePersonalContextTimeRange =
@@ -13335,6 +13384,11 @@ export async function registerRoutes(
                 ? args.timezone
                 : parsed.clientTimeZone ?? null,
             );
+            const calendarLookupLabel = buildLiveCalendarLookupLabel(timeRange);
+            webSearchEvents.push({
+              status: "searching",
+              label: calendarLookupLabel.searching,
+            });
 
             trace(req, "live.tool.calendar.start", {
               conversationId: conversation.id,
@@ -13427,7 +13481,7 @@ export async function registerRoutes(
               });
               webSearchEvents.push({
                 status: "grounded",
-                label: "Calendar checked",
+                label: calendarLookupLabel.grounded,
               });
               trace(req, "live.tool.calendar.success", {
                 conversationId: conversation.id,

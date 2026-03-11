@@ -768,29 +768,54 @@ function inferCalendarTimeRangeForNudge(text: string): CalendarNudgeTimeRange {
   return "today";
 }
 
-function inferPersonalContextLoadingLabel(
-  query: string,
-  intent: LivePersonalContextIntent,
-): string {
-  if (intent === "both") {
-    return "Retrieving your emails and calendar…";
+function inferEmailLookupLoadingLabel(query: string): string {
+  const normalized = normalizeText(query).toLowerCase();
+  if (LIVE_EMAIL_ACTION_PATTERN.test(query)) {
+    return "Preparing your email action…";
   }
-  if (intent === "email") {
-    if (LIVE_EMAIL_ACTION_PATTERN.test(query)) {
-      return "Preparing your email action…";
-    }
-    if (LIVE_EMAIL_DETAIL_PATTERN.test(query)) {
-      return "Retrieving email details…";
-    }
-    return "Retrieving your emails…";
+  if (LIVE_EMAIL_DETAIL_PATTERN.test(query)) {
+    return "Retrieving email details…";
   }
+  if (/\bunread\b/.test(normalized)) {
+    return "Checking unread emails…";
+  }
+  if (/\b(recent|latest|last\s+(day|few\s+days|week)|today)\b/.test(normalized)) {
+    return "Checking recent emails…";
+  }
+  return "Checking your inbox…";
+}
+
+function inferCalendarLookupLoadingLabel(query: string): string {
+  const normalized = normalizeText(query).toLowerCase();
   if (LIVE_CALENDAR_ACTION_PATTERN.test(query)) {
     return "Preparing your calendar action…";
   }
   if (LIVE_CALENDAR_DETAIL_PATTERN.test(query)) {
     return "Retrieving calendar details…";
   }
-  return "Retrieving your calendar…";
+  if (/\btomorrow\b/.test(normalized)) {
+    return "Checking tomorrow's calendar…";
+  }
+  if (/\b(this\s+week|later\s+this\s+week|weekend)\b/.test(normalized)) {
+    return "Checking this week's calendar…";
+  }
+  if (/\b(next\s+week|next\s+7\s+days|next\s+few\s+days)\b/.test(normalized)) {
+    return "Checking upcoming calendar events…";
+  }
+  return "Checking your calendar…";
+}
+
+function inferPersonalContextLoadingLabel(
+  query: string,
+  intent: LivePersonalContextIntent,
+): string {
+  if (intent === "both") {
+    return "Checking your inbox and calendar…";
+  }
+  if (intent === "email") {
+    return inferEmailLookupLoadingLabel(query);
+  }
+  return inferCalendarLookupLoadingLabel(query);
 }
 
 function buildPersonalContextToolInstruction(
@@ -4918,21 +4943,21 @@ export class GeminiLiveVoiceSession {
       hasEmailActionPrepCall && hasCalendarActionPrepCall
         ? "Preparing your email and calendar actions…"
         : hasEmailActionPrepCall
-          ? "Preparing your email action…"
+          ? inferEmailLookupLoadingLabel("draft or send email")
           : hasCalendarActionPrepCall
-            ? "Preparing your calendar action…"
+            ? inferCalendarLookupLoadingLabel("schedule or update calendar event")
             : hasEmailDetailCall && hasCalendarDetailCall
               ? "Retrieving email and calendar details…"
               : hasEmailDetailCall
-                ? "Retrieving email details…"
+                ? inferEmailLookupLoadingLabel("show email details")
                 : hasCalendarDetailCall
-                  ? "Retrieving calendar details…"
+                  ? inferCalendarLookupLoadingLabel("show calendar details")
                   : hasEmailCall && hasCalendarCall
-                    ? "Retrieving your emails and calendar…"
+                    ? "Checking your inbox and calendar…"
                     : hasCalendarCall
-                      ? "Retrieving your calendar…"
+                      ? inferCalendarLookupLoadingLabel("what is on my calendar")
                       : hasEmailCall
-                        ? "Retrieving your emails…"
+                        ? inferEmailLookupLoadingLabel("what emails do i have")
                         : "Searching live sources…",
     );
 

@@ -137,6 +137,14 @@ type LiveVoiceName = "Aoede" | "Kore" | "Charon" | "Fenrir";
 type CameraFacingMode = "user" | "environment";
 type WebLookupStatus = "searching" | "grounded";
 type WebLookupMode = "text" | "voice";
+type VoiceLookupPresentation = {
+  scope: "gmail" | "calendar" | "both";
+  phase: "searching" | "ready" | "stalled";
+  title: string;
+  subtitle: string;
+  statusLabel: string;
+  openLabel: string;
+};
 
 const PERSONA_AVATARS: Record<Persona, string> = {
   Maya: mayaAvatar,
@@ -1864,6 +1872,132 @@ function getVoiceStageCandidateSummary(candidate: VoiceStageCandidate): {
     detail: candidate.card.summaryText || candidate.card.prompt,
     connector:
       preview?.connector ?? result?.connector ?? null,
+  };
+}
+
+function inferVoiceLookupScopeFromLabel(
+  label: string | null | undefined,
+): "gmail" | "calendar" | "both" | null {
+  const normalized = (label ?? "").toLowerCase();
+  if (!normalized) return null;
+  if (
+    (normalized.includes("emails") || normalized.includes("inbox")) &&
+    normalized.includes("calendar")
+  ) {
+    return "both";
+  }
+  if (
+    normalized.includes("email") ||
+    normalized.includes("emails") ||
+    normalized.includes("inbox")
+  ) {
+    return "gmail";
+  }
+  if (normalized.includes("calendar")) {
+    return "calendar";
+  }
+  return null;
+}
+
+function inferVoiceLookupPresentation(params: {
+  status: WebLookupStatus | null;
+  label: string | null | undefined;
+  liveError: string | null;
+}): VoiceLookupPresentation | null {
+  const normalizedLabel = (params.label ?? "").trim();
+  const scopeFromLabel = inferVoiceLookupScopeFromLabel(normalizedLabel);
+  const stalledMatch = params.liveError?.match(
+    /I checked (your inbox and calendar|your inbox|your calendar), but my voice reply stalled/i,
+  );
+  const stalledScope =
+    stalledMatch?.[1]?.toLowerCase().includes("inbox and calendar")
+      ? "both"
+      : stalledMatch?.[1]?.toLowerCase().includes("inbox")
+        ? "gmail"
+        : stalledMatch?.[1]?.toLowerCase().includes("calendar")
+          ? "calendar"
+          : null;
+
+  if (params.liveError && stalledScope) {
+    return {
+      scope: stalledScope,
+      phase: "stalled",
+      title:
+        stalledScope === "both"
+          ? "Inbox and calendar ready"
+          : stalledScope === "calendar"
+            ? "Calendar summary ready"
+            : "Inbox summary ready",
+      subtitle:
+        "Zee finished the lookup, but the spoken reply stalled. Swipe up to read the summary in chat.",
+      statusLabel: "Summary ready in chat",
+      openLabel:
+        stalledScope === "both"
+          ? "Open Google summary"
+          : stalledScope === "calendar"
+            ? "Open calendar lookup"
+            : "Open inbox lookup",
+    };
+  }
+
+  if (!params.status || !scopeFromLabel) {
+    return null;
+  }
+
+  if (params.status === "searching") {
+    const normalized = normalizedLabel.toLowerCase();
+    const title =
+      scopeFromLabel === "both"
+        ? "Checking inbox and calendar"
+        : scopeFromLabel === "calendar"
+          ? normalized.includes("tomorrow")
+            ? "Checking tomorrow's calendar"
+            : normalized.includes("this week")
+              ? "Checking this week's calendar"
+              : normalized.includes("details")
+                ? "Opening calendar details"
+                : "Checking your calendar"
+          : normalized.includes("unread")
+            ? "Checking unread emails"
+            : normalized.includes("recent")
+              ? "Checking recent emails"
+              : normalized.includes("details")
+                ? "Opening email details"
+                : "Checking your inbox";
+    return {
+      scope: scopeFromLabel,
+      phase: "searching",
+      title,
+      subtitle:
+        "Fetching fresh Google results now. This can take a few seconds, and Zee will read the summary aloud as soon as it lands.",
+      statusLabel: normalizedLabel || "Checking live Google data…",
+      openLabel:
+        scopeFromLabel === "both"
+          ? "Open Google lookup"
+          : scopeFromLabel === "calendar"
+            ? "Open calendar lookup"
+            : "Open inbox lookup",
+    };
+  }
+
+  return {
+    scope: scopeFromLabel,
+    phase: "ready",
+    title:
+      scopeFromLabel === "both"
+        ? "Inbox and calendar checked"
+        : scopeFromLabel === "calendar"
+          ? "Calendar checked"
+          : "Inbox checked",
+    subtitle:
+      "Fresh Google results are back. Zee is wrapping up the spoken reply now.",
+    statusLabel: normalizedLabel || "Context ready",
+    openLabel:
+      scopeFromLabel === "both"
+        ? "Open Google summary"
+        : scopeFromLabel === "calendar"
+          ? "Open calendar summary"
+          : "Open inbox summary",
   };
 }
 
@@ -8350,7 +8484,7 @@ interface VoiceLiveDebugPanelProps {
   onExport: () => void;
 }
 
-const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, onProfile, assistantName, assistantAvatar, selectedVoice, setSelectedVoice, mode, setMode, duration, userProfileImage, isVideoEnabled, onToggleVideo, onFlipCamera, videoStream, isVideoTransitioning, cameraFacingMode, webLookupStatus, webLookupLabel, liveDebug, messages, liveTaskSnapshots, onOpenArtifact, onResolveApproval, onSendMessage, onTraceStageEvent, onStageContextChange }: {
+const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, onProfile, assistantName, assistantAvatar, selectedVoice, setSelectedVoice, mode, setMode, duration, userProfileImage, isVideoEnabled, onToggleVideo, onFlipCamera, videoStream, isVideoTransitioning, cameraFacingMode, webLookupStatus, webLookupLabel, liveError, liveDebug, messages, liveTaskSnapshots, onOpenArtifact, onResolveApproval, onSendMessage, onTraceStageEvent, onStageContextChange }: {
   isActive: boolean; 
   isConnecting: boolean;
   onEndCall: () => void;
@@ -8372,6 +8506,7 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
   cameraFacingMode: CameraFacingMode;
   webLookupStatus: WebLookupStatus | null;
   webLookupLabel?: string | null;
+  liveError?: string | null;
   liveDebug: VoiceLiveDebugPanelProps;
   messages: MessageData[];
   liveTaskSnapshots: Record<string, LiveTaskSnapshot>;
@@ -8437,6 +8572,21 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
       ),
     [voiceStageCandidates, voiceStageSurfaceKey],
   );
+  const activeVoiceLookupPresentation = useMemo(
+    () =>
+      inferVoiceLookupPresentation({
+        status: webLookupStatus,
+        label: webLookupLabel,
+        liveError: liveError ?? null,
+      }),
+    [liveError, webLookupLabel, webLookupStatus],
+  );
+  const effectiveVoiceCanvasKey = useMemo(() => {
+    if (activeVoiceLookupPresentation) {
+      return `lookup:${activeVoiceLookupPresentation.scope}:${activeVoiceLookupPresentation.phase}`;
+    }
+    return voiceStageSurfaceKey;
+  }, [activeVoiceLookupPresentation, voiceStageSurfaceKey]);
   const voiceStageCandidateTraceKey = useMemo(
     () =>
       voiceStageCandidates
@@ -8448,7 +8598,9 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
     [voiceStageCandidates],
   );
   const isVoiceCanvasVisible = Boolean(
-    isActive && voiceStageSurface && voiceStageSelectionMode !== "dismissed",
+    isActive &&
+      (voiceStageSurface || activeVoiceLookupPresentation) &&
+      voiceStageSelectionMode !== "dismissed",
   );
 
   useEffect(() => {
@@ -8538,6 +8690,9 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
   ]);
 
   const buildVoiceStageGoogleActionContext = useCallback(() => {
+    if (activeVoiceLookupPresentation) {
+      return null;
+    }
     if (!voiceStageSurface) return null;
     const taskGoogleContext =
       voiceStageSurface.kind === "task" ? voiceStageSurface.card.googleContext ?? null : null;
@@ -8612,6 +8767,7 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
       selectionMode: isVoiceCanvasVisible ? voiceStageSelectionMode : "dismissed",
     } satisfies NonNullable<SendMessageOptions["googleActionContext"]>;
   }, [
+    activeVoiceLookupPresentation,
     isVoiceCanvasVisible,
     voiceStageCandidates,
     voiceStageSelectionMode,
@@ -8643,6 +8799,24 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
     voiceStageCandidateTraceKey,
     voiceStageCandidates,
     voiceStageSurfaceKey,
+  ]);
+
+  useEffect(() => {
+    if (!activeVoiceLookupPresentation) {
+      return;
+    }
+    onTraceStageEvent("lookup_surface_state", {
+      phase: activeVoiceLookupPresentation.phase,
+      scope: activeVoiceLookupPresentation.scope,
+      statusLabel: activeVoiceLookupPresentation.statusLabel,
+      canvasVisible: isVoiceCanvasVisible,
+      surfaceKey: effectiveVoiceCanvasKey,
+    });
+  }, [
+    activeVoiceLookupPresentation,
+    effectiveVoiceCanvasKey,
+    isVoiceCanvasVisible,
+    onTraceStageEvent,
   ]);
 
   useEffect(() => {
@@ -8692,25 +8866,25 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
   }, [onTraceStageEvent, voiceStageSelectionMode, voiceStageSurface]);
 
   useEffect(() => {
-    if (!voiceStageSurfaceKey) return;
+    if (!effectiveVoiceCanvasKey) return;
     onTraceStageEvent(isVoiceCanvasVisible ? "surface_visible" : "surface_hidden", {
-      surfaceKey: voiceStageSurfaceKey,
+      surfaceKey: effectiveVoiceCanvasKey,
       dismissed: voiceStageSelectionMode === "dismissed",
     });
   }, [
+    effectiveVoiceCanvasKey,
     isVoiceCanvasVisible,
     onTraceStageEvent,
     voiceStageSelectionMode,
-    voiceStageSurfaceKey,
   ]);
 
   const dismissVoiceCanvas = () => {
-    if (!voiceStageSurface) return;
-    setDismissedStageSurfaceKey(voiceStageSurface.surfaceKey);
+    if (!effectiveVoiceCanvasKey) return;
+    setDismissedStageSurfaceKey(effectiveVoiceCanvasKey);
     setVoiceStageSelectionMode("dismissed");
     onTraceStageEvent("surface_dismissed", {
-      surfaceKind: voiceStageSurface.kind,
-      surfaceKey: voiceStageSurface.surfaceKey,
+      surfaceKind: activeVoiceLookupPresentation ? "lookup" : voiceStageSurface?.kind ?? null,
+      surfaceKey: effectiveVoiceCanvasKey,
     });
   };
 
@@ -8718,8 +8892,8 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
     setDismissedStageSurfaceKey(null);
     setVoiceStageSelectionMode("auto");
     onTraceStageEvent("surface_reopened", {
-      surfaceKind: voiceStageSurface?.kind ?? null,
-      surfaceKey: voiceStageSurface?.surfaceKey ?? null,
+      surfaceKind: activeVoiceLookupPresentation ? "lookup" : voiceStageSurface?.kind ?? null,
+      surfaceKey: effectiveVoiceCanvasKey,
     });
   };
 
@@ -8731,7 +8905,7 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
     onTraceStageEvent("approval_requested", {
       taskId,
       approve,
-      surfaceKey: voiceStageSurface?.surfaceKey ?? null,
+      surfaceKey: effectiveVoiceCanvasKey,
     });
     try {
       await onResolveApproval(taskId, approve, reason);
@@ -8739,7 +8913,7 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
       onTraceStageEvent("approval_failed", {
         taskId,
         approve,
-        surfaceKey: voiceStageSurface?.surfaceKey ?? null,
+        surfaceKey: effectiveVoiceCanvasKey,
         message: getErrorMessage(error),
       });
       throw error;
@@ -8749,7 +8923,7 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
   const handleVoiceStageOpenArtifact = (artifactId: string) => {
     onTraceStageEvent("artifact_opened", {
       artifactId,
-      surfaceKey: voiceStageSurface?.surfaceKey ?? null,
+      surfaceKey: effectiveVoiceCanvasKey,
     });
     onOpenArtifact(artifactId);
   };
@@ -8761,7 +8935,7 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
     const googleActionContext =
       options?.googleActionContext ?? buildVoiceStageGoogleActionContext();
     onTraceStageEvent("message_sent", {
-      surfaceKey: voiceStageSurface?.surfaceKey ?? null,
+      surfaceKey: effectiveVoiceCanvasKey,
       textPreview: text.slice(0, 160),
       googleActionContext,
     });
@@ -8772,7 +8946,7 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
       });
     } catch (error) {
       onTraceStageEvent("message_failed", {
-        surfaceKey: voiceStageSurface?.surfaceKey ?? null,
+        surfaceKey: effectiveVoiceCanvasKey,
         textPreview: text.slice(0, 160),
         message: getErrorMessage(error),
       });
@@ -8796,6 +8970,7 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
     : null;
 
   const voiceStageTitle =
+    activeVoiceLookupPresentation?.title ??
     voiceStageSurface?.kind === "task"
       ? activeVoiceStageSummary?.title ??
         (voiceStageSurface.card.googleActionPreview?.connector === "gmail"
@@ -8809,11 +8984,12 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
           ? "Draft In Progress"
           : voiceStageSurface?.kind === "email_ambiguity"
             ? voiceStageSurface.ambiguity.connector === "calendar"
-              ? "Choose The Event"
+            ? "Choose The Event"
               : "Choose The Email"
             : "Voice Canvas";
 
   const voiceStageSubtitle =
+    activeVoiceLookupPresentation?.subtitle ??
     voiceStageSurface?.kind === "task"
       ? activeVoiceStageSummary?.detail ?? voiceStageSurface.card.title
       : voiceStageSurface?.kind === "calendar_session"
@@ -8822,9 +8998,15 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
           ? "Zee is shaping a draft from your voice instructions."
           : voiceStageSurface?.kind === "email_ambiguity"
             ? voiceStageSurface.ambiguity.connector === "calendar"
-              ? "Zee needs one quick event clarification before acting."
+            ? "Zee needs one quick event clarification before acting."
               : "Zee needs one quick draft clarification before acting."
             : "Task-ready surface";
+
+  const voiceCanvasOpenLabel =
+    activeVoiceLookupPresentation?.openLabel ??
+    (activeVoiceStageSummary?.title
+      ? `Open ${activeVoiceStageSummary.title}`
+      : "Open canvas");
 
   return (
     <motion.div 
@@ -9325,7 +9507,7 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
             )}
           </AnimatePresence>
           <div className="flex-1 flex flex-col items-center justify-center relative">
-            {isActive && voiceStageSurface && !isVoiceCanvasVisible ? (
+            {isActive && (voiceStageSurface || activeVoiceLookupPresentation) && !isVoiceCanvasVisible ? (
               <div className="absolute left-1/2 top-4 z-20 -translate-x-1/2">
                 <button
                   type="button"
@@ -9340,9 +9522,7 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
                   }}
                   data-testid="button-voice-stage-open-canvas"
                 >
-                  {activeVoiceStageSummary?.title
-                    ? `Open ${activeVoiceStageSummary.title}`
-                    : "Open canvas"}
+                  {voiceCanvasOpenLabel}
                 </button>
               </div>
             ) : null}
@@ -9395,7 +9575,7 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
             ) : null}
             {isActive ? (
               <div className="w-full h-full flex items-center justify-center px-8">
-                {isVoiceCanvasVisible && voiceStageSurface ? (
+                {isVoiceCanvasVisible && (voiceStageSurface || activeVoiceLookupPresentation) ? (
                   <motion.div
                     initial={{ opacity: 0, y: 12, scale: 0.98 }}
                     animate={{ opacity: 1, y: 0, scale: 1 }}
@@ -9482,7 +9662,7 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
                         </div>
                       </div>
 
-                      {voiceStageRailCandidates.length > 1 ? (
+                      {!activeVoiceLookupPresentation && voiceStageRailCandidates.length > 1 ? (
                         <div
                           className="border-b px-3 py-2"
                           style={{
@@ -9558,20 +9738,110 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
                       <div className="relative flex-1 overflow-hidden px-2.5 pb-2.5 pt-2">
                         <ScrollArea className="h-full pr-2">
                           <div className="space-y-2.5">
-                            {voiceStageSurface.kind === "task" ? (
+                            {activeVoiceLookupPresentation ? (
+                              <div
+                                className="rounded-[1.5rem] border px-4 py-4"
+                                style={{
+                                  borderColor:
+                                    activeVoiceLookupPresentation.phase === "stalled"
+                                      ? "color-mix(in srgb, rgba(255,107,107,0.46) 72%, transparent)"
+                                      : "color-mix(in srgb, var(--app-soft-card-border) 72%, transparent)",
+                                  backgroundColor:
+                                    "color-mix(in srgb, var(--app-soft-card-bg) 82%, transparent)",
+                                }}
+                                data-testid="voice-lookup-surface"
+                              >
+                                <div className="flex items-center gap-2">
+                                  <div
+                                    className="flex h-10 w-10 items-center justify-center rounded-full"
+                                    style={{
+                                      backgroundColor:
+                                        "color-mix(in srgb, var(--app-panel-bg) 88%, rgba(255,255,255,0.08))",
+                                      color:
+                                        activeVoiceLookupPresentation.phase === "stalled"
+                                          ? "#FCA5A5"
+                                          : "var(--app-accent)",
+                                    }}
+                                  >
+                                    {activeVoiceLookupPresentation.phase === "searching" ? (
+                                      <Loader2 className="h-4.5 w-4.5 animate-spin" />
+                                    ) : activeVoiceLookupPresentation.phase === "stalled" ? (
+                                      <AlertTriangle className="h-4.5 w-4.5" />
+                                    ) : activeVoiceLookupPresentation.scope === "calendar" ? (
+                                      <CalendarDays className="h-4.5 w-4.5" />
+                                    ) : activeVoiceLookupPresentation.scope === "both" ? (
+                                      <Globe className="h-4.5 w-4.5" />
+                                    ) : (
+                                      <Mail className="h-4.5 w-4.5" />
+                                    )}
+                                  </div>
+                                  <div className="min-w-0">
+                                    <div
+                                      className="text-sm font-semibold"
+                                      style={{ color: "var(--app-on-dark)" }}
+                                    >
+                                      {activeVoiceLookupPresentation.title}
+                                    </div>
+                                    <div
+                                      className="text-[11px]"
+                                      style={{ color: "var(--app-on-dark-muted)" }}
+                                    >
+                                      {activeVoiceLookupPresentation.statusLabel}
+                                    </div>
+                                  </div>
+                                </div>
+                                <div
+                                  className="mt-4 rounded-[1.2rem] border px-3.5 py-3"
+                                  style={{
+                                    borderColor:
+                                      "color-mix(in srgb, var(--app-soft-card-border) 66%, transparent)",
+                                    backgroundColor:
+                                      "color-mix(in srgb, var(--app-panel-bg) 88%, rgba(255,255,255,0.03))",
+                                  }}
+                                >
+                                  <div
+                                    className="text-sm leading-6"
+                                    style={{ color: "var(--app-on-dark)" }}
+                                  >
+                                    {activeVoiceLookupPresentation.subtitle}
+                                  </div>
+                                  <div
+                                    className="mt-3 flex items-center gap-2 text-[11px] font-medium"
+                                    style={{ color: "var(--app-on-dark-muted)" }}
+                                  >
+                                    {activeVoiceLookupPresentation.phase === "searching" ? (
+                                      <>
+                                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                        Zee is still working on this lookup.
+                                      </>
+                                    ) : activeVoiceLookupPresentation.phase === "stalled" ? (
+                                      <>
+                                        <Info className="h-3.5 w-3.5" />
+                                        The verified summary is already saved in chat below.
+                                      </>
+                                    ) : (
+                                      <>
+                                        <CheckCircle2 className="h-3.5 w-3.5" />
+                                        Fresh Google data is ready.
+                                      </>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+                            ) : voiceStageSurface?.kind === "task" ? (
                               <UnifiedAgentTaskCard
                                 card={voiceStageSurface.card}
                                 onOpenArtifact={handleVoiceStageOpenArtifact}
                                 onResolveApproval={handleVoiceStageResolveApproval}
                                 displayMode="voice_stage"
                               />
-                            ) : voiceStageSurface.kind === "calendar_session" ? (
+                            ) : voiceStageSurface?.kind === "calendar_session" ? (
                               <GoogleCalendarSessionCard
                                 session={voiceStageSurface.session}
                                 text={voiceStageSurface.text}
                                 displayMode="voice_stage"
                               />
-                            ) : voiceStageSurface.kind === "compose_session" ? (
+                            ) : voiceStageSurface?.kind === "compose_session" ? (
                               <GoogleComposeSessionCard
                                 session={voiceStageSurface.session}
                                 text={voiceStageSurface.text}
@@ -9579,23 +9849,23 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
                               />
                             ) : (
                               <GoogleEmailAmbiguityCard
-                                ambiguity={voiceStageSurface.ambiguity}
-                                text={voiceStageSurface.text}
+                                ambiguity={voiceStageSurface!.ambiguity}
+                                text={voiceStageSurface!.text}
                                 onChoose={async (candidate) => {
                                   onTraceStageEvent("ambiguity_selected", {
-                                    connector: voiceStageSurface.ambiguity.connector,
-                                    action: voiceStageSurface.ambiguity.action,
+                                    connector: voiceStageSurface!.ambiguity.connector,
+                                    action: voiceStageSurface!.ambiguity.action,
                                     selectedTaskId: candidate.taskId,
-                                    surfaceKey: voiceStageSurface.surfaceKey,
+                                    surfaceKey: voiceStageSurface!.surfaceKey,
                                   });
                                   await handleVoiceStageSendMessage(candidate.selectionPrompt, {
                                     ignoreAttachments: true,
                                     googleActionContext: buildGoogleAmbiguitySelectionContext({
-                                      ambiguity: voiceStageSurface.ambiguity,
+                                      ambiguity: voiceStageSurface!.ambiguity,
                                       candidate,
                                       sourceTurnId:
-                                        voiceStageSurface.message.turnId ?? null,
-                                      surfaceKey: voiceStageSurface.surfaceKey,
+                                        voiceStageSurface!.message.turnId ?? null,
+                                      surfaceKey: voiceStageSurface!.surfaceKey,
                                       selectionMode: "manual",
                                     }),
                                   });
@@ -15732,6 +16002,7 @@ function App() {
             cameraFacingMode={cameraFacingMode}
             webLookupStatus={voiceWebLookupStatus}
             webLookupLabel={voiceWebLookupLabel}
+            liveError={liveError}
             messages={messagesData}
             liveTaskSnapshots={liveTaskSnapshots}
             onOpenArtifact={handleOpenArtifact}
