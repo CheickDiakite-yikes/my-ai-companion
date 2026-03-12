@@ -85,26 +85,11 @@ export interface LiveVoiceDebugState {
   compatibilityIsStandalonePwa: boolean;
   speechProfileMode: "desktop_default" | "mobile_relaxed";
   speechProfileThresholdScale: number;
-  pendingGoogleReadVoiceSummarySource:
-    | "immediate"
-    | "fallback"
-    | "tool_response"
-    | null;
+  pendingGoogleReadVoiceSummarySource: "immediate" | "fallback" | null;
   pendingGoogleReadVoiceSummaryToolNames: string[];
   pendingGoogleReadVoiceSummarySentAt: number | null;
   pendingGoogleReadVoiceSummaryDeadlineAt: number | null;
   lastGoogleReadVoiceSummaryTimeoutAt: number | null;
-  lastGoogleReadVoiceSummaryTranscriptOnlyAt: number | null;
-  activeGoogleReadTurnPhase:
-    | "idle"
-    | "waiting_for_audio"
-    | "audio_started"
-    | "failed";
-  activeGoogleReadTurnSuppressionUntilAt: number | null;
-  activeGoogleReadTurnAudioObserved: boolean;
-  activeGoogleReadTurnTranscriptBuffered: boolean;
-  lastAssistantAudioActivityAt: number | null;
-  activePlaybackNodes: number;
 }
 
 export interface LiveSessionResumptionEvent {
@@ -164,17 +149,10 @@ type LiveGoogleActionContextHint = ReturnType<
 type PendingGoogleReadVoiceSummary = {
   digestTexts: string[];
   toolNames: string[];
-  source: "immediate" | "fallback" | "tool_response";
+  source: "immediate" | "fallback";
   sentAtMs: number;
   deadlineAtMs: number;
-  suppressionUntilAtMs: number;
   assistantActivitySnapshotAtMs: number;
-  assistantAudioSnapshotAtMs: number;
-  retryCount: number;
-  audioObserved: boolean;
-  transcriptObservedAtMs: number | null;
-  transcriptBufferedText: string;
-  transcriptGraceExtended: boolean;
 };
 
 const INPUT_SAMPLE_RATE = 16000;
@@ -185,9 +163,7 @@ const VIDEO_PERMISSION_TIMEOUT_MS = 12000;
 const TRANSCRIPT_DUPLICATE_WINDOW_MS = 1500;
 const TRANSCRIPT_FLUSH_DEBOUNCE_MS = 900;
 const TRANSCRIPT_OVERLAP_MIN_CHARS = 6;
-const GOOGLE_READ_VOICE_SUMMARY_ACK_TIMEOUT_MS = 9000;
-const GOOGLE_READ_VOICE_TRANSCRIPT_GRACE_MS = 3500;
-const GOOGLE_READ_VOICE_INPUT_SUPPRESSION_MS = 7000;
+const GOOGLE_READ_VOICE_SUMMARY_ACK_TIMEOUT_MS = 5000;
 
 function parseClientPositiveInt(
   value: unknown,
@@ -233,6 +209,7 @@ type MicCaptureAttemptFailure = {
 };
 
 const liveClientEnv = (import.meta.env as Record<string, unknown>) ?? {};
+
 function resolveLiveAudioCompatibilityProfile(): LiveAudioCompatibilityProfile {
   const userAgent =
     typeof navigator !== "undefined" && typeof navigator.userAgent === "string"
@@ -1435,7 +1412,6 @@ export class GeminiLiveVoiceSession {
   private assistantTurnIdleReleaseTimeout: number | null = null;
   private speechCooldownTimeout: number | null = null;
   private lastAssistantActivityAtMs = 0;
-  private lastAssistantAudioActivityAtMs = 0;
   private latestInputRms = 0;
   private activeSpeechThreshold = USER_SPEECH_START_RMS_THRESHOLD;
   private candidateSpeechThreshold = USER_SPEECH_START_RMS_THRESHOLD;
@@ -1513,7 +1489,6 @@ export class GeminiLiveVoiceSession {
   private googleReadVoiceSummaryAckTimeout: number | null = null;
   private pendingGoogleReadVoiceSummary: PendingGoogleReadVoiceSummary | null = null;
   private lastGoogleReadVoiceSummaryTimeoutAt: number | null = null;
-  private lastGoogleReadVoiceSummaryTranscriptOnlyAt: number | null = null;
   private webSearchGroundedThisTurn = false;
   private webSearchNudgeSentThisTurn = false;
   private pendingTranscriptBySender: Record<TranscriptSender, string> = {
@@ -1603,7 +1578,6 @@ export class GeminiLiveVoiceSession {
     this.assistantSpeechWindowStartMs = 0;
     this.assistantTurnReleaseAtMs = 0;
     this.lastAssistantActivityAtMs = 0;
-    this.lastAssistantAudioActivityAtMs = 0;
     this.latestInputRms = 0;
     this.activeSpeechThreshold = USER_SPEECH_START_RMS_THRESHOLD;
     this.candidateSpeechThreshold = USER_SPEECH_START_RMS_THRESHOLD;
@@ -1625,9 +1599,6 @@ export class GeminiLiveVoiceSession {
     this.analyzerKind = "script_processor";
     this.debugStateTrackSettings = null;
     this.debugStateTrackCapabilities = null;
-    this.clearPendingGoogleReadVoiceSummary("session_start_reset");
-    this.lastGoogleReadVoiceSummaryTimeoutAt = null;
-    this.lastGoogleReadVoiceSummaryTranscriptOnlyAt = null;
     this.latestSessionResumptionHandle = params.sessionResumptionHandle ?? null;
     this.latestSessionResumptionUpdatedAt = null;
     this.latestGoAwayTimeLeft = null;
@@ -1712,7 +1683,6 @@ export class GeminiLiveVoiceSession {
     this.clearGoogleReadVoiceFallbackTimeout();
     this.clearPendingGoogleReadVoiceSummary();
     this.lastGoogleReadVoiceSummaryTimeoutAt = null;
-    this.lastGoogleReadVoiceSummaryTranscriptOnlyAt = null;
     this.webSearchGroundedThisTurn = false;
     this.webSearchNudgeSentThisTurn = false;
     this.debug("live.feature_gates", {
@@ -2028,7 +1998,6 @@ export class GeminiLiveVoiceSession {
     this.assistantSpeechWindowStartMs = 0;
     this.assistantTurnReleaseAtMs = 0;
     this.lastAssistantActivityAtMs = 0;
-    this.lastAssistantAudioActivityAtMs = 0;
     this.latestInputRms = 0;
     this.activeSpeechThreshold = USER_SPEECH_START_RMS_THRESHOLD;
     this.candidateSpeechThreshold = USER_SPEECH_START_RMS_THRESHOLD;
@@ -2074,7 +2043,6 @@ export class GeminiLiveVoiceSession {
     this.webSearchGroundedThisTurn = false;
     this.webSearchNudgeSentThisTurn = false;
     this.lastGoogleReadVoiceSummaryTimeoutAt = null;
-    this.lastGoogleReadVoiceSummaryTranscriptOnlyAt = null;
     this.compatibilityProfile = resolveSharedLiveAudioCompatibilityProfile();
     this.speechDetectionProfile = {
       mode: "desktop_default",
@@ -2133,88 +2101,6 @@ export class GeminiLiveVoiceSession {
       await this.outputContext.close().catch(() => {});
       this.outputContext = null;
     }
-  }
-
-  async debugRunServerToolResponse(params: {
-    functionCalls: Array<{
-      id?: string;
-      name: string;
-      args?: Record<string, unknown>;
-    }>;
-  }): Promise<{
-    traceId: string | null;
-    chatDigests: Array<{ text: string }>;
-    resolvedFunctionCalls: unknown[];
-    functionResponses: unknown[];
-  }> {
-    if (!this.session || !this.conversationId) {
-      throw new Error("Live voice session is not active");
-    }
-
-    const normalizedCalls = params.functionCalls
-      .map((call, index) => {
-        const name = normalizeText(call.name);
-        if (!name) return null;
-        return {
-          id:
-            normalizeText(call.id) ||
-            `debug-live-tool-${Date.now()}-${index}-${name}`,
-          name,
-          args:
-            call.args && typeof call.args === "object" && !Array.isArray(call.args)
-              ? call.args
-              : {},
-        };
-      })
-      .filter(
-        (
-          call,
-        ): call is { id: string; name: string; args: Record<string, unknown> } =>
-          Boolean(call),
-      );
-
-    if (normalizedCalls.length === 0) {
-      throw new Error("No valid function calls were provided");
-    }
-
-    this.debug("live.debug.tool_response_bridge_started", {
-      functionNames: normalizedCalls.map((call) => call.name),
-      conversationId: this.conversationId,
-    });
-
-    const toolCallStartedAt = Date.now();
-    const payload = await this.requestLiveToolResponse(normalizedCalls);
-    this.applyLiveToolResponsePayload({
-      payload,
-      normalizedCalls,
-      toolCallStartedAt,
-      forwardFunctionResponsesToSession: true,
-      allowGoogleReadVoiceFallback: true,
-    });
-
-    return {
-      traceId:
-        typeof payload.traceId === "string" ? payload.traceId : null,
-      chatDigests: Array.isArray(payload.chatDigests)
-        ? payload.chatDigests
-            .map((digest) => {
-              const text =
-                digest &&
-                typeof digest === "object" &&
-                typeof (digest as { text?: unknown }).text === "string"
-                  ? ((digest as { text: string }).text ?? "").trim()
-                  : "";
-              return text ? { text } : null;
-            })
-            .filter((digest): digest is { text: string } => Boolean(digest))
-        : [],
-      resolvedFunctionCalls: Array.isArray(payload.resolvedFunctionCalls)
-        ? payload.resolvedFunctionCalls
-        : [],
-      functionResponses: Array.isArray(payload.functionResponses)
-        ? payload.functionResponses
-        : [],
-    };
   }
 
   async startVideo(params: { facingMode?: CameraFacingMode } = {}): Promise<MediaStream> {
@@ -2439,28 +2325,6 @@ export class GeminiLiveVoiceSession {
         this.pendingGoogleReadVoiceSummary?.deadlineAtMs ?? null,
       lastGoogleReadVoiceSummaryTimeoutAt:
         this.lastGoogleReadVoiceSummaryTimeoutAt,
-      lastGoogleReadVoiceSummaryTranscriptOnlyAt:
-        this.lastGoogleReadVoiceSummaryTranscriptOnlyAt,
-      activeGoogleReadTurnPhase: this.pendingGoogleReadVoiceSummary
-        ? this.pendingGoogleReadVoiceSummary.audioObserved
-          ? "audio_started"
-          : "waiting_for_audio"
-        : this.lastGoogleReadVoiceSummaryTimeoutAt
-          ? "failed"
-          : "idle",
-      activeGoogleReadTurnSuppressionUntilAt: this.pendingGoogleReadVoiceSummary
-        ? this.pendingGoogleReadVoiceSummary.suppressionUntilAtMs
-        : null,
-      activeGoogleReadTurnAudioObserved:
-        this.pendingGoogleReadVoiceSummary?.audioObserved ?? false,
-      activeGoogleReadTurnTranscriptBuffered: Boolean(
-        this.pendingGoogleReadVoiceSummary?.transcriptBufferedText,
-      ),
-      lastAssistantAudioActivityAt:
-        this.lastAssistantAudioActivityAtMs > 0
-          ? this.lastAssistantAudioActivityAtMs
-          : null,
-      activePlaybackNodes: this.activePlaybackNodes.size,
     };
   }
 
@@ -2915,157 +2779,51 @@ export class GeminiLiveVoiceSession {
     return "your Google info";
   }
 
-  private isGoogleReadTurnInputSuppressed(now = Date.now()): boolean {
-    return Boolean(
-      this.pendingGoogleReadVoiceSummary &&
-        !this.pendingGoogleReadVoiceSummary.audioObserved &&
-        now < this.pendingGoogleReadVoiceSummary.suppressionUntilAtMs,
-    );
-  }
-
-  private discardPendingTranscript(
-    sender: TranscriptSender,
-    reason: string,
-  ): void {
-    this.clearTranscriptFlushTimeout(sender);
-    if (!this.pendingTranscriptBySender[sender]) {
-      return;
-    }
-    this.pendingTranscriptBySender[sender] = "";
-    this.debug("live.transcript.discarded", {
-      sender,
-      reason,
-    });
-  }
-
-  private clearUserActivityForGoogleReadTurn(toolNames: string[]): void {
-    let forcedActivityEnd = false;
-    this.discardPendingTranscript("user", "google_read_turn_started");
-    this.discardPendingTranscript("assistant", "google_read_turn_started");
-    this.pendingPersonalContextTurn = false;
-    this.personalContextToolCalledThisTurn = false;
-    this.personalContextNudgeSentThisTurn = false;
-    this.pendingPersonalContextReadFallback = null;
-    if (this.manualActivityActive) {
-      this.endUserSpeech("google_read_turn_started");
-    } else {
-      this.interruptPending = false;
-      this.interruptTrigger = "none";
-      this.manualInterruptSpeechObserved = false;
-      this.clearManualInterruptWatchdog();
-      this.activeUserSpeechWindow = null;
-      this.clearPendingUserSpeechWindowTimeouts();
-      forcedActivityEnd = this.sendRealtimeInputSafely(
-        { activityEnd: {} },
-        "live.audio.activity_end_failed",
-        {
-          reason: "google_read_turn_started",
-          forced: true,
-          toolNames,
-        },
-      );
-    }
-    this.speechCandidateFrames = 0;
-    this.speechSilenceFrames = 0;
-    this.speechCandidateMs = 0;
-    this.speechCandidateSilenceMs = 0;
-    this.speechSilenceMs = 0;
-    this.speechCandidatePeakRms = 0;
-    this.speechCandidateSumRms = 0;
-    this.candidateClearBurstCount = 0;
-    this.candidateClearBurstWindowStartAtMs = 0;
-    this.candidateClearBurstLastAtMs = 0;
-    this.lastMobileBargeInRejectedAtMs = 0;
-    this.debug("live.google_context.voice_read_turn_user_activity_cleared", {
-      toolNames,
-      speechState: this.speechState,
-      manualActivityActive: this.manualActivityActive,
-      forcedActivityEnd,
-    });
-    if (forcedActivityEnd) {
-      this.debug("live.google_context.voice_read_turn_activity_end_forced", {
-        toolNames,
-      });
-    }
-    if (!this.manualActivityActive) {
-      this.setSpeechState("idle", {
-        reason: "google_read_turn_started",
-      });
-    }
-  }
-
-  private beginGoogleReadTurn(params: {
+  private startGoogleReadVoiceSummaryWatchdog(params: {
     digestTexts: string[];
     toolNames: string[];
+    source: "immediate" | "fallback";
+    assistantActivitySnapshotAtMs: number;
   }): void {
-    this.clearGoogleReadVoiceFallbackTimeout();
-    this.clearPendingGoogleReadVoiceSummary("replaced_by_new_google_read_turn");
-    this.clearUserActivityForGoogleReadTurn(params.toolNames);
-    this.lastGoogleReadVoiceSummaryTranscriptOnlyAt = null;
+    this.clearGoogleReadVoiceSummaryAckTimeout();
     const now = Date.now();
     const pendingSummary: PendingGoogleReadVoiceSummary = {
       digestTexts: params.digestTexts,
       toolNames: params.toolNames,
-      source: "tool_response",
+      source: params.source,
       sentAtMs: now,
       deadlineAtMs: now + GOOGLE_READ_VOICE_SUMMARY_ACK_TIMEOUT_MS,
-      suppressionUntilAtMs: now + GOOGLE_READ_VOICE_INPUT_SUPPRESSION_MS,
-      assistantActivitySnapshotAtMs: this.lastAssistantActivityAtMs,
-      assistantAudioSnapshotAtMs: this.lastAssistantAudioActivityAtMs,
-      retryCount: 0,
-      audioObserved: false,
-      transcriptObservedAtMs: null,
-      transcriptBufferedText: "",
-      transcriptGraceExtended: false,
+      assistantActivitySnapshotAtMs: params.assistantActivitySnapshotAtMs,
     };
     this.pendingGoogleReadVoiceSummary = pendingSummary;
-    this.debug("live.google_context.voice_read_turn_started", {
+    this.debug("live.google_context.voice_read_summary_watchdog_started", {
+      source: params.source,
       toolNames: params.toolNames,
       digestCount: params.digestTexts.length,
       deadlineAtMs: pendingSummary.deadlineAtMs,
-      suppressionUntilAtMs: pendingSummary.suppressionUntilAtMs,
     });
     this.emitDebugState(true);
-    this.scheduleGoogleReadVoiceSummaryWatchdog(pendingSummary);
-  }
-
-  private scheduleGoogleReadVoiceSummaryWatchdog(
-    pendingSummary: PendingGoogleReadVoiceSummary,
-  ): void {
-    this.clearGoogleReadVoiceSummaryAckTimeout();
-    const timeoutMs = Math.max(0, pendingSummary.deadlineAtMs - Date.now());
     this.googleReadVoiceSummaryAckTimeout = window.setTimeout(() => {
       this.googleReadVoiceSummaryAckTimeout = null;
       const activeSummary = this.pendingGoogleReadVoiceSummary;
       if (!activeSummary || activeSummary.sentAtMs !== pendingSummary.sentAtMs) {
         return;
       }
-      if (activeSummary.audioObserved) {
-        this.debug("live.google_context.voice_read_turn_timeout_skipped_audio_observed", {
+      if (
+        this.assistantTurnActive ||
+        this.lastAssistantActivityAtMs > activeSummary.assistantActivitySnapshotAtMs
+      ) {
+        this.debug("live.google_context.voice_read_summary_timeout_skipped_assistant_active", {
+          source: activeSummary.source,
           toolNames: activeSummary.toolNames,
+          assistantTurnActive: this.assistantTurnActive,
+          lastAssistantActivityAtMs: this.lastAssistantActivityAtMs,
+          assistantActivitySnapshotAtMs:
+            activeSummary.assistantActivitySnapshotAtMs,
         });
         this.clearPendingGoogleReadVoiceSummary(
-          "assistant_audio_received_before_timeout",
+          "assistant_activity_detected_before_timeout",
         );
-        return;
-      }
-      if (
-        activeSummary.transcriptObservedAtMs &&
-        !activeSummary.transcriptGraceExtended
-      ) {
-        activeSummary.transcriptGraceExtended = true;
-        activeSummary.deadlineAtMs = Date.now() + GOOGLE_READ_VOICE_TRANSCRIPT_GRACE_MS;
-        activeSummary.suppressionUntilAtMs = Math.max(
-          activeSummary.suppressionUntilAtMs,
-          Date.now() + Math.min(GOOGLE_READ_VOICE_TRANSCRIPT_GRACE_MS, 1200),
-        );
-        this.debug("live.google_context.voice_read_turn_transcript_grace_extended", {
-          toolNames: activeSummary.toolNames,
-          deadlineAtMs: activeSummary.deadlineAtMs,
-          suppressionUntilAtMs: activeSummary.suppressionUntilAtMs,
-        });
-        this.emitDebugState(true);
-        this.scheduleGoogleReadVoiceSummaryWatchdog(activeSummary);
         return;
       }
 
@@ -3074,79 +2832,36 @@ export class GeminiLiveVoiceSession {
       );
       const preview = activeSummary.digestTexts.join(" ").trim().slice(0, 280);
       this.lastGoogleReadVoiceSummaryTimeoutAt = Date.now();
-      this.debug("live.google_context.voice_read_turn_failed_no_audio", {
+      this.debug("live.google_context.voice_read_summary_timeout", {
+        source: activeSummary.source,
         toolNames: activeSummary.toolNames,
         digestCount: activeSummary.digestTexts.length,
         digestPreview: preview,
-        transcriptObservedAtMs: activeSummary.transcriptObservedAtMs,
-        transcriptGraceExtended: activeSummary.transcriptGraceExtended,
         socketState: this.getSessionSocketReadyState(),
         sessionReadyForRealtimeInput: this.sessionReadyForRealtimeInput,
+        assistantTurnActive: this.assistantTurnActive,
         speechState: this.speechState,
-        activePlaybackNodes: this.activePlaybackNodes.size,
+        lastAssistantActivityAtMs: this.lastAssistantActivityAtMs,
       });
-      this.reportClientError("live.google_context.voice_read_turn_failed_no_audio", {
+      this.reportClientError("live.google_context.voice_read_summary_timeout", {
+        source: activeSummary.source,
         toolNames: activeSummary.toolNames,
         digestCount: activeSummary.digestTexts.length,
         digestPreview: preview,
-        transcriptObservedAtMs: activeSummary.transcriptObservedAtMs,
-        transcriptGraceExtended: activeSummary.transcriptGraceExtended,
         socketState: this.getSessionSocketReadyState(),
         sessionReadyForRealtimeInput: this.sessionReadyForRealtimeInput,
+        assistantTurnActive: this.assistantTurnActive,
         speechState: this.speechState,
-        activePlaybackNodes: this.activePlaybackNodes.size,
+        lastAssistantActivityAtMs: this.lastAssistantActivityAtMs,
       });
-      this.assistantTurnActive = false;
-      this.assistantTurnReleaseAtMs = 0;
-      this.clearAssistantTurnIdleReleaseTimeout();
-      this.assistantPlaybackTailUntilMs = 0;
-      this.discardPendingTranscript("assistant", "google_read_turn_failed_no_audio");
-      this.emitWebSearchStatus("grounded", "Voice reply stalled");
+      this.emitWebSearchStatus("grounded", "Summary ready in chat");
       this.emitError(
         new Error(
-          `I checked ${scope}, but my spoken reply stalled. Please ask again.`,
+          `I checked ${scope}, but my voice reply stalled. Swipe up to see the summary in chat.`,
         ),
       );
-      this.clearPendingGoogleReadVoiceSummary("timed_out_without_native_audio");
-      this.syncSpeechStateFromActivity("google_read_turn_failed_no_audio");
-    }, timeoutMs);
-  }
-
-  private bufferAssistantTranscriptForGoogleReadTurn(
-    text: string,
-    finished: boolean,
-  ): void {
-    if (!this.pendingGoogleReadVoiceSummary) {
-      return;
-    }
-    this.pendingGoogleReadVoiceSummary.transcriptBufferedText = mergeTranscriptText(
-      this.pendingGoogleReadVoiceSummary.transcriptBufferedText,
-      text,
-    );
-    this.pendingGoogleReadVoiceSummary.transcriptObservedAtMs = Date.now();
-    this.lastGoogleReadVoiceSummaryTranscriptOnlyAt =
-      this.pendingGoogleReadVoiceSummary.transcriptObservedAtMs;
-    this.debug("live.google_context.voice_read_turn_transcript_suppressed_pending_audio", {
-      toolNames: this.pendingGoogleReadVoiceSummary.toolNames,
-      textLength: text.length,
-      bufferedLength:
-        this.pendingGoogleReadVoiceSummary.transcriptBufferedText.length,
-      finished,
-    });
-    this.emitDebugState(true);
-  }
-
-  private releaseBufferedAssistantTranscriptForGoogleReadTurn(): void {
-    const bufferedText =
-      this.pendingGoogleReadVoiceSummary?.transcriptBufferedText ?? "";
-    if (!bufferedText) {
-      return;
-    }
-    this.pendingGoogleReadVoiceSummary!.transcriptBufferedText = "";
-    this.captureTranscript("assistant", {
-      text: bufferedText,
-      finished: false,
-    });
+      this.clearPendingGoogleReadVoiceSummary("timed_out_without_assistant_output");
+    }, GOOGLE_READ_VOICE_SUMMARY_ACK_TIMEOUT_MS);
   }
 
   private acknowledgeGoogleReadVoiceSummary(
@@ -3159,29 +2874,92 @@ export class GeminiLiveVoiceSession {
     if (!this.pendingGoogleReadVoiceSummary) {
       return;
     }
-    if (source === "audio") {
-      this.pendingGoogleReadVoiceSummary.audioObserved = true;
-      this.releaseBufferedAssistantTranscriptForGoogleReadTurn();
-    } else {
-      this.pendingGoogleReadVoiceSummary.transcriptObservedAtMs = Date.now();
-      this.lastGoogleReadVoiceSummaryTranscriptOnlyAt =
-        this.pendingGoogleReadVoiceSummary.transcriptObservedAtMs;
-    }
     this.debug("live.google_context.voice_read_summary_acknowledged", {
       source: this.pendingGoogleReadVoiceSummary.source,
       toolNames: this.pendingGoogleReadVoiceSummary.toolNames,
       via: source,
       ...metadata,
     });
-    if (source === "audio") {
-      this.debug("live.google_context.voice_read_turn_audio_started", {
-        toolNames: this.pendingGoogleReadVoiceSummary.toolNames,
-        ...metadata,
-      });
-      this.clearPendingGoogleReadVoiceSummary("assistant_audio_received");
-    } else {
-      this.emitDebugState(true);
+    this.clearPendingGoogleReadVoiceSummary(
+      source === "audio" ? "assistant_audio_received" : "assistant_transcript_received",
+    );
+  }
+
+  private sendGoogleReadVoiceSummary(params: {
+    digestTexts: string[];
+    toolNames: string[];
+    source: "immediate" | "fallback";
+  }): boolean {
+    const spokenSummary = params.digestTexts.join(" ").trim();
+    if (!spokenSummary) {
+      return false;
     }
+    const sent = this.sendClientContentSafely(
+      {
+        turns: `Using the verified Google results you just received, respond out loud right now in 1 to 3 short sentences. Start speaking immediately, do not call tools again, and do not ask the user to wait. Verified summary: ${spokenSummary}`,
+        turnComplete: true,
+      },
+      "live.google_context.nudge_failed",
+      {
+        source:
+          params.source === "immediate"
+            ? "google_read_voice_immediate"
+            : "google_read_voice_fallback",
+        toolNames: params.toolNames,
+      },
+    );
+    this.debug(
+      sent
+        ? params.source === "immediate"
+          ? "live.google_context.voice_read_summary_sent"
+          : "live.google_context.voice_fallback_sent"
+        : params.source === "immediate"
+          ? "live.google_context.voice_read_summary_send_failed"
+          : "live.google_context.voice_fallback_send_failed",
+      {
+        toolNames: params.toolNames,
+        digestCount: params.digestTexts.length,
+        spokenSummaryLength: spokenSummary.length,
+      },
+    );
+    if (sent) {
+      this.startGoogleReadVoiceSummaryWatchdog({
+        digestTexts: params.digestTexts,
+        toolNames: params.toolNames,
+        source: params.source,
+        assistantActivitySnapshotAtMs: this.lastAssistantActivityAtMs,
+      });
+    }
+    return sent;
+  }
+
+  private scheduleGoogleReadVoiceFallback(params: {
+    digestTexts: string[];
+    toolNames: string[];
+    assistantActivitySnapshotAtMs: number;
+  }): void {
+    this.clearGoogleReadVoiceFallbackTimeout();
+    if (params.digestTexts.length === 0) return;
+    this.googleReadVoiceFallbackTimeout = window.setTimeout(() => {
+      this.googleReadVoiceFallbackTimeout = null;
+      if (
+        this.assistantTurnActive ||
+        this.lastAssistantActivityAtMs > params.assistantActivitySnapshotAtMs
+      ) {
+        this.debug("live.google_context.voice_fallback_skipped_assistant_active", {
+          toolNames: params.toolNames,
+          assistantTurnActive: this.assistantTurnActive,
+          lastAssistantActivityAtMs: this.lastAssistantActivityAtMs,
+          assistantActivitySnapshotAtMs: params.assistantActivitySnapshotAtMs,
+        });
+        return;
+      }
+      this.sendGoogleReadVoiceSummary({
+        digestTexts: params.digestTexts,
+        toolNames: params.toolNames,
+        source: "fallback",
+      });
+    }, 1200);
   }
 
   private async requestLiveToolResponse(
@@ -3352,47 +3130,22 @@ export class GeminiLiveVoiceSession {
         name === "prepare_google_email_action" ||
         name === "prepare_google_calendar_action",
     );
-    const isNativeGoogleReadTurn =
-      params.allowGoogleReadVoiceFallback &&
-      hasReadOnlyGoogleTool &&
-      !hasGoogleActionTool &&
-      functionResponses.length > 0;
     if (
       params.forwardFunctionResponsesToSession &&
       functionResponses.length > 0 &&
-      !hasReroutedToolResponse
+      !hasReroutedToolResponse &&
+      !(params.allowGoogleReadVoiceFallback && hasReadOnlyGoogleTool && !hasGoogleActionTool)
     ) {
-      if (isNativeGoogleReadTurn) {
-        const digestTexts = Array.isArray(params.payload.chatDigests)
-          ? params.payload.chatDigests
-              .map((digest) =>
-                digest &&
-                typeof digest === "object" &&
-                typeof (digest as { text?: unknown }).text === "string"
-                  ? ((digest as { text: string }).text ?? "").trim()
-                  : "",
-              )
-              .filter((text): text is string => Boolean(text))
-          : [];
-        if (digestTexts.length > 0) {
-          this.beginGoogleReadTurn({
-            digestTexts,
-            toolNames: effectiveToolNames,
-          });
-        }
-      }
-      const forwarded = this.sendToolResponseSafely(
+      this.sendToolResponseSafely(
         functionResponses as Array<Record<string, unknown>>,
       );
-      if (isNativeGoogleReadTurn && !forwarded) {
-        this.clearPendingGoogleReadVoiceSummary(
-          "tool_response_send_failed_for_google_read_turn",
-        );
-      }
     } else if (
       params.forwardFunctionResponsesToSession &&
       functionResponses.length > 0 &&
-      hasReroutedToolResponse
+      (hasReroutedToolResponse ||
+        (params.allowGoogleReadVoiceFallback &&
+          hasReadOnlyGoogleTool &&
+          !hasGoogleActionTool))
     ) {
       this.debug("live.tool_call.response_not_forwarded", {
         resolvedFunctionCalls,
@@ -3412,17 +3165,8 @@ export class GeminiLiveVoiceSession {
             : "";
         if (!text) continue;
         chatDigestTexts.push(text);
-        if (!isNativeGoogleReadTurn) {
-          this.callbacks.onMorningBriefDigest?.({ text });
-        }
+        this.callbacks.onMorningBriefDigest?.({ text });
       }
-    }
-
-    if (isNativeGoogleReadTurn && chatDigestTexts.length > 0) {
-      this.debug("live.google_context.voice_read_turn_chat_digest_deferred", {
-        toolNames: effectiveToolNames,
-        digestCount: chatDigestTexts.length,
-      });
     }
 
     if (Array.isArray(params.payload.webSearchEvents)) {
@@ -3453,6 +3197,25 @@ export class GeminiLiveVoiceSession {
       );
     }
 
+    if (
+      params.allowGoogleReadVoiceFallback &&
+      hasReadOnlyGoogleTool &&
+      chatDigestTexts.length > 0
+    ) {
+      if (!hasGoogleActionTool) {
+        this.sendGoogleReadVoiceSummary({
+          digestTexts: chatDigestTexts,
+          toolNames: effectiveToolNames,
+          source: "immediate",
+        });
+      }
+      this.scheduleGoogleReadVoiceFallback({
+        digestTexts: chatDigestTexts,
+        toolNames: effectiveToolNames,
+        assistantActivitySnapshotAtMs: this.lastAssistantActivityAtMs,
+      });
+    }
+
     this.debug("live.tool_call.responded", {
       functionCount: params.normalizedCalls.length,
       traceId:
@@ -3467,7 +3230,7 @@ export class GeminiLiveVoiceSession {
         params.forwardFunctionResponsesToSession && !hasReroutedToolResponse,
       resolvedFunctionCalls,
     });
-    if (this.conversationId && !isNativeGoogleReadTurn) {
+    if (this.conversationId) {
       this.callbacks.onConversationMutated?.({
         conversationId: this.conversationId,
         source: "live_tool_response",
@@ -3476,13 +3239,6 @@ export class GeminiLiveVoiceSession {
   }
 
   private async runDirectPersonalContextReadFallback(reason: "model_no_tool_call"): Promise<void> {
-    if (this.pendingGoogleReadVoiceSummary) {
-      this.debug("live.google_context.direct_fallback_blocked_active_read_turn", {
-        reason,
-        toolNames: this.pendingGoogleReadVoiceSummary.toolNames,
-      });
-      return;
-    }
     if (!this.pendingPersonalContextReadFallback || !this.conversationId) {
       return;
     }
@@ -3831,33 +3587,6 @@ export class GeminiLiveVoiceSession {
         ? frameDurationMs
         : USER_SPEECH_REFERENCE_FRAME_DURATION_MS;
     this.latestInputRms = rms;
-
-    if (this.isGoogleReadTurnInputSuppressed()) {
-      this.debug("live.google_context.voice_read_turn_user_input_suppressed", {
-        reason: "speech_detector_blocked_during_native_read_reply",
-        speechState: this.speechState,
-        rms,
-        suppressionUntilAtMs:
-          this.pendingGoogleReadVoiceSummary?.suppressionUntilAtMs ?? null,
-      });
-      if (this.manualActivityActive) {
-        this.endUserSpeech("google_read_turn_input_suppressed");
-      }
-      this.speechCandidateFrames = 0;
-      this.speechCandidateMs = 0;
-      this.speechCandidateSilenceMs = 0;
-      this.speechCandidatePeakRms = 0;
-      this.speechCandidateSumRms = 0;
-      this.speechSilenceFrames = 0;
-      this.speechSilenceMs = 0;
-      if (!this.manualActivityActive) {
-        this.setSpeechState("idle", {
-          reason: "google_read_turn_input_suppressed",
-        });
-      }
-      this.emitDebugState();
-      return;
-    }
 
     const assistantWindowActive = this.isAssistantSpeechWindowActive();
     const { threshold, minSpeechDurationMs } =
@@ -4524,9 +4253,6 @@ export class GeminiLiveVoiceSession {
             : undefined,
         );
       }
-      if (this.isGoogleReadTurnInputSuppressed()) {
-        return;
-      }
       const pcmBase64 = pcm16ToBase64(
         inputSamples,
         this.inputContext.sampleRate,
@@ -4540,11 +4266,6 @@ export class GeminiLiveVoiceSession {
   }
 
   private handleServerMessage(message: LiveServerMessage): void {
-    const topLevelAudioData =
-      typeof (message as LiveServerMessage & { data?: unknown }).data === "string"
-        ? ((message as LiveServerMessage & { data: string }).data ?? "")
-        : "";
-
     if (message.sessionResumptionUpdate) {
       const handle =
         typeof message.sessionResumptionUpdate.newHandle === "string"
@@ -4627,43 +4348,6 @@ export class GeminiLiveVoiceSession {
     }
 
     if (!serverContent) {
-      if (topLevelAudioData) {
-        this.clearAssistantTurnIdleReleaseTimeout();
-        this.lastAssistantActivityAtMs = Date.now();
-        this.assistantTurnActive = true;
-        if (!this.interruptPending) {
-          const enqueued = this.enqueueAudio(topLevelAudioData);
-          if (enqueued) {
-            this.lastAssistantAudioActivityAtMs = this.lastAssistantActivityAtMs;
-            this.assistantPlaybackTailUntilMs = Math.max(
-              this.assistantPlaybackTailUntilMs,
-              Date.now() + SUPPRESS_INPUT_COOLDOWN_MS,
-            );
-            if (!this.manualActivityActive) {
-              this.setSpeechState("assistant_speaking", {
-                reason: "assistant_output_received_top_level_audio",
-              });
-            }
-            this.acknowledgeGoogleReadVoiceSummary("audio", {
-              audioPartCount: 1,
-              hasOutputTranscription: false,
-            });
-          } else {
-            this.debug("live.assistant.audio_payload_not_enqueued", {
-              audioPartCount: 1,
-              hasOutputTranscription: false,
-              outputContextState: this.outputContext?.state ?? "missing",
-              source: "top_level_data",
-            });
-          }
-        } else {
-          this.debug("live.assistant.output_dropped_after_interrupt", {
-            audioPartCount: 1,
-            hasOutputTranscription: false,
-            source: "top_level_data",
-          });
-        }
-      }
       if (
         this.liveGoogleSearchEnabled &&
         hasToolCall &&
@@ -4695,21 +4379,16 @@ export class GeminiLiveVoiceSession {
     );
 
     const modelParts = serverContent.modelTurn?.parts ?? [];
-    const inlineAudioPartCount = modelParts.reduce((count, part) => {
+    const audioPartCount = modelParts.reduce((count, part) => {
       return part.inlineData?.data ? count + 1 : count;
     }, 0);
-    const audioPartCount =
-      inlineAudioPartCount + (topLevelAudioData ? 1 : 0);
-    const hasOutputTranscription = Boolean(serverContent.outputTranscription?.text);
-    const transcriptOnlyAssistantOutput =
-      audioPartCount === 0 && hasOutputTranscription;
     const shouldLogServerContent =
       Boolean(serverContent.interrupted) ||
       Boolean(serverContent.generationComplete) ||
       Boolean(serverContent.turnComplete) ||
       audioPartCount > 0 ||
       Boolean(serverContent.inputTranscription?.text) ||
-      hasOutputTranscription;
+      Boolean(serverContent.outputTranscription?.text);
     if (shouldLogServerContent) {
       this.debug("live.server.content", {
         interrupted: Boolean(serverContent.interrupted),
@@ -4718,8 +4397,7 @@ export class GeminiLiveVoiceSession {
         waitingForInput: Boolean(serverContent.waitingForInput),
         audioPartCount,
         hasInputTranscription: Boolean(serverContent.inputTranscription?.text),
-        hasOutputTranscription,
-        transcriptOnlyAssistantOutput,
+        hasOutputTranscription: Boolean(serverContent.outputTranscription?.text),
         hasGroundingMetadata,
         hasUrlContextMetadata,
         hasToolCall,
@@ -4744,68 +4422,26 @@ export class GeminiLiveVoiceSession {
       });
     }
 
-    let audioEnqueueCount = 0;
-    const enqueueIfPossible = (audioData: string | undefined): void => {
-      if (!audioData) return;
-      if (this.enqueueAudio(audioData)) {
-        audioEnqueueCount += 1;
-      }
-    };
-    const interruptedByClientRequest =
-      Boolean(serverContent.interrupted) && this.interruptPending;
-    const shouldDropAssistantOutput =
-      this.interruptPending || interruptedByClientRequest;
-
-    if (audioPartCount > 0 || hasOutputTranscription) {
+    if (audioPartCount > 0 || Boolean(serverContent.outputTranscription?.text)) {
       this.clearAssistantTurnIdleReleaseTimeout();
       this.lastAssistantActivityAtMs = Date.now();
       this.assistantTurnActive = true;
-      if (!shouldDropAssistantOutput) {
-        enqueueIfPossible(topLevelAudioData);
-        for (const part of modelParts) {
-          enqueueIfPossible(part.inlineData?.data);
-        }
-      }
-      if (audioEnqueueCount > 0) {
-        this.lastAssistantAudioActivityAtMs = this.lastAssistantActivityAtMs;
-        this.assistantPlaybackTailUntilMs = Math.max(
-          this.assistantPlaybackTailUntilMs,
-          Date.now() + SUPPRESS_INPUT_COOLDOWN_MS,
-        );
-        if (!this.manualActivityActive) {
-          this.setSpeechState("assistant_speaking", {
-            reason: "assistant_output_received",
-          });
-        }
-        this.acknowledgeGoogleReadVoiceSummary("audio", {
-          audioPartCount: audioEnqueueCount,
-          hasOutputTranscription,
+      this.assistantPlaybackTailUntilMs = Math.max(
+        this.assistantPlaybackTailUntilMs,
+        Date.now() + SUPPRESS_INPUT_COOLDOWN_MS,
+      );
+      if (!this.manualActivityActive) {
+        this.setSpeechState("assistant_speaking", {
+          reason: "assistant_output_received",
         });
-      } else if (audioPartCount > 0) {
-        this.debug("live.assistant.audio_payload_not_enqueued", {
+      }
+      this.acknowledgeGoogleReadVoiceSummary(
+        audioPartCount > 0 ? "audio" : "transcript",
+        {
           audioPartCount,
-          hasOutputTranscription,
-          outputContextState: this.outputContext?.state ?? "missing",
-        });
-      }
-      if (
-        audioEnqueueCount === 0 &&
-        this.pendingGoogleReadVoiceSummary &&
-        hasOutputTranscription
-      ) {
-        this.acknowledgeGoogleReadVoiceSummary("transcript", {
-          audioPartCount: audioEnqueueCount,
-          hasOutputTranscription,
-        });
-        this.debug("live.google_context.voice_read_summary_transcript_only_observed", {
-          source: this.pendingGoogleReadVoiceSummary.source,
-          toolNames: this.pendingGoogleReadVoiceSummary.toolNames,
-          audioPartCount: audioEnqueueCount,
-          hasOutputTranscription,
-          speechState: this.speechState,
-          activePlaybackNodes: this.activePlaybackNodes.size,
-        });
-      }
+          hasOutputTranscription: Boolean(serverContent.outputTranscription?.text),
+        },
+      );
     }
 
     if (
@@ -4824,6 +4460,8 @@ export class GeminiLiveVoiceSession {
       );
     }
 
+    const interruptedByClientRequest =
+      Boolean(serverContent.interrupted) && this.interruptPending;
     if (serverContent.interrupted) {
       this.debug("live.server.interrupted");
       if (interruptedByClientRequest) {
@@ -4852,26 +4490,24 @@ export class GeminiLiveVoiceSession {
       this.syncSpeechStateFromActivity("server_interrupted");
     }
 
-    if (shouldDropAssistantOutput && (audioPartCount > 0 || hasOutputTranscription)) {
+    const shouldDropAssistantOutput =
+      this.interruptPending || interruptedByClientRequest;
+    if (shouldDropAssistantOutput && (audioPartCount > 0 || Boolean(serverContent.outputTranscription?.text))) {
       this.debug("live.assistant.output_dropped_after_interrupt", {
         audioPartCount,
-        hasOutputTranscription,
+        hasOutputTranscription: Boolean(serverContent.outputTranscription?.text),
       });
+    } else {
+      for (const part of modelParts) {
+        const audioData = part.inlineData?.data;
+        if (audioData) {
+          this.enqueueAudio(audioData);
+        }
+      }
     }
 
     this.captureTranscript("user", serverContent.inputTranscription);
-    if (
-      !shouldDropAssistantOutput &&
-      serverContent.outputTranscription?.text &&
-      this.pendingGoogleReadVoiceSummary &&
-      audioEnqueueCount === 0 &&
-      !this.pendingGoogleReadVoiceSummary.audioObserved
-    ) {
-      this.bufferAssistantTranscriptForGoogleReadTurn(
-        serverContent.outputTranscription.text,
-        Boolean(serverContent.outputTranscription.finished),
-      );
-    } else if (!shouldDropAssistantOutput) {
+    if (!shouldDropAssistantOutput) {
       this.captureTranscript("assistant", serverContent.outputTranscription);
     }
 
@@ -4917,42 +4553,19 @@ export class GeminiLiveVoiceSession {
       this.pendingPersonalContextReadFallback = null;
       this.webSearchGroundedThisTurn = false;
       this.webSearchNudgeSentThisTurn = false;
-      this.flushPendingTranscript("user", "turn_complete");
-      const waitingForGoogleReadAudio =
-        Boolean(this.pendingGoogleReadVoiceSummary) &&
-        !this.pendingGoogleReadVoiceSummary?.audioObserved;
-      if (waitingForGoogleReadAudio) {
-        this.debug("live.google_context.voice_read_turn_turn_complete_waiting_for_audio", {
-          toolNames: this.pendingGoogleReadVoiceSummary?.toolNames ?? [],
-          transcriptBuffered: Boolean(
-            this.pendingGoogleReadVoiceSummary?.transcriptBufferedText,
-          ),
-        });
-        this.assistantTurnActive = true;
-        this.assistantPlaybackTailUntilMs = Math.max(
-          this.assistantPlaybackTailUntilMs,
-          Date.now() + SUPPRESS_INPUT_COOLDOWN_MS,
-        );
-        this.syncSpeechStateFromActivity("turn_complete_waiting_for_google_read_audio");
-        return;
-      }
       this.assistantTurnActive = false;
       this.assistantPlaybackTailUntilMs = Math.max(
         this.assistantPlaybackTailUntilMs,
         Date.now() + SUPPRESS_INPUT_COOLDOWN_MS,
       );
+      this.flushPendingTranscript("user", "turn_complete");
       this.flushPendingTranscript("assistant", "turn_complete");
       this.syncSpeechStateFromActivity("turn_complete");
     }
   }
 
-  private enqueueAudio(base64Audio: string): boolean {
-    if (!this.outputContext) {
-      this.debug("live.assistant.audio_enqueue_skipped", {
-        reason: "missing_output_context",
-      });
-      return false;
-    }
+  private enqueueAudio(base64Audio: string): void {
+    if (!this.outputContext) return;
 
     if (this.outputContext.state === "suspended") {
       this.outputContext.resume().catch(() => {});
@@ -4961,12 +4574,7 @@ export class GeminiLiveVoiceSession {
     this.pruneStalePlaybackNodes();
 
     const int16 = base64ToPcm16(base64Audio);
-    if (int16.length === 0) {
-      this.debug("live.assistant.audio_enqueue_skipped", {
-        reason: "empty_pcm_payload",
-      });
-      return false;
-    }
+    if (int16.length === 0) return;
 
     const float32 = int16ToFloat32(int16);
     const audioBuffer = this.outputContext.createBuffer(
@@ -4990,16 +4598,8 @@ export class GeminiLiveVoiceSession {
     this.scheduledPlaybackTime = nodeEndTime;
     this.activePlaybackNodes.add(source);
     this.playbackNodeEndTimes.set(source, nodeEndTime);
-    this.debug("live.assistant.audio_enqueued", {
-      pcmSampleCount: int16.length,
-      durationMs: Math.round(audioBuffer.duration * 1000),
-      activePlaybackNodes: this.activePlaybackNodes.size,
-      scheduledPlaybackTime: this.scheduledPlaybackTime,
-      outputContextState: this.outputContext.state,
-    });
     this.clearAssistantTurnIdleReleaseTimeout();
     this.lastAssistantActivityAtMs = Date.now();
-    this.lastAssistantAudioActivityAtMs = this.lastAssistantActivityAtMs;
     this.assistantPlaybackTailUntilMs = Math.max(
       this.assistantPlaybackTailUntilMs,
       Date.now() + Math.round(audioBuffer.duration * 1000) + SUPPRESS_INPUT_COOLDOWN_MS,
@@ -5008,10 +4608,6 @@ export class GeminiLiveVoiceSession {
     source.onended = () => {
       this.activePlaybackNodes.delete(source);
       this.playbackNodeEndTimes.delete(source);
-      this.debug("live.assistant.audio_node_ended", {
-        activePlaybackNodes: this.activePlaybackNodes.size,
-        assistantTurnReleaseAtMs: this.assistantTurnReleaseAtMs,
-      });
       if (this.assistantTurnReleaseAtMs > 0) {
         this.releaseAssistantTurn("playback_drained");
       } else if (this.activePlaybackNodes.size === 0) {
@@ -5019,7 +4615,6 @@ export class GeminiLiveVoiceSession {
         this.syncSpeechStateFromActivity("playback_idle");
       }
     };
-    return true;
   }
 
   private clearPlaybackQueue(): void {
@@ -5047,21 +4642,6 @@ export class GeminiLiveVoiceSession {
 
     const text = normalizeText(transcript.text);
     if (!text) return;
-    const googleReadTurnActive = Boolean(this.pendingGoogleReadVoiceSummary);
-    if (
-      sender === "user" &&
-      googleReadTurnActive &&
-      !this.pendingGoogleReadVoiceSummary?.audioObserved
-    ) {
-      this.debug("live.google_context.voice_read_turn_user_transcript_suppressed", {
-        textLength: text.length,
-        finished: Boolean(transcript.finished),
-        toolNames: this.pendingGoogleReadVoiceSummary?.toolNames ?? [],
-        suppressionUntilAtMs:
-          this.pendingGoogleReadVoiceSummary?.suppressionUntilAtMs ?? null,
-      });
-      return;
-    }
     if (sender === "user") {
       this.markUserSpeechWindowTranscriptReceived(text.length);
     }
@@ -5075,7 +4655,6 @@ export class GeminiLiveVoiceSession {
       sender === "user" &&
       this.liveGooglePersonalContextFunctionCallingEnabled &&
       personalContextIntent &&
-      !googleReadTurnActive &&
       !this.pendingPersonalContextTurn
     ) {
       this.pendingPersonalContextTurn = true;
@@ -5096,7 +4675,6 @@ export class GeminiLiveVoiceSession {
       sender === "user" &&
       this.liveGooglePersonalContextFunctionCallingEnabled &&
       personalContextIntent &&
-      !googleReadTurnActive &&
       transcript.finished &&
       !this.personalContextNudgeSentThisTurn
     ) {
@@ -5111,7 +4689,6 @@ export class GeminiLiveVoiceSession {
       sender === "user" &&
       this.liveGooglePersonalContextFunctionCallingEnabled &&
       personalContextIntent &&
-      !googleReadTurnActive &&
       transcript.finished
     ) {
       this.pendingPersonalContextReadFallback = {
@@ -5124,7 +4701,6 @@ export class GeminiLiveVoiceSession {
       sender === "user" &&
       !this.liveGooglePersonalContextFunctionCallingEnabled &&
       personalContextIntent &&
-      !googleReadTurnActive &&
       transcript.finished
     ) {
       this.debug("live.google_context.intent_blocked", {
@@ -5390,39 +4966,6 @@ export class GeminiLiveVoiceSession {
       functionCount: normalizedCalls.length,
       calls: callDebugSummary,
     });
-
-    const duplicateGoogleReadTurnCall =
-      this.pendingGoogleReadVoiceSummary &&
-      normalizedCalls.every((call) =>
-        LIVE_GOOGLE_PERSONAL_CONTEXT_READ_TOOL_NAMES.has(call.name),
-      );
-    if (duplicateGoogleReadTurnCall) {
-      this.debug("live.google_context.voice_read_turn_duplicate_tool_call_blocked", {
-        activeToolNames: this.pendingGoogleReadVoiceSummary?.toolNames ?? [],
-        requestedToolNames: normalizedCalls.map((call) => call.name),
-      });
-      this.sendToolResponseSafely(
-        normalizedCalls.map((call) => ({
-          id: call.id,
-          name: call.name,
-          response: {
-            result: "The latest Google summary is already being finalized.",
-            scheduling: "SILENT",
-          },
-        })),
-      );
-      return;
-    }
-
-    const nativeGoogleReadToolNames = normalizedCalls
-      .map((call) => call.name)
-      .filter((name) => LIVE_GOOGLE_PERSONAL_CONTEXT_READ_TOOL_NAMES.has(name));
-    const isNativeGoogleReadToolCall =
-      nativeGoogleReadToolNames.length > 0 &&
-      nativeGoogleReadToolNames.length === normalizedCalls.length;
-    if (isNativeGoogleReadToolCall) {
-      this.clearUserActivityForGoogleReadTurn(nativeGoogleReadToolNames);
-    }
 
     try {
       const payload = await this.requestLiveToolResponse(normalizedCalls);

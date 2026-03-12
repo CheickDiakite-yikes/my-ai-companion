@@ -75,7 +75,6 @@ type LiveFunctionDeclaration = {
   name: string;
   description: string;
   parameters?: Record<string, unknown>;
-  behavior?: "NON_BLOCKING";
 };
 type LiveFunctionDeclarationsTool = {
   functionDeclarations: LiveFunctionDeclaration[];
@@ -1376,9 +1375,6 @@ function composeLiveSystemInstruction(params: {
         "- If the user asks for the details of a specific meeting or what changed in an invite, call get_calendar_event_detail before answering.",
         "- If the user asks you to draft/reply/send an email, call prepare_google_email_action instead of pretending it was sent.",
         "- If the user asks you to create/update/move a calendar event, call prepare_google_calendar_action instead of pretending it was updated.",
-        "- After any Gmail or Calendar read tool returns a summary, speak that summary immediately in 1 to 3 short sentences.",
-        "- When reading Gmail or Calendar tool results aloud, use natural language. Do not recite raw ISO timestamps, JSON-like fields, or echoed prompt text.",
-        "- Do not call the same Gmail or Calendar read tool again for the same user turn unless the user explicitly asks for a refresh.",
         '- Treat short follow-ups like "send it", "edit that", "make it warmer", "book that", "put that on my calendar", "add location", or "move it to 4" as Google action requests that still require the Gmail or Calendar prepare tool.',
         '- Treat follow-ups like "put that on my calendar", "book that time", "block that off", or "move it to 4" as calendar actions that still require prepare_google_calendar_action.',
         "- After detailed reads, prefer offering one grounded next step such as drafting a reply or updating the event.",
