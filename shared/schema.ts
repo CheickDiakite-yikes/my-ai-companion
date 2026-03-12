@@ -20,6 +20,9 @@ export const conversations = pgTable("conversations", {
   userId: varchar("user_id").notNull(),
   persona: varchar("persona").notNull().default("Zee"),
   title: varchar("title"),
+  messageCount: integer("message_count").notNull().default(0),
+  lastSummarizedAt: timestamp("last_summarized_at"),
+  lastSummarizedIndex: integer("last_summarized_index").notNull().default(0),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -168,6 +171,7 @@ export const memoryItemKindEnum = pgEnum("memory_item_kind", [
   "fact",
   "schedule",
   "relationship",
+  "summary",
 ]);
 
 export const memorySensitivityEnum = pgEnum("memory_sensitivity", [
@@ -470,6 +474,7 @@ export const userMemoryItems = pgTable(
     lastReinforcedAt: timestamp("last_reinforced_at").defaultNow(),
     archived: boolean("archived").notNull().default(false),
     metadata: jsonb("metadata"),
+    embedding: text("embedding"),
     createdAt: timestamp("created_at").defaultNow(),
     updatedAt: timestamp("updated_at").defaultNow(),
   },
@@ -614,6 +619,9 @@ export const insertConversationSchema = createInsertSchema(conversations).omit({
   id: true,
   createdAt: true,
   updatedAt: true,
+  messageCount: true,
+  lastSummarizedIndex: true,
+  lastSummarizedAt: true,
 });
 
 export const insertMessageSchema = createInsertSchema(messages).omit({

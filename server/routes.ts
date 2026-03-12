@@ -12,6 +12,12 @@ import {
   type QuotaMetricSnapshot,
   type QuotaSummary,
 } from "./storage";
+import {
+  generateEmbedding,
+  searchMemoryByEmbedding,
+  getRecentConversationMessages,
+  backfillEmbeddings,
+} from "./memory";
 import { setupAuth, registerAuthRoutes, isAuthenticated } from "./auth";
 import { db } from "./db";
 import { users } from "@shared/models/auth";
@@ -2940,9 +2946,14 @@ async function buildLiveMemoryContext(params: {
   const expectedScriptFamily = resolveExpectedScriptFamilyForLanguage(
     params.expectedLanguageHint,
   );
-  const activeMessages = await storage.getMessagesWithAttachments(params.conversationId);
+
+  const recentMessages = await getRecentConversationMessages({
+    conversationId: params.conversationId,
+    limit: Math.max(1, params.activeThreadMaxMessages),
+  });
+
   let filteredSuspectUserMessages = 0;
-  const activeHistory: MemorySourceMessage[] = activeMessages
+  const activeHistory: MemorySourceMessage[] = recentMessages
     .filter((message) => shouldIncludeMessageInConversationContext(message))
     .filter(
       (message) =>
@@ -2967,16 +2978,8 @@ async function buildLiveMemoryContext(params: {
       return false;
     });
 
-  const recentActive = activeHistory.slice(
-    -Math.max(1, params.activeThreadMaxMessages),
-  );
-  const olderActive = activeHistory.slice(
-    0,
-    Math.max(0, activeHistory.length - recentActive.length),
-  );
-
   let redactionCount = 0;
-  const currentThreadLines = recentActive
+  const currentThreadLines = activeHistory
     .map((message) => {
       const sanitized = sanitizeMemoryText(message.text, params.memoryPolicy);
       redactionCount += sanitized.redactionCount;
@@ -2988,22 +2991,123 @@ async function buildLiveMemoryContext(params: {
     })
     .filter((line): line is string => Boolean(line));
 
-  const olderThreadSummaryLines = olderActive
-    .slice(-10)
-    .map((message) => {
-      const sanitized = sanitizeMemoryText(message.text, params.memoryPolicy);
-      redactionCount += sanitized.redactionCount;
-      if (!sanitized.text) return null;
-      return `- ${messageLabel(message.sender)} earlier: ${truncateMemoryText(
-        sanitized.text,
-        150,
-      )}`;
-    })
-    .filter((line): line is string => Boolean(line));
-
-  const crossChatLines: string[] = [];
+  const semanticRecallLines: string[] = [];
   const durableMemoryLines: string[] = [];
+  const crossChatLines: string[] = [];
+
   if (params.includeCrossChat && params.crossChatMaxMessages > 0) {
+    const recentText = activeHistory
+      .slice(-8)
+      .map((m) => m.text)
+      .join(" ")
+      .slice(0, 1500);
+
+    let queryEmbedding: number[] | null = null;
+    try {
+      queryEmbedding = recentText.length > 10 ? await generateEmbedding(recentText) : null;
+    } catch {
+      queryEmbedding = null;
+    }
+
+    if (queryEmbedding) {
+      try {
+        const semanticResults = await searchMemoryByEmbedding({
+          userId: params.userId,
+          queryEmbedding,
+          limit: 8,
+          onlyKinds: ["summary"],
+        });
+
+        for (const entry of semanticResults) {
+          const sanitized = sanitizeMemoryText(entry.summary, params.memoryPolicy);
+          redactionCount += sanitized.redactionCount;
+          if (!sanitized.text) continue;
+          semanticRecallLines.push(
+            `- [recalled memory, relevance ${Math.round(entry.similarity * 100)}%] ${truncateMemoryText(sanitized.text, 200)}`,
+          );
+        }
+      } catch {
+        // semantic search is best-effort
+      }
+
+      try {
+        const semanticDurable = await searchMemoryByEmbedding({
+          userId: params.userId,
+          queryEmbedding,
+          limit: 10,
+          excludeKinds: ["summary"],
+        });
+
+        const kindCounts = new Map<string, number>();
+        for (const entry of semanticDurable) {
+          if (durableMemoryLines.length >= 12) break;
+          const kindCount = kindCounts.get(entry.kind) ?? 0;
+          if (kindCount >= 3) continue;
+
+          const sanitized = sanitizeMemoryText(entry.summary, params.memoryPolicy);
+          redactionCount += sanitized.redactionCount;
+          if (!sanitized.text) continue;
+
+          durableMemoryLines.push(
+            `- [${entry.kind}] ${truncateMemoryText(sanitized.text, 170)}`,
+          );
+          kindCounts.set(entry.kind, kindCount + 1);
+        }
+      } catch {
+        // durable memory search is best-effort
+      }
+    }
+
+    if (durableMemoryLines.length < 4) {
+      const fallbackItems = await storage.getUserMemoryItems({
+        userId: params.userId,
+        limit: Math.min(120, Math.max(params.crossChatMaxMessages * 2, 24)),
+        includeArchived: false,
+      });
+
+      const activeKeywords = new Set(
+        activeHistory.flatMap((message) => extractKeywords(message.text)),
+      );
+
+      const rankedDurable = fallbackItems
+        .filter((item) => item.kind !== "summary")
+        .map((item) => {
+          const relevance = scoreRelevance(item.summary, activeKeywords);
+          const lastTouchedAt = item.lastReinforcedAt ?? item.updatedAt ?? item.createdAt;
+          const ageDays = Math.max(
+            0,
+            (Date.now() - (lastTouchedAt?.getTime() ?? Date.now())) /
+              (24 * 60 * 60 * 1000),
+          );
+          const recencyBonus = Math.max(0, 2.5 - ageDays / 14);
+          const confidenceBonus = Math.min(3, Math.max(0, item.confidence / 40));
+          const score = relevance * 4 + recencyBonus + confidenceBonus;
+          return { item, score, relevance };
+        })
+        .sort((a, b) => b.score - a.score);
+
+      const existingSummaries = new Set(
+        durableMemoryLines.map((l) => l.toLowerCase()),
+      );
+      const kindCounts = new Map<string, number>();
+      for (const entry of rankedDurable) {
+        if (durableMemoryLines.length >= 12) break;
+        if (entry.relevance <= 0 && durableMemoryLines.length >= 4) continue;
+        const kindCount = kindCounts.get(entry.item.kind) ?? 0;
+        if (kindCount >= 3) continue;
+
+        const sanitized = sanitizeMemoryText(entry.item.summary, params.memoryPolicy);
+        redactionCount += sanitized.redactionCount;
+        if (!sanitized.text) continue;
+
+        const line = `- [${entry.item.kind}] ${truncateMemoryText(sanitized.text, 170)}`;
+        if (existingSummaries.has(line.toLowerCase())) continue;
+
+        durableMemoryLines.push(line);
+        kindCounts.set(entry.item.kind, kindCount + 1);
+      }
+    }
+
     const retrievalLimit = Math.min(
       240,
       Math.max(
@@ -3043,7 +3147,7 @@ async function buildLiveMemoryContext(params: {
       });
 
     const activeKeywords = new Set(
-      recentActive.flatMap((message) => extractKeywords(message.text)),
+      activeHistory.flatMap((message) => extractKeywords(message.text)),
     );
 
     const rankedCrossChat = crossChatMessages.map((message) => ({
@@ -3051,6 +3155,7 @@ async function buildLiveMemoryContext(params: {
       score: scoreRelevance(message.text, activeKeywords),
     }));
 
+    const maxCrossChatLines = Math.min(8, params.crossChatMaxMessages);
     const selectedCrossChat = [
       ...rankedCrossChat
         .filter((entry) => entry.score > 0)
@@ -3067,7 +3172,7 @@ async function buildLiveMemoryContext(params: {
             (b.message.createdAt?.getTime() ?? 0) -
             (a.message.createdAt?.getTime() ?? 0),
         ),
-    ].slice(0, Math.max(1, params.crossChatMaxMessages));
+    ].slice(0, Math.max(1, maxCrossChatLines));
 
     selectedCrossChat.sort(
       (a, b) =>
@@ -3086,51 +3191,6 @@ async function buildLiveMemoryContext(params: {
         ),
       );
     }
-
-    const durableMemoryItems = await storage.getUserMemoryItems({
-      userId: params.userId,
-      limit: Math.min(120, Math.max(params.crossChatMaxMessages * 2, 24)),
-      includeArchived: false,
-    });
-
-    const kindCounts = new Map<string, number>();
-    const rankedDurable = durableMemoryItems
-      .map((item) => {
-        const relevance = scoreRelevance(item.summary, activeKeywords);
-        const lastTouchedAt = item.lastReinforcedAt ?? item.updatedAt ?? item.createdAt;
-        const ageDays = Math.max(
-          0,
-          (Date.now() - (lastTouchedAt?.getTime() ?? Date.now())) /
-            (24 * 60 * 60 * 1000),
-        );
-        const recencyBonus = Math.max(0, 2.5 - ageDays / 14);
-        const confidenceBonus = Math.min(3, Math.max(0, item.confidence / 40));
-        const score = relevance * 4 + recencyBonus + confidenceBonus;
-        return { item, score, relevance };
-      })
-      .sort((a, b) => b.score - a.score);
-
-    for (const entry of rankedDurable) {
-      if (durableMemoryLines.length >= Math.min(12, params.crossChatMaxMessages)) {
-        break;
-      }
-      if (entry.relevance <= 0 && durableMemoryLines.length >= 4) {
-        continue;
-      }
-      const kindCount = kindCounts.get(entry.item.kind) ?? 0;
-      if (kindCount >= 3) {
-        continue;
-      }
-
-      const sanitized = sanitizeMemoryText(entry.item.summary, params.memoryPolicy);
-      redactionCount += sanitized.redactionCount;
-      if (!sanitized.text) continue;
-
-      durableMemoryLines.push(
-        `- [${entry.item.kind}] ${truncateMemoryText(sanitized.text, 170)}`,
-      );
-      kindCounts.set(entry.item.kind, kindCount + 1);
-    }
   }
 
   const profileFacts = buildProfileMemoryLines(
@@ -3145,35 +3205,37 @@ async function buildLiveMemoryContext(params: {
   sections.push(
     `[LIVE TIME ANCHOR — current time is ${liveSnap.weekday}, ${liveSnap.date} at ${liveSnap.time} ${liveSnap.timeZone}. Any earlier timestamps in the conversation below are historical — always use THIS time for "now".]`,
   );
+  if (profileFacts.text.length > 0) {
+    sections.push(["User Profile Facts:", profileFacts.text].join("\n"));
+  }
+  if (durableMemoryLines.length > 0) {
+    sections.push(["Long-Term Memory (things I know about you):", ...durableMemoryLines].join("\n"));
+  }
+  if (semanticRecallLines.length > 0) {
+    sections.push(["Conversation History Summaries (past interactions):", ...semanticRecallLines].join("\n"));
+  }
   if (currentThreadLines.length > 0) {
     sections.push(
       ["Current Thread (recent raw turns):", ...currentThreadLines].join("\n"),
     );
   }
-  if (olderThreadSummaryLines.length > 0) {
-    sections.push(
-      ["Thread Summary (older compressed points):", ...olderThreadSummaryLines].join(
-        "\n",
-      ),
-    );
-  }
   if (crossChatLines.length > 0) {
     sections.push(
-      ["Cross-Chat Relevant Memories:", ...crossChatLines].join("\n"),
+      ["Cross-Chat Recent Context:", ...crossChatLines].join("\n"),
     );
   }
-  if (durableMemoryLines.length > 0) {
-    sections.push(["Long-Term Memory Highlights:", ...durableMemoryLines].join("\n"));
-  }
-  if (profileFacts.text.length > 0) {
-    sections.push(["User Profile Facts:", profileFacts.text].join("\n"));
+
+  const MAX_CONTEXT_CHARS = 12000;
+  let contextBlock = sections.join("\n\n").trim();
+  if (contextBlock.length > MAX_CONTEXT_CHARS) {
+    contextBlock = contextBlock.slice(0, MAX_CONTEXT_CHARS) + "\n[...context truncated for safety]";
   }
 
   return {
-    memoryContextBlock: sections.join("\n\n").trim(),
+    memoryContextBlock: contextBlock,
     activeThreadMessagesUsed: currentThreadLines.length,
-    crossChatMessagesUsed: crossChatLines.length + durableMemoryLines.length,
-    durableMemoryItemsUsed: durableMemoryLines.length,
+    crossChatMessagesUsed: crossChatLines.length + durableMemoryLines.length + semanticRecallLines.length,
+    durableMemoryItemsUsed: durableMemoryLines.length + semanticRecallLines.length,
     redactionCount,
     filteredSuspectUserMessages,
   };

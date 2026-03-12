@@ -1,5 +1,10 @@
 import { randomUUID } from "crypto";
 import {
+  incrementConversationMessageCount,
+  triggerSummarizationIfNeeded,
+  generateEmbedding,
+} from "./memory";
+import {
   conversations,
   messages,
   messageAttachments,
@@ -834,11 +839,12 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createMessage(data: InsertMessage): Promise<Message> {
+    const purpose = inferMessagePurpose(data);
     const [msg] = await db
       .insert(messages)
       .values({
         ...data,
-        messagePurpose: inferMessagePurpose(data),
+        messagePurpose: purpose,
       })
       .returning();
     const [conversation] = await db
@@ -851,6 +857,16 @@ export class DatabaseStorage implements IStorage {
       .update(conversations)
       .set({ updatedAt: new Date() })
       .where(eq(conversations.id, data.conversationId));
+
+    if (purpose === "conversation") {
+      incrementConversationMessageCount(data.conversationId).catch(() => {});
+      if (conversation?.userId) {
+        triggerSummarizationIfNeeded({
+          conversationId: data.conversationId,
+          userId: conversation.userId,
+        }).catch(() => {});
+      }
+    }
 
     try {
       await this.ingestMessageMemory({
@@ -920,6 +936,18 @@ export class DatabaseStorage implements IStorage {
         });
       } catch {
         // Memory ingestion is best-effort and must not block message writes.
+      }
+    }
+
+    if (created.length > 0) {
+      for (let i = 0; i < created.length; i++) {
+        incrementConversationMessageCount(data.conversationId).catch(() => {});
+      }
+      if (conversation?.userId) {
+        triggerSummarizationIfNeeded({
+          conversationId: data.conversationId,
+          userId: conversation.userId,
+        }).catch(() => {});
       }
     }
 
@@ -1233,6 +1261,7 @@ export class DatabaseStorage implements IStorage {
         params.candidate.sensitivity,
       );
 
+      const summaryChanged = summary.toLowerCase() !== (existing.summary ?? "").toLowerCase();
       const [updated] = await db
         .update(userMemoryItems)
         .set({
@@ -1251,6 +1280,20 @@ export class DatabaseStorage implements IStorage {
         })
         .where(eq(userMemoryItems.id, existing.id))
         .returning();
+
+      if (summaryChanged) {
+        generateEmbedding(summary)
+          .then((emb) => {
+            if (emb) {
+              db.update(userMemoryItems)
+                .set({ embedding: JSON.stringify(emb) })
+                .where(eq(userMemoryItems.id, updated.id))
+                .execute()
+                .catch(() => {});
+            }
+          })
+          .catch(() => {});
+      }
 
       return updated;
     }
@@ -1272,6 +1315,19 @@ export class DatabaseStorage implements IStorage {
       .insert(userMemoryItems)
       .values(insertData)
       .returning();
+
+    generateEmbedding(summary)
+      .then((emb) => {
+        if (emb) {
+          db.update(userMemoryItems)
+            .set({ embedding: JSON.stringify(emb) })
+            .where(eq(userMemoryItems.id, created.id))
+            .execute()
+            .catch(() => {});
+        }
+      })
+      .catch(() => {});
+
     return created;
   }
 
