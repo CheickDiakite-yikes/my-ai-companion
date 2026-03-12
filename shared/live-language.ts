@@ -213,13 +213,19 @@ const COMMON_ENGLISH_WORDS = new Set([
   "want", "was", "way", "we", "well", "were", "what", "when", "which", "who",
   "why", "will", "with", "would", "ya", "yah", "yeah", "yep", "yes", "yet",
   "yo", "you", "your",
-  "again", "check", "cool", "done", "email", "emails", "fun", "haha",
-  "hello", "heyy", "hmm", "lol", "morning", "nah", "nope", "nothing",
-  "please", "read", "repeat", "same", "still", "stop", "today", "tomorrow",
-  "tonight", "wait", "what's", "whats", "where", "yep", "yoo", "yooo",
-  "sup", "wassup", "bruh", "bro", "dude", "alright", "bye", "goodnight",
-  "hear", "heard", "listen", "loud", "clear", "calendar", "schedule",
-  "summary", "summarize",
+  "again", "check", "cool", "done", "email", "emails", "fun", "funny",
+  "haha", "hello", "heyy", "hmm", "joke", "lol", "morning", "nah", "nope",
+  "nothing", "please", "read", "repeat", "same", "still", "stop", "today",
+  "tomorrow", "tonight", "wait", "what's", "whats", "where", "yep", "yoo",
+  "yooo", "sup", "wassup", "bruh", "bro", "dude", "alright", "bye",
+  "goodnight", "hear", "heard", "listen", "loud", "clear", "calendar",
+  "schedule", "summary", "summarize", "send", "save", "draft", "cancel",
+  "delete", "open", "show", "play", "pause", "next", "skip", "help",
+  "nice", "love", "hate", "fine", "bad", "mad", "sad", "happy", "wow",
+  "awesome", "terrible", "amazing", "perfect", "sorry", "answer", "ask",
+  "call", "remind", "set", "turn", "close", "add", "remove", "change",
+  "update", "fix", "move", "put", "song", "music", "weather", "news",
+  "dinner", "lunch", "food", "recipe", "joke", "story", "thanks",
 ]);
 
 function hasCommonEnglishWord(text: string): boolean {
@@ -538,7 +544,7 @@ export function evaluateUserTranscriptPersistence(params: {
         scriptStats,
       };
     }
-    if (!hasCommonEnglishWord(normalized) && wordCount <= 2 && scriptStats.lettersAnalyzed <= 8) {
+    if (!hasCommonEnglishWord(normalized) && wordCount <= 1 && scriptStats.lettersAnalyzed <= 3) {
       return {
         discard: true,
         reason: "non_english_latin_short_fragment",
@@ -556,4 +562,20 @@ export function evaluateUserTranscriptPersistence(params: {
     wordCount,
     scriptStats,
   };
+}
+
+const THOUGHT_REASONING_PATTERN = /^(?:thought|internal|reasoning)(?::\s*|\s+)(?:The user|I should|I need to|I will|I'll|Let me|This is|My response|The question|Looking at|Based on|Since the|Now I|First,|OK so)/i;
+
+const THOUGHT_BRACKETED_PATTERN = /^\[(?:thought|thinking|internal|reasoning)\]/i;
+
+export function stripAssistantThoughtContent(text: string): string | null {
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+  if (THOUGHT_REASONING_PATTERN.test(trimmed)) {
+    return null;
+  }
+  if (THOUGHT_BRACKETED_PATTERN.test(trimmed)) {
+    return null;
+  }
+  return trimmed;
 }

@@ -13894,7 +13894,8 @@ function App() {
       .catch(() => undefined)
       .then(async () => {
         const persisted = await persistVoiceTranscriptMutation.mutateAsync(payload);
-        logLiveTrace("voice.transcript.persisted", {
+        const wasFiltered = (persisted as any).filtered === true;
+        logLiveTrace(wasFiltered ? "voice.transcript.server_filtered" : "voice.transcript.persisted", {
           runId: liveRunIdRef.current,
           conversationId: payload.conversationId,
           sender: payload.sender,

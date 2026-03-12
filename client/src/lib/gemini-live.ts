@@ -11,6 +11,7 @@ import {
   evaluateUserTranscriptPersistence,
   resolveExpectedScriptFamilyForLanguage,
   shouldFlagTranscriptLanguageMismatch,
+  stripAssistantThoughtContent,
   type TranscriptScriptFamily,
 } from "@shared/live-language";
 import {
@@ -4735,16 +4736,15 @@ export class GeminiLiveVoiceSession {
       this.sendWebSearchNudge(text);
     }
 
-    if (
+    const duringAssistantSpeech =
       sender === "user" &&
       SUPPRESS_USER_TRANSCRIPT_DURING_ASSISTANT_SPEECH &&
       !this.manualActivityActive &&
-      this.isAssistantSpeechWindowActive()
-    ) {
-      this.debug("live.transcript.user_suppressed_during_assistant_speech", {
+      this.isAssistantSpeechWindowActive();
+    if (duringAssistantSpeech) {
+      this.debug("live.transcript.user_during_assistant_speech_persist_only", {
         textLength: text.length,
       });
-      return;
     }
 
     const mergedText = mergeTranscriptText(
@@ -4822,8 +4822,20 @@ export class GeminiLiveVoiceSession {
     rawText: string | undefined,
     reason: "finished" | "turn_complete" | "idle_timeout",
   ): void {
-    const text = normalizeText(rawText);
+    let text = normalizeText(rawText);
     if (!text) return;
+
+    if (sender === "assistant") {
+      const cleaned = stripAssistantThoughtContent(text);
+      if (!cleaned) {
+        this.debug("live.transcript.assistant_thought_filtered", {
+          textLength: text.length,
+          reason,
+        });
+        return;
+      }
+      text = cleaned;
+    }
 
     if (sender === "user") {
       const persistenceDecision = evaluateUserTranscriptPersistence({

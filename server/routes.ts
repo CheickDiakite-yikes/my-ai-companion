@@ -80,6 +80,7 @@ import {
   evaluateUserTranscriptPersistence,
   resolveEffectiveLanguageHint,
   resolveExpectedScriptFamilyForLanguage,
+  stripAssistantThoughtContent,
 } from "@shared/live-language";
 import {
   classifyTurnIntentWithModel,
@@ -17653,10 +17654,26 @@ export async function registerRoutes(
 
         const parsed = voiceTranscriptSchema.parse(req.body ?? {});
 
+        let textToSave = parsed.text;
+        if (parsed.sender === "assistant") {
+          const cleaned = stripAssistantThoughtContent(textToSave);
+          if (!cleaned) {
+            trace(req, "voice.transcript.assistant_thought_filtered", {
+              conversationId: conversation.id,
+              textLength: parsed.text.length,
+            });
+            return res.status(200).json({
+              traceId: getTraceId(req),
+              filtered: true,
+            });
+          }
+          textToSave = cleaned;
+        }
+
         const saved = await storage.createMessage({
           conversationId: conversation.id,
           sender: parsed.sender,
-          text: parsed.text,
+          text: textToSave,
         });
 
         trace(req, "voice.transcript.persisted", {
