@@ -178,7 +178,14 @@ async function main(): Promise<void> {
       /(checked your unread emails|unread emails|read a full thread|draft a reply)/i,
       "Expected live email-read requests to produce a user-facing digest summary",
     );
+    await assertNativeGoogleReadVoiceCompletion(
+      page,
+      readTraceBuffer,
+      "gmail",
+      "get_user_emails",
+    );
 
+    await clearTraceBuffer();
     const misroutedEmailReadDigest =
       await requestLiveGoogleReadSummaryViaMisroutedAction(page, args.baseUrl, {
         conversationId,
@@ -192,6 +199,7 @@ async function main(): Promise<void> {
       "Expected misrouted live email-read requests to recover to the inbox-read digest",
     );
 
+    await clearTraceBuffer();
     const misroutedCalendarReadDigest =
       await requestLiveGoogleReadSummaryViaMisroutedAction(page, args.baseUrl, {
         conversationId,
@@ -204,6 +212,12 @@ async function main(): Promise<void> {
       misroutedCalendarReadDigest,
       /(checked your calendar|calendar for today|scheduled there right now)/i,
       "Expected misrouted live calendar-read requests to recover to the calendar-read digest",
+    );
+    await assertNativeGoogleReadVoiceCompletion(
+      page,
+      readTraceBuffer,
+      "calendar",
+      "get_calendar_events",
     );
 
     await prepareLiveGoogleAction(page, args.baseUrl, {
@@ -515,7 +529,7 @@ async function prepareLiveGoogleAction(
 
 async function requestLiveGoogleReadSummary(
   page: Page,
-  baseUrl: string,
+  _baseUrl: string,
   params: {
     conversationId: string;
     functionName:
@@ -527,25 +541,59 @@ async function requestLiveGoogleReadSummary(
   },
 ): Promise<string> {
   const functionId = randomUUID();
-  const response = await page.request.post(`${baseUrl}/api/live/tool-response`, {
-    data: {
-      conversationId: params.conversationId,
-      clientTimeZone: "America/New_York",
-      functionCalls: [
-        {
-          id: functionId,
-          name: params.functionName,
-          args: params.args,
-        },
-      ],
-    },
-  });
-  assert.equal(
-    response.ok(),
-    true,
-    `Expected live tool-response to succeed for ${params.functionName}`,
+  await page.waitForFunction(
+    () =>
+      typeof (window as typeof window & {
+        __zeeLiveDebug?: { runLiveToolResponse?: unknown };
+      }).__zeeLiveDebug?.runLiveToolResponse === "function",
   );
-  const payload = (await response.json()) as {
+  const payload = (await page.evaluate(
+    async ({
+      functionId: browserFunctionId,
+      functionName,
+      args,
+    }: {
+      functionId: string;
+      functionName: string;
+      args: Record<string, unknown>;
+    }) => {
+      const bridge = (
+        window as typeof window & {
+          __zeeLiveDebug?: {
+            runLiveToolResponse?: (input: {
+              functionCalls: Array<{
+                id?: string;
+                name: string;
+                args?: Record<string, unknown>;
+              }>;
+            }) => Promise<{
+              traceId: string | null;
+              chatDigests: Array<{ text: string }>;
+              resolvedFunctionCalls: unknown[];
+              functionResponses: unknown[];
+            }>;
+          };
+        }
+      ).__zeeLiveDebug;
+      if (!bridge?.runLiveToolResponse) {
+        throw new Error("Live debug bridge is not available");
+      }
+      return await bridge.runLiveToolResponse({
+        functionCalls: [
+          {
+            id: browserFunctionId,
+            name: functionName,
+            args,
+          },
+        ],
+      });
+    },
+    {
+      functionId,
+      functionName: params.functionName,
+      args: params.args,
+    },
+  )) as {
     chatDigests?: Array<{ text?: string }>;
   };
   const digestText =
@@ -561,7 +609,7 @@ async function requestLiveGoogleReadSummary(
 
 async function requestLiveGoogleReadSummaryViaMisroutedAction(
   page: Page,
-  baseUrl: string,
+  _baseUrl: string,
   params: {
     conversationId: string;
     functionName: "prepare_google_email_action" | "prepare_google_calendar_action";
@@ -575,28 +623,65 @@ async function requestLiveGoogleReadSummaryViaMisroutedAction(
   },
 ): Promise<string> {
   const functionId = randomUUID();
-  const response = await page.request.post(`${baseUrl}/api/live/tool-response`, {
-    data: {
-      conversationId: params.conversationId,
-      clientTimeZone: params.timezone ?? "America/New_York",
-      functionCalls: [
-        {
-          id: functionId,
-          name: params.functionName,
-          args: {
-            request: params.request,
-            ...(params.timezone ? { timezone: params.timezone } : {}),
-          },
-        },
-      ],
-    },
-  });
-  assert.equal(
-    response.ok(),
-    true,
-    `Expected live tool-response to succeed for misrouted ${params.functionName}`,
+  await page.waitForFunction(
+    () =>
+      typeof (window as typeof window & {
+        __zeeLiveDebug?: { runLiveToolResponse?: unknown };
+      }).__zeeLiveDebug?.runLiveToolResponse === "function",
   );
-  const payload = (await response.json()) as {
+  const payload = (await page.evaluate(
+    async ({
+      functionId: browserFunctionId,
+      functionName,
+      request,
+      timezone,
+    }: {
+      functionId: string;
+      functionName: "prepare_google_email_action" | "prepare_google_calendar_action";
+      request: string;
+      timezone?: string;
+    }) => {
+      const bridge = (
+        window as typeof window & {
+          __zeeLiveDebug?: {
+            runLiveToolResponse?: (input: {
+              functionCalls: Array<{
+                id?: string;
+                name: string;
+                args?: Record<string, unknown>;
+              }>;
+            }) => Promise<{
+              traceId: string | null;
+              chatDigests: Array<{ text: string }>;
+              resolvedFunctionCalls: unknown[];
+              functionResponses: unknown[];
+            }>;
+          };
+        }
+      ).__zeeLiveDebug;
+      if (!bridge?.runLiveToolResponse) {
+        throw new Error("Live debug bridge is not available");
+      }
+      return await bridge.runLiveToolResponse({
+        functionCalls: [
+          {
+            id: browserFunctionId,
+            name: functionName,
+            args: {
+              request,
+              ...(timezone ? { timezone } : {}),
+            },
+          },
+        ],
+      });
+    },
+    {
+      functionId,
+      functionName: params.functionName,
+      request: params.request,
+      timezone: params.timezone,
+    },
+  )) as {
     resolvedFunctionCalls?: Array<{
       id?: string;
       requestedName?: string;
@@ -1148,6 +1233,58 @@ async function startVoiceSession(
       `Voice session failed to start: ${JSON.stringify(started.slice(-12), null, 2)}`,
     );
   }
+}
+
+async function assertNativeGoogleReadVoiceCompletion(
+  page: Page,
+  readTraceBuffer: () => Promise<LiveTraceEntry[]>,
+  scope: "gmail" | "calendar" | "both",
+  expectedToolName:
+    | "get_user_emails"
+    | "get_email_thread_detail"
+    | "get_calendar_events"
+    | "get_calendar_event_detail",
+): Promise<void> {
+  const deadline = Date.now() + 18_000;
+  let lastTrace: LiveTraceEntry[] = [];
+
+  while (Date.now() < deadline) {
+    lastTrace = await readTraceBuffer();
+    const started = lastTrace.some(
+      (entry) =>
+        entry.event === "live.google_context.voice_read_turn_started" &&
+        Array.isArray(entry.metadata?.toolNames) &&
+        (entry.metadata.toolNames as unknown[]).includes(expectedToolName),
+    );
+    const audioStarted = lastTrace.some((entry) =>
+      [
+        "live.google_context.voice_read_turn_audio_started",
+        "live.assistant.audio_enqueued",
+      ].includes(entry.event),
+    );
+    const failed = lastTrace.some(
+      (entry) => entry.event === "live.google_context.voice_read_turn_failed_no_audio",
+    );
+    if (started && audioStarted) {
+      assert.equal(
+        lastTrace.some(
+          (entry) =>
+            entry.event === "live.google_context.voice_read_turn_duplicate_tool_call_blocked",
+        ),
+        false,
+        `Expected ${scope} read turn to complete without duplicate tool-call blocking`,
+      );
+      return;
+    }
+    if (failed) {
+      break;
+    }
+    await page.waitForTimeout(250);
+  }
+
+  throw new Error(
+    `Expected native ${scope} read turn to produce assistant audio after ${expectedToolName}, but it did not.\nRecent traces: ${JSON.stringify(lastTrace.slice(-20), null, 2)}`,
+  );
 }
 
 function parseLiveTraceConsoleMessage(text: string): LiveTraceEntry | null {

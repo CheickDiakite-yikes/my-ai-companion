@@ -1764,6 +1764,7 @@ function buildLiveEmailThreadSummary(params: {
 function buildLiveCalendarReadSummary(params: {
   events: CalendarEventItem[];
   timeRange: GooglePersonalContextTimeRange;
+  timezone: string;
 }): string {
   const timeRangeLabel =
     params.timeRange === "tomorrow"
@@ -1779,8 +1780,10 @@ function buildLiveCalendarReadSummary(params: {
   const countLabel =
     params.events.length === 1 ? "1 event" : `${params.events.length} events`;
   const highlights = params.events.slice(0, 3).map((event) => {
+    const startLabel =
+      formatDisplayDateTime(event.startTime, params.timezone) ?? event.startTime;
     const locationSuffix = event.location ? ` at ${event.location}` : "";
-    return `${event.title} from ${event.startTime} to ${event.endTime}${locationSuffix}`;
+    return `${event.title}${startLabel ? ` on ${startLabel}` : ""}${locationSuffix}`;
   });
   return `I checked your calendar for ${timeRangeLabel}. You have ${countLabel}: ${highlights.join("; ")}. I can open one up or help you move it next.`;
 }
@@ -13025,15 +13028,26 @@ export async function registerRoutes(
                 accessToken: resolved.token,
                 maxThreads,
               }));
+            const summaryText = buildLiveEmailReadSummary({
+              inboxHighlights,
+              unreadOnly: false,
+              sinceDays: 3,
+            });
             functionResponses.push({
               id: functionCall.id,
               name: functionCall.name,
               response: {
-                result: {
-                  inboxHighlights,
-                  partialFailures: gatewayInbox?.partialFailures ?? [],
-                },
+                result: summaryText,
+                summaryText,
+                kind: "email_inbox",
+                itemCount: inboxHighlights.length,
+                timeRange: "last_3_days",
+                scheduling: "INTERRUPT",
               },
+            });
+            chatDigests.push({
+              sender: "assistant",
+              text: summaryText,
             });
             webSearchEvents.push({
               status: "grounded",
@@ -13131,24 +13145,27 @@ export async function registerRoutes(
                 sinceDays,
                 unreadOnly,
               });
+              const summaryText = buildLiveEmailReadSummary({
+                inboxHighlights,
+                unreadOnly,
+                sinceDays,
+              });
 
               functionResponses.push({
                 id: functionCall.id,
                 name: functionCall.name,
                 response: {
-                  result: {
-                    inboxHighlights,
-                    partialFailures: [] as GoogleDataFailureCode[],
-                  },
+                  result: summaryText,
+                  summaryText,
+                  kind: "email_inbox",
+                  itemCount: inboxHighlights.length,
+                  timeRange: sinceDays === 1 ? "last_day" : `last_${sinceDays}_days`,
+                  scheduling: "INTERRUPT",
                 },
               });
               chatDigests.push({
                 sender: "assistant",
-                text: buildLiveEmailReadSummary({
-                  inboxHighlights,
-                  unreadOnly,
-                  sinceDays,
-                }),
+                text: summaryText,
               });
               webSearchEvents.push({
                 status: "grounded",
@@ -13306,22 +13323,24 @@ export async function registerRoutes(
                 thread.messages.length > 0
                   ? `I can draft a reply to ${thread.messages[thread.messages.length - 1]?.from?.email ?? "the sender"} if you want.`
                   : "I can draft a reply next if you want.";
+              const summaryText = buildLiveEmailThreadSummary({
+                thread,
+                nextBestAction,
+              });
               functionResponses.push({
                 id: functionCall.id,
                 name: functionCall.name,
                 response: {
-                  result: {
-                    thread,
-                    nextBestAction,
-                  },
+                  result: summaryText,
+                  summaryText,
+                  kind: "email_thread",
+                  itemCount: thread.messages.length,
+                  scheduling: "INTERRUPT",
                 },
               });
               chatDigests.push({
                 sender: "assistant",
-                text: buildLiveEmailThreadSummary({
-                  thread,
-                  nextBestAction,
-                }),
+                text: summaryText,
               });
               webSearchEvents.push({
                 status: "grounded",
@@ -13459,25 +13478,27 @@ export async function registerRoutes(
                 timezone,
                 maxEvents,
               });
+              const summaryText = buildLiveCalendarReadSummary({
+                events,
+                timeRange,
+                timezone,
+              });
 
               functionResponses.push({
                 id: functionCall.id,
                 name: functionCall.name,
                 response: {
-                  result: {
-                    events,
-                    timeRange,
-                    timezone,
-                    partialFailures: [] as GoogleDataFailureCode[],
-                  },
+                  result: summaryText,
+                  summaryText,
+                  kind: "calendar_events",
+                  itemCount: events.length,
+                  timeRange,
+                  scheduling: "INTERRUPT",
                 },
               });
               chatDigests.push({
                 sender: "assistant",
-                text: buildLiveCalendarReadSummary({
-                  events,
-                  timeRange,
-                }),
+                text: summaryText,
               });
               webSearchEvents.push({
                 status: "grounded",
@@ -13648,24 +13669,25 @@ export async function registerRoutes(
                 eventId,
                 timezone,
               });
+              const nextBestAction =
+                "I can move this event or update its details with your approval.";
+              const summaryText = buildLiveCalendarEventSummary({
+                event,
+                nextBestAction,
+              });
               functionResponses.push({
                 id: functionCall.id,
                 name: functionCall.name,
                 response: {
-                  result: {
-                    event,
-                    nextBestAction:
-                      "I can move this event or update its details with your approval.",
-                  },
+                  result: summaryText,
+                  summaryText,
+                  kind: "calendar_event",
+                  scheduling: "INTERRUPT",
                 },
               });
               chatDigests.push({
                 sender: "assistant",
-                text: buildLiveCalendarEventSummary({
-                  event,
-                  nextBestAction:
-                    "I can move this event or update its details with your approval.",
-                }),
+                text: summaryText,
               });
               webSearchEvents.push({
                 status: "grounded",
