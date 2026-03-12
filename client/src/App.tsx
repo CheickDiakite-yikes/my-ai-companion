@@ -1907,7 +1907,7 @@ function inferVoiceLookupPresentation(params: {
   const normalizedLabel = (params.label ?? "").trim();
   const scopeFromLabel = inferVoiceLookupScopeFromLabel(normalizedLabel);
   const stalledMatch = params.liveError?.match(
-    /I checked (your inbox and calendar|your inbox|your calendar), but my voice reply stalled/i,
+    /I checked (your inbox and calendar|your inbox|your calendar), but my spoken reply stalled/i,
   );
   const stalledScope =
     stalledMatch?.[1]?.toLowerCase().includes("inbox and calendar")
@@ -1929,11 +1929,11 @@ function inferVoiceLookupPresentation(params: {
             ? "Calendar summary ready"
             : "Inbox summary ready",
       subtitle:
-        "Zee finished the lookup, but the spoken reply stalled. Swipe up to read the summary in chat.",
-      statusLabel: "Summary ready in chat",
+        "Zee finished the lookup, but the native voice reply stalled. Please ask again.",
+      statusLabel: "Voice reply stalled",
       openLabel:
         stalledScope === "both"
-          ? "Open Google summary"
+          ? "Open Google lookup"
           : stalledScope === "calendar"
             ? "Open calendar lookup"
             : "Open inbox lookup",
@@ -8969,9 +8969,9 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
     ? getVoiceStageCandidateSummary(voiceStageSurface)
     : null;
 
-  const voiceStageTitle = activeVoiceLookupPresentation?.title
-    ? activeVoiceLookupPresentation.title
-    : voiceStageSurface?.kind === "task"
+  const voiceStageTitle =
+    activeVoiceLookupPresentation?.title ??
+    (voiceStageSurface?.kind === "task"
       ? activeVoiceStageSummary?.title ??
         (voiceStageSurface.card.googleActionPreview?.connector === "gmail"
           ? "Zee Mail"
@@ -8986,11 +8986,11 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
             ? voiceStageSurface.ambiguity.connector === "calendar"
               ? "Choose The Event"
               : "Choose The Email"
-            : "Voice Canvas";
+            : "Voice Canvas");
 
-  const voiceStageSubtitle = activeVoiceLookupPresentation?.subtitle
-    ? activeVoiceLookupPresentation.subtitle
-    : voiceStageSurface?.kind === "task"
+  const voiceStageSubtitle =
+    activeVoiceLookupPresentation?.subtitle ??
+    (voiceStageSurface?.kind === "task"
       ? activeVoiceStageSummary?.detail ?? voiceStageSurface.card.title
       : voiceStageSurface?.kind === "calendar_session"
         ? "Zee is collecting the missing event details."
@@ -9000,7 +9000,7 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
             ? voiceStageSurface.ambiguity.connector === "calendar"
               ? "Zee needs one quick event clarification before acting."
               : "Zee needs one quick draft clarification before acting."
-            : "Task-ready surface";
+            : "Task-ready surface");
 
   const voiceCanvasOpenLabel =
     activeVoiceLookupPresentation?.openLabel ??
@@ -13101,68 +13101,42 @@ function App() {
   }, [liveDebugState, liveTokenConfigSummary]);
 
   useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-    const debugWindow = window as typeof window & {
-      __pwLiveSessionBridge?: {
-        isSessionActive: () => boolean;
-        getConversationId: () => string | null;
-        requestPersonalContextRead: (text: string) => boolean;
-        executeToolCalls: (params: {
-          normalizedCalls: Array<{
-            id: string;
-            name: string;
-            args: Record<string, unknown>;
-          }>;
-          forwardFunctionResponsesToSession?: boolean;
-          allowGoogleReadVoiceFallback?: boolean;
-        }) => Promise<unknown>;
-      };
-    };
+    if (typeof window === "undefined") return;
     if (!liveDebugEnabled) {
-      delete debugWindow.__pwLiveSessionBridge;
+      delete (window as typeof window & { __zeeLiveDebug?: unknown }).__zeeLiveDebug;
       return;
     }
-    const bridge = {
-      isSessionActive: () => Boolean(liveSessionRef.current),
-      getConversationId: () => liveConversationRef.current,
-      requestPersonalContextRead: (text: string) => {
-        const liveSession = liveSessionRef.current;
-        if (!liveSession) {
-          throw new Error("No active live session");
-        }
-        return liveSession.debugRequestPersonalContextRead(text);
-      },
-      executeToolCalls: (params: {
-        normalizedCalls: Array<{
-          id: string;
+
+    const debugBridge = {
+      runLiveToolResponse: async (input: {
+        functionCalls: Array<{
+          id?: string;
           name: string;
-          args: Record<string, unknown>;
+          args?: Record<string, unknown>;
         }>;
-        forwardFunctionResponsesToSession?: boolean;
-        allowGoogleReadVoiceFallback?: boolean;
       }) => {
-        const liveSession = liveSessionRef.current;
-        if (!liveSession) {
-          return Promise.reject(new Error("No active live session"));
+        if (!liveSessionRef.current) {
+          throw new Error("Live voice session is not active");
         }
-        return liveSession.debugExecuteLiveToolCalls({
-          normalizedCalls: params.normalizedCalls,
-          forwardFunctionResponsesToSession:
-            params.forwardFunctionResponsesToSession ?? true,
-          allowGoogleReadVoiceFallback:
-            params.allowGoogleReadVoiceFallback ?? true,
-        });
+        return await liveSessionRef.current.debugRunServerToolResponse(input);
       },
+      getConversationId: () => liveConversationRef.current,
+      getDebugState: () => liveDebugState,
+      getTraceCount: () => liveTraceEntriesRef.current.length,
     };
-    debugWindow.__pwLiveSessionBridge = bridge;
+
+    (window as typeof window & { __zeeLiveDebug?: typeof debugBridge }).__zeeLiveDebug =
+      debugBridge;
+
     return () => {
-      if (debugWindow.__pwLiveSessionBridge === bridge) {
-        delete debugWindow.__pwLiveSessionBridge;
+      const debugWindow = window as typeof window & {
+        __zeeLiveDebug?: typeof debugBridge;
+      };
+      if (debugWindow.__zeeLiveDebug === debugBridge) {
+        delete debugWindow.__zeeLiveDebug;
       }
     };
-  }, [liveDebugEnabled]);
+  }, [liveDebugEnabled, liveDebugState]);
 
   const clearWebLookupStatus = useCallback((mode: WebLookupMode) => {
     if (mode === "text") {

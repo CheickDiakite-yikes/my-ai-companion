@@ -1764,6 +1764,7 @@ function buildLiveEmailThreadSummary(params: {
 function buildLiveCalendarReadSummary(params: {
   events: CalendarEventItem[];
   timeRange: GooglePersonalContextTimeRange;
+  timezone: string;
 }): string {
   const timeRangeLabel =
     params.timeRange === "tomorrow"
@@ -1779,8 +1780,10 @@ function buildLiveCalendarReadSummary(params: {
   const countLabel =
     params.events.length === 1 ? "1 event" : `${params.events.length} events`;
   const highlights = params.events.slice(0, 3).map((event) => {
+    const startLabel =
+      formatDisplayDateTime(event.startTime, params.timezone) ?? event.startTime;
     const locationSuffix = event.location ? ` at ${event.location}` : "";
-    return `${event.title} from ${event.startTime} to ${event.endTime}${locationSuffix}`;
+    return `${event.title}${startLabel ? ` on ${startLabel}` : ""}${locationSuffix}`;
   });
   return `I checked your calendar for ${timeRangeLabel}. You have ${countLabel}: ${highlights.join("; ")}. I can open one up or help you move it next.`;
 }
@@ -12749,7 +12752,6 @@ export async function registerRoutes(
           id: string;
           name: string;
           response: Record<string, unknown>;
-          scheduling?: "INTERRUPT" | "WHEN_IDLE" | "SILENT";
         }> = [];
         const resolvedFunctionCalls: Array<{
           id: string;
@@ -12766,50 +12768,6 @@ export async function registerRoutes(
           status: "searching" | "grounded" | "idle";
           label?: string;
         }> = [];
-        const toCompactLiveReadResponse = (params: {
-          kind:
-            | "email_inbox"
-            | "email_thread"
-            | "calendar_events"
-            | "calendar_event";
-          summaryText: string;
-          payload: Record<string, unknown>;
-        }) => {
-          const normalizedSummary = params.summaryText.replace(/\s+/g, " ").trim();
-          const maxVoiceChars = 220;
-          const spokenSummaryText =
-            normalizedSummary.length <= maxVoiceChars
-              ? normalizedSummary
-              : (() => {
-                  const clipped = normalizedSummary.slice(0, maxVoiceChars);
-                  const lastSentenceBreak = clipped.lastIndexOf(". ");
-                  const lastClauseBreak = Math.max(
-                    clipped.lastIndexOf("; "),
-                    clipped.lastIndexOf(", "),
-                  );
-                  const cutoff =
-                    lastSentenceBreak >= 120
-                      ? lastSentenceBreak + 1
-                      : lastClauseBreak >= 140
-                        ? lastClauseBreak
-                        : maxVoiceChars;
-                  return `${clipped.slice(0, cutoff).trim()}…`;
-                })();
-          const responseBody = {
-            result: spokenSummaryText,
-            summaryText: spokenSummaryText,
-            kind: params.kind,
-            ...params.payload,
-            scheduling: "INTERRUPT" as const,
-          };
-          return {
-            responseBody,
-            approxBytes: Buffer.byteLength(
-              JSON.stringify(responseBody),
-              "utf8",
-            ),
-          };
-        };
         const hasMorningBriefFunctionCalls = parsed.functionCalls.some(
           (call) =>
             call.name === "get_morning_brief" ||
@@ -13070,15 +13028,26 @@ export async function registerRoutes(
                 accessToken: resolved.token,
                 maxThreads,
               }));
+            const summaryText = buildLiveEmailReadSummary({
+              inboxHighlights,
+              unreadOnly: false,
+              sinceDays: 3,
+            });
             functionResponses.push({
               id: functionCall.id,
               name: functionCall.name,
               response: {
-                result: {
-                  inboxHighlights,
-                  partialFailures: gatewayInbox?.partialFailures ?? [],
-                },
+                result: summaryText,
+                summaryText,
+                kind: "email_inbox",
+                itemCount: inboxHighlights.length,
+                timeRange: "last_3_days",
+                scheduling: "INTERRUPT",
               },
+            });
+            chatDigests.push({
+              sender: "assistant",
+              text: summaryText,
             });
             webSearchEvents.push({
               status: "grounded",
@@ -13181,32 +13150,18 @@ export async function registerRoutes(
                 unreadOnly,
                 sinceDays,
               });
-              const compactInboxHighlights = inboxHighlights
-                .slice(0, 8)
-                .map((highlight) => ({
-                  threadId: highlight.threadId,
-                  messageId: highlight.messageId,
-                  subject: highlight.subject,
-                  snippet: highlight.snippet,
-                  from: highlight.from,
-                  receivedAt: highlight.receivedAt,
-                  unread: highlight.unread,
-                }));
-              const { responseBody, approxBytes } = toCompactLiveReadResponse({
-                kind: "email_inbox",
-                summaryText,
-                payload: {
-                  itemCount: inboxHighlights.length,
-                  unreadOnly,
-                  sinceDays,
-                  highlights: compactInboxHighlights,
-                },
-              });
 
               functionResponses.push({
                 id: functionCall.id,
                 name: functionCall.name,
-                response: responseBody,
+                response: {
+                  result: summaryText,
+                  summaryText,
+                  kind: "email_inbox",
+                  itemCount: inboxHighlights.length,
+                  timeRange: sinceDays === 1 ? "last_day" : `last_${sinceDays}_days`,
+                  scheduling: "INTERRUPT",
+                },
               });
               chatDigests.push({
                 sender: "assistant",
@@ -13220,7 +13175,6 @@ export async function registerRoutes(
                 conversationId: conversation.id,
                 emailCount: inboxHighlights.length,
                 unreadOnly,
-                liveResponseBytes: approxBytes,
                 elapsedMs: elapsedMs(emailToolStartedAt),
               });
             } catch (error) {
@@ -13373,32 +13327,16 @@ export async function registerRoutes(
                 thread,
                 nextBestAction,
               });
-              const latestMessage =
-                thread.messages.length > 0
-                  ? thread.messages[thread.messages.length - 1]
-                  : null;
-              const { responseBody, approxBytes } = toCompactLiveReadResponse({
-                kind: "email_thread",
-                summaryText,
-                payload: {
-                  threadId: thread.threadId,
-                  subject: thread.subject,
-                  participants: thread.participants,
-                  latestMessage: latestMessage
-                    ? {
-                        from: latestMessage.from,
-                        receivedAt: latestMessage.receivedAt,
-                        excerpt: latestMessage.bodyTextExcerpt,
-                      }
-                    : null,
-                  attachmentCount: thread.attachments.length,
-                  nextBestAction,
-                },
-              });
               functionResponses.push({
                 id: functionCall.id,
                 name: functionCall.name,
-                response: responseBody,
+                response: {
+                  result: summaryText,
+                  summaryText,
+                  kind: "email_thread",
+                  itemCount: thread.messages.length,
+                  scheduling: "INTERRUPT",
+                },
               });
               chatDigests.push({
                 sender: "assistant",
@@ -13412,7 +13350,6 @@ export async function registerRoutes(
                 conversationId: conversation.id,
                 threadId,
                 query,
-                liveResponseBytes: approxBytes,
                 elapsedMs: elapsedMs(detailStartedAt),
               });
             } catch (error) {
@@ -13544,31 +13481,20 @@ export async function registerRoutes(
               const summaryText = buildLiveCalendarReadSummary({
                 events,
                 timeRange,
-              });
-              const compactEvents = events.slice(0, 10).map((event) => ({
-                eventId: event.eventId,
-                title: event.title,
-                start: event.start,
-                end: event.end,
-                location: event.location,
-                attendees: event.attendees.length,
-                status: event.status,
-              }));
-              const { responseBody, approxBytes } = toCompactLiveReadResponse({
-                kind: "calendar_events",
-                summaryText,
-                payload: {
-                  itemCount: events.length,
-                  timeRange,
-                  timezone,
-                  events: compactEvents,
-                },
+                timezone,
               });
 
               functionResponses.push({
                 id: functionCall.id,
                 name: functionCall.name,
-                response: responseBody,
+                response: {
+                  result: summaryText,
+                  summaryText,
+                  kind: "calendar_events",
+                  itemCount: events.length,
+                  timeRange,
+                  scheduling: "INTERRUPT",
+                },
               });
               chatDigests.push({
                 sender: "assistant",
@@ -13581,7 +13507,6 @@ export async function registerRoutes(
               trace(req, "live.tool.calendar.success", {
                 conversationId: conversation.id,
                 eventCount: events.length,
-                liveResponseBytes: approxBytes,
                 elapsedMs: elapsedMs(calendarToolStartedAt),
               });
             } catch (error) {
@@ -13750,24 +13675,15 @@ export async function registerRoutes(
                 event,
                 nextBestAction,
               });
-              const { responseBody, approxBytes } = toCompactLiveReadResponse({
-                kind: "calendar_event",
-                summaryText,
-                payload: {
-                  eventId: event.eventId,
-                  title: event.title,
-                  start: event.start,
-                  end: event.end,
-                  location: event.location,
-                  attendees: event.attendees,
-                  notes: event.notes,
-                  nextBestAction,
-                },
-              });
               functionResponses.push({
                 id: functionCall.id,
                 name: functionCall.name,
-                response: responseBody,
+                response: {
+                  result: summaryText,
+                  summaryText,
+                  kind: "calendar_event",
+                  scheduling: "INTERRUPT",
+                },
               });
               chatDigests.push({
                 sender: "assistant",
@@ -13783,7 +13699,6 @@ export async function registerRoutes(
                 query,
                 timeRange,
                 timezone,
-                liveResponseBytes: approxBytes,
                 elapsedMs: elapsedMs(detailStartedAt),
               });
             } catch (error) {

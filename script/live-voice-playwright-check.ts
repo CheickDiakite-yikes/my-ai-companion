@@ -164,23 +164,30 @@ async function main(): Promise<void> {
     const conversationId = await resolveActiveConversationId(page, args.baseUrl);
     await upsertGoogleIntegrationFixture(args.email, "write");
 
-    const emailReadDigest = await requestLiveGoogleReadSummary(page, {
-      clearTraceBuffer,
-      readTraceBuffer,
+    const emailReadDigest = await requestLiveGoogleReadSummary(page, args.baseUrl, {
       conversationId,
-      prompt: "What unread emails do I have?",
       functionName: "get_user_emails",
+      args: {
+        refresh: true,
+        unreadOnly: true,
+        sinceDays: 3,
+      },
     });
     assert.match(
       emailReadDigest,
       /(checked your unread emails|unread emails|read a full thread|draft a reply)/i,
       "Expected live email-read requests to produce a user-facing digest summary",
     );
+    await assertNativeGoogleReadVoiceCompletion(
+      page,
+      readTraceBuffer,
+      "gmail",
+      "get_user_emails",
+    );
 
+    await clearTraceBuffer();
     const misroutedEmailReadDigest =
-      await requestLiveGoogleReadSummaryViaMisroutedAction(page, {
-        clearTraceBuffer,
-        readTraceBuffer,
+      await requestLiveGoogleReadSummaryViaMisroutedAction(page, args.baseUrl, {
         conversationId,
         functionName: "prepare_google_email_action",
         request: "what unread emails do I have?",
@@ -192,10 +199,9 @@ async function main(): Promise<void> {
       "Expected misrouted live email-read requests to recover to the inbox-read digest",
     );
 
+    await clearTraceBuffer();
     const misroutedCalendarReadDigest =
-      await requestLiveGoogleReadSummaryViaMisroutedAction(page, {
-        clearTraceBuffer,
-        readTraceBuffer,
+      await requestLiveGoogleReadSummaryViaMisroutedAction(page, args.baseUrl, {
         conversationId,
         functionName: "prepare_google_calendar_action",
         request: "what do I have on my calendar today?",
@@ -206,6 +212,12 @@ async function main(): Promise<void> {
       misroutedCalendarReadDigest,
       /(checked your calendar|calendar for today|scheduled there right now)/i,
       "Expected misrouted live calendar-read requests to recover to the calendar-read digest",
+    );
+    await assertNativeGoogleReadVoiceCompletion(
+      page,
+      readTraceBuffer,
+      "calendar",
+      "get_calendar_events",
     );
 
     await prepareLiveGoogleAction(page, args.baseUrl, {
@@ -515,200 +527,90 @@ async function prepareLiveGoogleAction(
   };
 }
 
-async function executeLiveToolCallsThroughSession(
-  page: Page,
-  params: {
-    normalizedCalls: Array<{
-      id: string;
-      name: string;
-      args: Record<string, unknown>;
-    }>;
-    forwardFunctionResponsesToSession?: boolean;
-    allowGoogleReadVoiceFallback?: boolean;
-  },
-): Promise<{
-  resolvedFunctionCalls?: Array<{
-    id?: string;
-    requestedName?: string;
-    effectiveName?: string;
-    rerouted?: boolean;
-  }>;
-  chatDigests?: Array<{ text?: string }>;
-}> {
-  return page.evaluate(async (payload) => {
-    const bridge = (window as typeof window & {
-      __pwLiveSessionBridge?: {
-        executeToolCalls?: (params: {
-          normalizedCalls: Array<{
-            id: string;
-            name: string;
-            args: Record<string, unknown>;
-          }>;
-          forwardFunctionResponsesToSession?: boolean;
-          allowGoogleReadVoiceFallback?: boolean;
-        }) => Promise<unknown>;
-      };
-    }).__pwLiveSessionBridge;
-    if (!bridge?.executeToolCalls) {
-      throw new Error("Live session debug bridge is unavailable");
-    }
-    return (await bridge.executeToolCalls({
-      normalizedCalls: payload.normalizedCalls,
-      forwardFunctionResponsesToSession:
-        payload.forwardFunctionResponsesToSession ?? true,
-      allowGoogleReadVoiceFallback: payload.allowGoogleReadVoiceFallback ?? true,
-    })) as {
-      resolvedFunctionCalls?: Array<{
-        id?: string;
-        requestedName?: string;
-        effectiveName?: string;
-        rerouted?: boolean;
-      }>;
-      chatDigests?: Array<{ text?: string }>;
-    };
-  }, params);
-}
-
-async function requestPersonalContextReadThroughSession(
-  page: Page,
-  text: string,
-): Promise<boolean> {
-  return page.evaluate(async (queryText) => {
-    const bridge = (window as typeof window & {
-      __pwLiveSessionBridge?: {
-        requestPersonalContextRead?: (text: string) => boolean;
-      };
-    }).__pwLiveSessionBridge;
-    if (!bridge?.requestPersonalContextRead) {
-      throw new Error("Live session debug bridge is unavailable");
-    }
-    return bridge.requestPersonalContextRead(queryText);
-  }, text);
-}
-
-async function waitForLiveReadVoiceResolution(
-  readTraceBuffer: () => Promise<LiveTraceEntry[]>,
-  expectedToolName:
-    | "get_user_emails"
-    | "get_email_thread_detail"
-    | "get_calendar_events"
-    | "get_calendar_event_detail",
-): Promise<void> {
-  const deadlineAt = Date.now() + 12_000;
-  let lastTrace: LiveTraceEntry[] = [];
-  while (Date.now() < deadlineAt) {
-    lastTrace = await readTraceBuffer();
-    const hasRelevantStart = lastTrace.some((entry) => {
-      if (
-        entry.event !== "live.google_context.read_tool_response_forwarded" &&
-        entry.event !== "live.google_context.voice_read_summary_sent" &&
-        entry.event !== "live.google_context.voice_read_summary_watchdog_started"
-      ) {
-        return false;
-      }
-      const toolNames = Array.isArray(entry.metadata?.toolNames)
-        ? entry.metadata.toolNames
-        : [];
-      return toolNames.includes(expectedToolName);
-    });
-    const hasRelevantAudioAck = lastTrace.some((entry) => {
-      if (entry.event === "live.assistant.audio_enqueued") {
-        return true;
-      }
-      if (entry.event !== "live.google_context.voice_read_summary_acknowledged") {
-        return false;
-      }
-      const toolNames = Array.isArray(entry.metadata?.toolNames)
-        ? entry.metadata.toolNames
-        : [];
-      return toolNames.includes(expectedToolName) && entry.metadata?.via === "audio";
-    });
-    if (hasRelevantStart && hasRelevantAudioAck) {
-      return;
-    }
-    const failure = lastTrace.find((entry) => {
-      if (
-        ![
-          "live.google_context.voice_read_summary_timeout",
-          "live.google_context.voice_read_summary_failed_no_audio_after_retries",
-          "live.google_context.voice_read_summary_send_failed",
-        ].includes(entry.event)
-      ) {
-        return false;
-      }
-      const toolNames = Array.isArray(entry.metadata?.toolNames)
-        ? entry.metadata.toolNames
-        : [];
-      return toolNames.includes(expectedToolName);
-    });
-    if (failure) {
-      throw new Error(
-        `Voice read summary failed for ${expectedToolName}: ${failure.event}\nRecent traces: ${JSON.stringify(lastTrace.slice(-30), null, 2)}`,
-      );
-    }
-    await new Promise((resolve) => setTimeout(resolve, 250));
-  }
-  throw new Error(
-    `Voice read summary never advanced into audio for ${expectedToolName}\nRecent traces: ${JSON.stringify(lastTrace.slice(-30), null, 2)}`,
-  );
-}
-
 async function requestLiveGoogleReadSummary(
   page: Page,
+  _baseUrl: string,
   params: {
-    clearTraceBuffer: () => Promise<void>;
-    readTraceBuffer: () => Promise<LiveTraceEntry[]>;
     conversationId: string;
-    prompt: string;
     functionName:
       | "get_user_emails"
       | "get_email_thread_detail"
       | "get_calendar_events"
       | "get_calendar_event_detail";
+    args: Record<string, unknown>;
   },
 ): Promise<string> {
-  await params.clearTraceBuffer();
-  const started = await requestPersonalContextReadThroughSession(
-    page,
-    params.prompt,
+  const functionId = randomUUID();
+  await page.waitForFunction(
+    () =>
+      typeof (window as typeof window & {
+        __zeeLiveDebug?: { runLiveToolResponse?: unknown };
+      }).__zeeLiveDebug?.runLiveToolResponse === "function",
   );
-  assert.equal(started, true, "Expected live personal-context debug read to start");
-  await waitForLiveReadVoiceResolution(params.readTraceBuffer, params.functionName);
-  const deadlineAt = Date.now() + 8_000;
-  while (Date.now() < deadlineAt) {
-    const response = await page.request.get(
-      `/api/conversations/${params.conversationId}/messages`,
-    );
-    assert.equal(response.ok(), true, "Expected conversation messages request to succeed");
-    const payload = (await response.json()) as Array<{
-      sender?: string;
-      text?: string;
-    }>;
-    const latestAssistantText =
-      payload
-        .slice()
-        .reverse()
-        .find(
-          (entry) =>
-            entry?.sender === "assistant" &&
-            typeof entry?.text === "string" &&
-            entry.text.trim().length > 0,
-        )?.text?.trim() ?? "";
-    if (latestAssistantText) {
-      return latestAssistantText;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 250));
-  }
-  throw new Error(
-    `Expected ${params.functionName} to persist an assistant summary after audio`,
+  const payload = (await page.evaluate(
+    async ({
+      functionId: browserFunctionId,
+      functionName,
+      args,
+    }: {
+      functionId: string;
+      functionName: string;
+      args: Record<string, unknown>;
+    }) => {
+      const bridge = (
+        window as typeof window & {
+          __zeeLiveDebug?: {
+            runLiveToolResponse?: (input: {
+              functionCalls: Array<{
+                id?: string;
+                name: string;
+                args?: Record<string, unknown>;
+              }>;
+            }) => Promise<{
+              traceId: string | null;
+              chatDigests: Array<{ text: string }>;
+              resolvedFunctionCalls: unknown[];
+              functionResponses: unknown[];
+            }>;
+          };
+        }
+      ).__zeeLiveDebug;
+      if (!bridge?.runLiveToolResponse) {
+        throw new Error("Live debug bridge is not available");
+      }
+      return await bridge.runLiveToolResponse({
+        functionCalls: [
+          {
+            id: browserFunctionId,
+            name: functionName,
+            args,
+          },
+        ],
+      });
+    },
+    {
+      functionId,
+      functionName: params.functionName,
+      args: params.args,
+    },
+  )) as {
+    chatDigests?: Array<{ text?: string }>;
+  };
+  const digestText =
+    payload.chatDigests
+      ?.map((digest) => (typeof digest?.text === "string" ? digest.text.trim() : ""))
+      .find((text) => text.length > 0) ?? "";
+  assert.ok(
+    digestText.length > 0,
+    `Expected ${params.functionName} to return at least one chat digest`,
   );
+  return digestText;
 }
 
 async function requestLiveGoogleReadSummaryViaMisroutedAction(
   page: Page,
+  _baseUrl: string,
   params: {
-    clearTraceBuffer: () => Promise<void>;
-    readTraceBuffer: () => Promise<LiveTraceEntry[]>;
     conversationId: string;
     functionName: "prepare_google_email_action" | "prepare_google_calendar_action";
     request: string;
@@ -718,22 +620,76 @@ async function requestLiveGoogleReadSummaryViaMisroutedAction(
       | "get_email_thread_detail"
       | "get_calendar_events"
       | "get_calendar_event_detail";
-    },
-  ): Promise<string> {
-  await params.clearTraceBuffer();
+  },
+): Promise<string> {
   const functionId = randomUUID();
-  const payload = await executeLiveToolCallsThroughSession(page, {
-    normalizedCalls: [
-      {
-        id: functionId,
-        name: params.functionName,
-        args: {
-          request: params.request,
-          ...(params.timezone ? { timezone: params.timezone } : {}),
-        },
-      },
-    ],
-  });
+  await page.waitForFunction(
+    () =>
+      typeof (window as typeof window & {
+        __zeeLiveDebug?: { runLiveToolResponse?: unknown };
+      }).__zeeLiveDebug?.runLiveToolResponse === "function",
+  );
+  const payload = (await page.evaluate(
+    async ({
+      functionId: browserFunctionId,
+      functionName,
+      request,
+      timezone,
+    }: {
+      functionId: string;
+      functionName: "prepare_google_email_action" | "prepare_google_calendar_action";
+      request: string;
+      timezone?: string;
+    }) => {
+      const bridge = (
+        window as typeof window & {
+          __zeeLiveDebug?: {
+            runLiveToolResponse?: (input: {
+              functionCalls: Array<{
+                id?: string;
+                name: string;
+                args?: Record<string, unknown>;
+              }>;
+            }) => Promise<{
+              traceId: string | null;
+              chatDigests: Array<{ text: string }>;
+              resolvedFunctionCalls: unknown[];
+              functionResponses: unknown[];
+            }>;
+          };
+        }
+      ).__zeeLiveDebug;
+      if (!bridge?.runLiveToolResponse) {
+        throw new Error("Live debug bridge is not available");
+      }
+      return await bridge.runLiveToolResponse({
+        functionCalls: [
+          {
+            id: browserFunctionId,
+            name: functionName,
+            args: {
+              request,
+              ...(timezone ? { timezone } : {}),
+            },
+          },
+        ],
+      });
+    },
+    {
+      functionId,
+      functionName: params.functionName,
+      request: params.request,
+      timezone: params.timezone,
+    },
+  )) as {
+    resolvedFunctionCalls?: Array<{
+      id?: string;
+      requestedName?: string;
+      effectiveName?: string;
+      rerouted?: boolean;
+    }>;
+    chatDigests?: Array<{ text?: string }>;
+  };
   const resolvedCall = payload.resolvedFunctionCalls?.find(
     (entry) => entry?.id === functionId,
   );
@@ -754,10 +710,6 @@ async function requestLiveGoogleReadSummaryViaMisroutedAction(
   assert.ok(
     digestText.length > 0,
     `Expected misrouted ${params.functionName} to return at least one chat digest`,
-  );
-  await waitForLiveReadVoiceResolution(
-    params.readTraceBuffer,
-    params.expectedEffectiveName,
   );
   return digestText;
 }
@@ -1281,6 +1233,58 @@ async function startVoiceSession(
       `Voice session failed to start: ${JSON.stringify(started.slice(-12), null, 2)}`,
     );
   }
+}
+
+async function assertNativeGoogleReadVoiceCompletion(
+  page: Page,
+  readTraceBuffer: () => Promise<LiveTraceEntry[]>,
+  scope: "gmail" | "calendar" | "both",
+  expectedToolName:
+    | "get_user_emails"
+    | "get_email_thread_detail"
+    | "get_calendar_events"
+    | "get_calendar_event_detail",
+): Promise<void> {
+  const deadline = Date.now() + 18_000;
+  let lastTrace: LiveTraceEntry[] = [];
+
+  while (Date.now() < deadline) {
+    lastTrace = await readTraceBuffer();
+    const started = lastTrace.some(
+      (entry) =>
+        entry.event === "live.google_context.voice_read_turn_started" &&
+        Array.isArray(entry.metadata?.toolNames) &&
+        (entry.metadata.toolNames as unknown[]).includes(expectedToolName),
+    );
+    const audioStarted = lastTrace.some((entry) =>
+      [
+        "live.google_context.voice_read_turn_audio_started",
+        "live.assistant.audio_enqueued",
+      ].includes(entry.event),
+    );
+    const failed = lastTrace.some(
+      (entry) => entry.event === "live.google_context.voice_read_turn_failed_no_audio",
+    );
+    if (started && audioStarted) {
+      assert.equal(
+        lastTrace.some(
+          (entry) =>
+            entry.event === "live.google_context.voice_read_turn_duplicate_tool_call_blocked",
+        ),
+        false,
+        `Expected ${scope} read turn to complete without duplicate tool-call blocking`,
+      );
+      return;
+    }
+    if (failed) {
+      break;
+    }
+    await page.waitForTimeout(250);
+  }
+
+  throw new Error(
+    `Expected native ${scope} read turn to produce assistant audio after ${expectedToolName}, but it did not.\nRecent traces: ${JSON.stringify(lastTrace.slice(-20), null, 2)}`,
+  );
 }
 
 function parseLiveTraceConsoleMessage(text: string): LiveTraceEntry | null {
