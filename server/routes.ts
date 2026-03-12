@@ -121,6 +121,7 @@ import {
   detectGoogleActionTaskIntent,
   type GoogleRecentActionContext,
   type RecentGoogleActionTask,
+  looksLikeGoogleCalendarCreateRequest,
   looksLikeGoogleEmailComposeRequest,
   looksLikeGoogleEmailDraftRevisionInstruction,
   looksLikeGoogleEmailCancelRequest,
@@ -6441,6 +6442,32 @@ type GoogleConversationState = {
   actionAmbiguity: GoogleConversationActionAmbiguity | null;
 };
 
+function hasInterveningUserTurnAfterGoogleState(params: {
+  messages: Message[];
+  stateMessageIndex: number;
+  currentUserMessageId?: string | null;
+}): boolean {
+  for (
+    let index = params.stateMessageIndex + 1;
+    index < params.messages.length;
+    index += 1
+  ) {
+    const message = params.messages[index];
+    if (message.sender !== "user") {
+      continue;
+    }
+    if (
+      params.currentUserMessageId &&
+      typeof message.id === "string" &&
+      message.id === params.currentUserMessageId
+    ) {
+      continue;
+    }
+    return true;
+  }
+  return false;
+}
+
 type GoogleEmailConversationTaskTarget =
   | {
       connector: "gmail";
@@ -8459,6 +8486,12 @@ async function maybeHandleGoogleActionTask(params: {
     params.text,
     recentContext,
   );
+  const startsFreshEmailRequest = looksLikeGoogleEmailComposeRequest(params.text);
+  const startsFreshCalendarCreateRequest = looksLikeGoogleCalendarCreateRequest(
+    params.text,
+  );
+  const startsFreshGoogleActionRequest =
+    startsFreshEmailRequest || startsFreshCalendarCreateRequest;
   const wantsEmailSendFollowUp =
     Boolean(latestEmailTaskTarget) && isGoogleActionSendMessage(params.text);
   const wantsEmailSaveAsDraftFollowUp =
@@ -8531,6 +8564,8 @@ async function maybeHandleGoogleActionTask(params: {
     text: params.text,
     activeSurfaceKey: params.clientGoogleActionContext?.surfaceKey ?? null,
     connectorHint: params.clientGoogleActionContext?.connector ?? null,
+    startsFreshEmailRequest,
+    startsFreshCalendarCreateRequest,
     emailCandidateCount: actionableEmailCandidates.length,
     calendarCandidateCount: rankedCalendarCandidates.length,
     emailCandidateTaskIds: actionableEmailCandidates.map((candidate) => candidate.taskId),
@@ -8545,6 +8580,68 @@ async function maybeHandleGoogleActionTask(params: {
       ? googleConversationState.calendarSession?.session.status
       : null,
   });
+
+  if (startsFreshGoogleActionRequest) {
+    params.onTrace?.("google.fresh_request_preempts_existing_state", {
+      connector: startsFreshEmailRequest ? "gmail" : "calendar",
+      hasPendingTask: Boolean(googleConversationState.pendingTask),
+      pendingTaskId: googleConversationState.pendingTask?.taskId ?? null,
+      hasComposeSession: Boolean(googleConversationState.composeSession),
+      hasCalendarSession: Boolean(googleConversationState.calendarSession),
+      hasActionAmbiguity: Boolean(googleConversationState.actionAmbiguity),
+      emailCandidateTaskIds: actionableEmailCandidates.map((candidate) => candidate.taskId),
+      calendarCandidateTaskIds: rankedCalendarCandidates.map(
+        (candidate) => candidate.taskId,
+      ),
+    });
+    const freshPreparation = await prepareGoogleActionTask({
+      storage: params.storage,
+      userId: params.userId,
+      text: params.text,
+      clientTimeZone: params.clientTimeZone ?? null,
+      recentContext: null,
+    });
+    const freshGoogleContext =
+      freshPreparation.kind === "ready"
+        ? buildGoogleTargetContextMetadata({
+            connector: freshPreparation.preview.connector,
+            action:
+              freshPreparation.preview.connector === "gmail"
+                ? freshPreparation.preview.proposedEmail?.sendAfterApproval
+                  ? "send"
+                  : "create"
+                : freshPreparation.preview.kind === "calendar_update"
+                  ? "update"
+                  : "create",
+            sourceTurnId: params.userMessage.id,
+            selectionReason: "latest_actionable",
+          })
+        : freshPreparation.kind === "clarify" && freshPreparation.composeSession
+          ? buildGoogleTargetContextMetadata({
+              connector: "gmail",
+              action: "create",
+              sourceTurnId: params.userMessage.id,
+              selectionReason: "clarification_session",
+            })
+          : freshPreparation.kind === "clarify" && freshPreparation.calendarSession
+            ? buildGoogleTargetContextMetadata({
+                connector: "calendar",
+                action: "create",
+                sourceTurnId: params.userMessage.id,
+                selectionReason: "clarification_session",
+              })
+            : null;
+    return finalizePreparedGoogleActionTask({
+      storage: params.storage,
+      userId: params.userId,
+      conversationId: params.conversationId,
+      userMessage: params.userMessage,
+      text: params.text,
+      preparation: freshPreparation,
+      onEvent: params.onEvent,
+      googleContext: freshGoogleContext,
+    });
+  }
 
   if (googleConversationState.actionAmbiguity) {
     const hasExplicitAmbiguitySelection = hasExplicitAmbiguitySelectionContext({
@@ -9336,6 +9433,15 @@ async function maybeHandleGoogleActionTask(params: {
     const wantsSend = isGoogleActionSendMessage(params.text);
     const wantsApprove = wantsSend || isGoogleActionApproveMessage(params.text);
     const wantsDecline = isGoogleActionDeclineMessage(params.text);
+    const pendingTaskMatchesExplicitContext =
+      params.clientGoogleActionContext?.actionableTargetId ===
+      googleConversationState.pendingTask.taskId;
+    const pendingTaskHasInterveningUserTurns =
+      hasInterveningUserTurnAfterGoogleState({
+        messages: params.conversationMessages,
+        stateMessageIndex: googleConversationState.pendingTask.messageIndex,
+        currentUserMessageId: params.userMessage.id,
+      });
     const wantsDraftRevision =
       !wantsApprove &&
       !wantsDecline &&
@@ -9348,6 +9454,21 @@ async function maybeHandleGoogleActionTask(params: {
       looksLikeGoogleEmailDraftRevisionInstruction(params.text);
 
     if (wantsApprove || wantsDecline) {
+      if (
+        pendingTaskHasInterveningUserTurns &&
+        !pendingTaskMatchesExplicitContext
+      ) {
+        params.onTrace?.("google.pending_task_confirmation_ignored_as_stale", {
+          taskId: googleConversationState.pendingTask.taskId,
+          action: wantsDecline ? "decline" : wantsSend ? "send" : "approve",
+          activeTargetId:
+            params.clientGoogleActionContext?.actionableTargetId ?? null,
+          hasInterveningUserTurns: pendingTaskHasInterveningUserTurns,
+          pendingPreviewConnector:
+            googleConversationState.pendingTask.preview?.connector ?? null,
+        });
+        return { handled: false as const };
+      }
       const task = await params.storage.getAgentTaskById(
         googleConversationState.pendingTask.taskId,
       );

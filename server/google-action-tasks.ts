@@ -424,6 +424,26 @@ export function looksLikeGoogleEmailComposeRequest(input: string): boolean {
   );
 }
 
+function normalizeGoogleCalendarCreateRequestText(input: string): string {
+  return normalizeText(input)
+    .replace(
+      /^\s*(?:okay|ok|alright|all right|sure|yeah|yep|yup)\s+(?:(?:lets|let's)\s+)?/i,
+      "",
+    )
+    .replace(/^\s*(?:(?:lets|let's)\s+)/i, "")
+    .replace(/^\s*(?:can|could|would|will)\s+you\s+/i, "")
+    .replace(/^\s*please\s+/i, "")
+    .trim();
+}
+
+export function looksLikeGoogleCalendarCreateRequest(input: string): boolean {
+  const normalized = normalizeGoogleCalendarCreateRequestText(input);
+  if (!normalized) return false;
+  return /^(?:(?:create|add|schedule|book|put|hold|mark|block(?:\s+off)?)\s+(?:an?\s+)?(?:(?:new|fresh|another|different)\s+)?(?:calendar\s+event|event|meeting|appointment)|(?:new|fresh|another|different)\s+(?:calendar\s+event|event|meeting|appointment))\b/i.test(
+    normalized,
+  );
+}
+
 function inferEmailSubject(input: string): string | null {
   const normalized = normalizeText(input);
   const match = normalized.match(/\babout\s+(.+?)(?:\s+(?:saying|that)\s+.+)?$/i);
@@ -1858,6 +1878,8 @@ export function detectGoogleActionTaskIntent(
   recentContext?: GoogleRecentActionContext | null,
 ): boolean {
   return (
+    looksLikeGoogleEmailComposeRequest(text) ||
+    looksLikeGoogleCalendarCreateRequest(text) ||
     (isLikelyGoogleActionRequest(text) &&
       /gmail|email|calendar|meeting|event|appointment|reply|draft|schedule|reschedule/i.test(
         text,

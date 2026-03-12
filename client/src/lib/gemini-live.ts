@@ -3321,7 +3321,9 @@ export class GeminiLiveVoiceSession {
       }
     }
 
-    if (Array.isArray(params.payload.webSearchEvents)) {
+    if (hasGoogleActionTool) {
+      this.emitWebSearchStatus("idle");
+    } else if (Array.isArray(params.payload.webSearchEvents)) {
       for (const event of params.payload.webSearchEvents) {
         const status =
           event &&

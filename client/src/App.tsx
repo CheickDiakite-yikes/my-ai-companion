@@ -2098,6 +2098,9 @@ function resolveLatestAssistantGoogleActionContext(
 ): SendMessageOptions["googleActionContext"] | undefined {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
+    if (message.sender === "user") {
+      break;
+    }
     if (message.sender !== "assistant") continue;
     const context = sanitizeGoogleActionContext(
       getGoogleActionContextFromPayload(message.uiPayload),
@@ -2109,6 +2112,25 @@ function resolveLatestAssistantGoogleActionContext(
   return undefined;
 }
 
+function looksLikeFreshGoogleActionRequestText(text: string): boolean {
+  const normalized = text.trim().toLowerCase();
+  if (!normalized) return false;
+  const looksLikeFreshEmailRequest =
+    /\b(?:create|draft|start|write|make|send)\b.*\b(?:new|fresh|another)?\s*(?:email|draft)\b/.test(
+      normalized,
+    ) ||
+    /\b(?:new|fresh|another)\s+(?:email|draft)\b/.test(normalized) ||
+    /\bfresh draft\b/.test(normalized);
+  const looksLikeFreshCalendarRequest =
+    /\b(?:create|add|book|schedule|put|block|hold|mark)\b.*\b(?:calendar|event|meeting|appointment)\b/.test(
+      normalized,
+    ) ||
+    /\b(?:new|fresh|another)\s+(?:calendar\s+event|event|meeting|appointment)\b/.test(
+      normalized,
+    );
+  return looksLikeFreshEmailRequest || looksLikeFreshCalendarRequest;
+}
+
 function looksLikeGoogleTargetedFollowUpText(
   text: string,
   context: SendMessageOptions["googleActionContext"],
@@ -2116,15 +2138,7 @@ function looksLikeGoogleTargetedFollowUpText(
   const normalized = text.trim().toLowerCase();
   if (!normalized || !context?.connector) return false;
 
-  const looksLikeFreshEmailRequest =
-    /\b(?:create|draft|start|write|make)\b.*\b(?:new|fresh|another)?\s*(?:email|draft)\b/.test(
-      normalized,
-    ) || /\bfresh draft\b/.test(normalized);
-  const looksLikeFreshCalendarRequest =
-    /\b(?:create|add|book|schedule|put|block)\b.*\b(?:calendar|event|meeting|appointment)\b/.test(
-      normalized,
-    );
-  if (looksLikeFreshEmailRequest || looksLikeFreshCalendarRequest) {
+  if (looksLikeFreshGoogleActionRequestText(normalized)) {
     return false;
   }
 
@@ -8604,15 +8618,16 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
       ),
     [voiceStageCandidates, voiceStageSurfaceKey],
   );
-  const activeVoiceLookupPresentation = useMemo(
-    () =>
-      inferVoiceLookupPresentation({
-        status: webLookupStatus,
-        label: webLookupLabel,
-        liveError: liveError ?? null,
-      }),
-    [liveError, webLookupLabel, webLookupStatus],
-  );
+  const activeVoiceLookupPresentation = useMemo(() => {
+    if (voiceStageSurface?.isActionable) {
+      return null;
+    }
+    return inferVoiceLookupPresentation({
+      status: webLookupStatus,
+      label: webLookupLabel,
+      liveError: liveError ?? null,
+    });
+  }, [liveError, voiceStageSurface, webLookupLabel, webLookupStatus]);
   const effectiveVoiceCanvasKey = useMemo(() => {
     if (activeVoiceLookupPresentation) {
       return `lookup:${activeVoiceLookupPresentation.scope}:${activeVoiceLookupPresentation.phase}`;
@@ -13908,7 +13923,9 @@ function App() {
     const latestContext = resolveLatestAssistantGoogleActionContext(messagesData);
     if (latestContext) {
       activeTextGoogleActionContextRef.current = latestContext;
+      return;
     }
+    activeTextGoogleActionContextRef.current = null;
   }, [messagesData]);
 
   useEffect(() => {
@@ -14954,11 +14971,13 @@ function App() {
     options?: SendMessageOptions,
   ) => {
     const trimmed = text.trim();
+    const startsFreshGoogleAction = looksLikeFreshGoogleActionRequestText(trimmed);
     const explicitGoogleActionContext = sanitizeGoogleActionContext(
       options?.googleActionContext,
     );
     const inferredGoogleActionContext =
       !explicitGoogleActionContext &&
+      !startsFreshGoogleAction &&
       looksLikeGoogleTargetedFollowUpText(
         trimmed,
         activeTextGoogleActionContextRef.current,
@@ -14967,6 +14986,9 @@ function App() {
         : undefined;
     const sanitizedGoogleActionContext =
       explicitGoogleActionContext ?? inferredGoogleActionContext;
+    if (startsFreshGoogleAction && !explicitGoogleActionContext) {
+      activeTextGoogleActionContextRef.current = null;
+    }
     if (sanitizedGoogleActionContext) {
       activeTextGoogleActionContextRef.current = sanitizedGoogleActionContext;
       logLiveTrace("chat.google_action_send.started", {
@@ -15177,23 +15199,29 @@ function App() {
   };
 
   const handleSendMessage = async (text: string, options?: SendMessageOptions) => {
+    const trimmed = text.trim();
+    const startsFreshGoogleAction = looksLikeFreshGoogleActionRequestText(trimmed);
     const explicitGoogleActionContext = sanitizeGoogleActionContext(
       options?.googleActionContext,
     );
     const inferredGoogleActionContext =
       !explicitGoogleActionContext &&
+      !startsFreshGoogleAction &&
       looksLikeGoogleTargetedFollowUpText(
-        text.trim(),
+        trimmed,
         activeTextGoogleActionContextRef.current,
       )
         ? sanitizeGoogleActionContext(activeTextGoogleActionContextRef.current)
         : undefined;
     const sanitizedGoogleActionContext =
       explicitGoogleActionContext ?? inferredGoogleActionContext;
+    if (startsFreshGoogleAction && !explicitGoogleActionContext) {
+      activeTextGoogleActionContextRef.current = null;
+    }
     if (sanitizedGoogleActionContext) {
       activeTextGoogleActionContextRef.current = sanitizedGoogleActionContext;
       logLiveTrace("chat.google_action_send.queued", {
-        textPreview: text.trim().slice(0, 160),
+        textPreview: trimmed.slice(0, 160),
         googleActionContext: sanitizedGoogleActionContext,
         queueBusy: isSendingMessageRef.current,
       });
