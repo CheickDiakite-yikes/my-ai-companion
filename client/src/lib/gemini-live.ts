@@ -9,6 +9,7 @@ import {
 import {
   analyzeTranscriptScript,
   evaluateUserTranscriptPersistence,
+  isNonSpeechTranscriptTag,
   resolveExpectedScriptFamilyForLanguage,
   shouldFlagTranscriptLanguageMismatch,
   stripAssistantThoughtContent,
@@ -86,6 +87,10 @@ export interface LiveVoiceDebugState {
   compatibilityIsStandalonePwa: boolean;
   speechProfileMode: "desktop_default" | "mobile_relaxed";
   speechProfileThresholdScale: number;
+  adaptiveThresholdFloor: number;
+  adaptiveBaselineRms: number;
+  adaptiveCalibrated: boolean;
+  micGainLevel: string;
   pendingGoogleReadVoiceSummarySource: "immediate" | "fallback" | null;
   pendingGoogleReadVoiceSummaryToolNames: string[];
   pendingGoogleReadVoiceSummarySentAt: number | null;
@@ -358,9 +363,33 @@ const SUPPRESS_USER_TRANSCRIPT_DURING_ASSISTANT_SPEECH = parseClientBoolean(
 const USER_SPEECH_START_RMS_THRESHOLD = parseClientBoundedNumber(
   liveClientEnv.VITE_LIVE_AUDIO_USER_SPEECH_RMS_THRESHOLD,
   0.008,
-  0.003,
+  0.0005,
   0.08,
 );
+const ADAPTIVE_THRESHOLD_ABSOLUTE_FLOOR = parseClientBoundedNumber(
+  liveClientEnv.VITE_LIVE_AUDIO_ADAPTIVE_THRESHOLD_FLOOR,
+  0.001,
+  0.0003,
+  0.008,
+);
+const ADAPTIVE_THRESHOLD_AMBIENT_MULTIPLIER = parseClientBoundedNumber(
+  liveClientEnv.VITE_LIVE_AUDIO_ADAPTIVE_AMBIENT_MULTIPLIER,
+  6,
+  3,
+  20,
+);
+const ADAPTIVE_CALIBRATION_FRAMES = parseClientPositiveInt(
+  liveClientEnv.VITE_LIVE_AUDIO_ADAPTIVE_CALIBRATION_FRAMES,
+  16,
+);
+
+function classifyMicGainLevel(ambientRms: number): string {
+  if (ambientRms <= 0.0002) return "very_low";
+  if (ambientRms <= 0.001) return "low";
+  if (ambientRms <= 0.005) return "normal";
+  return "high";
+}
+
 const USER_SPEECH_ASSISTANT_RMS_THRESHOLD = parseClientBoundedNumber(
   liveClientEnv.VITE_LIVE_AUDIO_USER_SPEECH_ASSISTANT_RMS_THRESHOLD,
   Math.max(USER_SPEECH_START_RMS_THRESHOLD, ASSISTANT_BARGE_IN_RMS_THRESHOLD),
@@ -405,7 +434,7 @@ const USER_SPEECH_END_SILENCE_FRAMES = parseClientPositiveInt(
 );
 const USER_SPEECH_PREFIX_FRAMES = parseClientPositiveInt(
   liveClientEnv.VITE_LIVE_AUDIO_USER_SPEECH_PREFIX_FRAMES,
-  8,
+  14,
 );
 const USER_SPEECH_COOLDOWN_MS = parseClientPositiveInt(
   liveClientEnv.VITE_LIVE_AUDIO_USER_SPEECH_COOLDOWN_MS,
@@ -1276,8 +1305,9 @@ export async function getMicrophoneStreamWithFallback(): Promise<MediaStream> {
               channelCount: 1,
               echoCancellation: true,
               noiseSuppression: false,
-              autoGainControl: false,
-            },
+              autoGainControl: true,
+              voiceIsolation: true,
+            } as MediaTrackConstraints,
             video: false,
           },
         },
@@ -1289,7 +1319,8 @@ export async function getMicrophoneStreamWithFallback(): Promise<MediaStream> {
               echoCancellation: true,
               noiseSuppression: true,
               autoGainControl: true,
-            },
+              voiceIsolation: true,
+            } as MediaTrackConstraints,
             video: false,
           },
         },
@@ -1319,7 +1350,8 @@ export async function getMicrophoneStreamWithFallback(): Promise<MediaStream> {
               echoCancellation: true,
               noiseSuppression: true,
               autoGainControl: true,
-            },
+              voiceIsolation: true,
+            } as MediaTrackConstraints,
             video: false,
           },
         },
@@ -1417,6 +1449,10 @@ export class GeminiLiveVoiceSession {
   private activeSpeechThreshold = USER_SPEECH_START_RMS_THRESHOLD;
   private candidateSpeechThreshold = USER_SPEECH_START_RMS_THRESHOLD;
   private inputAmbientRms = 0;
+  private adaptiveCalibrationCount = 0;
+  private adaptiveCalibrationSumRms = 0;
+  private adaptiveBaselineRms = 0;
+  private adaptiveThresholdFloor = USER_SPEECH_START_RMS_THRESHOLD;
   private speechCandidateFrames = 0;
   private speechSilenceFrames = 0;
   private speechCandidateMs = 0;
@@ -1583,6 +1619,10 @@ export class GeminiLiveVoiceSession {
     this.activeSpeechThreshold = USER_SPEECH_START_RMS_THRESHOLD;
     this.candidateSpeechThreshold = USER_SPEECH_START_RMS_THRESHOLD;
     this.inputAmbientRms = 0;
+    this.adaptiveCalibrationCount = 0;
+    this.adaptiveCalibrationSumRms = 0;
+    this.adaptiveBaselineRms = 0;
+    this.adaptiveThresholdFloor = USER_SPEECH_START_RMS_THRESHOLD;
     this.speechCandidateFrames = 0;
     this.speechSilenceFrames = 0;
     this.speechCandidateMs = 0;
@@ -1788,6 +1828,10 @@ export class GeminiLiveVoiceSession {
           this.clearManualInterruptWatchdog();
           this.activeSpeechThreshold = USER_SPEECH_START_RMS_THRESHOLD;
           this.candidateSpeechThreshold = USER_SPEECH_START_RMS_THRESHOLD;
+          this.adaptiveCalibrationCount = 0;
+          this.adaptiveCalibrationSumRms = 0;
+          this.adaptiveBaselineRms = 0;
+          this.adaptiveThresholdFloor = USER_SPEECH_START_RMS_THRESHOLD;
           this.speechCandidateFrames = 0;
           this.speechSilenceFrames = 0;
           this.speechCandidateMs = 0;
@@ -1818,6 +1862,10 @@ export class GeminiLiveVoiceSession {
           this.clearManualInterruptWatchdog();
           this.activeSpeechThreshold = USER_SPEECH_START_RMS_THRESHOLD;
           this.candidateSpeechThreshold = USER_SPEECH_START_RMS_THRESHOLD;
+          this.adaptiveCalibrationCount = 0;
+          this.adaptiveCalibrationSumRms = 0;
+          this.adaptiveBaselineRms = 0;
+          this.adaptiveThresholdFloor = USER_SPEECH_START_RMS_THRESHOLD;
           this.speechCandidateFrames = 0;
           this.speechSilenceFrames = 0;
           this.speechCandidateMs = 0;
@@ -1924,6 +1972,10 @@ export class GeminiLiveVoiceSession {
         USER_SPEECH_END_SILENCE_MIN_DURATION_MS,
       userSpeechEndSilenceTargetMs: this.speechEndSilenceTargetMs,
       userSpeechPrefixFrames: USER_SPEECH_PREFIX_FRAMES,
+      adaptiveThresholdAbsoluteFloor: ADAPTIVE_THRESHOLD_ABSOLUTE_FLOOR,
+      adaptiveThresholdAmbientMultiplier: ADAPTIVE_THRESHOLD_AMBIENT_MULTIPLIER,
+      adaptiveCalibrationFrames: ADAPTIVE_CALIBRATION_FRAMES,
+      platformType: this.compatibilityProfile.isMobile ? "mobile" : "desktop",
       userSpeechCooldownMs: USER_SPEECH_COOLDOWN_MS,
       userSpeechTranscriptExpectationTimeoutMs:
         USER_SPEECH_TRANSCRIPT_EXPECTATION_TIMEOUT_MS,
@@ -2003,6 +2055,10 @@ export class GeminiLiveVoiceSession {
     this.activeSpeechThreshold = USER_SPEECH_START_RMS_THRESHOLD;
     this.candidateSpeechThreshold = USER_SPEECH_START_RMS_THRESHOLD;
     this.inputAmbientRms = 0;
+    this.adaptiveCalibrationCount = 0;
+    this.adaptiveCalibrationSumRms = 0;
+    this.adaptiveBaselineRms = 0;
+    this.adaptiveThresholdFloor = USER_SPEECH_START_RMS_THRESHOLD;
     this.speechCandidateFrames = 0;
     this.speechSilenceFrames = 0;
     this.speechCandidateMs = 0;
@@ -2316,6 +2372,10 @@ export class GeminiLiveVoiceSession {
       compatibilityIsStandalonePwa: this.compatibilityProfile.isStandalonePwa,
       speechProfileMode: this.speechDetectionProfile.mode,
       speechProfileThresholdScale: this.speechDetectionProfile.thresholdScale,
+      adaptiveThresholdFloor: this.adaptiveThresholdFloor,
+      adaptiveBaselineRms: this.adaptiveBaselineRms,
+      adaptiveCalibrated: this.adaptiveCalibrationCount >= ADAPTIVE_CALIBRATION_FRAMES,
+      micGainLevel: classifyMicGainLevel(this.adaptiveBaselineRms),
       pendingGoogleReadVoiceSummarySource:
         this.pendingGoogleReadVoiceSummary?.source ?? null,
       pendingGoogleReadVoiceSummaryToolNames:
@@ -3531,9 +3591,16 @@ export class GeminiLiveVoiceSession {
     minSpeechDurationMs: number;
   } {
     const speechProfile = this.speechDetectionProfile;
+    const adaptedIdleFloor = this.adaptiveThresholdFloor;
+    const adaptedAssistantFloor = Math.max(
+      adaptedIdleFloor,
+      this.adaptiveBaselineRms > 0
+        ? this.adaptiveBaselineRms * ADAPTIVE_THRESHOLD_AMBIENT_MULTIPLIER * 1.5
+        : USER_SPEECH_ASSISTANT_RMS_THRESHOLD,
+    );
     const baseThreshold = assistantWindowActive
-      ? USER_SPEECH_ASSISTANT_RMS_THRESHOLD
-      : USER_SPEECH_START_RMS_THRESHOLD;
+      ? Math.min(USER_SPEECH_ASSISTANT_RMS_THRESHOLD, adaptedAssistantFloor)
+      : adaptedIdleFloor;
     const ambientMultiplierBase = assistantWindowActive
       ? USER_SPEECH_ASSISTANT_AMBIENT_MULTIPLIER
       : USER_SPEECH_AMBIENT_MULTIPLIER;
@@ -3552,6 +3619,10 @@ export class GeminiLiveVoiceSession {
     const thresholdScale = assistantWindowActive
       ? speechProfile.assistantThresholdScale
       : speechProfile.thresholdScale;
+    const adaptedCandidateMin = Math.min(
+      USER_SPEECH_CANDIDATE_MIN_RMS_THRESHOLD,
+      Math.max(ADAPTIVE_THRESHOLD_ABSOLUTE_FLOOR, adaptedIdleFloor * 0.7),
+    );
     const rawThreshold = Math.min(
       maxThreshold,
       Math.max(
@@ -3564,7 +3635,7 @@ export class GeminiLiveVoiceSession {
       Math.max(
         assistantWindowActive
           ? baseThreshold
-          : USER_SPEECH_CANDIDATE_MIN_RMS_THRESHOLD,
+          : adaptedCandidateMin,
         rawThreshold * thresholdScale,
       ),
     );
@@ -3602,10 +3673,14 @@ export class GeminiLiveVoiceSession {
       isMobileAssistantWindow && MOBILE_ASSISTANT_BARGE_IN_DISABLE_HYSTERESIS
         ? 1
         : USER_SPEECH_CANDIDATE_HYSTERESIS_MULTIPLIER;
+    const adaptedCandidateMinRms = Math.min(
+      USER_SPEECH_CANDIDATE_MIN_RMS_THRESHOLD,
+      Math.max(ADAPTIVE_THRESHOLD_ABSOLUTE_FLOOR, this.adaptiveThresholdFloor * 0.7),
+    );
     const candidateThreshold =
       this.speechState === "candidate_user_speech"
         ? Math.max(
-            USER_SPEECH_CANDIDATE_MIN_RMS_THRESHOLD,
+            adaptedCandidateMinRms,
             threshold * hysteresisMultiplier,
           )
         : threshold;
@@ -3673,12 +3748,17 @@ export class GeminiLiveVoiceSession {
       }
       if (this.speechCandidateMs >= minSpeechDurationMs) {
         if (isMobileAssistantWindow) {
+          const adaptiveScale = this.adaptiveBaselineRms > 0 && USER_SPEECH_START_RMS_THRESHOLD > 0
+            ? Math.min(1, this.adaptiveThresholdFloor / USER_SPEECH_START_RMS_THRESHOLD)
+            : 1;
+          const scaledMinPeakRms = MOBILE_ASSISTANT_BARGE_IN_MIN_PEAK_RMS * adaptiveScale;
+          const scaledMinAvgRms = MOBILE_ASSISTANT_BARGE_IN_MIN_AVG_RMS * adaptiveScale;
           const minPeakRms = Math.max(
-            MOBILE_ASSISTANT_BARGE_IN_MIN_PEAK_RMS,
+            scaledMinPeakRms,
             threshold * MOBILE_ASSISTANT_BARGE_IN_PEAK_THRESHOLD_MULTIPLIER,
           );
           const minAvgRms = Math.max(
-            MOBILE_ASSISTANT_BARGE_IN_MIN_AVG_RMS,
+            scaledMinAvgRms,
             threshold * MOBILE_ASSISTANT_BARGE_IN_AVG_THRESHOLD_MULTIPLIER,
           );
           const minBargeInDurationMs = Math.max(
@@ -4090,8 +4170,37 @@ export class GeminiLiveVoiceSession {
     if (!Number.isFinite(rms) || rms <= 0) {
       return;
     }
-    const boundedBaseline = Math.max(
+
+    if (this.adaptiveCalibrationCount < ADAPTIVE_CALIBRATION_FRAMES) {
+      this.adaptiveCalibrationCount += 1;
+      this.adaptiveCalibrationSumRms += rms;
+      if (this.adaptiveCalibrationCount >= ADAPTIVE_CALIBRATION_FRAMES) {
+        this.adaptiveBaselineRms =
+          this.adaptiveCalibrationSumRms / this.adaptiveCalibrationCount;
+        const adaptiveFloor = Math.max(
+          ADAPTIVE_THRESHOLD_ABSOLUTE_FLOOR,
+          this.adaptiveBaselineRms * ADAPTIVE_THRESHOLD_AMBIENT_MULTIPLIER,
+        );
+        this.adaptiveThresholdFloor = Math.min(
+          USER_SPEECH_START_RMS_THRESHOLD,
+          adaptiveFloor,
+        );
+        this.debug("live.audio.adaptive_calibration_complete", {
+          calibrationFrames: this.adaptiveCalibrationCount,
+          baselineRms: this.adaptiveBaselineRms,
+          adaptiveFloor: this.adaptiveThresholdFloor,
+          originalFloor: USER_SPEECH_START_RMS_THRESHOLD,
+          micGainLevel: classifyMicGainLevel(this.adaptiveBaselineRms),
+        });
+      }
+    }
+
+    const adaptedCandidateFloor = Math.min(
       USER_SPEECH_CANDIDATE_MIN_RMS_THRESHOLD,
+      Math.max(ADAPTIVE_THRESHOLD_ABSOLUTE_FLOOR, this.adaptiveThresholdFloor * 0.7),
+    );
+    const boundedBaseline = Math.max(
+      adaptedCandidateFloor,
       speechThreshold,
     );
     if (this.inputAmbientRms <= 0) {
@@ -4824,6 +4933,16 @@ export class GeminiLiveVoiceSession {
   ): void {
     let text = normalizeText(rawText);
     if (!text) return;
+
+    if (isNonSpeechTranscriptTag(text)) {
+      this.debug("live.transcript.non_speech_tag_filtered", {
+        sender,
+        textLength: text.length,
+        tag: text,
+        reason,
+      });
+      return;
+    }
 
     if (sender === "assistant") {
       const cleaned = stripAssistantThoughtContent(text);

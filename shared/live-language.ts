@@ -564,6 +564,14 @@ export function evaluateUserTranscriptPersistence(params: {
   };
 }
 
+const NON_SPEECH_TAG_PATTERN = /^<\s*(?:noise|music|silence|inaudible|laugh|laughter|cough|sigh|applause|background[_ ]?noise|static|unintelligible|unclear|crosstalk)\s*>$/i;
+
+export function isNonSpeechTranscriptTag(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) return false;
+  return NON_SPEECH_TAG_PATTERN.test(trimmed);
+}
+
 const THOUGHT_REASONING_PATTERN = /^(?:thought|internal|reasoning)(?::\s*|\s+)(?:The user|I should|I need to|I will|I'll|Let me|This is|My response|The question|Looking at|Based on|Since the|Now I|First,|OK so)/i;
 
 const THOUGHT_BRACKETED_PATTERN = /^\[(?:thought|thinking|internal|reasoning)\]/i;

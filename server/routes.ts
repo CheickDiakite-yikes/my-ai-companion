@@ -78,6 +78,7 @@ import type {
 } from "@shared/agent";
 import {
   evaluateUserTranscriptPersistence,
+  isNonSpeechTranscriptTag,
   resolveEffectiveLanguageHint,
   resolveExpectedScriptFamilyForLanguage,
   stripAssistantThoughtContent,
@@ -17655,6 +17656,19 @@ export async function registerRoutes(
         const parsed = voiceTranscriptSchema.parse(req.body ?? {});
 
         let textToSave = parsed.text;
+
+        if (isNonSpeechTranscriptTag(textToSave)) {
+          trace(req, "voice.transcript.non_speech_tag_filtered", {
+            conversationId: conversation.id,
+            sender: parsed.sender,
+            tag: textToSave.trim(),
+          });
+          return res.status(200).json({
+            traceId: getTraceId(req),
+            filtered: true,
+          });
+        }
+
         if (parsed.sender === "assistant") {
           const cleaned = stripAssistantThoughtContent(textToSave);
           if (!cleaned) {
