@@ -9106,10 +9106,7 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
   })();
 
   const voiceCanvasOpenLabel =
-    activeVoiceLookupPresentation?.openLabel ??
-    (activeVoiceStageSummary?.title
-      ? `Open ${activeVoiceStageSummary.title}`
-      : "Open canvas");
+    activeVoiceLookupPresentation?.openLabel ?? "Open Zee Stage";
 
   return (
     <motion.div 
