@@ -2087,17 +2087,22 @@ export async function prepareGoogleActionTask(params: {
     }
 
     if (!draftInstructionText) {
+      const missingDetailsPrompt = subjectHint
+        ? `I can draft that to ${recipientEmail} with subject ${JSON.stringify(subjectHint)}. What should the body say?`
+        : `I can draft that to ${recipientEmail}. What subject should I use, and what should the email say?`;
+      const missingDetailsFollowUpPrompt = subjectHint
+        ? `What should the email say to ${recipientEmail}?`
+        : `What subject should I use, and what should the email say to ${recipientEmail}?`;
       return {
         kind: "clarify",
-        message:
-          `I can draft that to ${recipientEmail}. What should the email say?`,
+        message: missingDetailsPrompt,
         composeSession: buildComposeSession({
           status: "awaiting_body",
           recipientEmail,
           subject: subjectHint,
           bodyPreview: null,
           promptSeed: rawText,
-          followUpPrompt: `What should I say to ${recipientEmail}?`,
+          followUpPrompt: missingDetailsFollowUpPrompt,
         }),
         resolvedPrompt: resolvedContinuationPrompt,
       };

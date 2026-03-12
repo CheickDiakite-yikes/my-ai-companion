@@ -644,9 +644,9 @@ const LIVE_CALENDAR_FOLLOWUP_TIME_PATTERN =
 const LIVE_CALENDAR_FOLLOWUP_REQUEST_PATTERN =
   /\b(how\s+about|what\s+about|check(\s+again)?|look(\s+again)?|can\s+you\s+check|what\s+do\s+i\s+have|do\s+i\s+have|am\s+i\s+free|anything\s+on)\b/i;
 const LIVE_EMAIL_CONTEXT_FOLLOWUP_PATTERN =
-  /\b(send(?:\s+it|\s+that|\s+this)?|approve|looks\s+good|go\s+ahead|make\s+it|edit|change|update|revise|rewrite|short(?:en|er)?|lengthen|longer|warmer|friendlier|recipient|subject|to\s+field|email\s+address|send\s+to|change\s+the\s+to)\b|[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i;
+  /\b(send(?:\s+it|\s+that|\s+this)?|save(?:\s+it|\s+that|\s+this)?|approve(?:d)?|looks\s+good|sounds\s+good|that\s+works|go\s+ahead|do\s+it|please\s+do|let'?s\s+do\s+it|make\s+it|edit|change|update|revise|rewrite|short(?:en|er)?|lengthen|longer|warmer|friendlier|recipient|subject|to\s+field|email\s+address|send\s+to|change\s+the\s+to|don't\s+send|dont\s+send|cancel\s+it|never\s+mind)\b|[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i;
 const LIVE_CALENDAR_CONTEXT_FOLLOWUP_PATTERN =
-  /\b(book|put|add|create|schedule|hold|block(?:\s+off)?|move|reschedule|change|update|location|title|call\s+it|notes?|description|time|that\s+time|that\s+meeting|that\s+event|today|tomor+ow|tomore|tmrw|this\s+week|next\s+week|weekend|monday|tuesday|wednesday|thursday|friday|saturday|sunday|january|february|march|april|may|june|july|august|september|october|november|december)\b|\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}(?::\d{2})?\s*(?:am|pm)\b/i;
+  /\b(approve(?:d)?|looks\s+good|sounds\s+good|that\s+works|go\s+ahead|do\s+it|please\s+do|let'?s\s+do\s+it|save(?:\s+it|\s+that|\s+this)?|book(?:\s+it|\s+that|\s+this)?|put(?:\s+it|\s+that|\s+this)?|add(?:\s+it|\s+that|\s+this)?|create|schedule|hold|block(?:\s+off)?|move|reschedule|change|update|location|title|call\s+it|notes?|description|time|that\s+time|that\s+meeting|that\s+event|today|tomor+ow|tomore|tmrw|this\s+week|next\s+week|weekend|monday|tuesday|wednesday|thursday|friday|saturday|sunday|january|february|march|april|may|june|july|august|september|october|november|december)\b|\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}(?::\d{2})?\s*(?:am|pm)\b/i;
 const ENABLE_MORNING_BRIEF_VOICE_MODE = parseClientBoolean(
   liveClientEnv.VITE_ENABLE_MORNING_BRIEF_VOICE_MODE,
   false,
@@ -747,7 +747,7 @@ const LIVE_GOOGLE_PERSONAL_CONTEXT_FUNCTION_DECLARATIONS = [
   {
     name: "prepare_google_email_action",
     description:
-      "Prepare an approval-gated Gmail draft, reply, or send action from the user's natural-language request.",
+      "Prepare or continue an approval-gated Gmail draft, reply, or send action from the user's natural-language request. Use this for new requests and short follow-ups to the current draft/card such as send, save, approve, or revise. If required details are missing, stay in the Gmail action flow and ask only for what is missing.",
     parameters: {
       type: "object",
       properties: {
@@ -759,7 +759,7 @@ const LIVE_GOOGLE_PERSONAL_CONTEXT_FUNCTION_DECLARATIONS = [
   {
     name: "prepare_google_calendar_action",
     description:
-      "Prepare an approval-gated Google Calendar create or update action from the user's natural-language request.",
+      "Prepare or continue an approval-gated Google Calendar create or update action from the user's natural-language request. Use this for new requests and short follow-ups to the current event/card such as approve, sounds good, save it, go ahead, or revise. If required details are missing, stay in the calendar action flow and ask only for what is missing.",
     parameters: {
       type: "object",
       properties: {
@@ -911,7 +911,7 @@ function buildPersonalContextToolInstruction(
   }
   if (intent === "email" && hasEmailActionIntent) {
     return activeGoogleActionContext?.connector === "gmail"
-      ? 'Call prepare_google_email_action with {"request":"<full user request>"} before answering. This follow-up refers to the current Zee Mail draft/card, so do not answer conversationally or start a fresh draft unless the tool says more info is needed.'
+      ? 'Call prepare_google_email_action with {"request":"<full user request>"} before answering. This follow-up refers to the current Zee Mail draft/card, including short approvals like "I approve", "sounds good", "save it", or "send it". Do not answer conversationally, do not ask the user to tap review buttons, and do not start a fresh draft unless the tool says more info is needed.'
       : 'Call prepare_google_email_action with {"request":"<full user request>"} before answering. Do not answer conversationally instead of using the Gmail action tool.';
   }
   if (intent === "email" && LIVE_EMAIL_DETAIL_PATTERN.test(query)) {
@@ -919,7 +919,7 @@ function buildPersonalContextToolInstruction(
   }
   if (intent === "calendar" && hasCalendarActionIntent) {
     return activeGoogleActionContext?.connector
-      ? 'Call prepare_google_calendar_action with {"request":"<full user request>","timezone":"user_local"} before answering. This may be a follow-up to the current task context, so do not answer conversationally instead of using the calendar action tool.'
+      ? 'Call prepare_google_calendar_action with {"request":"<full user request>","timezone":"user_local"} before answering. This follow-up may simply be approval language like "I approve", "sounds good", "save it", or "let\'s do it" for the current calendar card. Do not answer conversationally, do not ask the user to tap review buttons, and do not start a fresh event unless the tool says more info is needed.'
       : 'Call prepare_google_calendar_action with {"request":"<full user request>","timezone":"user_local"} before answering. Do not answer conversationally instead of using the calendar action tool.';
   }
   if (intent === "calendar" && LIVE_CALENDAR_DETAIL_PATTERN.test(query)) {

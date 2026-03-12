@@ -7528,13 +7528,16 @@ function buildComposeSessionReminder(session: GoogleComposeSession): string {
   const recipientLabel = session.recipientEmail
     ? session.recipientEmail.replace(/@/g, " at ").replace(/\./g, " dot ")
     : "them";
-  return `I have the recipient as ${recipientLabel}. What would you like the email to say?`;
+  if (session.subject?.trim()) {
+    return `I have the recipient as ${recipientLabel} and the subject as ${session.subject.trim()}. What should the email say?`;
+  }
+  return `I have the recipient as ${recipientLabel}. What subject should I use, and what should the email say?`;
 }
 
 function buildCalendarSessionReminder(session: GoogleCalendarSession): string {
   return session.status === "awaiting_datetime"
-    ? "I still need when the event should happen before I can prepare it."
-    : "I still need what the event should be called before I can prepare it.";
+    ? "I still need when the event should happen. What day and time should I use?"
+    : "I have the timing. What should I call the event?";
 }
 
 function buildGoogleTargetContextMetadata(params: {

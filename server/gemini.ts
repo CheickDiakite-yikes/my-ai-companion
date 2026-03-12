@@ -213,7 +213,7 @@ const LIVE_GOOGLE_PERSONAL_CONTEXT_ACTION_FUNCTION_DECLARATIONS: LiveFunctionDec
     {
       name: "prepare_google_email_action",
       description:
-        "Prepare an approval-gated Gmail action such as drafting a reply or composing an email. This creates an in-thread approval card instead of sending immediately.",
+        "Prepare or continue an approval-gated Gmail action such as drafting a reply, composing an email, or handling a short follow-up like send it, save it, approve, or revise. This creates an in-thread approval card instead of sending immediately.",
       parameters: {
         type: "object",
         properties: {
@@ -225,7 +225,7 @@ const LIVE_GOOGLE_PERSONAL_CONTEXT_ACTION_FUNCTION_DECLARATIONS: LiveFunctionDec
     {
       name: "prepare_google_calendar_action",
       description:
-        "Prepare an approval-gated Google Calendar action such as creating or moving an event. This creates an in-thread approval card instead of updating the calendar immediately.",
+        "Prepare or continue an approval-gated Google Calendar action such as creating or moving an event, or handling a short follow-up like I approve, sounds good, save it, go ahead, or revise. This creates an in-thread approval card instead of updating the calendar immediately.",
       parameters: {
         type: "object",
         properties: {
@@ -1417,8 +1417,8 @@ function composeLiveSystemInstruction(params: {
         "- If the user asks for the details of a specific meeting or what changed in an invite, call get_calendar_event_detail before answering.",
         "- If the user asks you to draft/reply/send an email, call prepare_google_email_action instead of pretending it was sent.",
         "- If the user asks you to create/update/move a calendar event, call prepare_google_calendar_action instead of pretending it was updated.",
-        '- Treat short follow-ups like "send it", "edit that", "make it warmer", "book that", "put that on my calendar", "add location", or "move it to 4" as Google action requests that still require the Gmail or Calendar prepare tool.',
-        '- Treat follow-ups like "put that on my calendar", "book that time", "block that off", or "move it to 4" as calendar actions that still require prepare_google_calendar_action.',
+        '- Treat short follow-ups like "send it", "save it", "I approve", "sounds good", "edit that", "make it warmer", "book that", "put that on my calendar", "add location", or "move it to 4" as Google action requests that still require the Gmail or Calendar prepare tool.',
+        '- Treat follow-ups like "put that on my calendar", "book that time", "block that off", "I approve", "sounds good", "save it", or "move it to 4" as calendar actions that still require prepare_google_calendar_action.',
         "- After detailed reads, prefer offering one grounded next step such as drafting a reply or updating the event.",
         "- If tools report google_not_connected or google_scope_missing, tell the user to connect/reconnect Google from Profile settings.",
         "- Never fabricate email or calendar information. Use only returned tool data.",
@@ -1430,6 +1430,7 @@ function composeLiveSystemInstruction(params: {
         "EMAIL COMPOSE VOICE FLOW GUIDELINES:",
         "- When the user asks to draft or send an email, always confirm the recipient aloud before proceeding. Spell out the email address naturally (e.g., 'alex at gmail dot com').",
         "- If the user provides only a name without an email address, ask for the full email address before drafting.",
+        "- If the user gives only the recipient, ask for the missing subject and body details instead of pretending the draft is complete.",
         "- After composing or revising a draft, always read back a concise summary: mention the recipient, subject line, and the gist of the message in 1-2 sentences. Do NOT read the entire email body verbatim.",
         "- Example read-back: 'I drafted an email to alex at gmail dot com with subject Dinner Plans, asking if the 12th works for dinner at 7. Want me to send it, save it as a draft, or make any changes?'",
         "- Handle revision requests naturally. Phrases like 'make it warmer', 'shorter', 'change the subject', 'ask about the 14th instead', 'add a line about X' are all revision instructions — pass them to prepare_google_email_action.",
@@ -1444,6 +1445,18 @@ function composeLiveSystemInstruction(params: {
         "  - 'Send to Y instead' or 'change the recipient to Y' → replaces the recipient.",
         "- If the user says 'forget the email', 'never mind about that email', or 'cancel the draft', acknowledge and drop the compose session.",
         "- Voice transcription may garble email addresses. If the transcribed address looks wrong or incomplete, ask the user to repeat or spell it out.",
+      ].join("\n"),
+    );
+
+    sections.push(
+      [
+        "CALENDAR VOICE FLOW GUIDELINES:",
+        "- After preparing a calendar event or update, read back a concise summary with the title, day/time, and location if there is one.",
+        "- Ask for approval or changes naturally, for example: 'I drafted Lunch with Maya for tomorrow at 2 PM. Want me to save it or make any changes?'",
+        "- Treat short confirmations in the current calendar context like 'I approve', 'sounds good', 'that works', 'go ahead', 'let's do it', or 'save it' as approval follow-ups for the current event preview.",
+        "- Do not tell the user to tap the screen or press an approval button when a current calendar preview is already active. Call prepare_google_calendar_action again instead.",
+        "- If the user wants edits like moving the time, changing the title, adding a location, or updating notes, pass that instruction to prepare_google_calendar_action.",
+        "- If details are missing, ask only for the missing slot, such as the event title or the day/time.",
       ].join("\n"),
     );
   }

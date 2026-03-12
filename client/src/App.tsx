@@ -8562,6 +8562,7 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
   const [dismissedStageSurfaceKey, setDismissedStageSurfaceKey] = useState<string | null>(
     null,
   );
+  const [idleVoiceCanvasOpen, setIdleVoiceCanvasOpen] = useState(false);
   const [voiceStageSelectionMode, setVoiceStageSelectionMode] = useState<
     "auto" | "manual" | "dismissed"
   >("auto");
@@ -8618,6 +8619,21 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
     }
     return voiceStageSurfaceKey;
   }, [activeVoiceLookupPresentation, voiceStageSurfaceKey]);
+  const hasVoiceStageContent = Boolean(
+    voiceStageSurface || activeVoiceLookupPresentation,
+  );
+  const shouldAutoOpenVoiceCanvas = useMemo(() => {
+    if (activeVoiceLookupPresentation || !voiceStageSurface) {
+      return false;
+    }
+    if (voiceStageSurface.kind !== "task") {
+      return false;
+    }
+    return (
+      voiceStageSurface.card.status === "approval_required" &&
+      voiceStageSurface.card.approval?.status === "pending"
+    );
+  }, [activeVoiceLookupPresentation, voiceStageSurface]);
   const voiceStageCandidateTraceKey = useMemo(
     () =>
       voiceStageCandidates
@@ -8629,9 +8645,8 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
     [voiceStageCandidates],
   );
   const isVoiceCanvasVisible = Boolean(
-    isActive &&
-      (voiceStageSurface || activeVoiceLookupPresentation) &&
-      voiceStageSelectionMode !== "dismissed",
+    hasVoiceStageContent &&
+      (isActive ? voiceStageSelectionMode !== "dismissed" : idleVoiceCanvasOpen),
   );
 
   useEffect(() => {
@@ -8647,6 +8662,7 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
     const wasActive = wasVoiceCallActiveRef.current;
     if (isActive && !wasActive) {
       wasVoiceCallActiveRef.current = true;
+      setIdleVoiceCanvasOpen(false);
       setDismissedStageSurfaceKey(voiceStageSurfaceKey);
       setVoiceStageSelectionMode("dismissed");
       setPinnedVoiceStageSurfaceKey(null);
@@ -8660,6 +8676,7 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
 
     if (!isActive && wasActive) {
       wasVoiceCallActiveRef.current = false;
+      setIdleVoiceCanvasOpen(false);
       setDismissedStageSurfaceKey(null);
       setVoiceStageSelectionMode("auto");
       setPinnedVoiceStageSurfaceKey(null);
@@ -8672,6 +8689,13 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
       });
     }
   }, [isActive, onTraceStageEvent, voiceStageSurface, voiceStageSurfaceKey]);
+
+  useEffect(() => {
+    if (isActive || !idleVoiceCanvasOpen || hasVoiceStageContent) {
+      return;
+    }
+    setIdleVoiceCanvasOpen(false);
+  }, [hasVoiceStageContent, idleVoiceCanvasOpen, isActive]);
 
   useEffect(() => {
     if (!pinnedVoiceStageSurfaceKey) return;
@@ -8722,6 +8746,7 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
 
   useEffect(() => {
     if (!isActive) return;
+    if (!shouldAutoOpenVoiceCanvas) return;
     if (voiceStageSelectionMode !== "dismissed") return;
     if (dismissedStageSurfaceKey !== null) return;
     if (!effectiveVoiceCanvasKey) return;
@@ -8742,6 +8767,7 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
     activeVoiceLookupPresentation,
     dismissedStageSurfaceKey,
     effectiveVoiceCanvasKey,
+    shouldAutoOpenVoiceCanvas,
     isActive,
     onTraceStageEvent,
     voiceStageSelectionMode,
@@ -8939,8 +8965,12 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
 
   const dismissVoiceCanvas = () => {
     if (!effectiveVoiceCanvasKey) return;
-    setDismissedStageSurfaceKey(effectiveVoiceCanvasKey);
-    setVoiceStageSelectionMode("dismissed");
+    if (isActive) {
+      setDismissedStageSurfaceKey(effectiveVoiceCanvasKey);
+      setVoiceStageSelectionMode("dismissed");
+    } else {
+      setIdleVoiceCanvasOpen(false);
+    }
     onTraceStageEvent("surface_dismissed", {
       surfaceKind: activeVoiceLookupPresentation ? "lookup" : voiceStageSurface?.kind ?? null,
       surfaceKey: effectiveVoiceCanvasKey,
@@ -8948,8 +8978,12 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
   };
 
   const reopenVoiceCanvas = () => {
-    setDismissedStageSurfaceKey(null);
-    setVoiceStageSelectionMode("auto");
+    if (isActive) {
+      setDismissedStageSurfaceKey(null);
+      setVoiceStageSelectionMode("auto");
+    } else {
+      setIdleVoiceCanvasOpen(true);
+    }
     onTraceStageEvent("surface_reopened", {
       surfaceKind: activeVoiceLookupPresentation ? "lookup" : voiceStageSurface?.kind ?? null,
       surfaceKey: effectiveVoiceCanvasKey,
@@ -9576,7 +9610,7 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
             )}
           </AnimatePresence>
           <div className="flex-1 flex flex-col items-center justify-center relative">
-            {isActive && (voiceStageSurface || activeVoiceLookupPresentation) && !isVoiceCanvasVisible ? (
+            {hasVoiceStageContent && !isVoiceCanvasVisible ? (
               <div className="absolute left-1/2 top-4 z-20 -translate-x-1/2">
                 <button
                   type="button"
@@ -9642,7 +9676,7 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
                 </button>
               </motion.div>
             ) : null}
-            {isActive ? (
+            {isActive || isVoiceCanvasVisible ? (
               <div className="w-full h-full flex items-center justify-center px-8">
                 {isVoiceCanvasVisible && (voiceStageSurface || activeVoiceLookupPresentation) ? (
                   <motion.div
@@ -9959,7 +9993,20 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
                               "color-mix(in srgb, var(--app-soft-card-bg) 78%, transparent)",
                           }}
                         >
-                          {webLookupStatus === "searching" ? (
+                          {!isActive ? (
+                            <>
+                              <CheckCircle2
+                                className="h-3.5 w-3.5"
+                                style={{ color: "var(--app-accent)" }}
+                              />
+                              <span
+                                className="text-[11px] font-medium tracking-wide"
+                                style={{ color: "var(--app-on-dark-muted)" }}
+                              >
+                                Stage ready for review
+                              </span>
+                            </>
+                          ) : webLookupStatus === "searching" ? (
                             <>
                               <Loader2 className="h-3.5 w-3.5 animate-spin" />
                               <span
