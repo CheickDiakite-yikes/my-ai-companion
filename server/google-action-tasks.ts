@@ -1139,21 +1139,25 @@ function buildVoiceFriendlyDraftSummary(
   const subjectPart = plan.execution.subject
     ? `, subject: ${plan.execution.subject}`
     : "";
-  const bodySnippet = plan.execution.bodyText.length > 120
-    ? plan.execution.bodyText.slice(0, 120).replace(/\s+\S*$/, "") + "..."
-    : plan.execution.bodyText;
-  const bodyGist = bodySnippet
-    .replace(/^(?:Hi|Hey|Hello|Dear)\s+\S+[,.]?\s*/i, "")
-    .replace(/\s*(?:Best|Thanks|Regards|Cheers|Sincerely)[,.]?\s*\S*$/i, "")
-    .trim();
+  const bodyLen = plan.execution.bodyText.trim().length;
+  const bodyLengthHint = bodyLen > 300
+    ? " with a detailed message"
+    : bodyLen > 80
+      ? " with a short message"
+      : bodyLen > 0
+        ? " with a brief note"
+        : "";
 
   if (context === "new") {
     const sendOrSave = plan.execution.sendAfterApproval
       ? "Want me to send it or make any changes?"
       : "Want me to send it, save it as a draft, or make any changes?";
-    return `I've drafted an email to ${recipientLabel}${subjectPart}. ${bodyGist ? `It says: ${bodyGist}. ` : ""}${sendOrSave}`;
+    return `I've drafted an email to ${recipientLabel}${subjectPart}${bodyLengthHint}. ${sendOrSave}`;
   }
-  return `Updated the draft to ${recipientLabel}${subjectPart}. ${bodyGist ? `Now it says: ${bodyGist}. ` : ""}Want me to send it or make more changes?`;
+  const revisedAction = plan.execution.sendAfterApproval
+    ? "Want me to send it or make more changes?"
+    : "Want me to send it, save as draft, or make more changes?";
+  return `Updated the draft to ${recipientLabel}${subjectPart}${bodyLengthHint}. ${revisedAction}`;
 }
 
 function buildGoogleEmailPreview(params: {
@@ -2422,6 +2426,7 @@ export async function startGoogleActionTaskRun(params: {
   plan: StoredGoogleActionPlan;
   onEvent?: (event: AgentTaskEvent) => void;
   googleContext?: GoogleActionTargetContextMetadata | null;
+  voiceSummaryContext?: "new" | "revised";
 }): Promise<{ task: AgentTaskSummary; awaitingApproval: true }> {
   const task = await params.storage.createAgentTask({
     userId: params.userId,
@@ -2498,7 +2503,7 @@ export async function startGoogleActionTaskRun(params: {
 
   const isEmailCompose = params.plan.execution.kind === "email_compose" || params.plan.execution.kind === "email_reply";
   const voiceSummary = isEmailCompose
-    ? buildVoiceFriendlyDraftSummary(params.plan, "new")
+    ? buildVoiceFriendlyDraftSummary(params.plan, params.voiceSummaryContext ?? "new")
     : params.preview.summary;
   await createAssistantUiMessage({
     storage: params.storage,
@@ -3051,6 +3056,7 @@ export async function startFollowUpGoogleEmailRevisionTask(params: {
     plan: next.plan,
     onEvent: params.onEvent,
     googleContext: params.googleContext ?? null,
+    voiceSummaryContext: "revised",
   });
 
   await createAssistantUiMessage({
