@@ -131,6 +131,12 @@ app.use((req, res, next) => {
 (async () => {
   logGoogleIntegrationEncryptionKeyPreflight();
 
+  const { ensurePgvectorExtension, backfillEmbeddings } = await import("./memory");
+  await ensurePgvectorExtension();
+  backfillEmbeddings().catch((err) =>
+    console.error("[memory] Startup backfill failed:", err),
+  );
+
   await registerRoutes(httpServer, app);
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {

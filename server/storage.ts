@@ -435,7 +435,7 @@ export interface IStorage {
 export class DatabaseStorage implements IStorage {
   private static readonly QUOTA_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
   private static readonly MEMORY_MAX_SUMMARY_LENGTH = 220;
-  private static readonly MEMORY_MAX_CANDIDATES_PER_MESSAGE = 4;
+
 
   private static readonly MEMORY_HIGH_SENSITIVITY_PATTERNS = [
     /\b(password|passcode|api[_ -]?key|secret|token|private key)\b/i,
@@ -493,117 +493,6 @@ export class DatabaseStorage implements IStorage {
       if (pattern.test(value)) return "medium";
     }
     return "low";
-  }
-
-  private extractMemoryCandidatesFromMessage(message: Message): UserMemoryItemCandidate[] {
-    if (
-      (message.sender !== "user" && message.sender !== "assistant") ||
-      message.uiPayload
-    ) {
-      return [];
-    }
-
-    const normalizedText = this.normalizeWhitespace(message.text);
-    if (normalizedText.length < 12) {
-      return [];
-    }
-
-    const sentences = normalizedText
-      .split(/(?<=[.!?])\s+/)
-      .map((sentence) => this.normalizeWhitespace(sentence))
-      .filter((sentence) => sentence.length >= 12)
-      .slice(0, 8);
-
-    if (sentences.length === 0) {
-      sentences.push(normalizedText);
-    }
-
-    const candidates: UserMemoryItemCandidate[] = [];
-    const dedupe = new Set<string>();
-
-    const pushCandidate = (
-      kind: MemoryItemKind,
-      summary: string,
-      confidence: number,
-    ) => {
-      const clipped = this.truncateMemorySummary(summary);
-      if (clipped.length < 12) return;
-      const normalized = this.normalizeMemorySummary(clipped);
-      const dedupeKey = `${kind}:${normalized}`;
-      if (dedupe.has(dedupeKey)) return;
-      dedupe.add(dedupeKey);
-      candidates.push({
-        kind,
-        summary: clipped,
-        confidence: this.clampConfidence(confidence),
-        sensitivity: this.inferSensitivity(clipped),
-      });
-    };
-
-    for (const sentence of sentences) {
-      const lower = sentence.toLowerCase();
-      if (lower.includes("?")) continue;
-
-      if (message.sender === "user") {
-        if (
-          /\b(i (?:really )?(?:like|love|enjoy|prefer|hate|dislike)\b|my (?:favorite|favourite)\b)/i.test(
-            sentence,
-          )
-        ) {
-          pushCandidate("preference", sentence, 78);
-        }
-        if (
-          /\b(i (?:want|need|plan|intend|hope|am trying|trying) to\b|my goal is\b)/i.test(
-            sentence,
-          )
-        ) {
-          pushCandidate("goal", sentence, 76);
-        }
-        if (
-          /\b(i(?:'m| am) (?:working on|building|developing|creating)\b|my project\b)/i.test(
-            sentence,
-          )
-        ) {
-          pushCandidate("project", sentence, 74);
-        }
-        if (
-          /\b(my name is\b|call me\b|you can call me\b|i(?:'m| am) from\b|i live in\b|i work as\b)/i.test(
-            sentence,
-          )
-        ) {
-          pushCandidate("profile", sentence, 82);
-        }
-        if (
-          /\b(today|tomorrow|next week|on monday|on tuesday|on wednesday|on thursday|on friday|on saturday|on sunday|at \d{1,2}(?::\d{2})?\s?(?:am|pm)?)\b/i.test(
-            sentence,
-          )
-        ) {
-          pushCandidate("schedule", sentence, 68);
-        }
-        if (/^(?:i|my)\b/i.test(sentence) && sentence.length >= 24) {
-          pushCandidate("fact", sentence, 62);
-        }
-      } else {
-        if (
-          /\b(you said|you mentioned|you told me)\b/i.test(sentence) &&
-          sentence.length >= 20
-        ) {
-          pushCandidate("fact", sentence, 56);
-        }
-        if (/\b(you like|you prefer|your favorite)\b/i.test(sentence)) {
-          pushCandidate("preference", sentence, 58);
-        }
-        if (/\b(your goal|you want to|you need to)\b/i.test(sentence)) {
-          pushCandidate("goal", sentence, 56);
-        }
-      }
-
-      if (candidates.length >= DatabaseStorage.MEMORY_MAX_CANDIDATES_PER_MESSAGE) {
-        break;
-      }
-    }
-
-    return candidates.slice(0, DatabaseStorage.MEMORY_MAX_CANDIDATES_PER_MESSAGE);
   }
 
   private async ingestMessageMemory(params: {

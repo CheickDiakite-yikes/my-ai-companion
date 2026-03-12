@@ -18,6 +18,15 @@ const SUMMARIZATION_MODEL = "gemini-2.0-flash-lite";
 const SUMMARY_BLOCK_SIZE = 50;
 const MAX_EMBEDDING_TEXT_LENGTH = 2000;
 
+export async function ensurePgvectorExtension(): Promise<void> {
+  try {
+    await pool.query("CREATE EXTENSION IF NOT EXISTS vector");
+    console.log("[memory] pgvector extension ensured");
+  } catch (err) {
+    console.error("[memory] Failed to ensure pgvector extension:", err);
+  }
+}
+
 let _ai: GoogleGenAI | null = null;
 function getAI(): GoogleGenAI {
   if (!_ai) {
@@ -267,6 +276,8 @@ export async function embedMemoryItem(item: UserMemoryItem): Promise<void> {
 }
 
 export async function backfillEmbeddings(): Promise<{ processed: number; failed: number }> {
+  await backfillConversationMetadata();
+
   const items = await db
     .select()
     .from(userMemoryItems)
@@ -292,7 +303,36 @@ export async function backfillEmbeddings(): Promise<{ processed: number; failed:
     }
   }
 
+  if (processed > 0 || failed > 0) {
+    console.log(`[memory] Backfill: ${processed} embedded, ${failed} failed`);
+  }
+
   return { processed, failed };
+}
+
+async function backfillConversationMetadata(): Promise<void> {
+  const convosToBackfill = await db
+    .select({ id: conversations.id })
+    .from(conversations)
+    .where(eq(conversations.messageCount, 0));
+
+  if (convosToBackfill.length === 0) return;
+
+  for (const convo of convosToBackfill) {
+    const countResult = await pool.query(
+      "SELECT COUNT(*)::int AS cnt FROM messages WHERE conversation_id = $1",
+      [convo.id],
+    );
+    const count = countResult.rows[0]?.cnt ?? 0;
+    if (count > 0) {
+      await db
+        .update(conversations)
+        .set({ messageCount: count })
+        .where(eq(conversations.id, convo.id));
+    }
+  }
+
+  console.log(`[memory] Backfilled messageCount for ${convosToBackfill.length} conversations`);
 }
 
 export async function incrementConversationMessageCount(
