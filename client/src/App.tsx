@@ -8956,15 +8956,6 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
     });
   };
 
-  const toggleVoiceCanvas = () => {
-    if (!effectiveVoiceCanvasKey) return;
-    if (isVoiceCanvasVisible) {
-      dismissVoiceCanvas();
-      return;
-    }
-    reopenVoiceCanvas();
-  };
-
   const handleVoiceStageResolveApproval = async (
     taskId: string,
     approve: boolean,
@@ -9085,12 +9076,6 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
     (activeVoiceStageSummary?.title
       ? `Open ${activeVoiceStageSummary.title}`
       : "Open canvas");
-  const voiceStageToggleLabel = isVoiceCanvasVisible
-    ? "Hide stage"
-    : activeVoiceLookupPresentation?.openLabel ??
-      (activeVoiceStageSummary?.title
-        ? `Open ${activeVoiceStageSummary.title}`
-        : "Open stage");
 
   return (
     <motion.div 
@@ -10274,25 +10259,6 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
           >
             {isActive && (
               <div className="mb-4 flex flex-wrap items-center justify-center gap-4">
-                 {effectiveVoiceCanvasKey ? (
-                   <Button
-                     variant="outline"
-                     className="h-14 rounded-full border-2 px-5 text-sm font-medium transition-colors hover:opacity-90"
-                     style={{
-                       backgroundColor: "var(--app-soft-card-bg)",
-                       borderColor: isVoiceCanvasVisible
-                         ? "var(--app-accent)"
-                         : "var(--app-soft-card-border)",
-                       color: "var(--app-on-dark)",
-                     }}
-                     onClick={toggleVoiceCanvas}
-                     aria-label={voiceStageToggleLabel}
-                     data-testid="button-toggle-voice-stage"
-                   >
-                     <Sparkles className="mr-2 h-4 w-4" />
-                     {voiceStageToggleLabel}
-                   </Button>
-                 ) : null}
                  <Button 
                     variant="outline" 
                     size="icon" 
