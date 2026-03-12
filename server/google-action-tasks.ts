@@ -323,9 +323,34 @@ function getRequiredEmailWriteScopes(sendAfterApproval: boolean): string[] {
     : [GOOGLE_GMAIL_COMPOSE_SCOPE];
 }
 
+function extractVoiceTranscribedEmailCandidate(input: string): string | null {
+  const voicePattern = /\b([A-Z0-9][A-Z0-9._%+-]*(?:\s+[A-Z0-9._%+-]+)*)\s+at\s+([A-Z0-9][A-Z0-9.-]*(?:\s+[A-Z0-9.-]+)*)\s+dot\s+([A-Z]{2,})\b/i;
+  const match = input.match(voicePattern);
+  if (!match) return null;
+  const local = match[1].replace(/\s+/g, "")
+    .replace(/underscore/gi, "_")
+    .replace(/dash/gi, "-")
+    .replace(/hyphen/gi, "-")
+    .replace(/plus/gi, "+");
+  const domain = match[2].replace(/\s+/g, "")
+    .replace(/dash/gi, "-")
+    .replace(/hyphen/gi, "-");
+  const tld = match[3].replace(/\s+/g, "");
+  const candidate = `${local}@${domain}.${tld}`.toLowerCase();
+  if (/^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$/i.test(candidate)) {
+    return candidate;
+  }
+  return null;
+}
+
 function extractEmailAddress(input: string): string | null {
-  const match = input.match(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i);
-  return match?.[0]?.trim().toLowerCase() ?? null;
+  const directMatch = input.match(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i);
+  if (directMatch) return directMatch[0].trim().toLowerCase();
+
+  const voiceCandidate = extractVoiceTranscribedEmailCandidate(input);
+  if (voiceCandidate) return voiceCandidate;
+
+  return null;
 }
 
 function parseEmailRecipientList(input: string): string[] {
@@ -651,22 +676,43 @@ function shouldAttemptGoogleActionAiRouting(params: {
   );
 }
 
+type RecipientChangeResult = {
+  email: string;
+  mode: "replace" | "add";
+};
+
 function inferComposeRecipientCorrection(input: string): string | null {
+  const result = inferComposeRecipientChange(input);
+  return result?.email ?? null;
+}
+
+function inferComposeRecipientChange(input: string): RecipientChangeResult | null {
   const normalized = normalizeText(input);
   const recipientEmail = extractEmailAddress(normalized);
   if (!recipientEmail) return null;
   if (
     /\b(?:ask|say|tell|mention|write|body|message)\b/i.test(normalized) &&
-    !/\b(?:to|instead|recipient|change|switch|update|make)\b/i.test(normalized)
+    !/\b(?:to|instead|recipient|change|switch|update|make|also|too|as well|add)\b/i.test(normalized)
   ) {
     return null;
   }
+
+  const isAddRecipient =
+    /\b(?:also|too|as well)\b/i.test(normalized) ||
+    /\b(?:send|cc|add)\s+(?:it\s+)?(?:to\s+)?.*\btoo\b/i.test(normalized) ||
+    /\badd\s+/i.test(normalized) ||
+    /\b(?:send|email)\s+(?:it\s+)?to\s+.*\b(?:too|also|as well)\b/i.test(normalized);
+
+  if (isAddRecipient) {
+    return { email: recipientEmail, mode: "add" };
+  }
+
   if (
     normalized === recipientEmail ||
     /^(?:to\s+)?[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$/i.test(normalized) ||
-    /\b(?:to|instead|recipient|change|switch|update|make)\b/i.test(normalized)
+    /\b(?:to|instead|recipient|change|switch|update|make|rather|actually)\b/i.test(normalized)
   ) {
-    return recipientEmail;
+    return { email: recipientEmail, mode: "replace" };
   }
   return null;
 }
@@ -1077,6 +1123,39 @@ async function buildRevisedEmailDraftContent(params: {
   }
 }
 
+function buildVoiceFriendlyDraftSummary(
+  plan: StoredGoogleActionPlan,
+  context: "new" | "revised",
+): string {
+  if (
+    plan.execution.kind !== "email_compose" &&
+    plan.execution.kind !== "email_reply"
+  ) {
+    return "I updated the draft. Review it and approve when you're ready.";
+  }
+  const recipientLabel = plan.execution.to
+    .map((email: string) => email.replace(/@/g, " at ").replace(/\./g, " dot "))
+    .join(" and ");
+  const subjectPart = plan.execution.subject
+    ? `, subject: ${plan.execution.subject}`
+    : "";
+  const bodySnippet = plan.execution.bodyText.length > 120
+    ? plan.execution.bodyText.slice(0, 120).replace(/\s+\S*$/, "") + "..."
+    : plan.execution.bodyText;
+  const bodyGist = bodySnippet
+    .replace(/^(?:Hi|Hey|Hello|Dear)\s+\S+[,.]?\s*/i, "")
+    .replace(/\s*(?:Best|Thanks|Regards|Cheers|Sincerely)[,.]?\s*\S*$/i, "")
+    .trim();
+
+  if (context === "new") {
+    const sendOrSave = plan.execution.sendAfterApproval
+      ? "Want me to send it or make any changes?"
+      : "Want me to send it, save it as a draft, or make any changes?";
+    return `I've drafted an email to ${recipientLabel}${subjectPart}. ${bodyGist ? `It says: ${bodyGist}. ` : ""}${sendOrSave}`;
+  }
+  return `Updated the draft to ${recipientLabel}${subjectPart}. ${bodyGist ? `Now it says: ${bodyGist}. ` : ""}Want me to send it or make more changes?`;
+}
+
 function buildGoogleEmailPreview(params: {
   kind: "email_compose" | "email_reply";
   sendAfterApproval: boolean;
@@ -1218,17 +1297,52 @@ export function looksLikeGoogleEmailDraftRevisionInstruction(text: string): bool
   if (/\b(?:calendar|meeting|event|appointment|schedule)\b/i.test(normalized)) {
     return false;
   }
+  if (looksLikeGoogleEmailCancelRequest(text)) {
+    return false;
+  }
   return (
-    /^(?:ask|say|tell|mention|add|remove|make|rewrite|revise|edit|update|change|shorten|lengthen|reword|replace|use|keep|drop|swap|instead)\b/i.test(
+    /^(?:ask|say|tell|mention|add|remove|make|rewrite|revise|edit|update|change|shorten|lengthen|reword|replace|use|keep|drop|swap|instead|tone|warmer|friendlier|shorter|longer|more formal|less formal|more casual)\b/i.test(
       normalized,
     ) ||
     /^(?:can|could|would|will)\s+you\s+(?:ask|say|tell|mention|add|remove|make|rewrite|revise|edit|update|change|shorten|lengthen|reword|replace|use|keep|drop|swap)\b/i.test(
       normalized,
     ) ||
     /\b(?:subject)\b.*\b(?:to|should be)\b/i.test(normalized) ||
-    /\b(?:make it|change it|rewrite it|reword it|shorten it)\b/i.test(
+    /\b(?:make it|change it|rewrite it|reword it|shorten it|make the)\b/i.test(
       normalized,
-    )
+    ) ||
+    /\b(?:more|less)\s+(?:formal|casual|friendly|warm|professional|brief|detailed|urgent)\b/i.test(
+      normalized,
+    ) ||
+    /\b(?:actually|wait|hold on)\s+(?:change|say|ask|mention|make|add)\b/i.test(
+      normalized,
+    ) ||
+    /\b(?:change|update)\s+(?:the\s+)?(?:date|time|day)\s+(?:to|from)\b/i.test(
+      normalized,
+    ) ||
+    Boolean(inferComposeRecipientChange(normalized))
+  );
+}
+
+export function looksLikeGoogleEmailCancelRequest(text: string): boolean {
+  const normalized = normalizeText(text).toLowerCase();
+  if (!normalized) return false;
+  return (
+    /\b(?:forget|cancel|drop|scrap|abandon|discard|skip|scratch)\s+(?:the|that|this)?\s*(?:email|draft|message)\b/i.test(normalized) ||
+    /\b(?:actually\s+)?(?:forget|never\s*mind|nevermind)\s*(?:about)?\s*(?:the|that|this)?\s*(?:email|draft|message)?\b/i.test(normalized) ||
+    /\b(?:don't|dont|do not)\s+(?:send|draft|write|compose)\s+(?:it|that|the email|the draft|the message|anything)\b/i.test(normalized)
+  );
+}
+
+export function looksLikeGoogleEmailSaveAsDraftRequest(text: string): boolean {
+  const normalized = normalizeText(text).toLowerCase();
+  if (!normalized) return false;
+  return (
+    /\b(?:save|just save|only save)\b/i.test(normalized) ||
+    /\b(?:save|keep)\s+(?:it|that|this)?\s*(?:as)?\s*(?:a\s+)?draft\b/i.test(normalized) ||
+    /\b(?:don't|dont|do not)\s+send\s*(?:it|that|yet)?\b/i.test(normalized) ||
+    /\bsave\s+(?:it|that)\s+for\s+later\b/i.test(normalized) ||
+    /\bjust\s+(?:the\s+)?draft\b/i.test(normalized)
   );
 }
 
@@ -2382,10 +2496,14 @@ export async function startGoogleActionTaskRun(params: {
     approval: approvalSummary,
   });
 
+  const isEmailCompose = params.plan.execution.kind === "email_compose" || params.plan.execution.kind === "email_reply";
+  const voiceSummary = isEmailCompose
+    ? buildVoiceFriendlyDraftSummary(params.plan, "new")
+    : params.preview.summary;
   await createAssistantUiMessage({
     storage: params.storage,
     conversationId: params.conversationId,
-    text: params.preview.summary,
+    text: voiceSummary,
     uiPayload: {
       kind: "agent_task_status",
       task: taskSummary,
@@ -2503,6 +2621,47 @@ async function buildRevisedEmailVariantFromPlan(params: {
         ...params.plan.execution,
         subject: revisedDraft.subject,
         bodyText: revisedDraft.bodyText,
+      },
+    },
+  };
+}
+
+function buildRecipientChangedEmailVariantFromPlan(params: {
+  plan: StoredGoogleActionPlan;
+  recipientChange: RecipientChangeResult;
+}): { preview: GoogleActionPreview; plan: StoredGoogleActionPlan } {
+  if (
+    params.plan.execution.kind !== "email_compose" &&
+    params.plan.execution.kind !== "email_reply"
+  ) {
+    throw new Error("Task is not an email draft");
+  }
+
+  let newTo: string[];
+  if (params.recipientChange.mode === "add") {
+    newTo = Array.from(new Set([...params.plan.execution.to, params.recipientChange.email]));
+  } else {
+    newTo = [params.recipientChange.email];
+  }
+
+  const preview = buildGoogleEmailPreview({
+    kind: params.plan.execution.kind,
+    sendAfterApproval: params.plan.execution.sendAfterApproval,
+    to: newTo,
+    cc: params.plan.execution.cc,
+    subject: params.plan.execution.subject,
+    bodyText: params.plan.execution.bodyText,
+    emailThread: params.plan.preview.emailThread ?? null,
+  });
+
+  return {
+    preview,
+    plan: {
+      ...params.plan,
+      preview,
+      execution: {
+        ...params.plan.execution,
+        to: newTo,
       },
     },
   };
@@ -2769,6 +2928,58 @@ export async function promotePendingGoogleEmailTaskToSend(params: {
   };
 }
 
+export async function demotePendingGoogleEmailTaskToSaveDraft(params: {
+  storage: IStorage;
+  taskId: string;
+  userId: string;
+}): Promise<{ task: AgentTaskSummary; preview: GoogleActionPreview }> {
+  const task = await params.storage.getAgentTaskById(params.taskId);
+  if (!task || task.userId !== params.userId) {
+    throw new Error("Task not found");
+  }
+
+  const plan = taskPlanFromTask(task);
+  if (
+    (plan.execution.kind !== "email_compose" &&
+      plan.execution.kind !== "email_reply") ||
+    !plan.execution.sendAfterApproval
+  ) {
+    return {
+      task: toTaskSummary(task),
+      preview: plan.preview,
+    };
+  }
+
+  const preview = buildGoogleEmailPreview({
+    kind: plan.execution.kind,
+    sendAfterApproval: false,
+    to: plan.execution.to,
+    cc: plan.execution.cc,
+    subject: plan.execution.subject,
+    bodyText: plan.execution.bodyText,
+    emailThread: plan.preview.emailThread ?? null,
+  });
+
+  const nextPlan: StoredGoogleActionPlan = {
+    ...plan,
+    preview,
+    execution: {
+      ...plan.execution,
+      sendAfterApproval: false,
+    },
+  };
+
+  const updated = await params.storage.updateAgentTaskStatus({
+    taskId: task.id,
+    status: task.status,
+    plan: nextPlan,
+  });
+  return {
+    task: toTaskSummary(updated ?? task),
+    preview,
+  };
+}
+
 export async function startFollowUpGoogleEmailSendTask(params: {
   storage: IStorage;
   taskId: string;
@@ -2882,6 +3093,43 @@ export async function revisePendingGoogleEmailTask(params: {
   if (!isEmailDraftRevisionCandidatePreview(plan.preview)) {
     throw new Error("Task is not a revisable email draft");
   }
+  const recipientChange = inferComposeRecipientChange(params.instructionText);
+  if (recipientChange) {
+    const next = buildRecipientChangedEmailVariantFromPlan({
+      plan,
+      recipientChange,
+    });
+    const updated =
+      (await params.storage.updateAgentTaskStatus({
+        taskId: task.id,
+        status: task.status,
+        plan: next.plan,
+      })) ?? task;
+    const taskSummary = toTaskSummary(updated);
+    const recipientLabel = next.plan.execution.to.join(", ");
+    const actionLabel = recipientChange.mode === "add"
+      ? `Added ${recipientChange.email} as a recipient. Now sending to ${recipientLabel}.`
+      : `Changed recipient to ${recipientLabel}.`;
+
+    await createAssistantUiMessage({
+      storage: params.storage,
+      conversationId: task.conversationId,
+      text: `${actionLabel} Review it and approve when you're ready.`,
+      uiPayload: {
+        kind: "agent_task_status",
+        task: taskSummary,
+        text: recipientChange.mode === "add" ? "Added recipient" : "Changed recipient",
+        googleActionPreview: next.preview,
+        googleContext: params.googleContext ?? null,
+      },
+    });
+
+    return {
+      task: taskSummary,
+      preview: next.preview,
+    };
+  }
+
   const authorContext = await resolveEmailAuthorContext(
     params.storage,
     params.userId,
@@ -2903,7 +3151,7 @@ export async function revisePendingGoogleEmailTask(params: {
   await createAssistantUiMessage({
     storage: params.storage,
     conversationId: task.conversationId,
-    text: "I updated the draft preview. Review it and approve when you're ready.",
+    text: buildVoiceFriendlyDraftSummary(next.plan, "revised"),
     uiPayload: {
       kind: "agent_task_status",
       task: taskSummary,
@@ -3347,11 +3595,14 @@ export async function approveAndExecuteGoogleActionTask(params: {
           bodyText: plan.execution.bodyText,
           threadId: "threadId" in plan.execution ? plan.execution.threadId ?? null : null,
         });
+        const voiceRecipientLabel = plan.execution.to
+          .map((email: string) => email.replace(/@/g, " at ").replace(/\./g, " dot "))
+          .join(" and ");
         actionResult = {
           kind: plan.execution.kind,
           connector: "gmail",
           status: "email_sent",
-          summary: `Sent your email to ${plan.execution.to.join(", ")}.`,
+          summary: `Email sent to ${voiceRecipientLabel}.`,
           messageId: sent.messageId,
           threadId: sent.threadId,
         };
@@ -3364,11 +3615,14 @@ export async function approveAndExecuteGoogleActionTask(params: {
           bodyText: plan.execution.bodyText,
           threadId: "threadId" in plan.execution ? plan.execution.threadId ?? null : null,
         });
+        const voiceRecipientLabel = plan.execution.to
+          .map((email: string) => email.replace(/@/g, " at ").replace(/\./g, " dot "))
+          .join(" and ");
         actionResult = {
           kind: plan.execution.kind,
           connector: "gmail",
           status: "draft_created",
-          summary: `Created a Gmail draft to ${plan.execution.to.join(", ")}.`,
+          summary: `Draft saved to your Gmail. It's addressed to ${voiceRecipientLabel}.`,
           draftId: draft.draftId,
           messageId: draft.messageId,
           threadId: draft.threadId,

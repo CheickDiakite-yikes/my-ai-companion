@@ -118,8 +118,11 @@ import {
   type RecentGoogleActionTask,
   looksLikeGoogleEmailComposeRequest,
   looksLikeGoogleEmailDraftRevisionInstruction,
+  looksLikeGoogleEmailCancelRequest,
+  looksLikeGoogleEmailSaveAsDraftRequest,
   prepareGoogleActionTask,
   promotePendingGoogleEmailTaskToSend,
+  demotePendingGoogleEmailTaskToSaveDraft,
   revisePendingGoogleEmailTask,
   startFollowUpGoogleEmailRevisionTask,
   startFollowUpGoogleEmailSendTask,
@@ -6518,7 +6521,8 @@ function isGoogleActionAmbiguityPromptPayload(
     (prompt.connector === "gmail" || prompt.connector === "calendar") &&
     (prompt.action === "send" ||
       prompt.action === "revise" ||
-      prompt.action === "update") &&
+      prompt.action === "update" ||
+      prompt.action === "save") &&
     typeof prompt.instructionText === "string" &&
     Array.isArray(prompt.candidates) &&
     prompt.candidates.every((candidate) =>
@@ -7407,17 +7411,27 @@ function normalizeGoogleActionControlText(text: string): string {
 function isGoogleActionSendMessage(text: string): boolean {
   const compact = normalizeGoogleActionControlText(text);
   if (!compact) return false;
+  if (looksLikeGoogleEmailSaveAsDraftRequest(text)) return false;
   return (
     /\b(?:send|ship)\b/.test(compact) ||
     compact.includes("let's send") ||
     compact.includes("lets send") ||
     compact.includes("fire it off") ||
-    compact.includes("fire this off")
+    compact.includes("fire this off") ||
+    compact.includes("go ahead and send") ||
+    compact.includes("yeah send") ||
+    compact.includes("yes send") ||
+    compact.includes("yep send")
   );
+}
+
+function isGoogleActionSaveAsDraftMessage(text: string): boolean {
+  return looksLikeGoogleEmailSaveAsDraftRequest(text);
 }
 
 function isGoogleActionApproveMessage(text: string): boolean {
   if (isGoogleActionSendMessage(text)) return false;
+  if (isGoogleActionSaveAsDraftMessage(text)) return true;
   const compact = normalizeGoogleActionControlText(text);
   if (!compact) return false;
   if (isOfferAcceptMessage(compact)) return true;
@@ -7435,6 +7449,7 @@ function isGoogleActionDeclineMessage(text: string): boolean {
   const compact = normalizeGoogleActionControlText(text);
   if (!compact) return false;
   if (isOfferDeclineMessage(compact)) return true;
+  if (looksLikeGoogleEmailCancelRequest(text)) return true;
   return (
     compact.includes("don't send") ||
     compact.includes("dont send") ||
@@ -7478,6 +7493,9 @@ function shouldBypassGenericAgentTaskForGoogleAction(params: {
   if (latestEmailTaskTarget && isGoogleActionSendMessage(params.text)) {
     return true;
   }
+  if (latestEmailTaskTarget && isGoogleActionSaveAsDraftMessage(params.text)) {
+    return true;
+  }
   return detectGoogleActionTaskIntent(
     params.text,
     toGoogleRecentActionContext(state),
@@ -7485,9 +7503,13 @@ function shouldBypassGenericAgentTaskForGoogleAction(params: {
 }
 
 function buildComposeSessionReminder(session: GoogleComposeSession): string {
-  return session.status === "awaiting_recipient"
-    ? "I still need the recipient email before I can draft it."
-    : "I still need what you want the email to say before I can draft it.";
+  if (session.status === "awaiting_recipient") {
+    return "I still need the recipient's email address. Who should I send this to?";
+  }
+  const recipientLabel = session.recipientEmail
+    ? session.recipientEmail.replace(/@/g, " at ").replace(/\./g, " dot ")
+    : "them";
+  return `I have the recipient as ${recipientLabel}. What would you like the email to say?`;
 }
 
 function buildCalendarSessionReminder(session: GoogleCalendarSession): string {
@@ -7896,7 +7918,7 @@ async function handleResolvedGoogleEmailFollowUp(params: {
   conversationId: string;
   requestedByMessageId: string;
   userCreatedAt: Date | null;
-  action: "send" | "revise";
+  action: "send" | "revise" | "save";
   instructionText: string;
   targetTaskId: string;
   targetPreview?: GoogleActionPreview | null;
@@ -7905,6 +7927,60 @@ async function handleResolvedGoogleEmailFollowUp(params: {
 }) {
   const task = await params.storage.getAgentTaskById(params.targetTaskId);
   if (!task || task.userId !== params.userId) {
+    return { handled: false as const };
+  }
+
+  if (params.action === "save") {
+    if (task.status === "approval_required") {
+      await demotePendingGoogleEmailTaskToSaveDraft({
+        storage: params.storage,
+        taskId: task.id,
+        userId: params.userId,
+      });
+      const result = await approveAndExecuteGoogleActionTask({
+        storage: params.storage,
+        taskId: task.id,
+        userId: params.userId,
+        onEvent: params.onEvent,
+      });
+      const assistantMessages = await collectRecentAssistantTaskMessages({
+        conversationId: params.conversationId,
+        taskId: task.id,
+        userId: params.userId,
+        userCreatedAt: params.userCreatedAt,
+      });
+      const finalizedAssistantMessages =
+        assistantMessages.length > 0
+          ? assistantMessages
+          : [
+              {
+                id: `google-action-save-draft-${task.id}`,
+                conversationId: params.conversationId,
+                sender: "assistant",
+                turnId: randomUUID(),
+                partIndex: 0,
+                text: "Draft saved to your Gmail.",
+                createdAt: new Date(),
+                attachments: [],
+                uiPayload: {
+                  kind: "agent_task_status",
+                  task: result,
+                  text: "Draft saved",
+                },
+              },
+            ];
+      return {
+        handled: true as const,
+        kind: "ready" as const,
+        assistantMessages: finalizedAssistantMessages,
+        legacyAssistantMessage: makeLegacyAssistantMessage(finalizedAssistantMessages),
+        model: "google_action_task_save_draft_v1",
+        decisionPath: "agent_task" as const,
+        decisionPathReason: "task_started" as const,
+        awaitingApproval: false,
+        task: result,
+      };
+    }
     return { handled: false as const };
   }
 
@@ -8363,11 +8439,14 @@ async function maybeHandleGoogleActionTask(params: {
   );
   const wantsEmailSendFollowUp =
     Boolean(latestEmailTaskTarget) && isGoogleActionSendMessage(params.text);
+  const wantsEmailSaveAsDraftFollowUp =
+    Boolean(latestEmailTaskTarget) && isGoogleActionSaveAsDraftMessage(params.text);
   const actionableEmailCandidates =
     rankedEmailCandidates as GoogleEmailConversationTaskTarget[];
   const wantsEmailRevisionFollowUp =
     Boolean(latestEmailTaskTarget) &&
     !wantsEmailSendFollowUp &&
+    !wantsEmailSaveAsDraftFollowUp &&
     !isGoogleActionApproveMessage(params.text) &&
     !isGoogleActionDeclineMessage(params.text) &&
       !hasOtherGoogleFollowUpIntent &&
@@ -8539,11 +8618,13 @@ async function maybeHandleGoogleActionTask(params: {
           ? "client_action_context"
           : emailCandidateResolution.kind,
       });
+      const resolvedAmbiguityAction = googleConversationState.actionAmbiguity.prompt.action;
       const googleContext = buildGoogleTargetContextMetadata({
         connector: "gmail",
-        action:
-          googleConversationState.actionAmbiguity.prompt.action === "send"
-            ? "send"
+        action: resolvedAmbiguityAction === "send"
+          ? "send"
+          : resolvedAmbiguityAction === "save"
+            ? "save"
             : "revise",
         actionableTargetId: selectedEmailTarget.taskId,
         candidateTargetIds:
@@ -8562,9 +8643,11 @@ async function maybeHandleGoogleActionTask(params: {
         requestedByMessageId: params.userMessage.id,
         userCreatedAt: params.userMessage.createdAt,
         action:
-          googleConversationState.actionAmbiguity.prompt.action === "send"
+          resolvedAmbiguityAction === "send"
             ? "send"
-            : "revise",
+            : resolvedAmbiguityAction === "save"
+              ? "save"
+              : "revise",
         instructionText:
           googleConversationState.actionAmbiguity.prompt.instructionText,
         targetTaskId: selectedEmailTarget.taskId,
@@ -8673,12 +8756,16 @@ async function maybeHandleGoogleActionTask(params: {
 
   if (googleConversationState.composeSession) {
     if (isGoogleActionDeclineMessage(params.text)) {
+      const cancelledSession = googleConversationState.composeSession.session;
+      const cancelRecipient = cancelledSession.recipientEmail
+        ? ` to ${cancelledSession.recipientEmail.replace(/@/g, " at ").replace(/\./g, " dot ")}`
+        : "";
       const assistantMessage = await createGoogleComposeSessionAssistantMessage({
         storage: params.storage,
         conversationId: params.conversationId,
-        text: "Okay, I dropped that draft idea.",
+        text: `Got it, I've dropped the email draft${cancelRecipient}. Let me know if you need anything else.`,
         session: {
-          ...googleConversationState.composeSession.session,
+          ...cancelledSession,
           status: "cancelled",
         },
       });
@@ -8895,15 +8982,16 @@ async function maybeHandleGoogleActionTask(params: {
     }
   }
 
-  if (latestEmailTaskTarget && (wantsEmailSendFollowUp || wantsEmailRevisionFollowUp)) {
+  if (latestEmailTaskTarget && (wantsEmailSendFollowUp || wantsEmailSaveAsDraftFollowUp || wantsEmailRevisionFollowUp)) {
     if (
       actionableEmailCandidates.length > 1 &&
       emailCandidateResolution.kind !== "resolved" &&
       !explicitContextSelectedEmailTarget
     ) {
+      const ambiguityAction = wantsEmailSendFollowUp ? "send" : wantsEmailSaveAsDraftFollowUp ? "save" : "revise";
       const ambiguity: GoogleActionAmbiguityPrompt = {
         connector: "gmail",
-        action: wantsEmailSendFollowUp ? "send" : "revise",
+        action: ambiguityAction,
         instructionText: params.text,
         candidates: actionableEmailCandidates
           .slice(0, 3)
@@ -8922,7 +9010,9 @@ async function maybeHandleGoogleActionTask(params: {
         ambiguity,
         text: wantsEmailSendFollowUp
           ? "I found a couple of drafts I could send. Which email did you mean?"
-          : "I found a couple of recent drafts. Which email should I update?",
+          : wantsEmailSaveAsDraftFollowUp
+            ? "I found a couple of recent drafts. Which one should I save?"
+            : "I found a couple of recent drafts. Which email should I update?",
         googleContext: buildGoogleTargetContextMetadata({
           connector: "gmail",
           action: ambiguity.action,
@@ -8955,17 +9045,19 @@ async function maybeHandleGoogleActionTask(params: {
       params.clientGoogleActionContext?.actionableTargetId &&
       params.clientGoogleActionContext.actionableTargetId !== resolvedTarget.taskId
     ) {
+      const resolvedAction = wantsEmailSendFollowUp ? "send" : wantsEmailSaveAsDraftFollowUp ? "save" : "revise";
       params.onTrace?.("google.target_context_mismatch", {
         connector: "gmail",
-        action: wantsEmailSendFollowUp ? "send" : "revise",
+        action: resolvedAction,
         activeTargetId: params.clientGoogleActionContext.actionableTargetId,
         resolvedTargetId: resolvedTarget.taskId,
         resolutionKind: emailCandidateResolution.kind,
       });
     }
+    const resolvedAction = wantsEmailSendFollowUp ? "send" : wantsEmailSaveAsDraftFollowUp ? "save" : "revise";
     params.onTrace?.("google.target_resolved", {
       connector: "gmail",
-      action: wantsEmailSendFollowUp ? "send" : "revise",
+      action: resolvedAction,
       selectedTaskId: resolvedTarget.taskId,
       selectionReason:
         explicitContextSelectedEmailTarget
@@ -8978,7 +9070,7 @@ async function maybeHandleGoogleActionTask(params: {
     });
     const googleContext = buildGoogleTargetContextMetadata({
       connector: "gmail",
-      action: wantsEmailSendFollowUp ? "send" : "revise",
+      action: resolvedAction,
       actionableTargetId: resolvedTarget.taskId,
       candidateTargetIds: actionableEmailCandidates.map((candidate) => candidate.taskId),
       sourceTurnId: params.userMessage.id,
@@ -8999,7 +9091,7 @@ async function maybeHandleGoogleActionTask(params: {
       conversationId: params.conversationId,
       requestedByMessageId: params.userMessage.id,
       userCreatedAt: params.userMessage.createdAt,
-      action: wantsEmailSendFollowUp ? "send" : "revise",
+      action: wantsEmailSendFollowUp ? "send" : wantsEmailSaveAsDraftFollowUp ? "save" : "revise",
       instructionText: params.text,
       targetTaskId: resolvedTarget.taskId,
       targetPreview: resolvedTarget.preview,

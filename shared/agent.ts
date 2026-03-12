@@ -460,7 +460,7 @@ export interface GoogleActionAmbiguityCandidate {
 
 export interface GoogleActionAmbiguityPrompt {
   connector: GoogleActionTargetConnector;
-  action: "send" | "revise" | "update";
+  action: "send" | "revise" | "update" | "save";
   instructionText: string;
   candidates: GoogleActionAmbiguityCandidate[];
 }

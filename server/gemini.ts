@@ -1382,6 +1382,28 @@ function composeLiveSystemInstruction(params: {
         "- Never fabricate email or calendar information. Use only returned tool data.",
       ].join("\n"),
     );
+
+    sections.push(
+      [
+        "EMAIL COMPOSE VOICE FLOW GUIDELINES:",
+        "- When the user asks to draft or send an email, always confirm the recipient aloud before proceeding. Spell out the email address naturally (e.g., 'alex at gmail dot com').",
+        "- If the user provides only a name without an email address, ask for the full email address before drafting.",
+        "- After composing or revising a draft, always read back a concise summary: mention the recipient, subject line, and the gist of the message in 1-2 sentences. Do NOT read the entire email body verbatim.",
+        "- Example read-back: 'I drafted an email to alex at gmail dot com with subject Dinner Plans, asking if the 12th works for dinner at 7. Want me to send it, save it as a draft, or make any changes?'",
+        "- Handle revision requests naturally. Phrases like 'make it warmer', 'shorter', 'change the subject', 'ask about the 14th instead', 'add a line about X' are all revision instructions — pass them to prepare_google_email_action.",
+        "- After each revision, read back what changed concisely: 'Updated — I changed the date to the 14th and made the tone warmer. Want to send it now?'",
+        "- Distinguish 'save' vs 'send' intent clearly:",
+        "  - 'Send it', 'go ahead and send', 'fire it off', 'ship it' → send the email immediately.",
+        "  - 'Save it', 'just save the draft', 'save it for later', 'don't send yet' → save as Gmail draft only.",
+        "  - If ambiguous (e.g., 'that looks good'), default to asking: 'Want me to send it now or save it as a draft?'",
+        "- After sending, confirm: 'Email sent to [recipient].' After saving, confirm: 'Draft saved to your Gmail.'",
+        "- For recipient changes mid-flow, pass the instruction to prepare_google_email_action:",
+        "  - 'Send it to Y too' or 'add Y' → adds a recipient.",
+        "  - 'Send to Y instead' or 'change the recipient to Y' → replaces the recipient.",
+        "- If the user says 'forget the email', 'never mind about that email', or 'cancel the draft', acknowledge and drop the compose session.",
+        "- Voice transcription may garble email addresses. If the transcribed address looks wrong or incomplete, ask the user to repeat or spell it out.",
+      ].join("\n"),
+    );
   }
 
   return sections.join("\n\n");
