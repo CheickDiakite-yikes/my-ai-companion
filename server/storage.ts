@@ -3,6 +3,7 @@ import {
   incrementConversationMessageCount,
   triggerSummarizationIfNeeded,
   generateEmbedding,
+  bufferMessageForExtraction,
 } from "./memory";
 import {
   conversations,
@@ -609,11 +610,6 @@ export class DatabaseStorage implements IStorage {
     message: Message;
     conversationUserId?: string | null;
   }): Promise<void> {
-    const candidates = this.extractMemoryCandidatesFromMessage(params.message);
-    if (candidates.length === 0) {
-      return;
-    }
-
     let userId = params.conversationUserId ?? null;
     if (!userId) {
       const conversation = await this.getConversation(params.message.conversationId);
@@ -623,16 +619,11 @@ export class DatabaseStorage implements IStorage {
       return;
     }
 
-    for (const candidate of candidates) {
-      await this.upsertUserMemoryCandidate({
-        userId,
-        candidate: {
-          ...candidate,
-          sourceMessageId: params.message.id,
-          sourceConversationId: params.message.conversationId,
-        },
-      });
-    }
+    bufferMessageForExtraction({
+      conversationId: params.message.conversationId,
+      userId,
+      message: params.message,
+    }).catch(() => {});
   }
 
   private getQuotaWindowStart(): Date {

@@ -305,3 +305,144 @@ export async function incrementConversationMessageCount(
     })
     .where(eq(conversations.id, conversationId));
 }
+
+export type ExtractedMemoryItem = {
+  kind: "fact" | "preference" | "goal" | "project" | "profile" | "schedule" | "relationship";
+  summary: string;
+  confidence: number;
+  sensitivity: "low" | "medium" | "high";
+};
+
+const MEMORY_EXTRACTION_BATCH_SIZE = 10;
+const memoryExtractionBuffers = new Map<string, Message[]>();
+
+export async function extractMemoriesWithGemini(
+  messageTexts: Array<{ sender: string; text: string }>,
+): Promise<ExtractedMemoryItem[]> {
+  const transcript = messageTexts
+    .map((m) => `${m.sender === "user" ? "User" : "Zee"}: ${m.text.slice(0, 400)}`)
+    .join("\n");
+
+  if (transcript.length < 30) return [];
+
+  const prompt = `You extract structured memory items from a conversation between a user and their AI companion Zee. Analyze these messages and extract important facts to remember about the user.
+
+Return a JSON array of memory items. Each item has:
+- "kind": one of "fact", "preference", "goal", "project", "profile", "schedule", "relationship"
+- "summary": concise statement of what to remember (1-2 sentences max, written as the user said it)
+- "confidence": 50-95 (how confident this is a real, persistent fact vs. passing comment)
+- "sensitivity": "low", "medium", or "high"
+
+Extraction rules:
+- "profile": name, location, job, background, identity
+- "preference": likes, dislikes, favorites, habits
+- "goal": plans, ambitions, things they want to do
+- "project": things they're building or working on
+- "schedule": appointments, deadlines, recurring events
+- "relationship": people mentioned (friends, family, colleagues)
+- "fact": other personal facts worth remembering
+
+Only extract genuine personal facts. Skip:
+- Questions the user asked (not facts about them)
+- Greetings, filler, and chit-chat
+- Things Zee said (unless quoting something the user told Zee earlier)
+- Garbled or unclear transcription artifacts
+
+If no memorable facts, return an empty array [].
+
+Messages:
+${transcript.slice(0, 5000)}
+
+Return ONLY a valid JSON array, no markdown fences:`;
+
+  try {
+    const ai = getAI();
+    const result = await ai.models.generateContent({
+      model: SUMMARIZATION_MODEL,
+      contents: prompt,
+    });
+    const raw = result.text?.trim() ?? "";
+
+    const cleaned = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
+    const parsed = JSON.parse(cleaned);
+    if (!Array.isArray(parsed)) return [];
+
+    const validKinds = new Set(["fact", "preference", "goal", "project", "profile", "schedule", "relationship"]);
+    const validSensitivities = new Set(["low", "medium", "high"]);
+
+    return parsed
+      .filter(
+        (item: any) =>
+          item &&
+          typeof item.summary === "string" &&
+          item.summary.length >= 10 &&
+          validKinds.has(item.kind) &&
+          typeof item.confidence === "number",
+      )
+      .map((item: any) => ({
+        kind: item.kind,
+        summary: item.summary.slice(0, 300),
+        confidence: Math.min(95, Math.max(50, Math.round(item.confidence))),
+        sensitivity: validSensitivities.has(item.sensitivity) ? item.sensitivity : "low",
+      }))
+      .slice(0, 8);
+  } catch (err) {
+    console.error("[memory] Gemini extraction failed:", err);
+    return [];
+  }
+}
+
+export async function bufferMessageForExtraction(params: {
+  conversationId: string;
+  userId: string;
+  message: Message;
+}): Promise<void> {
+  const key = `${params.conversationId}:${params.userId}`;
+  const buffer = memoryExtractionBuffers.get(key) ?? [];
+  buffer.push(params.message);
+  memoryExtractionBuffers.set(key, buffer);
+
+  if (buffer.length >= MEMORY_EXTRACTION_BATCH_SIZE) {
+    memoryExtractionBuffers.delete(key);
+    runBatchExtraction(params.conversationId, params.userId, buffer).catch(() => {});
+  }
+}
+
+async function runBatchExtraction(
+  conversationId: string,
+  userId: string,
+  batch: Message[],
+): Promise<void> {
+  const texts = batch
+    .filter((m) => m.sender === "user" || m.sender === "assistant")
+    .filter((m) => !m.uiPayload)
+    .filter((m) => m.text && m.text.trim().length >= 10)
+    .map((m) => ({ sender: m.sender, text: m.text }));
+
+  if (texts.length < 2) return;
+
+  const items = await extractMemoriesWithGemini(texts);
+  if (items.length === 0) return;
+
+  const { storage: storageImport } = await import("./storage");
+  const lastMsg = batch[batch.length - 1];
+
+  for (const item of items) {
+    const kind = item.kind === "relationship" ? "fact" : item.kind;
+    try {
+      await storageImport.upsertUserMemoryCandidate({
+        userId,
+        candidate: {
+          kind: kind as any,
+          summary: item.summary,
+          confidence: item.confidence,
+          sensitivity: item.sensitivity,
+          sourceMessageId: lastMsg.id,
+          sourceConversationId: conversationId,
+        },
+      });
+    } catch {
+      // best effort
+    }
+  }
+}
