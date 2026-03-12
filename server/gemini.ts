@@ -75,6 +75,7 @@ type LiveFunctionDeclaration = {
   name: string;
   description: string;
   parameters?: Record<string, unknown>;
+  behavior?: "NON_BLOCKING";
 };
 type LiveFunctionDeclarationsTool = {
   functionDeclarations: LiveFunctionDeclaration[];
@@ -122,6 +123,7 @@ const LIVE_GOOGLE_PERSONAL_CONTEXT_READ_FUNCTION_DECLARATIONS: LiveFunctionDecla
     name: "get_user_emails",
     description:
       "Retrieve the user's recent Gmail inbox messages. Only works if user has connected their Google account.",
+    behavior: "NON_BLOCKING",
     parameters: {
       type: "object",
       properties: {
@@ -136,6 +138,7 @@ const LIVE_GOOGLE_PERSONAL_CONTEXT_READ_FUNCTION_DECLARATIONS: LiveFunctionDecla
     name: "get_calendar_events",
     description:
       "Retrieve the user's upcoming Google Calendar events for a specific time range. Only works if user has connected their Google account.",
+    behavior: "NON_BLOCKING",
     parameters: {
       type: "object",
       properties: {
@@ -157,6 +160,7 @@ const LIVE_GOOGLE_PERSONAL_CONTEXT_DETAIL_FUNCTION_DECLARATIONS: LiveFunctionDec
       name: "get_email_thread_detail",
       description:
         "Retrieve a detailed Gmail thread with participants, body excerpts, and attachments for a specific email reference.",
+      behavior: "NON_BLOCKING",
       parameters: {
         type: "object",
         properties: {
@@ -169,6 +173,7 @@ const LIVE_GOOGLE_PERSONAL_CONTEXT_DETAIL_FUNCTION_DECLARATIONS: LiveFunctionDec
       name: "get_calendar_event_detail",
       description:
         "Retrieve a detailed Google Calendar event with attendees, notes, and the latest event metadata.",
+      behavior: "NON_BLOCKING",
       parameters: {
         type: "object",
         properties: {

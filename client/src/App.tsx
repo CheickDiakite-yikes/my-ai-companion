@@ -8969,9 +8969,9 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
     ? getVoiceStageCandidateSummary(voiceStageSurface)
     : null;
 
-  const voiceStageTitle =
-    activeVoiceLookupPresentation?.title ??
-    voiceStageSurface?.kind === "task"
+  const voiceStageTitle = activeVoiceLookupPresentation?.title
+    ? activeVoiceLookupPresentation.title
+    : voiceStageSurface?.kind === "task"
       ? activeVoiceStageSummary?.title ??
         (voiceStageSurface.card.googleActionPreview?.connector === "gmail"
           ? "Zee Mail"
@@ -8984,13 +8984,13 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
           ? "Draft In Progress"
           : voiceStageSurface?.kind === "email_ambiguity"
             ? voiceStageSurface.ambiguity.connector === "calendar"
-            ? "Choose The Event"
+              ? "Choose The Event"
               : "Choose The Email"
             : "Voice Canvas";
 
-  const voiceStageSubtitle =
-    activeVoiceLookupPresentation?.subtitle ??
-    voiceStageSurface?.kind === "task"
+  const voiceStageSubtitle = activeVoiceLookupPresentation?.subtitle
+    ? activeVoiceLookupPresentation.subtitle
+    : voiceStageSurface?.kind === "task"
       ? activeVoiceStageSummary?.detail ?? voiceStageSurface.card.title
       : voiceStageSurface?.kind === "calendar_session"
         ? "Zee is collecting the missing event details."
@@ -8998,7 +8998,7 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
           ? "Zee is shaping a draft from your voice instructions."
           : voiceStageSurface?.kind === "email_ambiguity"
             ? voiceStageSurface.ambiguity.connector === "calendar"
-            ? "Zee needs one quick event clarification before acting."
+              ? "Zee needs one quick event clarification before acting."
               : "Zee needs one quick draft clarification before acting."
             : "Task-ready surface";
 
@@ -13099,6 +13099,70 @@ function App() {
     anchor.remove();
     window.setTimeout(() => URL.revokeObjectURL(href), 0);
   }, [liveDebugState, liveTokenConfigSummary]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    const debugWindow = window as typeof window & {
+      __pwLiveSessionBridge?: {
+        isSessionActive: () => boolean;
+        getConversationId: () => string | null;
+        requestPersonalContextRead: (text: string) => boolean;
+        executeToolCalls: (params: {
+          normalizedCalls: Array<{
+            id: string;
+            name: string;
+            args: Record<string, unknown>;
+          }>;
+          forwardFunctionResponsesToSession?: boolean;
+          allowGoogleReadVoiceFallback?: boolean;
+        }) => Promise<unknown>;
+      };
+    };
+    if (!liveDebugEnabled) {
+      delete debugWindow.__pwLiveSessionBridge;
+      return;
+    }
+    const bridge = {
+      isSessionActive: () => Boolean(liveSessionRef.current),
+      getConversationId: () => liveConversationRef.current,
+      requestPersonalContextRead: (text: string) => {
+        const liveSession = liveSessionRef.current;
+        if (!liveSession) {
+          throw new Error("No active live session");
+        }
+        return liveSession.debugRequestPersonalContextRead(text);
+      },
+      executeToolCalls: (params: {
+        normalizedCalls: Array<{
+          id: string;
+          name: string;
+          args: Record<string, unknown>;
+        }>;
+        forwardFunctionResponsesToSession?: boolean;
+        allowGoogleReadVoiceFallback?: boolean;
+      }) => {
+        const liveSession = liveSessionRef.current;
+        if (!liveSession) {
+          return Promise.reject(new Error("No active live session"));
+        }
+        return liveSession.debugExecuteLiveToolCalls({
+          normalizedCalls: params.normalizedCalls,
+          forwardFunctionResponsesToSession:
+            params.forwardFunctionResponsesToSession ?? true,
+          allowGoogleReadVoiceFallback:
+            params.allowGoogleReadVoiceFallback ?? true,
+        });
+      },
+    };
+    debugWindow.__pwLiveSessionBridge = bridge;
+    return () => {
+      if (debugWindow.__pwLiveSessionBridge === bridge) {
+        delete debugWindow.__pwLiveSessionBridge;
+      }
+    };
+  }, [liveDebugEnabled]);
 
   const clearWebLookupStatus = useCallback((mode: WebLookupMode) => {
     if (mode === "text") {

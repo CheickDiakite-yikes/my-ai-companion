@@ -85,10 +85,11 @@ export interface LiveVoiceDebugState {
   compatibilityIsStandalonePwa: boolean;
   speechProfileMode: "desktop_default" | "mobile_relaxed";
   speechProfileThresholdScale: number;
-  pendingGoogleReadVoiceSummarySource: "immediate" | "fallback" | null;
+  pendingGoogleReadVoiceSummarySource: "tool_response" | "immediate" | "fallback" | null;
   pendingGoogleReadVoiceSummaryToolNames: string[];
   pendingGoogleReadVoiceSummarySentAt: number | null;
   pendingGoogleReadVoiceSummaryDeadlineAt: number | null;
+  pendingGoogleReadVoiceSummarySpeechDetectorSuppressedUntilAt: number | null;
   lastGoogleReadVoiceSummaryTimeoutAt: number | null;
   lastGoogleReadVoiceSummaryTranscriptOnlyAt: number | null;
   lastAssistantAudioActivityAt: number | null;
@@ -152,12 +153,13 @@ type LiveGoogleActionContextHint = ReturnType<
 type PendingGoogleReadVoiceSummary = {
   digestTexts: string[];
   toolNames: string[];
-  source: "immediate" | "fallback";
+  source: "tool_response" | "immediate" | "fallback";
   sentAtMs: number;
   deadlineAtMs: number;
   assistantActivitySnapshotAtMs: number;
   assistantAudioSnapshotAtMs: number;
   retryCount: number;
+  continuationAttempted: boolean;
 };
 
 const INPUT_SAMPLE_RATE = 16000;
@@ -169,8 +171,11 @@ const TRANSCRIPT_DUPLICATE_WINDOW_MS = 1500;
 const TRANSCRIPT_FLUSH_DEBOUNCE_MS = 900;
 const TRANSCRIPT_OVERLAP_MIN_CHARS = 6;
 const GOOGLE_READ_VOICE_SUMMARY_ACK_TIMEOUT_MS = 5000;
+const GOOGLE_READ_VOICE_TOOL_RESPONSE_ACK_TIMEOUT_MS = 2500;
 const GOOGLE_READ_VOICE_SUMMARY_RETRY_TIMEOUT_MS = 3500;
 const GOOGLE_READ_VOICE_SUMMARY_MAX_RETRIES = 2;
+const GOOGLE_READ_VOICE_SUMMARY_CONTINUATION_DELAY_MS = 450;
+const GOOGLE_READ_VOICE_SPEECH_DETECTOR_SUPPRESSION_MS = 2200;
 
 function parseClientPositiveInt(
   value: unknown,
@@ -1498,10 +1503,12 @@ export class GeminiLiveVoiceSession {
       }
     | null = null;
   private googleReadVoiceFallbackTimeout: number | null = null;
+  private googleReadVoiceSummaryContinuationTimeout: number | null = null;
   private googleReadVoiceSummaryAckTimeout: number | null = null;
   private pendingGoogleReadVoiceSummary: PendingGoogleReadVoiceSummary | null = null;
   private lastGoogleReadVoiceSummaryTimeoutAt: number | null = null;
   private lastGoogleReadVoiceSummaryTranscriptOnlyAt: number | null = null;
+  private lastGoogleReadVoiceSummarySuppressedSpeechDetectorAtMs = 0;
   private webSearchGroundedThisTurn = false;
   private webSearchNudgeSentThisTurn = false;
   private pendingTranscriptBySender: Record<TranscriptSender, string> = {
@@ -1695,6 +1702,7 @@ export class GeminiLiveVoiceSession {
     this.personalContextNudgeSentThisTurn = false;
     this.pendingPersonalContextReadFallback = null;
     this.clearGoogleReadVoiceFallbackTimeout();
+    this.clearGoogleReadVoiceSummaryContinuationTimeout();
     this.clearPendingGoogleReadVoiceSummary();
     this.lastGoogleReadVoiceSummaryTimeoutAt = null;
     this.lastGoogleReadVoiceSummaryTranscriptOnlyAt = null;
@@ -2055,6 +2063,7 @@ export class GeminiLiveVoiceSession {
     this.personalContextNudgeSentThisTurn = false;
     this.pendingPersonalContextReadFallback = null;
     this.clearGoogleReadVoiceFallbackTimeout();
+    this.clearGoogleReadVoiceSummaryContinuationTimeout();
     this.clearPendingGoogleReadVoiceSummary();
     this.webSearchGroundedThisTurn = false;
     this.webSearchNudgeSentThisTurn = false;
@@ -2340,6 +2349,8 @@ export class GeminiLiveVoiceSession {
         this.pendingGoogleReadVoiceSummary?.sentAtMs ?? null,
       pendingGoogleReadVoiceSummaryDeadlineAt:
         this.pendingGoogleReadVoiceSummary?.deadlineAtMs ?? null,
+      pendingGoogleReadVoiceSummarySpeechDetectorSuppressedUntilAt:
+        this.getPendingGoogleReadVoiceSummarySpeechDetectorSuppressedUntilMs(),
       lastGoogleReadVoiceSummaryTimeoutAt:
         this.lastGoogleReadVoiceSummaryTimeoutAt,
       lastGoogleReadVoiceSummaryTranscriptOnlyAt:
@@ -2478,6 +2489,23 @@ export class GeminiLiveVoiceSession {
     pendingWindow.transcriptReceived = true;
     pendingWindow.transcriptCharCount += textLength;
     pendingWindow.transcriptReceivedAtMs = Date.now();
+  }
+
+  private resetSpeechCandidateState(reason: string): void {
+    const hadCandidate =
+      this.speechCandidateFrames > 0 ||
+      this.speechCandidateMs > 0 ||
+      this.speechState === "candidate_user_speech";
+    this.speechCandidateFrames = 0;
+    this.speechCandidateMs = 0;
+    this.speechCandidateSilenceMs = 0;
+    this.speechCandidatePeakRms = 0;
+    this.speechCandidateSumRms = 0;
+    if (hadCandidate) {
+      this.syncSpeechStateFromActivity(reason);
+    } else {
+      this.emitDebugState();
+    }
   }
 
   private syncSpeechStateFromActivity(reason: string): void {
@@ -2742,6 +2770,13 @@ export class GeminiLiveVoiceSession {
     }
   }
 
+  private clearGoogleReadVoiceSummaryContinuationTimeout(): void {
+    if (this.googleReadVoiceSummaryContinuationTimeout !== null) {
+      window.clearTimeout(this.googleReadVoiceSummaryContinuationTimeout);
+      this.googleReadVoiceSummaryContinuationTimeout = null;
+    }
+  }
+
   private clearGoogleReadVoiceSummaryAckTimeout(): void {
     if (this.googleReadVoiceSummaryAckTimeout !== null) {
       window.clearTimeout(this.googleReadVoiceSummaryAckTimeout);
@@ -2751,8 +2786,10 @@ export class GeminiLiveVoiceSession {
 
   private clearPendingGoogleReadVoiceSummary(reason?: string): void {
     const hadPendingSummary = Boolean(this.pendingGoogleReadVoiceSummary);
+    this.clearGoogleReadVoiceSummaryContinuationTimeout();
     this.clearGoogleReadVoiceSummaryAckTimeout();
     this.pendingGoogleReadVoiceSummary = null;
+    this.lastGoogleReadVoiceSummarySuppressedSpeechDetectorAtMs = 0;
     if (hadPendingSummary && reason) {
       this.debug("live.google_context.voice_read_summary_cleared", {
         reason,
@@ -2803,15 +2840,30 @@ export class GeminiLiveVoiceSession {
     return "your Google info";
   }
 
+  private describeGoogleReadVoiceSummaryWaitingLabel(toolNames: string[]): string {
+    const scope = this.describeGoogleReadVoiceSummaryScope(toolNames);
+    if (scope === "your inbox and calendar") {
+      return "Summarizing your inbox and calendar aloud…";
+    }
+    if (scope === "your inbox") {
+      return "Summarizing your emails aloud…";
+    }
+    if (scope === "your calendar") {
+      return "Summarizing your calendar aloud…";
+    }
+    return "Summarizing that aloud…";
+  }
+
   private startGoogleReadVoiceSummaryWatchdog(params: {
     digestTexts: string[];
     toolNames: string[];
-    source: "immediate" | "fallback";
+    source: "tool_response" | "immediate" | "fallback";
     assistantActivitySnapshotAtMs: number;
     retryCount: number;
   }): void {
     this.clearGoogleReadVoiceSummaryAckTimeout();
     this.lastGoogleReadVoiceSummaryTranscriptOnlyAt = null;
+    this.lastGoogleReadVoiceSummarySuppressedSpeechDetectorAtMs = 0;
     const now = Date.now();
     const pendingSummary: PendingGoogleReadVoiceSummary = {
       digestTexts: params.digestTexts,
@@ -2820,12 +2872,15 @@ export class GeminiLiveVoiceSession {
       sentAtMs: now,
       deadlineAtMs:
         now +
-        (params.retryCount > 0
+        (params.source === "tool_response"
+          ? GOOGLE_READ_VOICE_TOOL_RESPONSE_ACK_TIMEOUT_MS
+          : params.retryCount > 0
           ? GOOGLE_READ_VOICE_SUMMARY_RETRY_TIMEOUT_MS
           : GOOGLE_READ_VOICE_SUMMARY_ACK_TIMEOUT_MS),
       assistantActivitySnapshotAtMs: params.assistantActivitySnapshotAtMs,
       assistantAudioSnapshotAtMs: this.lastAssistantAudioActivityAtMs,
       retryCount: params.retryCount,
+      continuationAttempted: false,
     };
     this.pendingGoogleReadVoiceSummary = pendingSummary;
     this.debug("live.google_context.voice_read_summary_watchdog_started", {
@@ -2964,6 +3019,71 @@ export class GeminiLiveVoiceSession {
     }, GOOGLE_READ_VOICE_SUMMARY_ACK_TIMEOUT_MS);
   }
 
+  private scheduleGoogleReadVoiceSummaryContinuation(params: {
+    digestTexts: string[];
+    toolNames: string[];
+    assistantAudioSnapshotAtMs: number;
+  }): void {
+    this.clearGoogleReadVoiceSummaryContinuationTimeout();
+    if (params.digestTexts.length === 0) return;
+    this.debug("live.google_context.voice_read_summary_continuation_scheduled", {
+      toolNames: params.toolNames,
+      digestCount: params.digestTexts.length,
+      delayMs: GOOGLE_READ_VOICE_SUMMARY_CONTINUATION_DELAY_MS,
+    });
+    this.googleReadVoiceSummaryContinuationTimeout = window.setTimeout(() => {
+      this.googleReadVoiceSummaryContinuationTimeout = null;
+      const activeSummary = this.pendingGoogleReadVoiceSummary;
+      if (!activeSummary || activeSummary.source !== "tool_response") {
+        this.debug("live.google_context.voice_read_summary_continuation_skipped", {
+          reason: "no_pending_tool_response_summary",
+          toolNames: params.toolNames,
+        });
+        return;
+      }
+      const assistantAudioDetected =
+        this.lastAssistantAudioActivityAtMs > params.assistantAudioSnapshotAtMs;
+      if (assistantAudioDetected) {
+        this.debug("live.google_context.voice_read_summary_continuation_skipped", {
+          reason: "assistant_audio_already_detected",
+          toolNames: params.toolNames,
+          lastAssistantAudioActivityAtMs: this.lastAssistantAudioActivityAtMs,
+          assistantAudioSnapshotAtMs: params.assistantAudioSnapshotAtMs,
+        });
+        return;
+      }
+      if (activeSummary.continuationAttempted) {
+        this.debug("live.google_context.voice_read_summary_continuation_skipped", {
+          reason: "continuation_already_attempted",
+          toolNames: params.toolNames,
+          source: activeSummary.source,
+        });
+        return;
+      }
+      activeSummary.continuationAttempted = true;
+      this.emitWebSearchStatus("searching", "Finishing voice summary…");
+      this.debug("live.google_context.voice_read_summary_continuation_started", {
+        toolNames: params.toolNames,
+        digestCount: params.digestTexts.length,
+      });
+      const sent = this.sendGoogleReadVoiceSummary({
+        digestTexts: params.digestTexts,
+        toolNames: params.toolNames,
+        source: "immediate",
+        retryCount: 0,
+      });
+      if (!sent) {
+        this.debug(
+          "live.google_context.voice_read_summary_continuation_send_failed",
+          {
+            toolNames: params.toolNames,
+            digestCount: params.digestTexts.length,
+          },
+        );
+      }
+    }, GOOGLE_READ_VOICE_SUMMARY_CONTINUATION_DELAY_MS);
+  }
+
   private acknowledgeGoogleReadVoiceSummary(
     source: "audio" | "transcript",
     metadata: {
@@ -2983,6 +3103,39 @@ export class GeminiLiveVoiceSession {
     this.clearPendingGoogleReadVoiceSummary(
       source === "audio" ? "assistant_audio_received" : "assistant_transcript_received",
     );
+  }
+
+  private getPendingGoogleReadVoiceSummarySpeechDetectorSuppressedUntilMs():
+    | number
+    | null {
+    const pendingSummary = this.pendingGoogleReadVoiceSummary;
+    if (!pendingSummary) {
+      return null;
+    }
+    return pendingSummary.sentAtMs + GOOGLE_READ_VOICE_SPEECH_DETECTOR_SUPPRESSION_MS;
+  }
+
+  private shouldSuppressSpeechDetectorForPendingGoogleReadVoiceSummary(): {
+    active: boolean;
+    suppressUntilMs: number | null;
+    pendingSummary: PendingGoogleReadVoiceSummary | null;
+  } {
+    const pendingSummary = this.pendingGoogleReadVoiceSummary;
+    const suppressUntilMs =
+      this.getPendingGoogleReadVoiceSummarySpeechDetectorSuppressedUntilMs();
+    if (!pendingSummary || typeof suppressUntilMs !== "number") {
+      return { active: false, suppressUntilMs: null, pendingSummary };
+    }
+    if (
+      this.lastAssistantAudioActivityAtMs > pendingSummary.assistantAudioSnapshotAtMs
+    ) {
+      return { active: false, suppressUntilMs, pendingSummary };
+    }
+    return {
+      active: Date.now() < suppressUntilMs,
+      suppressUntilMs,
+      pendingSummary,
+    };
   }
 
   private shouldAllowGoogleReadBrowserTtsFallback(): boolean {
@@ -3102,17 +3255,30 @@ export class GeminiLiveVoiceSession {
   private sendGoogleReadVoiceSummary(params: {
     digestTexts: string[];
     toolNames: string[];
-    source: "immediate" | "fallback";
+    source: "tool_response" | "immediate" | "fallback";
     retryCount: number;
   }): boolean {
     const spokenSummary = params.digestTexts.join(" ").trim();
     if (!spokenSummary) {
       return false;
     }
+    const shouldResetUserSpeech =
+      this.manualActivityActive ||
+      this.speechState === "user_speaking" ||
+      this.speechState === "candidate_user_speech";
+    if (shouldResetUserSpeech) {
+      this.debug("live.google_context.voice_read_summary_user_speech_reset", {
+        source: params.source,
+        toolNames: params.toolNames,
+        speechState: this.speechState,
+        manualActivityActive: this.manualActivityActive,
+      });
+      this.endUserSpeech("google_read_voice_summary");
+    }
     const turns =
       params.retryCount > 0
-        ? `The user is still waiting for your spoken Google summary. Speak out loud immediately in 1 to 2 short sentences using the active voice. Do not call tools again, do not ask the user to wait, and do not restate that you checked. Verified summary: ${spokenSummary}`
-        : `Using the verified Google results you just received, respond out loud right now in 1 to 3 short sentences. Start speaking immediately, do not call tools again, and do not ask the user to wait. Verified summary: ${spokenSummary}`;
+        ? `The user is still waiting for your spoken Google summary. Respond with native voice audio now in 1 to 2 short sentences. Do not call tools again, do not ask the user to wait, and do not restate that you checked. Verified summary: ${spokenSummary}`
+        : `Using the verified Google results you just received, respond with native voice audio immediately in 1 to 3 short sentences. Start speaking now, do not call tools again, and do not ask the user to wait. Verified summary: ${spokenSummary}`;
     const sent = this.sendClientContentSafely(
       {
         turns,
@@ -3130,8 +3296,8 @@ export class GeminiLiveVoiceSession {
     this.debug(
       sent
         ? params.source === "immediate"
-          ? "live.google_context.voice_read_summary_sent"
-          : "live.google_context.voice_fallback_sent"
+        ? "live.google_context.voice_read_summary_sent"
+        : "live.google_context.voice_fallback_sent"
         : params.source === "immediate"
           ? "live.google_context.voice_read_summary_send_failed"
           : "live.google_context.voice_fallback_send_failed",
@@ -3140,6 +3306,10 @@ export class GeminiLiveVoiceSession {
         digestCount: params.digestTexts.length,
         spokenSummaryLength: spokenSummary.length,
         retryCount: params.retryCount,
+        speechState: this.speechState,
+        manualActivityActive: this.manualActivityActive,
+        assistantTurnActive: this.assistantTurnActive,
+        sessionReadyForRealtimeInput: this.sessionReadyForRealtimeInput,
       },
     );
     if (sent) {
@@ -3193,12 +3363,21 @@ export class GeminiLiveVoiceSession {
     chatDigests?: unknown;
     webSearchEvents?: unknown;
   }> {
-    const googleActionContext = this.callbacks.getGoogleActionContext?.() ?? null;
+    const shouldAttachGoogleActionContext = normalizedCalls.some((call) =>
+      [
+        "prepare_google_email_action",
+        "prepare_google_calendar_action",
+      ].includes(call.name),
+    );
+    const googleActionContext = shouldAttachGoogleActionContext
+      ? (this.callbacks.getGoogleActionContext?.() ?? null)
+      : null;
     this.debug("live.tool_call.forwarding", {
       endpoint: "/api/live/tool-response",
       conversationId: this.conversationId,
       functionNames: normalizedCalls.map((c) => c.name),
       googleActionContext,
+      googleActionContextSuppressed: !shouldAttachGoogleActionContext,
     });
     const response = await fetch("/api/live/tool-response", {
       method: "POST",
@@ -3251,6 +3430,80 @@ export class GeminiLiveVoiceSession {
       chatDigests?: unknown;
       webSearchEvents?: unknown;
     };
+  }
+
+  async debugExecuteLiveToolCalls(params: {
+    normalizedCalls: Array<{ id: string; name: string; args: Record<string, unknown> }>;
+    forwardFunctionResponsesToSession?: boolean;
+    allowGoogleReadVoiceFallback?: boolean;
+  }): Promise<{
+    traceId?: unknown;
+    functionResponses?: unknown;
+    resolvedFunctionCalls?: unknown;
+    chatDigests?: unknown;
+    webSearchEvents?: unknown;
+  }> {
+    const toolCallStartedAt = Date.now();
+    const payload = await this.requestLiveToolResponse(params.normalizedCalls);
+    this.applyLiveToolResponsePayload({
+      payload,
+      normalizedCalls: params.normalizedCalls,
+      toolCallStartedAt,
+      forwardFunctionResponsesToSession:
+        params.forwardFunctionResponsesToSession ?? true,
+      allowGoogleReadVoiceFallback: params.allowGoogleReadVoiceFallback ?? true,
+    });
+    return payload;
+  }
+
+  debugRequestPersonalContextRead(text: string): boolean {
+    const normalizedText = normalizeText(text);
+    if (!normalizedText) {
+      return false;
+    }
+    const activeGoogleActionContext =
+      this.callbacks.getGoogleActionContext?.() ?? null;
+    const personalContextIntent = classifyLivePersonalContextIntent(
+      normalizedText,
+      activeGoogleActionContext,
+    );
+    if (!personalContextIntent) {
+      return this.sendClientContentSafely(
+        {
+          turns: normalizedText,
+          turnComplete: true,
+        },
+        "live.google_context.nudge_failed",
+        {
+          source: "google_read_debug_prompt",
+          intent: null,
+        },
+      );
+    }
+    this.pendingPersonalContextTurn = true;
+    this.personalContextToolCalledThisTurn = false;
+    this.personalContextNudgeSentThisTurn = true;
+    this.pendingPersonalContextReadFallback = {
+      text: normalizedText,
+      intent: personalContextIntent,
+      activeGoogleActionContext,
+    };
+    this.emitWebSearchStatus(
+      "searching",
+      inferPersonalContextLoadingLabel(normalizedText, personalContextIntent),
+    );
+    this.debug("live.google_context.debug_read_request_started", {
+      intent: personalContextIntent,
+      textLength: normalizedText.length,
+      detectedText: normalizedText.slice(0, 120),
+      activeGoogleActionContext,
+    });
+    this.sendPersonalContextToolNudge(
+      normalizedText,
+      personalContextIntent,
+      activeGoogleActionContext,
+    );
+    return true;
   }
 
   private applyLiveToolResponsePayload(params: {
@@ -3352,22 +3605,50 @@ export class GeminiLiveVoiceSession {
         name === "prepare_google_email_action" ||
         name === "prepare_google_calendar_action",
     );
-    if (
+    const isReadOnlyGoogleToolResponse =
+      params.allowGoogleReadVoiceFallback &&
+      hasReadOnlyGoogleTool &&
+      !hasGoogleActionTool;
+    let forwardedFunctionResponsesToSession = false;
+    let forwardedReadOnlyGoogleToolResponse = false;
+    const shouldForwardReadOnlyGoogleToolResponse =
+      params.forwardFunctionResponsesToSession &&
+      functionResponses.length > 0 &&
+      isReadOnlyGoogleToolResponse;
+    if (shouldForwardReadOnlyGoogleToolResponse) {
+      forwardedReadOnlyGoogleToolResponse = this.sendToolResponseSafely(
+        functionResponses as Array<Record<string, unknown>>,
+      );
+      forwardedFunctionResponsesToSession = forwardedReadOnlyGoogleToolResponse;
+      this.debug(
+        forwardedReadOnlyGoogleToolResponse
+          ? "live.google_context.read_tool_response_forwarded"
+          : "live.google_context.read_tool_response_forward_failed",
+        {
+          resolvedFunctionCalls,
+          toolNames: effectiveToolNames,
+          functionResponseCount: functionResponses.length,
+          chatDigestCount: Array.isArray(params.payload.chatDigests)
+            ? params.payload.chatDigests.length
+            : 0,
+          reroutedFunctionCount: resolvedFunctionCalls.filter(
+            (entry) => entry.rerouted,
+          ).length,
+        },
+      );
+    } else if (
       params.forwardFunctionResponsesToSession &&
       functionResponses.length > 0 &&
       !hasReroutedToolResponse &&
-      !(params.allowGoogleReadVoiceFallback && hasReadOnlyGoogleTool && !hasGoogleActionTool)
+      !isReadOnlyGoogleToolResponse
     ) {
-      this.sendToolResponseSafely(
+      forwardedFunctionResponsesToSession = this.sendToolResponseSafely(
         functionResponses as Array<Record<string, unknown>>,
       );
     } else if (
       params.forwardFunctionResponsesToSession &&
       functionResponses.length > 0 &&
-      (hasReroutedToolResponse ||
-        (params.allowGoogleReadVoiceFallback &&
-          hasReadOnlyGoogleTool &&
-          !hasGoogleActionTool))
+      hasReroutedToolResponse
     ) {
       this.debug("live.tool_call.response_not_forwarded", {
         resolvedFunctionCalls,
@@ -3377,6 +3658,8 @@ export class GeminiLiveVoiceSession {
     }
 
     const chatDigestTexts: string[] = [];
+    const shouldPersistChatDigestImmediately =
+      !(hasReadOnlyGoogleTool && forwardedReadOnlyGoogleToolResponse);
     if (Array.isArray(params.payload.chatDigests)) {
       for (const digest of params.payload.chatDigests) {
         const text =
@@ -3387,7 +3670,9 @@ export class GeminiLiveVoiceSession {
             : "";
         if (!text) continue;
         chatDigestTexts.push(text);
-        this.callbacks.onMorningBriefDigest?.({ text });
+        if (shouldPersistChatDigestImmediately) {
+          this.callbacks.onMorningBriefDigest?.({ text });
+        }
       }
     }
 
@@ -3425,18 +3710,52 @@ export class GeminiLiveVoiceSession {
       chatDigestTexts.length > 0
     ) {
       if (!hasGoogleActionTool) {
-        this.sendGoogleReadVoiceSummary({
+        if (forwardedReadOnlyGoogleToolResponse) {
+          this.clearGoogleReadVoiceFallbackTimeout();
+          this.clearPendingGoogleReadVoiceSummary(
+            "forwarded_blocking_google_read_tool_response",
+          );
+          this.emitWebSearchStatus(
+            "searching",
+            this.describeGoogleReadVoiceSummaryWaitingLabel(effectiveToolNames),
+          );
+          this.debug("live.google_context.read_tool_response_waiting_for_native_voice", {
+            toolNames: effectiveToolNames,
+            digestCount: chatDigestTexts.length,
+            forwardedReadOnlyGoogleToolResponse,
+          });
+          this.startGoogleReadVoiceSummaryWatchdog({
+            digestTexts: chatDigestTexts,
+            toolNames: effectiveToolNames,
+            source: "tool_response",
+            assistantActivitySnapshotAtMs: this.lastAssistantActivityAtMs,
+            retryCount: 0,
+          });
+          this.scheduleGoogleReadVoiceSummaryContinuation({
+            digestTexts: chatDigestTexts,
+            toolNames: effectiveToolNames,
+            assistantAudioSnapshotAtMs: this.lastAssistantAudioActivityAtMs,
+          });
+        } else {
+          this.sendGoogleReadVoiceSummary({
+            digestTexts: chatDigestTexts,
+            toolNames: effectiveToolNames,
+            source: "immediate",
+            retryCount: 0,
+          });
+          this.scheduleGoogleReadVoiceFallback({
+            digestTexts: chatDigestTexts,
+            toolNames: effectiveToolNames,
+            assistantActivitySnapshotAtMs: this.lastAssistantActivityAtMs,
+          });
+        }
+      } else {
+        this.scheduleGoogleReadVoiceFallback({
           digestTexts: chatDigestTexts,
           toolNames: effectiveToolNames,
-          source: "immediate",
-          retryCount: 0,
+          assistantActivitySnapshotAtMs: this.lastAssistantActivityAtMs,
         });
       }
-      this.scheduleGoogleReadVoiceFallback({
-        digestTexts: chatDigestTexts,
-        toolNames: effectiveToolNames,
-        assistantActivitySnapshotAtMs: this.lastAssistantActivityAtMs,
-      });
     }
 
     this.debug("live.tool_call.responded", {
@@ -3449,8 +3768,7 @@ export class GeminiLiveVoiceSession {
         ? params.payload.webSearchEvents.length
         : 0,
       elapsedMs: Date.now() - params.toolCallStartedAt,
-      forwardedToSession:
-        params.forwardFunctionResponsesToSession && !hasReroutedToolResponse,
+      forwardedToSession: forwardedFunctionResponsesToSession,
       resolvedFunctionCalls,
     });
     if (this.conversationId) {
@@ -3591,6 +3909,34 @@ export class GeminiLiveVoiceSession {
   ): boolean {
     if (!this.session) {
       return false;
+    }
+
+    if (!force && trigger === "speech_detector") {
+      const suppression =
+        this.shouldSuppressSpeechDetectorForPendingGoogleReadVoiceSummary();
+      if (suppression.active) {
+        const now = Date.now();
+        if (
+          now - this.lastGoogleReadVoiceSummarySuppressedSpeechDetectorAtMs >=
+          350
+        ) {
+          this.lastGoogleReadVoiceSummarySuppressedSpeechDetectorAtMs = now;
+          this.debug(
+            "live.google_context.voice_read_summary_speech_detector_suppressed",
+            {
+              reason,
+              suppressUntilMs: suppression.suppressUntilMs,
+              pendingSource: suppression.pendingSummary?.source ?? null,
+              pendingToolNames: suppression.pendingSummary?.toolNames ?? [],
+              retryCount: suppression.pendingSummary?.retryCount ?? null,
+              speechCandidateMs: this.speechCandidateMs,
+              speechCandidatePeakRms: this.speechCandidatePeakRms,
+              activeThreshold: this.activeSpeechThreshold,
+            },
+          );
+        }
+        return false;
+      }
     }
 
     const assistantWindowActive =
@@ -3959,6 +4305,40 @@ export class GeminiLiveVoiceSession {
             this.emitDebugState();
             return;
           }
+        }
+        const pendingSummarySuppression =
+          this.shouldSuppressSpeechDetectorForPendingGoogleReadVoiceSummary();
+        if (pendingSummarySuppression.active) {
+          const now = Date.now();
+          if (
+            now - this.lastGoogleReadVoiceSummarySuppressedSpeechDetectorAtMs >=
+            350
+          ) {
+            this.lastGoogleReadVoiceSummarySuppressedSpeechDetectorAtMs = now;
+            this.debug(
+              "live.google_context.voice_read_summary_speech_detector_suppressed",
+              {
+                reason: assistantWindowActive
+                  ? "detected_user_barge_in"
+                  : "detected_user_speech",
+                suppressUntilMs: pendingSummarySuppression.suppressUntilMs,
+                pendingSource:
+                  pendingSummarySuppression.pendingSummary?.source ?? null,
+                pendingToolNames:
+                  pendingSummarySuppression.pendingSummary?.toolNames ?? [],
+                retryCount:
+                  pendingSummarySuppression.pendingSummary?.retryCount ?? null,
+                speechCandidateMs: this.speechCandidateMs,
+                speechCandidatePeakRms: this.speechCandidatePeakRms,
+                activeThreshold: this.activeSpeechThreshold,
+                currentRms: rms,
+              },
+            );
+          }
+          this.resetSpeechCandidateState(
+            "google_read_voice_summary_speech_detector_suppressed",
+          );
+          return;
         }
         this.beginUserSpeech(
           assistantWindowActive
@@ -4532,6 +4912,11 @@ export class GeminiLiveVoiceSession {
       this.emitDebugState(true);
     }
 
+    const topLevelAudioData =
+      typeof (message as LiveServerMessage & { data?: unknown }).data === "string"
+        ? (((message as LiveServerMessage & { data?: string }).data ?? "").trim() ||
+          null)
+        : null;
     const serverContent = message.serverContent;
     const toolCallPayload = (
       message as LiveServerMessage & {
@@ -4570,7 +4955,40 @@ export class GeminiLiveVoiceSession {
       void this.handleToolCall(toolCallPayload);
     }
 
+    if (topLevelAudioData) {
+      this.lastAssistantActivityAtMs = Date.now();
+      this.lastAssistantAudioActivityAtMs = this.lastAssistantActivityAtMs;
+      this.assistantTurnActive = true;
+      this.assistantPlaybackTailUntilMs = Math.max(
+        this.assistantPlaybackTailUntilMs,
+        Date.now() + SUPPRESS_INPUT_COOLDOWN_MS,
+      );
+      if (!this.manualActivityActive) {
+        this.setSpeechState("assistant_speaking", {
+          reason: "assistant_top_level_audio_received",
+        });
+      }
+      this.acknowledgeGoogleReadVoiceSummary("audio", {
+        audioPartCount: 1,
+        hasOutputTranscription: Boolean(serverContent?.outputTranscription?.text),
+      });
+      this.debug("live.assistant.audio_chunk_received", {
+        source: "top_level_data",
+        base64Length: topLevelAudioData.length,
+        interruptPending: this.interruptPending,
+      });
+    }
+
     if (!serverContent) {
+      if (topLevelAudioData && !this.interruptPending) {
+        this.enqueueAudio(topLevelAudioData);
+      } else if (topLevelAudioData) {
+        this.debug("live.assistant.output_dropped_after_interrupt", {
+          audioPartCount: 1,
+          hasOutputTranscription: false,
+          source: "top_level_data",
+        });
+      }
       if (
         this.liveGoogleSearchEnabled &&
         hasToolCall &&
@@ -4602,12 +5020,13 @@ export class GeminiLiveVoiceSession {
     );
 
     const modelParts = serverContent.modelTurn?.parts ?? [];
-    const audioPartCount = modelParts.reduce((count, part) => {
+    const inlineAudioPartCount = modelParts.reduce((count, part) => {
       return part.inlineData?.data ? count + 1 : count;
     }, 0);
+    const audioPartCount = inlineAudioPartCount + (topLevelAudioData ? 1 : 0);
     const hasOutputTranscription = Boolean(serverContent.outputTranscription?.text);
     const transcriptOnlyAssistantOutput =
-      audioPartCount === 0 && hasOutputTranscription;
+      inlineAudioPartCount === 0 && !topLevelAudioData && hasOutputTranscription;
     const shouldLogServerContent =
       Boolean(serverContent.interrupted) ||
       Boolean(serverContent.generationComplete) ||
@@ -4622,6 +5041,8 @@ export class GeminiLiveVoiceSession {
         turnComplete: Boolean(serverContent.turnComplete),
         waitingForInput: Boolean(serverContent.waitingForInput),
         audioPartCount,
+        inlineAudioPartCount,
+        hasTopLevelAudioData: Boolean(topLevelAudioData),
         hasInputTranscription: Boolean(serverContent.inputTranscription?.text),
         hasOutputTranscription,
         transcriptOnlyAssistantOutput,
@@ -4689,6 +5110,38 @@ export class GeminiLiveVoiceSession {
             activePlaybackNodes: this.activePlaybackNodes.size,
           },
         );
+        if (
+          this.pendingGoogleReadVoiceSummary.source === "tool_response" &&
+          !this.pendingGoogleReadVoiceSummary.continuationAttempted
+        ) {
+          const digestTexts = [...this.pendingGoogleReadVoiceSummary.digestTexts];
+          const toolNames = [...this.pendingGoogleReadVoiceSummary.toolNames];
+          this.pendingGoogleReadVoiceSummary.continuationAttempted = true;
+          this.clearGoogleReadVoiceSummaryContinuationTimeout();
+          this.emitWebSearchStatus("searching", "Finishing voice summary…");
+          this.debug(
+            "live.google_context.voice_read_summary_transcript_only_retry_immediate",
+            {
+              toolNames,
+              digestCount: digestTexts.length,
+            },
+          );
+          const sent = this.sendGoogleReadVoiceSummary({
+            digestTexts,
+            toolNames,
+            source: "immediate",
+            retryCount: 0,
+          });
+          if (!sent) {
+            this.debug(
+              "live.google_context.voice_read_summary_transcript_only_retry_send_failed",
+              {
+                toolNames,
+                digestCount: digestTexts.length,
+              },
+            );
+          }
+        }
       }
     }
 
@@ -4746,6 +5199,9 @@ export class GeminiLiveVoiceSession {
         hasOutputTranscription,
       });
     } else {
+      if (topLevelAudioData) {
+        this.enqueueAudio(topLevelAudioData);
+      }
       for (const part of modelParts) {
         const audioData = part.inlineData?.data;
         if (audioData) {
