@@ -375,7 +375,7 @@ export async function extractMemoriesWithGemini(
 
   if (transcript.length < 30) return [];
 
-  const prompt = `You extract structured memory items from a conversation between a user and their AI companion Zee. Analyze these messages and extract important facts to remember about the user.
+  const prompt = `You extract structured memory items from a conversation between a user and their AI companion Zee. Analyze these messages and extract important things to remember about the user — facts, emotions, relationships, and conversational dynamics.
 
 Return a JSON array of memory items. Each item has:
 - "kind": one of "fact", "preference", "goal", "project", "profile", "schedule", "relationship"
@@ -385,20 +385,25 @@ Return a JSON array of memory items. Each item has:
 
 Extraction rules:
 - "profile": name, location, job, background, identity
-- "preference": likes, dislikes, favorites, habits
+- "preference": likes, dislikes, favorites, habits, emotional reactions, things that make them happy/upset
 - "goal": plans, ambitions, things they want to do
 - "project": things they're building or working on
 - "schedule": appointments, deadlines, recurring events
-- "relationship": people mentioned (friends, family, colleagues)
-- "fact": other personal facts worth remembering
+- "relationship": people mentioned (friends, family, colleagues) — include who they are and the user's relationship to them
+- "fact": other personal facts worth remembering, including emotional states, shared jokes, recurring conversational themes, inside references, and things the user finds funny or meaningful
 
-Only extract genuine personal facts. Skip:
+Be especially attentive to:
+- Emotional context: how the user was feeling, what made them frustrated/happy/excited
+- Shared moments: jokes, funny exchanges, or meaningful conversations worth referencing later
+- Conversational themes: recurring topics the user keeps bringing up across messages
+
+Only extract genuine observations. Skip:
 - Questions the user asked (not facts about them)
 - Greetings, filler, and chit-chat
 - Things Zee said (unless quoting something the user told Zee earlier)
 - Garbled or unclear transcription artifacts
 
-If no memorable facts, return an empty array [].
+If no memorable items, return an empty array [].
 
 Messages:
 ${transcript.slice(0, 5000)}
@@ -490,7 +495,7 @@ async function runBatchExtraction(
       await storageImport.upsertUserMemoryCandidate({
         userId,
         candidate: {
-          kind: item.kind === "relationship" ? "fact" : item.kind,
+          kind: item.kind,
           summary: item.summary,
           confidence: item.confidence,
           sensitivity: item.sensitivity,
