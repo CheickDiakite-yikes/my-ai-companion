@@ -71,7 +71,7 @@ export async function searchMemoryByEmbedding(params: {
   const vecStr = toVectorString(params.queryEmbedding);
 
   let kindFilter = "";
-  const queryParams: any[] = [params.userId, vecStr, threshold, limit];
+  const queryParams: (string | number | string[])[] = [params.userId, vecStr, threshold, limit];
 
   if (params.onlyKinds && params.onlyKinds.length > 0) {
     kindFilter = ` AND kind = ANY($5)`;
@@ -94,16 +94,16 @@ export async function searchMemoryByEmbedding(params: {
     queryParams,
   );
 
-  return result.rows.map((row: any) => ({
+  return result.rows.map((row: Record<string, unknown>) => ({
     ...row,
-    similarity: parseFloat(row.similarity),
-    userId: row.user_id,
-    sourceMessageId: row.source_message_id,
-    sourceConversationId: row.source_conversation_id,
-    lastReinforcedAt: row.last_reinforced_at,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  }));
+    similarity: parseFloat(String(row.similarity)),
+    userId: row.user_id as string,
+    sourceMessageId: row.source_message_id as string | null,
+    sourceConversationId: row.source_conversation_id as string | null,
+    lastReinforcedAt: row.last_reinforced_at as Date | null,
+    createdAt: row.created_at as Date,
+    updatedAt: row.updated_at as Date,
+  })) as Array<UserMemoryItem & { similarity: number }>;
 }
 
 export type MessageWithAttachments = Message & { attachments: MessageAttachment[] };
@@ -278,33 +278,43 @@ export async function embedMemoryItem(item: UserMemoryItem): Promise<void> {
 export async function backfillEmbeddings(): Promise<{ processed: number; failed: number }> {
   await backfillConversationMetadata();
 
-  const items = await db
-    .select()
-    .from(userMemoryItems)
-    .where(
-      and(
-        eq(userMemoryItems.archived, false),
-        sql`${userMemoryItems.embedding} IS NULL`,
-      ),
-    )
-    .limit(100);
-
   let processed = 0;
   let failed = 0;
-  for (const item of items) {
-    try {
-      await embedMemoryItem(item);
-      processed++;
-    } catch {
-      failed++;
+  const BATCH_SIZE = 50;
+
+  while (true) {
+    const items = await db
+      .select()
+      .from(userMemoryItems)
+      .where(
+        and(
+          eq(userMemoryItems.archived, false),
+          sql`${userMemoryItems.embedding} IS NULL`,
+        ),
+      )
+      .limit(BATCH_SIZE);
+
+    if (items.length === 0) break;
+
+    for (const item of items) {
+      try {
+        await embedMemoryItem(item);
+        processed++;
+      } catch {
+        failed++;
+      }
+      if ((processed + failed) % 10 === 0) {
+        await new Promise((r) => setTimeout(r, 200));
+      }
     }
-    if (processed % 10 === 0) {
-      await new Promise((r) => setTimeout(r, 200));
-    }
+
+    console.log(`[memory] Backfill progress: ${processed} embedded, ${failed} failed`);
+
+    if (items.length < BATCH_SIZE) break;
   }
 
   if (processed > 0 || failed > 0) {
-    console.log(`[memory] Backfill: ${processed} embedded, ${failed} failed`);
+    console.log(`[memory] Backfill complete: ${processed} embedded, ${failed} failed`);
   }
 
   return { processed, failed };
@@ -410,20 +420,28 @@ Return ONLY a valid JSON array, no markdown fences:`;
     const validKinds = new Set(["fact", "preference", "goal", "project", "profile", "schedule", "relationship"]);
     const validSensitivities = new Set(["low", "medium", "high"]);
 
-    return parsed
+    type RawExtractedItem = {
+      kind: string;
+      summary: string;
+      confidence: number;
+      sensitivity?: string;
+    };
+
+    return (parsed as unknown[])
       .filter(
-        (item: any) =>
-          item &&
-          typeof item.summary === "string" &&
-          item.summary.length >= 10 &&
-          validKinds.has(item.kind) &&
-          typeof item.confidence === "number",
+        (item): item is RawExtractedItem =>
+          item !== null &&
+          typeof item === "object" &&
+          typeof (item as Record<string, unknown>).summary === "string" &&
+          ((item as Record<string, unknown>).summary as string).length >= 10 &&
+          validKinds.has((item as Record<string, unknown>).kind as string) &&
+          typeof (item as Record<string, unknown>).confidence === "number",
       )
-      .map((item: any) => ({
-        kind: item.kind,
+      .map((item) => ({
+        kind: item.kind as ExtractedMemoryItem["kind"],
         summary: item.summary.slice(0, 300),
         confidence: Math.min(95, Math.max(50, Math.round(item.confidence))),
-        sensitivity: validSensitivities.has(item.sensitivity) ? item.sensitivity : "low",
+        sensitivity: (validSensitivities.has(item.sensitivity ?? "") ? item.sensitivity : "low") as ExtractedMemoryItem["sensitivity"],
       }))
       .slice(0, 8);
   } catch (err) {
@@ -468,12 +486,11 @@ async function runBatchExtraction(
   const lastMsg = batch[batch.length - 1];
 
   for (const item of items) {
-    const kind = item.kind === "relationship" ? "fact" : item.kind;
     try {
       await storageImport.upsertUserMemoryCandidate({
         userId,
         candidate: {
-          kind: kind as any,
+          kind: item.kind === "relationship" ? "fact" : item.kind,
           summary: item.summary,
           confidence: item.confidence,
           sensitivity: item.sensitivity,
