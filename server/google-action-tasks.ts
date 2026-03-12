@@ -488,12 +488,15 @@ function buildComposeContinuationPrompt(params: {
     if (!params.session.recipientEmail) {
       return null;
     }
-    const correctedRecipient = inferComposeRecipientCorrection(followUpText);
-    if (correctedRecipient) {
+    const recipientChange = inferComposeRecipientChange(followUpText);
+    if (recipientChange) {
       const subjectPart = params.session.subject
         ? ` about ${params.session.subject}`
         : "";
-      return `draft an email to ${correctedRecipient}${subjectPart}`;
+      if (recipientChange.mode === "add") {
+        return `draft an email to ${params.session.recipientEmail} and ${recipientChange.email}${subjectPart}`;
+      }
+      return `draft an email to ${recipientChange.email}${subjectPart}`;
     }
     const subjectPart = params.session.subject
       ? ` about ${params.session.subject}`
@@ -680,11 +683,6 @@ type RecipientChangeResult = {
   email: string;
   mode: "replace" | "add";
 };
-
-function inferComposeRecipientCorrection(input: string): string | null {
-  const result = inferComposeRecipientChange(input);
-  return result?.email ?? null;
-}
 
 function inferComposeRecipientChange(input: string): RecipientChangeResult | null {
   const normalized = normalizeText(input);
@@ -1123,9 +1121,29 @@ async function buildRevisedEmailDraftContent(params: {
   }
 }
 
+function summarizeEmailBodyForVoice(bodyText: string): string {
+  const cleaned = bodyText
+    .replace(/^(?:Hi|Hey|Hello|Dear)\s+\S+[,.]?\s*/i, "")
+    .replace(/\s*(?:Best|Thanks|Regards|Cheers|Sincerely|Best regards|Kind regards|Thank you)[,.]?\s*\S*$/i, "")
+    .trim();
+  if (!cleaned) return "";
+  const sentences = cleaned.split(/(?<=[.!?])\s+/).filter(Boolean);
+  if (sentences.length <= 2) {
+    const truncated = cleaned.length > 150
+      ? cleaned.slice(0, 147).replace(/\s+\S*$/, "") + "..."
+      : cleaned;
+    return truncated;
+  }
+  const keyPoints = sentences.slice(0, 2).join(" ");
+  return keyPoints.length > 150
+    ? keyPoints.slice(0, 147).replace(/\s+\S*$/, "") + "..."
+    : keyPoints;
+}
+
 function buildVoiceFriendlyDraftSummary(
   plan: StoredGoogleActionPlan,
   context: "new" | "revised",
+  revisionInstruction?: string,
 ): string {
   if (
     plan.execution.kind !== "email_compose" &&
@@ -1137,27 +1155,26 @@ function buildVoiceFriendlyDraftSummary(
     .map((email: string) => email.replace(/@/g, " at ").replace(/\./g, " dot "))
     .join(" and ");
   const subjectPart = plan.execution.subject
-    ? `, subject: ${plan.execution.subject}`
+    ? `, subject: "${plan.execution.subject}"`
     : "";
-  const bodyLen = plan.execution.bodyText.trim().length;
-  const bodyLengthHint = bodyLen > 300
-    ? " with a detailed message"
-    : bodyLen > 80
-      ? " with a short message"
-      : bodyLen > 0
-        ? " with a brief note"
-        : "";
+  const contentSummary = summarizeEmailBodyForVoice(plan.execution.bodyText);
+  const contentPart = contentSummary
+    ? ` It covers: ${contentSummary}`
+    : "";
 
   if (context === "new") {
     const sendOrSave = plan.execution.sendAfterApproval
       ? "Want me to send it or make any changes?"
       : "Want me to send it, save it as a draft, or make any changes?";
-    return `I've drafted an email to ${recipientLabel}${subjectPart}${bodyLengthHint}. ${sendOrSave}`;
+    return `I've drafted an email to ${recipientLabel}${subjectPart}.${contentPart} ${sendOrSave}`;
   }
+  const changeDescription = revisionInstruction
+    ? ` I ${revisionInstruction.toLowerCase().replace(/^\s*(?:please\s+)?/i, "").replace(/\s*[.!?]*$/, "")}.`
+    : "";
   const revisedAction = plan.execution.sendAfterApproval
     ? "Want me to send it or make more changes?"
     : "Want me to send it, save as draft, or make more changes?";
-  return `Updated the draft to ${recipientLabel}${subjectPart}${bodyLengthHint}. ${revisedAction}`;
+  return `Updated the draft to ${recipientLabel}${subjectPart}.${changeDescription}${contentPart} ${revisedAction}`;
 }
 
 function buildGoogleEmailPreview(params: {
@@ -2427,6 +2444,7 @@ export async function startGoogleActionTaskRun(params: {
   onEvent?: (event: AgentTaskEvent) => void;
   googleContext?: GoogleActionTargetContextMetadata | null;
   voiceSummaryContext?: "new" | "revised";
+  revisionInstruction?: string;
 }): Promise<{ task: AgentTaskSummary; awaitingApproval: true }> {
   const task = await params.storage.createAgentTask({
     userId: params.userId,
@@ -2503,7 +2521,7 @@ export async function startGoogleActionTaskRun(params: {
 
   const isEmailCompose = params.plan.execution.kind === "email_compose" || params.plan.execution.kind === "email_reply";
   const voiceSummary = isEmailCompose
-    ? buildVoiceFriendlyDraftSummary(params.plan, params.voiceSummaryContext ?? "new")
+    ? buildVoiceFriendlyDraftSummary(params.plan, params.voiceSummaryContext ?? "new", params.revisionInstruction)
     : params.preview.summary;
   await createAssistantUiMessage({
     storage: params.storage,
@@ -3057,6 +3075,7 @@ export async function startFollowUpGoogleEmailRevisionTask(params: {
     onEvent: params.onEvent,
     googleContext: params.googleContext ?? null,
     voiceSummaryContext: "revised",
+    revisionInstruction: params.instructionText,
   });
 
   await createAssistantUiMessage({
@@ -3157,7 +3176,7 @@ export async function revisePendingGoogleEmailTask(params: {
   await createAssistantUiMessage({
     storage: params.storage,
     conversationId: task.conversationId,
-    text: buildVoiceFriendlyDraftSummary(next.plan, "revised"),
+    text: buildVoiceFriendlyDraftSummary(next.plan, "revised", params.instructionText),
     uiPayload: {
       kind: "agent_task_status",
       task: taskSummary,
