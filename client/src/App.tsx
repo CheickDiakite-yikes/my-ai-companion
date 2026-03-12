@@ -13852,7 +13852,7 @@ function App() {
           text: data.text,
         },
       );
-      const body = (await res.json()) as { traceId?: string };
+      const body = (await res.json()) as { traceId?: string; filtered?: boolean };
       return {
         ...body,
         traceId: extractTraceId(res, body),
@@ -13894,7 +13894,7 @@ function App() {
       .catch(() => undefined)
       .then(async () => {
         const persisted = await persistVoiceTranscriptMutation.mutateAsync(payload);
-        const wasFiltered = (persisted as any).filtered === true;
+        const wasFiltered = persisted.filtered === true;
         logLiveTrace(wasFiltered ? "voice.transcript.server_filtered" : "voice.transcript.persisted", {
           runId: liveRunIdRef.current,
           conversationId: payload.conversationId,
