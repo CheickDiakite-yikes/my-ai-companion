@@ -2993,7 +2993,6 @@ async function buildLiveMemoryContext(params: {
 
   const semanticRecallLines: string[] = [];
   const durableMemoryLines: string[] = [];
-  const crossChatLines: string[] = [];
 
   if (params.includeCrossChat && params.crossChatMaxMessages > 0) {
     const recentText = activeHistory
@@ -3108,89 +3107,6 @@ async function buildLiveMemoryContext(params: {
       }
     }
 
-    const retrievalLimit = Math.min(
-      240,
-      Math.max(
-        params.crossChatMaxMessages,
-        params.crossChatMaxMessages * 2,
-      ),
-    );
-    const crossChatMessages = (
-      await storage.getRecentMessagesForUser({
-        userId: params.userId,
-        limit: retrievalLimit,
-        excludeConversationId: params.conversationId,
-      })
-    )
-      .filter((message) => shouldIncludeMessageInConversationContext(message))
-      .filter(
-        (message) =>
-          !(message.sender === "assistant" && isAgentMessageUiPayload(message.uiPayload)),
-      )
-      .filter((message) => !isGoogleConnectionFailureMessage(message))
-      .map((message) => ({
-        sender: message.sender,
-        text: normalizeMemoryText(message.text),
-        createdAt: message.createdAt ?? null,
-      }))
-      .filter((message) => message.text.length > 0)
-      .filter((message) => {
-        if (message.sender !== "user") return true;
-        const decision = evaluateUserTranscriptPersistence({
-          text: message.text,
-          expectedScriptFamily,
-          expectedLanguageHint: params.expectedLanguageHint ?? null,
-        });
-        if (!decision.discard) return true;
-        filteredSuspectUserMessages += 1;
-        return false;
-      });
-
-    const activeKeywords = new Set(
-      activeHistory.flatMap((message) => extractKeywords(message.text)),
-    );
-
-    const rankedCrossChat = crossChatMessages.map((message) => ({
-      message,
-      score: scoreRelevance(message.text, activeKeywords),
-    }));
-
-    const maxCrossChatLines = Math.min(8, params.crossChatMaxMessages);
-    const selectedCrossChat = [
-      ...rankedCrossChat
-        .filter((entry) => entry.score > 0)
-        .sort(
-          (a, b) =>
-            b.score - a.score ||
-            (b.message.createdAt?.getTime() ?? 0) -
-              (a.message.createdAt?.getTime() ?? 0),
-        ),
-      ...rankedCrossChat
-        .filter((entry) => entry.score === 0)
-        .sort(
-          (a, b) =>
-            (b.message.createdAt?.getTime() ?? 0) -
-            (a.message.createdAt?.getTime() ?? 0),
-        ),
-    ].slice(0, Math.max(1, maxCrossChatLines));
-
-    selectedCrossChat.sort(
-      (a, b) =>
-        (a.message.createdAt?.getTime() ?? 0) -
-        (b.message.createdAt?.getTime() ?? 0),
-    );
-
-    for (const entry of selectedCrossChat) {
-      const sanitized = sanitizeMemoryText(entry.message.text, params.memoryPolicy);
-      redactionCount += sanitized.redactionCount;
-      if (!sanitized.text) continue;
-      crossChatLines.push(
-        formatMemoryLine(
-          entry.message.sender,
-          truncateMemoryText(sanitized.text, 180),
-        ),
-      );
-    }
   }
 
   const profileFacts = buildProfileMemoryLines(
@@ -3219,12 +3135,6 @@ async function buildLiveMemoryContext(params: {
       ["Current Thread (recent raw turns):", ...currentThreadLines].join("\n"),
     );
   }
-  if (crossChatLines.length > 0) {
-    sections.push(
-      ["Cross-Chat Recent Context:", ...crossChatLines].join("\n"),
-    );
-  }
-
   const MAX_CONTEXT_CHARS = 12000;
   let contextBlock = sections.join("\n\n").trim();
   if (contextBlock.length > MAX_CONTEXT_CHARS) {
@@ -3234,7 +3144,7 @@ async function buildLiveMemoryContext(params: {
   return {
     memoryContextBlock: contextBlock,
     activeThreadMessagesUsed: currentThreadLines.length,
-    crossChatMessagesUsed: crossChatLines.length + durableMemoryLines.length + semanticRecallLines.length,
+    crossChatMessagesUsed: durableMemoryLines.length + semanticRecallLines.length,
     durableMemoryItemsUsed: durableMemoryLines.length + semanticRecallLines.length,
     redactionCount,
     filteredSuspectUserMessages,
@@ -11028,6 +10938,30 @@ export async function registerRoutes(
         });
         return res.status(500).json({
           message: "Failed to archive memory item",
+          traceId: getTraceId(req),
+        });
+      }
+    },
+  );
+
+  app.post(
+    "/api/memory/backfill-embeddings",
+    isAuthenticated,
+    async (req: any, res) => {
+      const startedAt = Date.now();
+      try {
+        const result = await backfillEmbeddings();
+        trace(req, "memory.backfill.complete", {
+          ...result,
+          elapsedMs: elapsedMs(startedAt),
+        });
+        return res.json(result);
+      } catch (error) {
+        traceError(req, "memory.backfill.failed", error, {
+          elapsedMs: elapsedMs(startedAt),
+        });
+        return res.status(500).json({
+          message: "Backfill failed",
           traceId: getTraceId(req),
         });
       }

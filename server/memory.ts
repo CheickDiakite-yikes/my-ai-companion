@@ -45,33 +45,8 @@ export async function generateEmbedding(text: string): Promise<number[] | null> 
   }
 }
 
-function serializeEmbedding(vec: number[]): string {
-  return JSON.stringify(vec);
-}
-
-function deserializeEmbedding(raw: string | null): number[] | null {
-  if (!raw) return null;
-  try {
-    const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed) && parsed.length > 0 && typeof parsed[0] === "number") {
-      return parsed;
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-export function cosineSimilarity(a: number[], b: number[]): number {
-  if (a.length !== b.length || a.length === 0) return 0;
-  let dot = 0, magA = 0, magB = 0;
-  for (let i = 0; i < a.length; i++) {
-    dot += a[i] * b[i];
-    magA += a[i] * a[i];
-    magB += b[i] * b[i];
-  }
-  const denom = Math.sqrt(magA) * Math.sqrt(magB);
-  return denom === 0 ? 0 : dot / denom;
+function toVectorString(vec: number[]): string {
+  return "[" + vec.join(",") + "]";
 }
 
 export async function searchMemoryByEmbedding(params: {
@@ -80,34 +55,46 @@ export async function searchMemoryByEmbedding(params: {
   limit?: number;
   excludeKinds?: string[];
   onlyKinds?: string[];
+  similarityThreshold?: number;
 }): Promise<Array<UserMemoryItem & { similarity: number }>> {
   const limit = params.limit ?? 10;
-  const items = await db
-    .select()
-    .from(userMemoryItems)
-    .where(
-      and(
-        eq(userMemoryItems.userId, params.userId),
-        eq(userMemoryItems.archived, false),
-      ),
-    )
-    .orderBy(desc(userMemoryItems.lastReinforcedAt))
-    .limit(200);
+  const threshold = params.similarityThreshold ?? 0.3;
+  const vecStr = toVectorString(params.queryEmbedding);
 
-  const scored: Array<UserMemoryItem & { similarity: number }> = [];
-  for (const item of items) {
-    if (params.excludeKinds && params.excludeKinds.includes(item.kind)) continue;
-    if (params.onlyKinds && !params.onlyKinds.includes(item.kind)) continue;
-    const emb = deserializeEmbedding(item.embedding);
-    if (!emb) continue;
-    const sim = cosineSimilarity(params.queryEmbedding, emb);
-    if (sim > 0.3) {
-      scored.push({ ...item, similarity: sim });
-    }
+  let kindFilter = "";
+  const queryParams: any[] = [params.userId, vecStr, threshold, limit];
+
+  if (params.onlyKinds && params.onlyKinds.length > 0) {
+    kindFilter = ` AND kind = ANY($5)`;
+    queryParams.push(params.onlyKinds);
+  } else if (params.excludeKinds && params.excludeKinds.length > 0) {
+    kindFilter = ` AND kind != ALL($5)`;
+    queryParams.push(params.excludeKinds);
   }
 
-  scored.sort((a, b) => b.similarity - a.similarity);
-  return scored.slice(0, limit);
+  const result = await pool.query(
+    `SELECT *, 1 - (embedding <=> $2::vector) as similarity
+     FROM user_memory_items
+     WHERE user_id = $1
+       AND archived = false
+       AND embedding IS NOT NULL
+       AND 1 - (embedding <=> $2::vector) > $3
+       ${kindFilter}
+     ORDER BY embedding <=> $2::vector
+     LIMIT $4`,
+    queryParams,
+  );
+
+  return result.rows.map((row: any) => ({
+    ...row,
+    similarity: parseFloat(row.similarity),
+    userId: row.user_id,
+    sourceMessageId: row.source_message_id,
+    sourceConversationId: row.source_conversation_id,
+    lastReinforcedAt: row.last_reinforced_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }));
 }
 
 export type MessageWithAttachments = Message & { attachments: MessageAttachment[] };
@@ -202,7 +189,7 @@ ${transcript.slice(0, 6000)}`;
         confidence: 85,
         sourceConversationId: params.conversationId,
         sourceMessageId: lastMsg.id,
-        embedding: embedding ? serializeEmbedding(embedding) : null,
+        embedding: embedding ? toVectorString(embedding) : null,
         metadata: {
           blockStartAt: firstMsg.createdAt?.toISOString() ?? null,
           blockEndAt: lastMsg.createdAt?.toISOString() ?? null,
@@ -273,10 +260,10 @@ export async function embedMemoryItem(item: UserMemoryItem): Promise<void> {
   if (item.embedding) return;
   const embedding = await generateEmbedding(item.summary);
   if (!embedding) return;
-  await db
-    .update(userMemoryItems)
-    .set({ embedding: serializeEmbedding(embedding) })
-    .where(eq(userMemoryItems.id, item.id));
+  await pool.query(
+    "UPDATE user_memory_items SET embedding = $1::vector WHERE id = $2",
+    [toVectorString(embedding), item.id],
+  );
 }
 
 export async function backfillEmbeddings(): Promise<{ processed: number; failed: number }> {

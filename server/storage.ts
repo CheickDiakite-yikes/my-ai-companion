@@ -61,7 +61,7 @@ import {
   type MemoryItemKind,
   type MemorySensitivity,
 } from "@shared/schema";
-import { db } from "./db";
+import { db, pool } from "./db";
 import {
   and,
   asc,
@@ -1285,11 +1285,11 @@ export class DatabaseStorage implements IStorage {
         generateEmbedding(summary)
           .then((emb) => {
             if (emb) {
-              db.update(userMemoryItems)
-                .set({ embedding: JSON.stringify(emb) })
-                .where(eq(userMemoryItems.id, updated.id))
-                .execute()
-                .catch(() => {});
+              const vecStr = "[" + emb.join(",") + "]";
+              pool.query(
+                "UPDATE user_memory_items SET embedding = $1::vector WHERE id = $2",
+                [vecStr, updated.id],
+              ).catch(() => {});
             }
           })
           .catch(() => {});
@@ -1319,11 +1319,11 @@ export class DatabaseStorage implements IStorage {
     generateEmbedding(summary)
       .then((emb) => {
         if (emb) {
-          db.update(userMemoryItems)
-            .set({ embedding: JSON.stringify(emb) })
-            .where(eq(userMemoryItems.id, created.id))
-            .execute()
-            .catch(() => {});
+          const vecStr = "[" + emb.join(",") + "]";
+          pool.query(
+            "UPDATE user_memory_items SET embedding = $1::vector WHERE id = $2",
+            [vecStr, created.id],
+          ).catch(() => {});
         }
       })
       .catch(() => {});

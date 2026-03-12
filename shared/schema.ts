@@ -9,9 +9,22 @@ import {
   boolean,
   index,
   jsonb,
+  customType,
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { users } from "./models/auth";
+
+const vector = customType<{ data: string; driverParam: string }>({
+  dataType() {
+    return "vector(256)";
+  },
+  toDriver(value: string): string {
+    return value;
+  },
+  fromDriver(value: string): string {
+    return value;
+  },
+});
 
 export * from "./models/auth";
 
@@ -474,7 +487,7 @@ export const userMemoryItems = pgTable(
     lastReinforcedAt: timestamp("last_reinforced_at").defaultNow(),
     archived: boolean("archived").notNull().default(false),
     metadata: jsonb("metadata"),
-    embedding: text("embedding"),
+    embedding: vector("embedding"),
     createdAt: timestamp("created_at").defaultNow(),
     updatedAt: timestamp("updated_at").defaultNow(),
   },
