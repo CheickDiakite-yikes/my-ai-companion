@@ -226,7 +226,11 @@ export async function triggerSummarizationIfNeeded(params: {
 
   if (!conv) return;
 
-  const totalMessages = conv.messageCount ?? 0;
+  const countResult = await pool.query(
+    `SELECT COUNT(*)::int AS cnt FROM messages WHERE conversation_id = $1 AND message_purpose = 'conversation'`,
+    [params.conversationId],
+  );
+  const totalMessages = countResult.rows[0]?.cnt ?? 0;
   const lastSummarizedIndex = conv.lastSummarizedIndex ?? 0;
   const unsummarized = totalMessages - lastSummarizedIndex;
 
