@@ -3133,8 +3133,7 @@ export class GeminiLiveVoiceSession {
     if (
       params.forwardFunctionResponsesToSession &&
       functionResponses.length > 0 &&
-      !hasReroutedToolResponse &&
-      !(params.allowGoogleReadVoiceFallback && hasReadOnlyGoogleTool && !hasGoogleActionTool)
+      !hasReroutedToolResponse
     ) {
       this.sendToolResponseSafely(
         functionResponses as Array<Record<string, unknown>>,
@@ -3142,10 +3141,7 @@ export class GeminiLiveVoiceSession {
     } else if (
       params.forwardFunctionResponsesToSession &&
       functionResponses.length > 0 &&
-      (hasReroutedToolResponse ||
-        (params.allowGoogleReadVoiceFallback &&
-          hasReadOnlyGoogleTool &&
-          !hasGoogleActionTool))
+      hasReroutedToolResponse
     ) {
       this.debug("live.tool_call.response_not_forwarded", {
         resolvedFunctionCalls,
@@ -3202,7 +3198,7 @@ export class GeminiLiveVoiceSession {
       hasReadOnlyGoogleTool &&
       chatDigestTexts.length > 0
     ) {
-      if (!hasGoogleActionTool) {
+      if (!hasGoogleActionTool && !params.forwardFunctionResponsesToSession) {
         this.sendGoogleReadVoiceSummary({
           digestTexts: chatDigestTexts,
           toolNames: effectiveToolNames,
