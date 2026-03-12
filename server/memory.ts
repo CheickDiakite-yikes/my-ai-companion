@@ -141,6 +141,7 @@ export async function getRecentConversationMessages(params: {
 
   const attachmentMap = new Map<string, MessageAttachment[]>();
   for (const att of attachments) {
+    if (!att.messageId) continue;
     const list = attachmentMap.get(att.messageId) ?? [];
     list.push(att);
     attachmentMap.set(att.messageId, list);

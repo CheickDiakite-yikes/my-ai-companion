@@ -383,11 +383,40 @@ const ADAPTIVE_CALIBRATION_FRAMES = parseClientPositiveInt(
   16,
 );
 
-function classifyMicGainLevel(ambientRms: number): string {
+function classifyMicGainLevel(ambientRms: number): MicGainLevel {
   if (ambientRms <= 0.0002) return "very_low";
   if (ambientRms <= 0.001) return "low";
   if (ambientRms <= 0.005) return "normal";
   return "high";
+}
+
+function resolveMicSignalCompensation(ambientRms: number): MicSignalCompensation {
+  const gainLevel = classifyMicGainLevel(ambientRms);
+  if (gainLevel === "very_low") {
+    return {
+      inputGain: 1.7,
+      thresholdScale: 0.8,
+      assistantThresholdScale: 0.88,
+      startMinDurationScale: 0.78,
+      assistantMinDurationScale: 0.88,
+    };
+  }
+  if (gainLevel === "low") {
+    return {
+      inputGain: 1.35,
+      thresholdScale: 0.9,
+      assistantThresholdScale: 0.95,
+      startMinDurationScale: 0.88,
+      assistantMinDurationScale: 0.94,
+    };
+  }
+  return {
+    inputGain: 1,
+    thresholdScale: 1,
+    assistantThresholdScale: 1,
+    startMinDurationScale: 1,
+    assistantMinDurationScale: 1,
+  };
 }
 
 const USER_SPEECH_ASSISTANT_RMS_THRESHOLD = parseClientBoundedNumber(
@@ -746,6 +775,21 @@ function normalizeText(input: string | undefined): string {
   return (input ?? "").replace(/\s+/g, " ").trim();
 }
 
+function normalizeFunctionCallArgs(args: unknown): Record<string, unknown> {
+  let parsedArgs = args;
+  if (typeof parsedArgs === "string") {
+    try {
+      parsedArgs = JSON.parse(parsedArgs);
+    } catch {
+      return {};
+    }
+  }
+  if (!parsedArgs || typeof parsedArgs !== "object" || Array.isArray(parsedArgs)) {
+    return {};
+  }
+  return parsedArgs as Record<string, unknown>;
+}
+
 function isLikelyLiveWebSearchQuery(text: string): boolean {
   return LIVE_WEB_SEARCH_SIGNAL_PATTERN.test(text);
 }
@@ -1026,6 +1070,16 @@ type BufferedAudioFrame = {
   at: number;
 };
 
+type MicGainLevel = "very_low" | "low" | "normal" | "high";
+
+type MicSignalCompensation = {
+  inputGain: number;
+  thresholdScale: number;
+  assistantThresholdScale: number;
+  startMinDurationScale: number;
+  assistantMinDurationScale: number;
+};
+
 type UserSpeechWindowDiagnostics = {
   id: number;
   trigger: LiveInterruptTrigger;
@@ -1155,8 +1209,29 @@ function base64ToBytes(base64: string): Uint8Array {
   return bytes;
 }
 
-function pcm16ToBase64(input: Float32Array, inputSampleRate: number): string {
-  const mono16k = downsampleFloat32Buffer(input, inputSampleRate, INPUT_SAMPLE_RATE);
+function applyInputGain(input: Float32Array, gain: number): Float32Array {
+  if (!Number.isFinite(gain) || Math.abs(gain - 1) < 0.01) {
+    return input;
+  }
+  const output = new Float32Array(input.length);
+  for (let index = 0; index < input.length; index += 1) {
+    const boosted = input[index] * gain;
+    output[index] = Math.max(-1, Math.min(1, boosted));
+  }
+  return output;
+}
+
+function pcm16ToBase64(
+  input: Float32Array,
+  inputSampleRate: number,
+  gain = 1,
+): string {
+  const amplifiedInput = applyInputGain(input, gain);
+  const mono16k = downsampleFloat32Buffer(
+    amplifiedInput,
+    inputSampleRate,
+    INPUT_SAMPLE_RATE,
+  );
   const int16 = float32ToInt16(mono16k);
   const bytes = new Uint8Array(int16.buffer, int16.byteOffset, int16.byteLength);
   return bytesToBase64(bytes);
@@ -1446,6 +1521,7 @@ export class GeminiLiveVoiceSession {
   private speechCooldownTimeout: number | null = null;
   private lastAssistantActivityAtMs = 0;
   private latestInputRms = 0;
+  private inputFrameDurationMs = USER_SPEECH_REFERENCE_FRAME_DURATION_MS;
   private activeSpeechThreshold = USER_SPEECH_START_RMS_THRESHOLD;
   private candidateSpeechThreshold = USER_SPEECH_START_RMS_THRESHOLD;
   private inputAmbientRms = 0;
@@ -1616,6 +1692,7 @@ export class GeminiLiveVoiceSession {
     this.assistantTurnReleaseAtMs = 0;
     this.lastAssistantActivityAtMs = 0;
     this.latestInputRms = 0;
+    this.inputFrameDurationMs = USER_SPEECH_REFERENCE_FRAME_DURATION_MS;
     this.activeSpeechThreshold = USER_SPEECH_START_RMS_THRESHOLD;
     this.candidateSpeechThreshold = USER_SPEECH_START_RMS_THRESHOLD;
     this.inputAmbientRms = 0;
@@ -1828,6 +1905,7 @@ export class GeminiLiveVoiceSession {
           this.clearManualInterruptWatchdog();
           this.activeSpeechThreshold = USER_SPEECH_START_RMS_THRESHOLD;
           this.candidateSpeechThreshold = USER_SPEECH_START_RMS_THRESHOLD;
+          this.inputFrameDurationMs = USER_SPEECH_REFERENCE_FRAME_DURATION_MS;
           this.adaptiveCalibrationCount = 0;
           this.adaptiveCalibrationSumRms = 0;
           this.adaptiveBaselineRms = 0;
@@ -1862,6 +1940,7 @@ export class GeminiLiveVoiceSession {
           this.clearManualInterruptWatchdog();
           this.activeSpeechThreshold = USER_SPEECH_START_RMS_THRESHOLD;
           this.candidateSpeechThreshold = USER_SPEECH_START_RMS_THRESHOLD;
+          this.inputFrameDurationMs = USER_SPEECH_REFERENCE_FRAME_DURATION_MS;
           this.adaptiveCalibrationCount = 0;
           this.adaptiveCalibrationSumRms = 0;
           this.adaptiveBaselineRms = 0;
@@ -2052,6 +2131,7 @@ export class GeminiLiveVoiceSession {
     this.assistantTurnReleaseAtMs = 0;
     this.lastAssistantActivityAtMs = 0;
     this.latestInputRms = 0;
+    this.inputFrameDurationMs = USER_SPEECH_REFERENCE_FRAME_DURATION_MS;
     this.activeSpeechThreshold = USER_SPEECH_START_RMS_THRESHOLD;
     this.candidateSpeechThreshold = USER_SPEECH_START_RMS_THRESHOLD;
     this.inputAmbientRms = 0;
@@ -2591,6 +2671,21 @@ export class GeminiLiveVoiceSession {
         this.bufferedPrefixAudioFrames.length - USER_SPEECH_PREFIX_FRAMES,
       );
     }
+  }
+
+  private getMicSignalCompensation(): MicSignalCompensation {
+    const baselineRms =
+      this.adaptiveBaselineRms > 0 ? this.adaptiveBaselineRms : this.inputAmbientRms;
+    if (!Number.isFinite(baselineRms) || baselineRms <= 0) {
+      return {
+        inputGain: 1,
+        thresholdScale: 1,
+        assistantThresholdScale: 1,
+        startMinDurationScale: 1,
+        assistantMinDurationScale: 1,
+      };
+    }
+    return resolveMicSignalCompensation(baselineRms);
   }
 
   private getSessionSocketReadyState(): number | null {
@@ -3591,6 +3686,7 @@ export class GeminiLiveVoiceSession {
     minSpeechDurationMs: number;
   } {
     const speechProfile = this.speechDetectionProfile;
+    const micSignalCompensation = this.getMicSignalCompensation();
     const adaptedIdleFloor = this.adaptiveThresholdFloor;
     const adaptedAssistantFloor = Math.max(
       adaptedIdleFloor,
@@ -3617,8 +3713,9 @@ export class GeminiLiveVoiceSession {
         ? Math.min(baseMaxThreshold, profileMaxCap)
         : baseMaxThreshold;
     const thresholdScale = assistantWindowActive
-      ? speechProfile.assistantThresholdScale
-      : speechProfile.thresholdScale;
+      ? speechProfile.assistantThresholdScale *
+        micSignalCompensation.assistantThresholdScale
+      : speechProfile.thresholdScale * micSignalCompensation.thresholdScale;
     const adaptedCandidateMin = Math.min(
       USER_SPEECH_CANDIDATE_MIN_RMS_THRESHOLD,
       Math.max(ADAPTIVE_THRESHOLD_ABSOLUTE_FLOOR, adaptedIdleFloor * 0.7),
@@ -3639,11 +3736,18 @@ export class GeminiLiveVoiceSession {
         rawThreshold * thresholdScale,
       ),
     );
+    const baseMinSpeechDurationMs = assistantWindowActive
+      ? this.speechAssistantMinDurationMs
+      : this.speechStartMinDurationMs;
+    const minSpeechDurationScale = assistantWindowActive
+      ? micSignalCompensation.assistantMinDurationScale
+      : micSignalCompensation.startMinDurationScale;
     return {
       threshold,
-      minSpeechDurationMs: assistantWindowActive
-        ? this.speechAssistantMinDurationMs
-        : this.speechStartMinDurationMs,
+      minSpeechDurationMs: Math.max(
+        this.inputFrameDurationMs,
+        baseMinSpeechDurationMs * minSpeechDurationScale,
+      ),
     };
   }
 
@@ -4186,12 +4290,14 @@ export class GeminiLiveVoiceSession {
           adaptiveFloor,
         );
         const gainLevel = classifyMicGainLevel(this.adaptiveBaselineRms);
+        const micSignalCompensation = this.getMicSignalCompensation();
         this.debug("live.audio.adaptive_calibration_complete", {
           calibrationFrames: this.adaptiveCalibrationCount,
           baselineRms: this.adaptiveBaselineRms,
           adaptiveFloor: this.adaptiveThresholdFloor,
           originalFloor: USER_SPEECH_START_RMS_THRESHOLD,
           micGainLevel: gainLevel,
+          micSignalCompensation,
           effectiveIdleThreshold: this.computeSpeechThreshold(false).threshold,
           effectiveAssistantThreshold: this.computeSpeechThreshold(true).threshold,
           adaptiveCandidateMinRms: Math.min(
@@ -4336,6 +4442,29 @@ export class GeminiLiveVoiceSession {
 
     this.inputContext = createAudioContext();
     await this.inputContext.resume();
+    this.inputFrameDurationMs =
+      this.inputContext.sampleRate > 0
+        ? (PROCESSOR_BUFFER_SIZE / this.inputContext.sampleRate) * 1000
+        : USER_SPEECH_REFERENCE_FRAME_DURATION_MS;
+    this.speechStartMinDurationMs = Math.max(
+      this.inputFrameDurationMs,
+      USER_SPEECH_START_CONSECUTIVE_FRAMES *
+        this.inputFrameDurationMs *
+        this.speechDetectionProfile.startMinSpeechDurationMultiplier,
+    );
+    this.speechAssistantMinDurationMs = Math.max(
+      this.inputFrameDurationMs,
+      USER_SPEECH_ASSISTANT_CONSECUTIVE_FRAMES *
+        this.inputFrameDurationMs *
+        this.speechDetectionProfile.assistantMinSpeechDurationMultiplier,
+    );
+    this.debug("live.audio.input_frame_timing", {
+      inputSampleRate: this.inputContext.sampleRate,
+      processorBufferSize: PROCESSOR_BUFFER_SIZE,
+      inputFrameDurationMs: this.inputFrameDurationMs,
+      speechStartMinDurationMs: this.speechStartMinDurationMs,
+      speechAssistantMinDurationMs: this.speechAssistantMinDurationMs,
+    });
 
     this.mediaSourceNode = this.inputContext.createMediaStreamSource(this.mediaStream);
     this.processorNode = this.inputContext.createScriptProcessor(
@@ -4369,6 +4498,7 @@ export class GeminiLiveVoiceSession {
       const pcmBase64 = pcm16ToBase64(
         inputSamples,
         this.inputContext.sampleRate,
+        this.getMicSignalCompensation().inputGain,
       );
       this.bufferPrefixAudioFrame(pcmBase64);
       if (this.manualActivityActive) {
@@ -5021,24 +5151,17 @@ export class GeminiLiveVoiceSession {
         return {
           id,
           name,
-          args: call.args,
+          args: normalizeFunctionCallArgs(call.args),
         };
       })
-      .filter((call): call is { id: string; name: string; args: unknown } =>
+      .filter((call): call is { id: string; name: string; args: Record<string, unknown> } =>
         Boolean(call),
       );
 
     if (normalizedCalls.length === 0) return;
 
     const callDebugSummary = normalizedCalls.map((call) => {
-      let parsedArgs: unknown = call.args;
-      if (typeof parsedArgs === "string") {
-        try {
-          parsedArgs = JSON.parse(parsedArgs);
-        } catch {
-          parsedArgs = null;
-        }
-      }
+      const parsedArgs = call.args;
       const argKeys =
         parsedArgs && typeof parsedArgs === "object" && !Array.isArray(parsedArgs)
           ? Object.keys(parsedArgs as Record<string, unknown>)

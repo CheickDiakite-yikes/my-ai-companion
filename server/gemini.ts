@@ -1,5 +1,6 @@
 import {
   ActivityHandling,
+  Behavior,
   EndSensitivity,
   GoogleGenAI,
   Modality,
@@ -75,6 +76,7 @@ type LiveFunctionDeclaration = {
   name: string;
   description: string;
   parameters?: Record<string, unknown>;
+  behavior?: Behavior;
 };
 type LiveFunctionDeclarationsTool = {
   functionDeclarations: LiveFunctionDeclaration[];
@@ -116,12 +118,29 @@ const ENABLE_VOICE_GOOGLE_WRITE_HANDOFF = parseBooleanFlag(
   false,
 );
 const GOOGLE_SEARCH_TOOLS: GoogleSearchTool[] = [{ googleSearch: {} }];
+
+function buildLiveReadOnlyFunctionDeclaration(params: {
+  name: string;
+  description: string;
+  invocationCondition: string;
+  parameters?: Record<string, unknown>;
+}): LiveFunctionDeclaration {
+  return {
+    name: params.name,
+    description: `${params.description} Invocation Condition: ${params.invocationCondition}`,
+    parameters: params.parameters,
+    behavior: Behavior.NON_BLOCKING,
+  };
+}
+
 const LIVE_GOOGLE_PERSONAL_CONTEXT_READ_FUNCTION_DECLARATIONS: LiveFunctionDeclaration[] =
   [
-  {
+  buildLiveReadOnlyFunctionDeclaration({
     name: "get_user_emails",
     description:
       "Retrieve the user's recent Gmail inbox messages. Only works if user has connected their Google account.",
+    invocationCondition:
+      "Call this when the user asks about email, inbox, unread messages, recent mail, or Gmail context. Use it before answering instead of relying on memory.",
     parameters: {
       type: "object",
       properties: {
@@ -131,11 +150,13 @@ const LIVE_GOOGLE_PERSONAL_CONTEXT_READ_FUNCTION_DECLARATIONS: LiveFunctionDecla
         refresh: { type: "boolean" },
       },
     },
-  },
-  {
+  }),
+  buildLiveReadOnlyFunctionDeclaration({
     name: "get_calendar_events",
     description:
       "Retrieve the user's upcoming Google Calendar events for a specific time range. Only works if user has connected their Google account.",
+    invocationCondition:
+      "Call this when the user asks about their calendar, schedule, meetings, events, or availability for a specific time range. Use it before answering instead of relying on memory.",
     parameters: {
       type: "object",
       properties: {
@@ -149,14 +170,16 @@ const LIVE_GOOGLE_PERSONAL_CONTEXT_READ_FUNCTION_DECLARATIONS: LiveFunctionDecla
       },
       required: ["timeRange", "timezone"],
     },
-  },
+  }),
 ];
 const LIVE_GOOGLE_PERSONAL_CONTEXT_DETAIL_FUNCTION_DECLARATIONS: LiveFunctionDeclaration[] =
   [
-    {
+    buildLiveReadOnlyFunctionDeclaration({
       name: "get_email_thread_detail",
       description:
         "Retrieve a detailed Gmail thread with participants, body excerpts, and attachments for a specific email reference.",
+      invocationCondition:
+        "Call this when the user asks to read, expand, or see details for a specific email thread after referring to a sender, subject, or message.",
       parameters: {
         type: "object",
         properties: {
@@ -164,11 +187,13 @@ const LIVE_GOOGLE_PERSONAL_CONTEXT_DETAIL_FUNCTION_DECLARATIONS: LiveFunctionDec
         },
         required: ["query"],
       },
-    },
-    {
+    }),
+    buildLiveReadOnlyFunctionDeclaration({
       name: "get_calendar_event_detail",
       description:
         "Retrieve a detailed Google Calendar event with attendees, notes, and the latest event metadata.",
+      invocationCondition:
+        "Call this when the user asks for details, changes, attendees, location, or notes for a specific meeting or event they referenced.",
       parameters: {
         type: "object",
         properties: {
@@ -181,7 +206,7 @@ const LIVE_GOOGLE_PERSONAL_CONTEXT_DETAIL_FUNCTION_DECLARATIONS: LiveFunctionDec
         },
         required: ["query"],
       },
-    },
+    }),
   ];
 const LIVE_GOOGLE_PERSONAL_CONTEXT_ACTION_FUNCTION_DECLARATIONS: LiveFunctionDeclaration[] =
   [
@@ -224,10 +249,12 @@ export function buildLiveGoogleDataFunctionDeclarations(): LiveFunctionDeclarati
 }
 
 const LIVE_MORNING_BRIEF_FUNCTION_DECLARATIONS: LiveFunctionDeclaration[] = [
-  {
+  buildLiveReadOnlyFunctionDeclaration({
     name: "get_morning_brief",
     description:
       "Retrieve a grounded morning briefing with top headlines and markets, optionally including inbox highlights.",
+    invocationCondition:
+      "Call this when the user asks for a morning briefing, daily briefing, headlines plus markets, or a concise current-events roundup.",
     parameters: {
       type: "object",
       properties: {
@@ -236,11 +263,13 @@ const LIVE_MORNING_BRIEF_FUNCTION_DECLARATIONS: LiveFunctionDeclaration[] = [
         timezone: { type: "string" },
       },
     },
-  },
-  {
+  }),
+  buildLiveReadOnlyFunctionDeclaration({
     name: "get_inbox_digest",
     description:
       "Retrieve a concise read-only inbox digest for the current user.",
+    invocationCondition:
+      "Call this when the user asks for inbox highlights or a concise email summary without asking for full thread details.",
     parameters: {
       type: "object",
       properties: {
@@ -248,7 +277,7 @@ const LIVE_MORNING_BRIEF_FUNCTION_DECLARATIONS: LiveFunctionDeclaration[] = [
         maxThreads: { type: "integer" },
       },
     },
-  },
+  }),
 ];
 const LIVE_MORNING_BRIEF_FUNCTION_TOOLS: LiveFunctionDeclarationsTool[] = [
   {

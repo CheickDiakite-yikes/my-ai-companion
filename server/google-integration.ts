@@ -1113,7 +1113,7 @@ export async function fetchGmailInboxDigest(params: {
   const sinceDays = clamp(Math.floor(params.sinceDays ?? 3), 1, 14);
   const unreadOnly = params.unreadOnly ?? false;
   if (isFixtureGoogleAccessToken(params.accessToken)) {
-    return [
+    const fixtures: InboxDigestItem[] = [
       {
         threadId: "fixture-thread-inbox-1",
         from: "Alex Rivera <alex@example.com>",
@@ -1135,7 +1135,8 @@ export async function fetchGmailInboxDigest(params: {
         snippet: "Would love to catch up and see what your schedule looks like next month.",
         urgency: "medium",
       },
-    ].slice(0, maxThreads);
+    ];
+    return fixtures.slice(0, maxThreads);
   }
   const queryText = unreadOnly
     ? `in:inbox is:unread newer_than:${sinceDays}d -category:promotions -category:social`

@@ -1,4 +1,5 @@
 import { createHash, createHmac, randomUUID, timingSafeEqual } from "crypto";
+import { FunctionResponseScheduling } from "@google/genai";
 import { buildDocumentRenderPayload } from "./artifact-render-spec";
 import type { Express } from "express";
 import multer, { MulterError } from "multer";
@@ -69,8 +70,10 @@ import type {
   GoogleActionAmbiguityPrompt,
   GoogleActionTargetConnector,
   GoogleActionTargetContextMetadata,
+  GoogleCalendarEventDetail,
   GoogleCalendarSession,
   GoogleComposeSession,
+  GoogleEmailThreadDetail,
   GooglePersonalContextTimeRange,
   InboxDigestItem,
   MorningBriefFailureCode,
@@ -551,6 +554,15 @@ function verifyGoogleOAuthStateSignature(
 const briefRunDebugHistory: BriefRunDebugRecord[] = [];
 const briefRunDebugById = new Map<string, BriefRunDebugRecord>();
 
+function isLoopbackHostname(hostname: string): boolean {
+  return (
+    hostname === "localhost" ||
+    hostname === "127.0.0.1" ||
+    hostname === "::1" ||
+    hostname === "[::1]"
+  );
+}
+
 function isValidGoogleRedirectUriOverride(value: string): boolean {
   try {
     const parsed = new URL(value);
@@ -558,7 +570,7 @@ function isValidGoogleRedirectUriOverride(value: string): boolean {
       return false;
     }
     if (parsed.protocol === "https:") return true;
-    return parsed.protocol === "http:" && parsed.hostname === "localhost";
+    return parsed.protocol === "http:" && isLoopbackHostname(parsed.hostname);
   } catch {
     return false;
   }
@@ -576,7 +588,7 @@ function resolveGoogleRedirectUriFromRequest(
   if (trimmedOverride && isGoogleOAuthRedirectOverrideEnabled()) {
     if (!isValidGoogleRedirectUriOverride(trimmedOverride)) {
       throw new Error(
-        "redirectUri must point to /api/integrations/google/callback with https (or http on localhost)",
+        "redirectUri must point to /api/integrations/google/callback with https (or http on a local loopback host)",
       );
     }
     return {
@@ -6431,12 +6443,14 @@ type GoogleConversationState = {
 
 type GoogleEmailConversationTaskTarget =
   | {
+      connector: "gmail";
       source: "pending";
       taskId: string;
       preview: GoogleActionPreview;
       messageIndex: number;
     }
   | {
+      connector: "gmail";
       source: "recent";
       taskId: string;
       preview: GoogleActionPreview;
@@ -7251,6 +7265,7 @@ function resolveLatestGoogleConversationState(messages: Message[]): GoogleConver
         isGoogleEmailDraftPreview(preview)
       ) {
         state.emailDraftCandidates.push({
+          connector: "gmail",
           source: "pending",
           taskId: payload.taskId,
           preview,
@@ -7303,6 +7318,7 @@ function resolveLatestGoogleConversationState(messages: Message[]): GoogleConver
           isGoogleEmailDraftPreview(preview)
         ) {
           state.emailDraftCandidates.push({
+            connector: "gmail",
             source: "pending",
             taskId: payload.task.id,
             preview,
@@ -7326,6 +7342,7 @@ function resolveLatestGoogleConversationState(messages: Message[]): GoogleConver
           isActionableRecentGoogleEmailDraftTask(preview, result)
         ) {
           state.emailDraftCandidates.push({
+            connector: "gmail",
             source: "recent",
             taskId: payload.task.id,
             preview,
@@ -14006,13 +14023,37 @@ export async function registerRoutes(
           });
         }
 
+        const nonBlockingFunctionNames = new Set([
+          "get_morning_brief",
+          "get_inbox_digest",
+          "get_user_emails",
+          "get_email_thread_detail",
+          "get_calendar_events",
+          "get_calendar_event_detail",
+        ]);
+        const functionResponsesWithScheduling = functionResponses.map((entry) => {
+          const effectiveFunctionName =
+            resolvedFunctionCalls.find((resolved) => resolved.id === entry.id)
+              ?.effectiveName ?? entry.name;
+          if (!nonBlockingFunctionNames.has(effectiveFunctionName)) {
+            return entry;
+          }
+          return {
+            ...entry,
+            response: {
+              ...entry.response,
+              scheduling: FunctionResponseScheduling.WHEN_IDLE,
+            },
+          };
+        });
+
         trace(req, "live.tool_response.generated", {
           conversationId: conversation.id,
           functionCount: parsed.functionCalls.length,
-          responseCount: functionResponses.length,
+          responseCount: functionResponsesWithScheduling.length,
           resolvedFunctionCalls,
           digestCount: chatDigests.length,
-          functionOutcomeSummary: functionResponses.map((entry) => {
+          functionOutcomeSummary: functionResponsesWithScheduling.map((entry) => {
             const error =
               entry.response &&
               typeof entry.response === "object" &&
@@ -14035,7 +14076,7 @@ export async function registerRoutes(
 
         return res.status(200).json({
           traceId: getTraceId(req),
-          functionResponses,
+          functionResponses: functionResponsesWithScheduling,
           resolvedFunctionCalls,
           chatDigests,
           webSearchEvents,

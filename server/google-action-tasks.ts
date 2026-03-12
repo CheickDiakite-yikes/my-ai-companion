@@ -68,6 +68,39 @@ type StoredGoogleActionPlan = {
       };
 };
 
+type EmailExecution = Extract<
+  StoredGoogleActionPlan["execution"],
+  { kind: "email_compose" | "email_reply" }
+>;
+
+type CalendarCreateExecution = Extract<
+  StoredGoogleActionPlan["execution"],
+  { kind: "calendar_create" }
+>;
+
+type CalendarUpdateExecution = Extract<
+  StoredGoogleActionPlan["execution"],
+  { kind: "calendar_update" }
+>;
+
+function isEmailExecution(
+  execution: StoredGoogleActionPlan["execution"],
+): execution is EmailExecution {
+  return execution.kind === "email_compose" || execution.kind === "email_reply";
+}
+
+function isCalendarCreateExecution(
+  execution: StoredGoogleActionPlan["execution"],
+): execution is CalendarCreateExecution {
+  return execution.kind === "calendar_create";
+}
+
+function isCalendarUpdateExecution(
+  execution: StoredGoogleActionPlan["execution"],
+): execution is CalendarUpdateExecution {
+  return execution.kind === "calendar_update";
+}
+
 export type RecentGoogleActionTask = {
   taskId: string;
   preview: GoogleActionPreview;
@@ -1904,11 +1937,19 @@ export async function prepareGoogleActionTask(params: {
   if (/\b(reply|respond)\b/i.test(rawText)) {
     const replyTarget = matchReplyTarget(rawText);
     const literalBodyText = buildEmailReplyBody(rawText);
+    if (!replyTarget || !literalBodyText) {
+      return {
+        kind: "clarify",
+        message:
+          "Tell me which email to reply to and what you want the reply to say.",
+        resolvedPrompt: resolvedContinuationPrompt,
+      };
+    }
     const bodyText = applyEmailBodySignature(
       literalBodyText,
       emailAuthorContext.signatureName,
     );
-    if (!replyTarget || !bodyText) {
+    if (!bodyText) {
       return {
         kind: "clarify",
         message:
@@ -2768,6 +2809,7 @@ function buildStructuredCalendarVariantFromPlan(params: {
   description: string | null;
   resultEventId?: string | null;
 }): { preview: GoogleActionPreview; plan: StoredGoogleActionPlan } {
+  const execution = params.plan.execution;
   const title = params.title.trim();
   const location = params.location?.trim() || null;
   const description = params.description?.trim() || null;
@@ -2784,25 +2826,25 @@ function buildStructuredCalendarVariantFromPlan(params: {
     throw new Error("Calendar event end time must be after start time");
   }
 
-  if (params.plan.execution.kind === "calendar_create") {
+  if (isCalendarCreateExecution(execution)) {
     if (params.resultEventId && params.resultEventId.trim()) {
       const originalEvent = buildSyntheticCalendarEventDetail({
         eventId: params.resultEventId.trim(),
         title:
           params.plan.preview.proposedCalendar?.title ??
-          params.plan.execution.title,
+          execution.title,
         startTime:
           params.plan.preview.proposedCalendar?.startTime ??
-          params.plan.execution.startTime,
+          execution.startTime,
         endTime:
           params.plan.preview.proposedCalendar?.endTime ??
-          params.plan.execution.endTime,
+          execution.endTime,
         location:
           params.plan.preview.proposedCalendar?.location ??
-          params.plan.execution.location,
+          execution.location,
         description:
           params.plan.preview.proposedCalendar?.descriptionPreview ??
-          params.plan.execution.description,
+          execution.description,
       });
       const preview = buildGoogleCalendarPreview({
         kind: "calendar_update",
@@ -2820,7 +2862,7 @@ function buildStructuredCalendarVariantFromPlan(params: {
           preview,
           execution: {
             kind: "calendar_update",
-            timezone: params.plan.execution.timezone,
+            timezone: execution.timezone,
             eventId: originalEvent.eventId,
             title,
             startTime: params.startTime,
@@ -2847,7 +2889,7 @@ function buildStructuredCalendarVariantFromPlan(params: {
         ...params.plan,
         preview,
         execution: {
-          ...params.plan.execution,
+          ...execution,
           title,
           startTime: params.startTime,
           endTime: params.endTime,
@@ -2858,34 +2900,42 @@ function buildStructuredCalendarVariantFromPlan(params: {
     };
   }
 
+  if (!isCalendarUpdateExecution(execution)) {
+    throw new Error("Task is not a revisable calendar event");
+  }
+  const existingCalendarEvent: GoogleCalendarEventDetail | null =
+    params.plan.preview.calendarEvent ?? null;
+  const existingCalendarLocation = existingCalendarEvent?.location ?? null;
+  const existingCalendarDescription = existingCalendarEvent?.description ?? null;
+
   const originalEvent =
-    params.plan.preview.calendarEvent ??
+    existingCalendarEvent ??
     buildSyntheticCalendarEventDetail({
-      eventId: params.plan.execution.eventId,
+      eventId: execution.eventId,
       title:
         params.plan.preview.proposedCalendar?.originalTitle ??
         params.plan.preview.proposedCalendar?.title ??
-        params.plan.execution.title ??
+        execution.title ??
         title,
       startTime:
         params.plan.preview.proposedCalendar?.originalStartTime ??
         params.plan.preview.proposedCalendar?.startTime ??
-        params.plan.execution.startTime ??
+        execution.startTime ??
         params.startTime,
       endTime:
         params.plan.preview.proposedCalendar?.originalEndTime ??
         params.plan.preview.proposedCalendar?.endTime ??
-        params.plan.execution.endTime ??
+        execution.endTime ??
         params.endTime,
       location:
-        params.plan.preview.calendarEvent?.location ??
+        existingCalendarLocation ??
         params.plan.preview.proposedCalendar?.location ??
-        params.plan.execution.location ??
+        execution.location ??
         null,
       description:
-        params.plan.preview.calendarEvent?.description ??
+        existingCalendarDescription ??
         params.plan.preview.proposedCalendar?.descriptionPreview ??
-        params.plan.execution.description ??
+        execution.description ??
         null,
     });
 
@@ -2905,7 +2955,7 @@ function buildStructuredCalendarVariantFromPlan(params: {
       ...params.plan,
       preview,
       execution: {
-        ...params.plan.execution,
+        ...execution,
         title,
         startTime: params.startTime,
         endTime: params.endTime,
@@ -3118,6 +3168,9 @@ export async function revisePendingGoogleEmailTask(params: {
   if (!isEmailDraftRevisionCandidatePreview(plan.preview)) {
     throw new Error("Task is not a revisable email draft");
   }
+  if (!isEmailExecution(plan.execution)) {
+    throw new Error("Task is not an email draft");
+  }
   const recipientChange = inferComposeRecipientChange(params.instructionText);
   if (recipientChange) {
     const next = buildRecipientChangedEmailVariantFromPlan({
@@ -3131,7 +3184,11 @@ export async function revisePendingGoogleEmailTask(params: {
         plan: next.plan,
       })) ?? task;
     const taskSummary = toTaskSummary(updated);
-    const recipientLabel = next.plan.execution.to.join(", ");
+    const nextExecution = next.plan.execution;
+    if (!isEmailExecution(nextExecution)) {
+      throw new Error("Task is not an email draft");
+    }
+    const recipientLabel = nextExecution.to.join(", ");
     const actionLabel = recipientChange.mode === "add"
       ? `Added ${recipientChange.email} as a recipient. Now sending to ${recipientLabel}.`
       : `Changed recipient to ${recipientLabel}.`;
@@ -3214,6 +3271,9 @@ export async function applyStructuredGoogleEmailDraftEdit(params: {
   if (!isEmailDraftRevisionCandidatePreview(plan.preview)) {
     throw new Error("Task is not a revisable email draft");
   }
+  if (!isEmailExecution(plan.execution)) {
+    throw new Error("Task is not an email draft");
+  }
   if (task.status === "completed" && plan.execution.sendAfterApproval) {
     throw new Error("Sent emails can't be edited");
   }
@@ -3227,9 +3287,13 @@ export async function applyStructuredGoogleEmailDraftEdit(params: {
       (await resolveEmailAuthorContext(params.storage, params.userId)).signatureName,
     ),
   });
+  const nextExecution = next.plan.execution;
+  if (!isEmailExecution(nextExecution)) {
+    throw new Error("Task is not an email draft");
+  }
   const nextContext: GoogleActionTargetContextMetadata = {
     connector: "gmail",
-    action: next.plan.execution.sendAfterApproval ? "send" : "revise",
+    action: nextExecution.sendAfterApproval ? "send" : "revise",
     actionableTargetId: task.status === "approval_required" ? task.id : null,
     candidateTargetIds: task.status === "approval_required" ? [task.id] : [],
     selectionReason: "manual_selection",
@@ -3598,7 +3662,7 @@ export async function approveAndExecuteGoogleActionTask(params: {
 
   let actionResult: GoogleActionResult;
   try {
-    if (plan.execution.kind === "email_compose" || plan.execution.kind === "email_reply") {
+    if (isEmailExecution(plan.execution)) {
       const auth = await resolveGoogleAccessTokenForUser({
         userId: params.userId,
         storage: params.storage,
@@ -3653,7 +3717,7 @@ export async function approveAndExecuteGoogleActionTask(params: {
           threadId: draft.threadId,
         };
       }
-    } else if (plan.execution.kind === "calendar_create") {
+    } else if (isCalendarCreateExecution(plan.execution)) {
       const auth = await resolveGoogleAccessTokenForUser({
         userId: params.userId,
         storage: params.storage,
@@ -3680,7 +3744,7 @@ export async function approveAndExecuteGoogleActionTask(params: {
         summary: `Created ${created.title}.`,
         eventId: created.eventId,
       };
-    } else {
+    } else if (isCalendarUpdateExecution(plan.execution)) {
       const auth = await resolveGoogleAccessTokenForUser({
         userId: params.userId,
         storage: params.storage,
@@ -3708,6 +3772,8 @@ export async function approveAndExecuteGoogleActionTask(params: {
         summary: `Updated ${updated.title}.`,
         eventId: updated.eventId,
       };
+    } else {
+      throw new Error("Unsupported Google action execution");
     }
 
     await params.storage.updateAgentToolCall({

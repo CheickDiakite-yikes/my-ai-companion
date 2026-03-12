@@ -21,8 +21,8 @@ const vector = customType<{ data: string; driverParam: string }>({
   toDriver(value: string): string {
     return value;
   },
-  fromDriver(value: string): string {
-    return value;
+  fromDriver(value: unknown): string {
+    return typeof value === "string" ? value : String(value);
   },
 });
 

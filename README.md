@@ -1014,19 +1014,29 @@ The app will be available at `http://localhost:5000`.
 
 Use this flow when validating Gmail/Calendar integration in local dev and ephemeral preview hosts (for example Replit dev URLs):
 
-1. Set baseline OAuth env values in `.env`:
+1. Copy the committed local template and fill it in:
+   - `cp .env.local.example .env.local`
+   - The local dev server loads `.env` first, then `.env.local` as an override.
+2. In Google Cloud Console, open the OAuth web client used for local ZeeMe testing and add these **Authorized redirect URIs** exactly:
+   - `http://localhost:5000/api/integrations/google/callback`
+   - `http://localhost:5000/api/auth/google/callback`
+   - Optional phone/tunnel callback for Google integration: `https://<your-tunnel-host>/api/integrations/google/callback`
+   - Optional phone/tunnel callback for app sign-in: `https://<your-tunnel-host>/api/auth/google/callback`
+3. Set baseline OAuth env values in `.env.local`:
    - `GOOGLE_OAUTH_CLIENT_ID`
    - `GOOGLE_OAUTH_CLIENT_SECRET`
-   - `GOOGLE_OAUTH_REDIRECT_URI` (stable callback you trust, for production use `https://zeeme.io/api/integrations/google/callback`)
+   - `GOOGLE_OAUTH_REDIRECT_URI=http://localhost:5000/api/integrations/google/callback`
+   - `GOOGLE_OAUTH_AUTH_REDIRECT_URI=http://localhost:5000/api/auth/google/callback`
    - `GOOGLE_OAUTH_STATE_SIGNING_SECRET` (recommended; falls back to `SESSION_SECRET` when unset)
-2. Start app with `npm run dev`.
-3. Request a connect URL:
+   - `GOOGLE_INTEGRATION_ENCRYPTION_KEY`
+4. Start app with `npm run dev`.
+5. Request a connect URL:
    - `GET /api/integrations/google/connect-url`
-4. Confirm response includes:
+6. Confirm response includes:
    - `redirectUri`
    - `redirectSource` (`query_override`, `dynamic_host`, or `configured_env`)
    - `state` is now signed and TTL-bound; callback no longer depends on in-memory cache persistence.
-5. Complete OAuth and verify callback logs:
+7. Complete OAuth and verify callback logs:
    - `google.integration.callback.exchange_attempt`
    - `google.integration.callback.connected`
 
@@ -1034,6 +1044,13 @@ Optional (preview host override):
 - Set `VITE_GOOGLE_OAUTH_CONNECT_REDIRECT_URI` to a full callback URL ending with `/api/integrations/google/callback`.
 - This is useful for deterministic testing against a specific preview hostname without changing server default env.
 - Keep this unset in production so live auth uses `GOOGLE_OAUTH_REDIRECT_URI`.
+
+Local voice + Google recipe:
+- Use the committed template at `.env.local.example` as the starting point for Gmail/Calendar voice testing.
+- For read-only inbox/calendar testing, keep the default read-only `GOOGLE_OAUTH_SCOPES`.
+- For approval-gated Gmail/Calendar write-flow testing, uncomment the write scopes and set `ENABLE_GOOGLE_PERSONAL_CONTEXT_WRITES=true`, `ENABLE_VOICE_GOOGLE_WRITE_HANDOFF=true`, and `VITE_ENABLE_GOOGLE_PERSONAL_CONTEXT_WRITES=true` so the client renders the same draft/task surfaces the server is allowed to produce.
+- If you run standalone scripts instead of `npm run dev`, source the file first so those processes see local overrides:
+  `set -a; source .env.local; set +a`
 
 ### Expo wrapper quick start (mobile shell)
 

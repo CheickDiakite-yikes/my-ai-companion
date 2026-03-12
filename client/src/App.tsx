@@ -41,6 +41,7 @@ import {
   Terminal,
   Maximize2,
   Globe,
+  Sparkles,
   SwitchCamera,
   VolumeX,
 } from "lucide-react";
@@ -329,6 +330,8 @@ interface SendMessageOptions {
     selectionMode?: "auto" | "manual" | "dismissed";
   }) | null;
 }
+
+type GoogleActionContext = NonNullable<SendMessageOptions["googleActionContext"]>;
 
 interface TraceAwareResponse {
   traceId?: string;
@@ -1096,7 +1099,7 @@ function isGoogleAssistantUiPayload(payload: MessageData["uiPayload"]): boolean 
 
 function getGoogleActionContextFromPayload(
   payload: MessageData["uiPayload"],
-): GoogleActionTargetContextMetadata | null {
+): GoogleActionContext | null {
   if (!payload) return null;
   if (
     payload.kind === "agent_task_status" ||
@@ -1106,7 +1109,28 @@ function getGoogleActionContextFromPayload(
     payload.kind === "agent_google_email_ambiguity" ||
     payload.kind === "agent_google_action_ambiguity"
   ) {
-    return payload.googleContext ?? null;
+    const googleContext = payload.googleContext;
+    if (!googleContext) return null;
+    return {
+      connector: googleContext.connector,
+      action: googleContext.action,
+      ...(typeof googleContext.actionableTargetId === "string" ||
+      googleContext.actionableTargetId === null
+        ? { actionableTargetId: googleContext.actionableTargetId }
+        : {}),
+      ...(Array.isArray(googleContext.candidateTargetIds)
+        ? { candidateTargetIds: googleContext.candidateTargetIds }
+        : {}),
+      ...(typeof googleContext.sourceTurnId === "string" || googleContext.sourceTurnId === null
+        ? { sourceTurnId: googleContext.sourceTurnId }
+        : {}),
+      ...(typeof googleContext.selectionReason === "string" ||
+      googleContext.selectionReason === null
+        ? { selectionReason: googleContext.selectionReason }
+        : {}),
+      ...(googleContext.selectionMode ? { selectionMode: googleContext.selectionMode } : {}),
+      ...(googleContext.surfaceKey ? { surfaceKey: googleContext.surfaceKey } : {}),
+    };
   }
   return null;
 }
@@ -1821,7 +1845,7 @@ function getVoiceStageCandidateSummary(candidate: VoiceStageCandidate): {
   }
 
   const preview = candidate.card.googleActionPreview;
-  const result = candidate.card.googleActionResult;
+  const result = candidate.card.googleActionResult ?? null;
   const failure = candidate.card.failure ?? null;
   const approvalPending =
     candidate.card.status === "approval_required" &&
@@ -2007,7 +2031,7 @@ function buildGoogleAmbiguitySelectionContext(params: {
   sourceTurnId?: string | null;
   surfaceKey?: string | null;
   selectionMode?: "auto" | "manual" | "dismissed";
-}): NonNullable<SendMessageOptions["googleActionContext"]> {
+}): GoogleActionContext {
   return {
     connector: params.ambiguity.connector,
     action: params.ambiguity.action,
@@ -2021,9 +2045,16 @@ function buildGoogleAmbiguitySelectionContext(params: {
 }
 
 function sanitizeGoogleActionContext(
-  context: SendMessageOptions["googleActionContext"],
-): SendMessageOptions["googleActionContext"] | undefined {
+  context:
+    | SendMessageOptions["googleActionContext"]
+    | GoogleActionTargetContextMetadata
+    | null
+    | undefined,
+): GoogleActionContext | undefined {
   if (!context) {
+    return undefined;
+  }
+  if (typeof context.connector !== "string" || !context.connector) {
     return undefined;
   }
 
@@ -2034,13 +2065,12 @@ function sanitizeGoogleActionContext(
       )
     : undefined;
 
-  const sanitized: NonNullable<SendMessageOptions["googleActionContext"]> = {
-    ...(typeof context.connector === "string" && context.connector
-      ? { connector: context.connector }
-      : {}),
-    ...(typeof context.action === "string" && context.action.trim().length > 0
-      ? { action: context.action.trim() }
-      : {}),
+  const sanitized: GoogleActionContext = {
+    connector: context.connector,
+    action:
+      typeof context.action === "string" && context.action.trim().length > 0
+        ? context.action.trim()
+        : null,
     ...(typeof context.actionableTargetId === "string" &&
     context.actionableTargetId.trim().length > 0
       ? { actionableTargetId: context.actionableTargetId.trim() }
@@ -2060,7 +2090,7 @@ function sanitizeGoogleActionContext(
     ...(context.selectionMode ? { selectionMode: context.selectionMode } : {}),
   };
 
-  return Object.keys(sanitized).length > 0 ? sanitized : undefined;
+  return sanitized;
 }
 
 function resolveLatestAssistantGoogleActionContext(
@@ -4923,7 +4953,8 @@ function buildUnifiedAgentTaskCards(
 
   const taskAggregates = new Map<string, AgentTaskAggregate>();
 
-  for (const [messageIndex, message] of messages.entries()) {
+  for (let messageIndex = 0; messageIndex < messages.length; messageIndex += 1) {
+    const message = messages[messageIndex];
     if (message.sender !== "assistant") continue;
     const taskId = extractAgentTaskIdFromPayload(message.uiPayload);
     if (!taskId) continue;
@@ -5198,7 +5229,7 @@ function summarizeVoiceStageSurface(
       summary:
         surface.card.googleActionResult?.summary ??
         surface.card.googleActionPreview?.summary ??
-        surface.card.summary ??
+        surface.card.summaryText ??
         null,
       source: "source" in surface ? surface.source : "task",
       activeRank: "activeRank" in surface ? surface.activeRank : null,
@@ -8689,6 +8720,34 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
     voiceStageCandidates,
   ]);
 
+  useEffect(() => {
+    if (!isActive) return;
+    if (voiceStageSelectionMode !== "dismissed") return;
+    if (dismissedStageSurfaceKey !== null) return;
+    if (!effectiveVoiceCanvasKey) return;
+    setVoiceStageSelectionMode("auto");
+    onTraceStageEvent("surface_auto_reopened", {
+      reason: "first_surface_after_session_start",
+      surfaceKind: activeVoiceLookupPresentation ? "lookup" : voiceStageSurface?.kind ?? null,
+      surfaceKey: effectiveVoiceCanvasKey,
+      surface: activeVoiceLookupPresentation
+        ? {
+            kind: "lookup",
+            scope: activeVoiceLookupPresentation.scope,
+            phase: activeVoiceLookupPresentation.phase,
+          }
+        : summarizeVoiceStageSurface(voiceStageSurface),
+    });
+  }, [
+    activeVoiceLookupPresentation,
+    dismissedStageSurfaceKey,
+    effectiveVoiceCanvasKey,
+    isActive,
+    onTraceStageEvent,
+    voiceStageSelectionMode,
+    voiceStageSurface,
+  ]);
+
   const buildVoiceStageGoogleActionContext = useCallback(() => {
     if (activeVoiceLookupPresentation) {
       return null;
@@ -8897,6 +8956,15 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
     });
   };
 
+  const toggleVoiceCanvas = () => {
+    if (!effectiveVoiceCanvasKey) return;
+    if (isVoiceCanvasVisible) {
+      dismissVoiceCanvas();
+      return;
+    }
+    reopenVoiceCanvas();
+  };
+
   const handleVoiceStageResolveApproval = async (
     taskId: string,
     approve: boolean,
@@ -8969,44 +9037,60 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
     ? getVoiceStageCandidateSummary(voiceStageSurface)
     : null;
 
-  const voiceStageTitle =
-    activeVoiceLookupPresentation?.title ??
-    voiceStageSurface?.kind === "task"
-      ? activeVoiceStageSummary?.title ??
+  const voiceStageTitle = activeVoiceLookupPresentation?.title ?? (() => {
+    if (voiceStageSurface?.kind === "task") {
+      return (
+        activeVoiceStageSummary?.title ??
         (voiceStageSurface.card.googleActionPreview?.connector === "gmail"
           ? "Zee Mail"
           : voiceStageSurface.card.googleActionPreview?.connector === "calendar"
             ? "Zee Calendar"
             : "Zee Canvas")
-      : voiceStageSurface?.kind === "calendar_session"
-        ? "Event In Progress"
-        : voiceStageSurface?.kind === "compose_session"
-          ? "Draft In Progress"
-          : voiceStageSurface?.kind === "email_ambiguity"
-            ? voiceStageSurface.ambiguity.connector === "calendar"
-            ? "Choose The Event"
-              : "Choose The Email"
-            : "Voice Canvas";
+      );
+    }
+    if (voiceStageSurface?.kind === "calendar_session") {
+      return "Event In Progress";
+    }
+    if (voiceStageSurface?.kind === "compose_session") {
+      return "Draft In Progress";
+    }
+    if (voiceStageSurface?.kind === "email_ambiguity") {
+      return voiceStageSurface.ambiguity.connector === "calendar"
+        ? "Choose The Event"
+        : "Choose The Email";
+    }
+    return "Voice Canvas";
+  })();
 
-  const voiceStageSubtitle =
-    activeVoiceLookupPresentation?.subtitle ??
-    voiceStageSurface?.kind === "task"
-      ? activeVoiceStageSummary?.detail ?? voiceStageSurface.card.title
-      : voiceStageSurface?.kind === "calendar_session"
-        ? "Zee is collecting the missing event details."
-        : voiceStageSurface?.kind === "compose_session"
-          ? "Zee is shaping a draft from your voice instructions."
-          : voiceStageSurface?.kind === "email_ambiguity"
-            ? voiceStageSurface.ambiguity.connector === "calendar"
-            ? "Zee needs one quick event clarification before acting."
-              : "Zee needs one quick draft clarification before acting."
-            : "Task-ready surface";
+  const voiceStageSubtitle = activeVoiceLookupPresentation?.subtitle ?? (() => {
+    if (voiceStageSurface?.kind === "task") {
+      return activeVoiceStageSummary?.detail ?? voiceStageSurface.card.title;
+    }
+    if (voiceStageSurface?.kind === "calendar_session") {
+      return "Zee is collecting the missing event details.";
+    }
+    if (voiceStageSurface?.kind === "compose_session") {
+      return "Zee is shaping a draft from your voice instructions.";
+    }
+    if (voiceStageSurface?.kind === "email_ambiguity") {
+      return voiceStageSurface.ambiguity.connector === "calendar"
+        ? "Zee needs one quick event clarification before acting."
+        : "Zee needs one quick draft clarification before acting.";
+    }
+    return "Task-ready surface";
+  })();
 
   const voiceCanvasOpenLabel =
     activeVoiceLookupPresentation?.openLabel ??
     (activeVoiceStageSummary?.title
       ? `Open ${activeVoiceStageSummary.title}`
       : "Open canvas");
+  const voiceStageToggleLabel = isVoiceCanvasVisible
+    ? "Hide stage"
+    : activeVoiceLookupPresentation?.openLabel ??
+      (activeVoiceStageSummary?.title
+        ? `Open ${activeVoiceStageSummary.title}`
+        : "Open stage");
 
   return (
     <motion.div 
@@ -10190,6 +10274,25 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
           >
             {isActive && (
               <div className="mb-4 flex flex-wrap items-center justify-center gap-4">
+                 {effectiveVoiceCanvasKey ? (
+                   <Button
+                     variant="outline"
+                     className="h-14 rounded-full border-2 px-5 text-sm font-medium transition-colors hover:opacity-90"
+                     style={{
+                       backgroundColor: "var(--app-soft-card-bg)",
+                       borderColor: isVoiceCanvasVisible
+                         ? "var(--app-accent)"
+                         : "var(--app-soft-card-border)",
+                       color: "var(--app-on-dark)",
+                     }}
+                     onClick={toggleVoiceCanvas}
+                     aria-label={voiceStageToggleLabel}
+                     data-testid="button-toggle-voice-stage"
+                   >
+                     <Sparkles className="mr-2 h-4 w-4" />
+                     {voiceStageToggleLabel}
+                   </Button>
+                 ) : null}
                  <Button 
                     variant="outline" 
                     size="icon" 
@@ -11917,13 +12020,16 @@ const TextView = ({
                         text={msg.uiPayload.text}
                       />
                     ) : isGoogleActionAmbiguityPayload(msg.uiPayload) ? (
+                      (() => {
+                        const ambiguityPayload = msg.uiPayload;
+                        return (
                       <GoogleEmailAmbiguityCard
-                        ambiguity={msg.uiPayload.ambiguity}
-                        text={msg.uiPayload.text}
+                        ambiguity={ambiguityPayload.ambiguity}
+                        text={ambiguityPayload.text}
                         onChoose={async (candidate) => {
                           console.log("[GoogleUiTrace]", "chat.google_ambiguity_selected", {
-                            connector: msg.uiPayload.ambiguity.connector,
-                            action: msg.uiPayload.ambiguity.action,
+                            connector: ambiguityPayload.ambiguity.connector,
+                            action: ambiguityPayload.ambiguity.action,
                             selectedTaskId: candidate.taskId,
                           });
                           shouldAutoStickRef.current = true;
@@ -11932,7 +12038,7 @@ const TextView = ({
                           await onSendMessage(candidate.selectionPrompt, {
                             ignoreAttachments: true,
                             googleActionContext: buildGoogleAmbiguitySelectionContext({
-                              ambiguity: msg.uiPayload.ambiguity,
+                              ambiguity: ambiguityPayload.ambiguity,
                               candidate,
                               sourceTurnId: msg.turnId ?? null,
                             }),
@@ -11944,6 +12050,8 @@ const TextView = ({
                           }, 120);
                         }}
                       />
+                        );
+                      })()
                     ) : isAgentTaskStatusPayload(msg.uiPayload) ? (
                       <div
                         className="space-y-2"
