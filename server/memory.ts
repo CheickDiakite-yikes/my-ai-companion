@@ -236,20 +236,23 @@ export async function triggerSummarizationIfNeeded(params: {
 
   if (unsummarized < SUMMARY_BLOCK_SIZE) return;
 
-  const allConvMessages = await db
-    .select()
-    .from(messages)
-    .where(
-      and(
-        eq(messages.conversationId, params.conversationId),
-        eq(messages.messagePurpose, "conversation"),
-      ),
-    )
-    .orderBy(asc(messages.createdAt), asc(messages.id));
-
   let currentIndex = lastSummarizedIndex;
-  while (currentIndex + SUMMARY_BLOCK_SIZE <= allConvMessages.length) {
-    const block = allConvMessages.slice(currentIndex, currentIndex + SUMMARY_BLOCK_SIZE);
+  while (currentIndex + SUMMARY_BLOCK_SIZE <= totalMessages) {
+    const block = await db
+      .select()
+      .from(messages)
+      .where(
+        and(
+          eq(messages.conversationId, params.conversationId),
+          eq(messages.messagePurpose, "conversation"),
+        ),
+      )
+      .orderBy(asc(messages.createdAt), asc(messages.id))
+      .offset(currentIndex)
+      .limit(SUMMARY_BLOCK_SIZE);
+
+    if (block.length < SUMMARY_BLOCK_SIZE) break;
+
     await summarizeConversationBlock({
       conversationId: params.conversationId,
       userId: params.userId,
