@@ -4185,12 +4185,19 @@ export class GeminiLiveVoiceSession {
           USER_SPEECH_START_RMS_THRESHOLD,
           adaptiveFloor,
         );
+        const gainLevel = classifyMicGainLevel(this.adaptiveBaselineRms);
         this.debug("live.audio.adaptive_calibration_complete", {
           calibrationFrames: this.adaptiveCalibrationCount,
           baselineRms: this.adaptiveBaselineRms,
           adaptiveFloor: this.adaptiveThresholdFloor,
           originalFloor: USER_SPEECH_START_RMS_THRESHOLD,
-          micGainLevel: classifyMicGainLevel(this.adaptiveBaselineRms),
+          micGainLevel: gainLevel,
+          effectiveIdleThreshold: this.computeSpeechThreshold(false).threshold,
+          effectiveAssistantThreshold: this.computeSpeechThreshold(true).threshold,
+          adaptiveCandidateMinRms: Math.min(
+            USER_SPEECH_CANDIDATE_MIN_RMS_THRESHOLD,
+            Math.max(ADAPTIVE_THRESHOLD_ABSOLUTE_FLOOR, this.adaptiveThresholdFloor * 0.7),
+          ),
         });
       }
     }
