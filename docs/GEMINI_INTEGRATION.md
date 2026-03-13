@@ -1,6 +1,6 @@
 # Gemini Integration Notes
 
-Last Updated: 2026-03-12
+Last Updated: 2026-03-13
 
 This document is the technical integration reference for ZeeMe's Gemini usage across text chat, live voice, grounding, and Google personal-context tool calls.
 
@@ -224,7 +224,50 @@ Result truthfulness contract:
 
 ---
 
-## 10) Observability
+## 10) Cost and Quota Implications
+
+### What currently drives spend
+
+The current spend profile is dominated by:
+- live native-audio time
+- live camera time
+- search-grounded flows such as Morning Brief
+- extra Gemini turns created by Gmail/Calendar draft planning and revision
+
+The current spend profile is not dominated by:
+- plain Gmail reads
+- plain Calendar reads
+- the raw Google Workspace API calls themselves
+
+### Model-specific implication
+
+- `gemini-3-flash-preview` still makes ordinary text chat and Google-action planning relatively cheap.
+- `gemini-2.5-flash-native-audio-preview-12-2025` makes long live voice sessions materially more expensive than older planning worksheets assumed.
+- `gemini-2.0-flash-lite` and `gemini-embedding-001` are background-cost factors, but they are usually second-order compared with voice and grounding.
+
+### Gmail + Calendar implication
+
+Gmail + Calendar actions cost Zee in two layers:
+
+1. extra Gemini turns
+- Google-action AI router
+- draft generation or revision
+- approval follow-up handling
+
+2. operational Google quota
+- Gmail uses quota units per method
+- Calendar uses per-project and per-user request quotas, plus operational limits on hot calendars
+
+Recommended cost-tracking consequence:
+- keep the user-facing quota system simple
+- shadow-meter Google reads, detail reads, write prep, write execution, and grounded search internally
+
+Reference worksheet:
+- [docs/QUOTA_PRICING_REEVALUATION_2026-03-13.md](/Users/cheickdiakite/Codex/my-ai-companion/docs/QUOTA_PRICING_REEVALUATION_2026-03-13.md)
+
+---
+
+## 11) Observability
 
 ### Server traces
 - `live.token.*`
@@ -256,8 +299,9 @@ First classify:
 
 ---
 
-## 11) Related Documents
+## 12) Related Documents
 
 - [README.md](/Users/cheickdiakite/Codex/my-ai-companion/README.md)
 - [docs/ZEE_STAGE_GOOGLE_ACTIONS.md](/Users/cheickdiakite/Codex/my-ai-companion/docs/ZEE_STAGE_GOOGLE_ACTIONS.md)
 - [docs/LIVE_VOICE_REPLIT_CHECKLIST.md](/Users/cheickdiakite/Codex/my-ai-companion/docs/LIVE_VOICE_REPLIT_CHECKLIST.md)
+- [docs/QUOTA_PRICING_REEVALUATION_2026-03-13.md](/Users/cheickdiakite/Codex/my-ai-companion/docs/QUOTA_PRICING_REEVALUATION_2026-03-13.md)

@@ -1,6 +1,6 @@
 # Zee Stage and Google Actions
 
-Last Updated: 2026-03-12
+Last Updated: 2026-03-13
 
 This document is the current architecture and operations reference for ZeeMe's Gmail + Calendar flows across text mode, live voice mode, and Zee Stage.
 
@@ -486,9 +486,52 @@ Writes:
 
 ---
 
-## 14) Related Documents
+## 14) Cost and Quota Implications
+
+Zee Stage itself is not the main spend driver. The spend comes from what Stage is surfacing.
+
+### Reads
+
+Stage-adjacent read flows usually mean:
+- one Gmail or Calendar fetch
+- one short verified assistant summary
+- little extra model cost relative to the user's normal turn
+
+Operationally, though:
+- Gmail summary reads can fan out into many `messages.get` calls
+- Calendar polling or repeated detail lookups can create quota pressure even when direct dollar cost stays low
+
+### Writes
+
+Stage-backed Gmail/Calendar write flows are more expensive than plain reads because they can involve:
+- AI routing to normalize a follow-up
+- draft generation or revision
+- approval loops across voice + text
+- a final Gmail or Calendar API write
+
+Practical takeaway:
+- `Needs approval` and `Completed` are not just UI states
+- they correspond to materially different execution and cost states
+
+### Recommended instrumentation
+
+For quota accuracy, the next instrumentation layer should emit shadow metrics for:
+- `google_read`
+- `google_detail_read`
+- `google_write_prepare`
+- `google_write_execute`
+
+That keeps Zee Stage truthful as a product surface while giving the team real cost and rate-limit visibility.
+
+Related worksheet:
+- [docs/QUOTA_PRICING_REEVALUATION_2026-03-13.md](/Users/cheickdiakite/Codex/my-ai-companion/docs/QUOTA_PRICING_REEVALUATION_2026-03-13.md)
+
+---
+
+## 15) Related Documents
 
 - [README.md](/Users/cheickdiakite/Codex/my-ai-companion/README.md)
 - [docs/GEMINI_INTEGRATION.md](/Users/cheickdiakite/Codex/my-ai-companion/docs/GEMINI_INTEGRATION.md)
 - [docs/LIVE_VOICE_REPLIT_CHECKLIST.md](/Users/cheickdiakite/Codex/my-ai-companion/docs/LIVE_VOICE_REPLIT_CHECKLIST.md)
 - [docs/GOOGLE_PERSONAL_CONTEXT_TRACKER.md](/Users/cheickdiakite/Codex/my-ai-companion/docs/GOOGLE_PERSONAL_CONTEXT_TRACKER.md)
+- [docs/QUOTA_PRICING_REEVALUATION_2026-03-13.md](/Users/cheickdiakite/Codex/my-ai-companion/docs/QUOTA_PRICING_REEVALUATION_2026-03-13.md)
