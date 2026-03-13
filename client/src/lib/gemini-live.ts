@@ -3407,10 +3407,6 @@ export class GeminiLiveVoiceSession {
     if (hasGoogleActionTool) {
       this.emitWebSearchStatus("idle");
     } else if (Array.isArray(params.payload.webSearchEvents)) {
-      const normalizedEvents: Array<{
-        status: "searching" | "grounded" | "idle";
-        label?: string;
-      }> = [];
       for (const event of params.payload.webSearchEvents) {
         const status =
           event &&
@@ -3428,24 +3424,7 @@ export class GeminiLiveVoiceSession {
             ? (event as { label: string }).label
             : undefined;
         if (!status) continue;
-        normalizedEvents.push({ status, label });
-      }
-      let terminalEvent:
-        | { status: "searching" | "grounded" | "idle"; label?: string }
-        | null = null;
-      for (let index = normalizedEvents.length - 1; index >= 0; index -= 1) {
-        const event = normalizedEvents[index];
-        if (!event) continue;
-        if (event.status !== "searching") {
-          terminalEvent = event;
-          break;
-        }
-      }
-      if (!terminalEvent && normalizedEvents.length > 0) {
-        terminalEvent = normalizedEvents[normalizedEvents.length - 1] ?? null;
-      }
-      if (terminalEvent) {
-        this.emitWebSearchStatus(terminalEvent.status, terminalEvent.label);
+        this.emitWebSearchStatus(status, label);
       }
     } else {
       const hasError = functionResponseSummary.some((entry) => entry.status === "error");

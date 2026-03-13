@@ -13119,8 +13119,6 @@ function App() {
   const textSearchStartedAtRef = useRef<number | null>(null);
   const voiceSearchMinTimerRef = useRef<number | null>(null);
   const textSearchMinTimerRef = useRef<number | null>(null);
-  const voiceSearchShowDelayTimerRef = useRef<number | null>(null);
-  const textSearchShowDelayTimerRef = useRef<number | null>(null);
 
   const logLiveTrace = useCallback((
     event: string,
@@ -13165,32 +13163,21 @@ function App() {
   }, [liveDebugState, liveTokenConfigSummary]);
 
   const clearWebLookupStatus = useCallback((mode: WebLookupMode) => {
-    const clearTimerRef =
-      mode === "voice" ? voiceWebLookupClearTimerRef : textWebLookupClearTimerRef;
-    const minTimerRef =
-      mode === "voice" ? voiceSearchMinTimerRef : textSearchMinTimerRef;
-    const showDelayTimerRef =
-      mode === "voice" ? voiceSearchShowDelayTimerRef : textSearchShowDelayTimerRef;
-    const startedAtRef =
-      mode === "voice" ? voiceSearchStartedAtRef : textSearchStartedAtRef;
-    const setStatus = mode === "voice" ? setVoiceWebLookupStatus : setTextWebLookupStatus;
-    const setLabel = mode === "voice" ? setVoiceWebLookupLabel : setTextWebLookupLabel;
-
-    if (clearTimerRef.current !== null) {
-      window.clearTimeout(clearTimerRef.current);
-      clearTimerRef.current = null;
+    if (mode === "text") {
+      if (textWebLookupClearTimerRef.current !== null) {
+        window.clearTimeout(textWebLookupClearTimerRef.current);
+        textWebLookupClearTimerRef.current = null;
+      }
+      setTextWebLookupStatus(null);
+      setTextWebLookupLabel(null);
+      return;
     }
-    if (minTimerRef.current !== null) {
-      window.clearTimeout(minTimerRef.current);
-      minTimerRef.current = null;
+    if (voiceWebLookupClearTimerRef.current !== null) {
+      window.clearTimeout(voiceWebLookupClearTimerRef.current);
+      voiceWebLookupClearTimerRef.current = null;
     }
-    if (showDelayTimerRef.current !== null) {
-      window.clearTimeout(showDelayTimerRef.current);
-      showDelayTimerRef.current = null;
-    }
-    startedAtRef.current = null;
-    setStatus(null);
-    setLabel(null);
+    setVoiceWebLookupStatus(null);
+    setVoiceWebLookupLabel(null);
   }, []);
 
   const defaultWebLookupLabel = useCallback(
@@ -13203,9 +13190,7 @@ function App() {
     [],
   );
 
-  const SEARCH_SHOW_DELAY_MS = 140;
-  const SEARCH_MIN_VISIBLE_MS = 700;
-  const GROUNDED_DISPLAY_MS = 2400;
+  const SEARCH_MIN_DISPLAY_MS = 1400;
 
   const setWebLookupStatus = useCallback(
     (
@@ -13215,13 +13200,13 @@ function App() {
     ) => {
       if (status === "idle") {
         clearWebLookupStatus(mode);
+        if (mode === "voice") voiceSearchStartedAtRef.current = null;
+        else textSearchStartedAtRef.current = null;
         return;
       }
 
       const startedAtRef = mode === "voice" ? voiceSearchStartedAtRef : textSearchStartedAtRef;
       const minTimerRef = mode === "voice" ? voiceSearchMinTimerRef : textSearchMinTimerRef;
-      const showDelayTimerRef =
-        mode === "voice" ? voiceSearchShowDelayTimerRef : textSearchShowDelayTimerRef;
       const clearTimerRef = mode === "voice" ? voiceWebLookupClearTimerRef : textWebLookupClearTimerRef;
       const setStatus = mode === "voice" ? setVoiceWebLookupStatus : setTextWebLookupStatus;
       const setLabel = mode === "voice" ? setVoiceWebLookupLabel : setTextWebLookupLabel;
@@ -13234,25 +13219,18 @@ function App() {
         window.clearTimeout(minTimerRef.current);
         minTimerRef.current = null;
       }
-      if (showDelayTimerRef.current !== null) {
-        window.clearTimeout(showDelayTimerRef.current);
-        showDelayTimerRef.current = null;
-      }
 
       if (status === "searching") {
-        if (startedAtRef.current !== null) {
-          setStatus("searching");
-          setLabel(label ?? defaultWebLookupLabel(mode, "searching"));
-          return;
-        }
-        const nextLabel = label ?? defaultWebLookupLabel(mode, "searching");
-        showDelayTimerRef.current = window.setTimeout(() => {
-          showDelayTimerRef.current = null;
-          startedAtRef.current = Date.now();
-          setStatus("searching");
-          setLabel(nextLabel);
-        }, SEARCH_SHOW_DELAY_MS);
+        startedAtRef.current = Date.now();
+        setStatus("searching");
+        setLabel(label ?? defaultWebLookupLabel(mode, "searching"));
         return;
+      }
+
+      if (startedAtRef.current === null) {
+        startedAtRef.current = Date.now();
+        setStatus("searching");
+        setLabel(defaultWebLookupLabel(mode, "searching"));
       }
 
       const applyGrounded = () => {
@@ -13263,16 +13241,11 @@ function App() {
           setStatus(null);
           setLabel(null);
           clearTimerRef.current = null;
-        }, GROUNDED_DISPLAY_MS);
+        }, 3600);
       };
 
-      if (startedAtRef.current === null) {
-        applyGrounded();
-        return;
-      }
-
       const elapsed = Date.now() - startedAtRef.current;
-      const remaining = SEARCH_MIN_VISIBLE_MS - elapsed;
+      const remaining = SEARCH_MIN_DISPLAY_MS - elapsed;
 
       if (remaining > 0) {
         minTimerRef.current = window.setTimeout(() => {
@@ -13299,12 +13272,6 @@ function App() {
       }
       if (textSearchMinTimerRef.current !== null) {
         window.clearTimeout(textSearchMinTimerRef.current);
-      }
-      if (voiceSearchShowDelayTimerRef.current !== null) {
-        window.clearTimeout(voiceSearchShowDelayTimerRef.current);
-      }
-      if (textSearchShowDelayTimerRef.current !== null) {
-        window.clearTimeout(textSearchShowDelayTimerRef.current);
       }
     };
   }, []);
