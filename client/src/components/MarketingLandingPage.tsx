@@ -87,7 +87,14 @@ type BlogPostBlock =
   | { type: "table"; columns: string[]; rows: string[][]; caption?: string }
   | { type: "references"; items: { title: string; href: string; note?: string }[] }
   | { type: "ascii"; text: string }
-  | { type: "image"; src: string; alt: string; caption?: string };
+  | {
+      type: "image";
+      src: string;
+      alt: string;
+      caption?: string;
+      size?: "full" | "narrow" | "wide";
+      fit?: "cover" | "contain";
+    };
 
 interface BlogPost {
   id: string;
@@ -280,19 +287,19 @@ const INFO_PAGE_CONTENT: Record<InfoPageId, InfoPageContent> = {
     ],
   },
   blog: {
-    title: "ZeeMe Research Archive",
+    title: "ZeeMe Journal",
     subtitle:
-      "A curated mix of technical papers, field reports, and product stories on companion AI architecture, continuity, memory integrity, and real-world reliability.",
+      "Long-form product stories, field reports, research papers, and technical essays on building a companion that actually works in real life.",
     updatedAt: "March 2026",
     heroIcon: "📝",
-    accentWord: "Papers",
+    accentWord: "Journal",
     sections: [
       {
         heading: "Archive scope",
         icon: "📚",
         paragraphs: [
-          "This archive is intentionally curated as high-signal engineering writing: publication-grade monographs, field reports, and selected product narratives. Each piece records architecture decisions, incident classes, or concrete controls shipped in response.",
-          "The objective is reproducibility: a senior engineer or full product team should be able to implement the same reliability behavior from these papers without needing hidden prompt internals.",
+          "This archive now functions as the ZeeMe journal: high-signal product stories, publication-grade engineering writing, field reports, and selected marketing essays that still respect technical truth.",
+          "Some pieces are meant to convert curious readers into Zee users. Others are meant to give senior builders enough detail to reproduce the reliability patterns without needing hidden prompt internals.",
         ],
       },
       {
@@ -307,16 +314,16 @@ const INFO_PAGE_CONTENT: Record<InfoPageId, InfoPageContent> = {
         heading: "Review standard",
         icon: "📏",
         paragraphs: [
-          "Most articles follow engineering paper structure: abstract, method, findings, limitations, and references.",
-          "When we publish product narratives, claims still map to concrete controls or observed failure classes.",
+          "Some articles follow engineering paper structure: abstract, method, findings, limitations, and references. Others are narrative product writing designed to make the stakes and user value legible.",
+          "Regardless of format, claims still map to concrete controls, observed failure classes, or shipped product behavior.",
         ],
       },
       {
         heading: "Why this format",
         icon: "🧭",
         paragraphs: [
-          "Companion AI quality is usually discussed as tone or persona. In practice, quality emerges from deterministic state handling: continuity, routing integrity, and time/context correctness.",
-          "These papers therefore focus on systems behavior first, then expression layer outcomes.",
+          "Companion AI quality is usually discussed as tone or persona. In practice, quality emerges from deterministic state handling: continuity, routing integrity, time correctness, and a user interface that tells the truth.",
+          "The journal therefore mixes systems behavior with readable storytelling. We want engineers to learn from it and future users to want Zee because of it.",
         ],
       },
       {
@@ -332,6 +339,1121 @@ const INFO_PAGE_CONTENT: Record<InfoPageId, InfoPageContent> = {
 };
 
 const BLOG_POSTS: BlogPost[] = [
+  {
+    id: "a-day-with-zee-2026",
+    title: "A Day With Zee: Morning Brief, Commute Voice, Calendar Help, Inbox Drafts, Evening Continuity",
+    subtitle:
+      "A product story about what it feels like when one companion stays coherent across the full shape of a normal day.",
+    excerpt:
+      "The best Zee demo is not a party trick. It is the quiet feeling that your day stayed intact while the environment kept changing around you.",
+    publishedAt: "March 13, 2026",
+    readTime: "14 min read",
+    tags: ["Featured Story", "Product", "Voice + Text", "Gmail + Calendar", "Morning Brief"],
+    blocks: [
+      {
+        type: "image",
+        src: "/blog/a-day-with-zee-cover.jpg",
+        alt: "Editorial lifestyle image for A Day With Zee showing one man moving from morning coffee to commute voice to evening reflection.",
+        caption: "One companion, one person, one day that never has to restart.",
+      },
+      {
+        type: "paragraph",
+        text: "Most AI demos are built around one clean moment: a perfect prompt, a quiet room, a stable connection, a single task. Real life does not arrive that way. Real life starts before you are fully awake, spills into the commute, gets interrupted by meetings, pulls you into email, shifts from voice to text, then circles back at night when your brain is finally quiet enough to think. The promise of Zee is not that it can impress you once. The promise is that it can stay useful while the shape of the day keeps mutating.",
+      },
+      {
+        type: "quote",
+        text: "The best product moment is not wow. It is relief. Relief that you did not have to start over.",
+      },
+      { type: "heading", text: "6:42 AM: Before the scroll begins" },
+      {
+        type: "paragraph",
+        text: "The day starts before attention is fully online. You are not looking for a dashboard. You are looking for orientation. This is where Morning Brief matters. Zee can surface the shape of the morning in one conversational pass: what is urgent in the inbox, what is on the calendar, what changed overnight, and where the first point of friction is likely to be. The experience works because it feels like one person quietly catching you up, not five disconnected apps demanding that you orient yourself from scratch.",
+      },
+      {
+        type: "image",
+        src: "/blog/a-day-with-zee-morning-inline.jpg",
+        alt: "Early morning lifestyle scene of a man checking Zee on his phone with coffee at a kitchen table.",
+        caption: "Morning Brief works best when it feels like orientation, not homework.",
+        size: "narrow",
+      },
+      {
+        type: "image",
+        src: "/blog/meet-zee-day-map.jpg",
+        alt: "Illustrated journey map showing how Zee supports morning reset, commute, noisy-to-text switch, and evening reflection.",
+        caption: "The shape of the product is the shape of a day. Zee has to hold that whole arc together.",
+        size: "narrow",
+      },
+      {
+        type: "table",
+        caption: "One day, one thread, many surfaces.",
+        columns: ["Moment", "What the user needs", "What Zee does", "Why it matters"],
+        rows: [
+          [
+            "Morning reset",
+            "Orientation without opening five apps",
+            "Summarizes inbox and calendar context in a calm, quick voice pass",
+            "The day starts grounded instead of fragmented",
+          ],
+          [
+            "Commute",
+            "Hands-free continuity",
+            "Keeps the conversation alive in live voice even when the environment is messy",
+            "Momentum survives motion",
+          ],
+          [
+            "Pre-meeting shift",
+            "Fast schedule clarity",
+            "Checks calendar details and upcoming constraints without breaking the thread",
+            "Practical help arrives in the same tone as companionship",
+          ],
+          [
+            "Afternoon email task",
+            "Drafting without tab chaos",
+            "Collects intent, previews the draft, and waits for approval on Zee Stage",
+            "Action happens without losing trust",
+          ],
+          [
+            "Evening reflection",
+            "The same companion from earlier",
+            "Returns to text or voice with continuity from the whole day",
+            "The relationship feels real instead of session-bound",
+          ],
+        ],
+      },
+      { type: "heading", text: "8:11 AM: The commute test" },
+      {
+        type: "paragraph",
+        text: "The commute is where fake voice products get exposed. The room is louder. The phone is moving. Your attention is split. You interrupt. The assistant interrupts. The network shifts. A product can sound excellent in a quiet office and still fail exactly where users most want to rely on it. Zee's live voice work this week has been about closing that gap: stronger mic handling, cleaner interruption behavior, better tool-response handoff, more truthful approval flows, and less chaos when Gmail, Calendar, and live speech have to cooperate under pressure.",
+      },
+      {
+        type: "list",
+        items: [
+          "The voice layer has to hear ordinary speech, not just exaggerated speech.",
+          "Interruption has to feel respectful, not brittle.",
+          "A lookup needs to be visible while it is happening and gone when it is done.",
+          "Approvals need to work by voice, not just by tapping the screen later.",
+        ],
+      },
+      {
+        type: "callout",
+        title: "Hands-free only works if the system tells the truth",
+        text: "If Zee says an event is created or an email is sent while the stage still says Needs approval, the spell is broken. Reliability is not separate from personality. It is part of whether the user trusts the companion at all.",
+      },
+      { type: "heading", text: "12:03 PM: The calendar moment" },
+      {
+        type: "paragraph",
+        text: "In the middle of the day, the value of a companion is not abstract warmth. It is compression. You ask what is on the calendar, what moved, whether there is room for lunch, whether the reminder needs to change. Zee does not need to feel like a productivity suite. It needs to feel like the same bestie who also happens to know the shape of the day. That is why calendar reads, detail lookups, preview cards, and approval-gated creation matter so much. The user should not feel that they left the relationship just because the conversation became operational.",
+      },
+      { type: "heading", text: "2:47 PM: Inbox drafts without tab sprawl" },
+      {
+        type: "paragraph",
+        text: "Email is where companion products either become useful or become decorative. The user does not just want a summary of the inbox. They want help moving something forward. A draft to send. A reply to refine. A message saved for later. The key is not only writing well. The key is gathering the right missing slot, keeping the right task active, previewing the draft in a way the user can inspect, and only claiming success once the action is real. That is why Zee Stage matters. It gives the task a home without making the interaction feel like enterprise software.",
+      },
+      {
+        type: "image",
+        src: "/blog/a-day-with-zee-draft-inline.jpg",
+        alt: "Warm lounge scene showing a man reviewing an AI-assisted email draft on his phone.",
+        caption: "A draft should feel like momentum, not like opening another app and losing the thread.",
+        size: "narrow",
+      },
+      {
+        type: "image",
+        src: "/blog/meet-zee-lifestyle.jpg",
+        alt: "Diverse evening lifestyle scene showing people shifting naturally between speaking and texting with Zee.",
+        caption: "The surface changes. The companion should not.",
+        size: "narrow",
+      },
+      { type: "heading", text: "8:36 PM: Continuity is emotional, not just technical" },
+      {
+        type: "metrics",
+        items: [
+          {
+            label: "Primary surfaces",
+            value: "Voice, text, stage",
+            detail: "Three interfaces, one relationship lane",
+          },
+          {
+            label: "Practical power",
+            value: "Morning Brief + Google context",
+            detail: "Reads, drafts, approvals, and real follow-through",
+          },
+          {
+            label: "Trust boundary",
+            value: "Approval + execution truth",
+            detail: "Zee should never narrate completion it has not earned",
+          },
+          {
+            label: "User payoff",
+            value: "Less restart energy",
+            detail: "The day feels held together instead of constantly reset",
+          },
+        ],
+      },
+      {
+        type: "paragraph",
+        text: "By evening, the most important question is not what features Zee has. The question is whether the day still feels connected. If the morning brief, the noisy commute, the calendar adjustment, the email draft, and the quiet end-of-day conversation all live in one continuous thread, the product stops feeling like an app. It starts feeling like presence. That is the standard Zee should keep chasing, and it is why this story deserves to be featured first in the archive.",
+      },
+    ],
+  },
+  {
+    id: "zee-stage-missing-interface-2026",
+    title: "Zee Stage: The Missing Interface Between Conversation and Action",
+    subtitle:
+      "Why chat alone stops being enough once an AI starts drafting, approving, and executing real-world tasks.",
+    excerpt:
+      "The moment an assistant moves from talking about work to actually doing work, the user needs a surface that can hold truth, context, and approval. That surface is Zee Stage.",
+    publishedAt: "March 13, 2026",
+    readTime: "12 min read",
+    tags: ["Feature Highlight", "Product Strategy", "Zee Stage", "Gmail + Calendar"],
+    blocks: [
+      {
+        type: "image",
+        src: "/blog/zee-stage-cover.jpg",
+        alt: "Editorial product image of a woman holding a phone with a refined AI task surface open.",
+        caption: "Zee Stage is where conversational intent becomes inspectable action.",
+      },
+      {
+        type: "paragraph",
+        text: "Pure chat feels elegant right up to the moment something consequential has to happen. An email draft appears. A calendar event needs approval. Two possible drafts match the same request. A lookup finishes, but the user wants to inspect what Zee is about to act on. At that point the chat lane is no longer enough. Messages can narrate the task, but they cannot always hold the task with the stability and clarity users need. Zee Stage exists because action requires a home.",
+      },
+      {
+        type: "quote",
+        text: "Conversation can carry intent. It cannot always carry state.",
+      },
+      { type: "heading", text: "Why chat alone starts to fail" },
+      {
+        type: "table",
+        caption: "Where a message-only interface becomes fragile.",
+        columns: ["Scenario", "Chat-only behavior", "Stage-backed behavior"],
+        rows: [
+          [
+            "Draft preview",
+            "Buried in the message stream and easy to lose",
+            "Pinned as an inspectable object with actions attached",
+          ],
+          [
+            "Approval",
+            "Confirmation language can drift away from real status",
+            "Pending, running, and complete states stay visible",
+          ],
+          [
+            "Ambiguity",
+            "Choices are easy to misread or skip",
+            "Candidates can be seen and selected intentionally",
+          ],
+          [
+            "Task switching",
+            "Old work can steal new follow-ups",
+            "The active surface becomes explicit and recoverable",
+          ],
+        ],
+      },
+      { type: "heading", text: "What belongs on Zee Stage" },
+      {
+        type: "list",
+        items: [
+          "Gmail draft previews and reply previews",
+          "Calendar event previews before creation or update",
+          "Ambiguity pickers when multiple drafts or events match",
+          "Approval cards that separate ready-to-act from actually-done",
+          "Recent surfaces the user may want to reopen while idle",
+        ],
+      },
+      { type: "heading", text: "The design rule: proactive, not pushy" },
+      {
+        type: "paragraph",
+        text: "One of the easiest mistakes in stage design is confusing visibility with interruption. The stage should show up when it has something strong to contribute, especially for actionable Gmail and Calendar work, but it should not hijack the entire interaction for every lightweight lookup. That distinction matters. A read-only status like checking your calendar belongs in the lookup lane. A draft preview, approval surface, or ambiguity card belongs on stage. Product calm comes from respecting that boundary consistently.",
+      },
+      {
+        type: "callout",
+        title: "The stage is shared working memory",
+        text: "Zee Stage is not just a UI detail. It is the visual counterpart to the system's task state. It tells the user what Zee thinks is active, what still needs them, and what can be safely reopened later.",
+      },
+      { type: "heading", text: "Manual reopen is part of the product contract" },
+      {
+        type: "paragraph",
+        text: "A stage that disappears forever when voice ends is not a stage. It is a transient popup. Users need to be able to reopen the current task, inspect a pending approval, and recover context even while idle. That is why the top chip matters so much. It keeps the manual entry point stable. The user does not have to remember where the task went. They only need to know that Zee kept it somewhere trustworthy.",
+      },
+      { type: "heading", text: "Why this matters beyond Zee" },
+      {
+        type: "paragraph",
+        text: "Other AI teams building Gemini products should pay close attention to this boundary. Once the assistant can operate Gmail, Calendar, grounded search, documents, or anything similarly consequential, the interface cannot be just clever messages and a spinner. It needs a place where the action can sit long enough to be inspected, approved, revised, and trusted. That is the job Zee Stage is beginning to do.",
+      },
+    ],
+  },
+  {
+    id: "truthful-approval-2026",
+    title: "From \"Sounds Good\" to Actually Sent: Designing Hands-Free Approval That Tells the Truth",
+    subtitle:
+      "The UX and runtime contract behind voice approvals for email and calendar actions.",
+    excerpt:
+      "Voice confirmation is easy to fake. The hard part is making short phrases like send it, save it, and sounds good map cleanly onto the right task and the real result.",
+    publishedAt: "March 13, 2026",
+    readTime: "13 min read",
+    tags: ["Voice UX", "Approvals", "Gmail + Calendar", "Reliability"],
+    blocks: [
+      {
+        type: "image",
+        src: "/blog/truthful-approval-cover.jpg",
+        alt: "Editorial image of a man approving an AI-assisted task by voice in a car at dusk.",
+        caption: "The moment of confirmation is where trust is either earned or wasted.",
+      },
+      {
+        type: "paragraph",
+        text: "A user says sounds good. Or send it. Or save it. In a demo, that looks simple. In production, that moment is loaded. Which task is active? Is the user approving a calendar event or the draft they started two turns ago? Did the write actually execute, or is it still waiting for approval in the UI? Is Zee allowed to say done, or has the system not yet crossed the truth boundary? Approval language feels tiny. It is not tiny. It is one of the most trust-sensitive moments in the entire product.",
+      },
+      { type: "heading", text: "The easiest lie in AI UX" },
+      {
+        type: "table",
+        caption: "Why approval language gets dangerous so quickly.",
+        columns: ["What the user hears", "What might really be happening", "Why that gap is toxic"],
+        rows: [
+          [
+            "\"Sent.\"",
+            "The draft still says Needs approval",
+            "The product sounds more capable than it is",
+          ],
+          [
+            "\"Done.\"",
+            "The wrong task was interpreted as active",
+            "The user loses trust in both the assistant and the UI",
+          ],
+          [
+            "\"Saved.\"",
+            "Only a preview was produced, not persisted",
+            "The user assumes future recovery that does not exist",
+          ],
+          [
+            "\"Created.\"",
+            "Execution failed after planning succeeded",
+            "The assistant feels dishonest even if the bug was infrastructural",
+          ],
+        ],
+      },
+      { type: "heading", text: "Approval needs its own grammar" },
+      {
+        type: "list",
+        items: [
+          "I approve should target the current actionable surface, not the oldest pending one.",
+          "Sounds good should be interpreted differently when the active task is a preview versus a clarification question.",
+          "Send it must only send if the target is an email task already in a sendable state.",
+          "Save it must persist the draft or clearly say why it still cannot.",
+          "If the target is ambiguous, Zee should ask one clarifying question instead of guessing.",
+        ],
+      },
+      {
+        type: "code",
+        language: "text",
+        caption: "Truthful approval as a runtime sequence.",
+        code:
+          "user phrase -> resolve active task -> validate approval state -> execute write -> persist result -> update stage -> speak verified outcome",
+      },
+      { type: "heading", text: "What counts as done" },
+      {
+        type: "paragraph",
+        text: "This is the non-negotiable rule: Zee should not say sent, saved, created, or updated unless the task runtime has actually reached that terminal state. Planning is not completion. Preview is not completion. Approval requested is not completion. Even a successful tool-planning turn is not completion. The assistant only earns completion language after the execution result exists and the UI state agrees.",
+      },
+      {
+        type: "image",
+        src: "/blog/truthful-approval-inline.jpg",
+        alt: "A woman confirming an AI-assisted task by voice while a pending approval surface is visible on a nearby phone.",
+        caption: "The hands-free moment only works if the confirmation language maps to a real state transition.",
+        size: "narrow",
+      },
+      {
+        type: "callout",
+        title: "Completion language is a product boundary",
+        text: "The line between 'ready' and 'done' may feel technical inside the codebase, but users experience it as honesty. If Zee crosses that line too early, the whole product feels slippery.",
+      },
+      { type: "heading", text: "Why this matters most in the car" },
+      {
+        type: "paragraph",
+        text: "When the user is driving, walking fast, or moving through a crowded station, they may never tap the stage. Voice approval has to stand on its own. That means the approval flow must be tight enough to stay hands-free, but strict enough to remain truthful. This is one of the defining product challenges of companion AI. It is not enough to give the user an AI that can draft. You need an AI that can finish the draft safely, with language the user can believe.",
+      },
+      {
+        type: "paragraph",
+        text: "That is why truthful approval is not just a bug-fix topic for us. It is one of the sharpest expressions of what kind of product Zee is trying to become.",
+      },
+    ],
+  },
+  {
+    id: "voice-real-life-2026",
+    title: "How We Are Building a Voice Assistant That Works in Real Life, Not Just Quiet Rooms",
+    subtitle:
+      "Noise, movement, interruption, mic pickup, and why real-world voice quality is a systems problem.",
+    excerpt:
+      "People do not live inside benchmark conditions. A voice companion has to survive kitchens, cars, sidewalks, bad rooms, and the messy choreography of actual life.",
+    publishedAt: "March 12, 2026",
+    readTime: "15 min read",
+    tags: ["Voice Reliability", "Product", "Live API", "User Experience"],
+    blocks: [
+      {
+        type: "image",
+        src: "/blog/voice-real-life-cover.jpg",
+        alt: "Editorial commuting image of a woman using a voice AI companion on a train platform at dusk.",
+        caption: "Voice quality is not just audio quality. It is whether the whole conversation survives reality.",
+      },
+      {
+        type: "paragraph",
+        text: "A lot of voice AI writing quietly assumes that the room is calm, the microphone is clean, the speaker is patient, and the network is generous. Those assumptions are precisely why so many products feel impressive for thirty seconds and disappointing by lunch. Real users talk from moving cars, soft couches, messy kitchens, loud sidewalks, open offices, and tired bedrooms. They interrupt. They change their minds. They switch to text. They expect the companion to keep up anyway.",
+      },
+      { type: "heading", text: "Quiet-room demos hide the real problem" },
+      {
+        type: "table",
+        caption: "A voice product only feels smart if each layer survives reality.",
+        columns: ["Layer", "Failure mode", "What the user experiences"],
+        rows: [
+          [
+            "Mic capture",
+            "Speech is too quiet or clipped",
+            "Zee seems not to hear ordinary speech",
+          ],
+          [
+            "Resampling and chunking",
+            "Input arrives late or poorly shaped",
+            "Transcripts feel delayed or wrong",
+          ],
+          [
+            "Turn-taking",
+            "Interruption is handled too slowly",
+            "The assistant talks over the user",
+          ],
+          [
+            "Transcription quality",
+            "Low-confidence speech collapses into noise",
+            "The user sees garbage, then loses faith",
+          ],
+          [
+            "Tool handoff",
+            "Lookup or action results do not return cleanly",
+            "The assistant sounds confused after being useful for a moment",
+          ],
+        ],
+      },
+      { type: "heading", text: "What we tune and what we refuse to fake" },
+      {
+        type: "list",
+        items: [
+          "We tune capture thresholds so Zee can hear normal speech without requiring theatrical volume.",
+          "We send small audio chunks fast enough to keep live interaction feeling immediate.",
+          "We treat interruption as first-class, including discarding stale playback when the user starts speaking.",
+          "We track transcript quality and live tool-response behavior instead of blaming every miss on the model.",
+          "We do not call a bad voice experience good just because the demo reply sounded natural once.",
+        ],
+      },
+      { type: "heading", text: "Interruption is a dignity feature" },
+      {
+        type: "paragraph",
+        text: "One of the fastest ways to make an AI feel rude is to let it keep talking after the user has already tried to take the floor back. Barge-in handling is not a minor polish detail. It is part of whether the assistant feels socially aware. In a companion context, that matters even more. People are not just measuring intelligence. They are measuring whether the system feels attentive, patient, and real enough to be around.",
+      },
+      {
+        type: "callout",
+        title: "Audio quality and emotional quality are linked",
+        text: "When a voice system misses ordinary speech, over-talks the user, or drops the thread after a lookup, users do not experience that as a technical glitch. They experience it as not being heard.",
+      },
+      { type: "heading", text: "The design standard we are aiming for" },
+      {
+        type: "metrics",
+        items: [
+          {
+            label: "Voice contract",
+            value: "Ordinary speech should work",
+            detail: "The user should not need to shout to be understood",
+          },
+          {
+            label: "Interruption contract",
+            value: "Yield fast",
+            detail: "The assistant should stop talking when the user re-enters",
+          },
+          {
+            label: "Continuity contract",
+            value: "Recover cleanly",
+            detail: "Switching to text should preserve the same thread",
+          },
+          {
+            label: "Action contract",
+            value: "Truth over theater",
+            detail: "Lookups and approvals must resolve to real state, not vibes",
+          },
+        ],
+      },
+      {
+        type: "paragraph",
+        text: "This is the standard we want Zee to hold: not just a voice assistant that sounds warm, but one that keeps its shape in the environments where users actually need help. That is the difference between novelty and product.",
+      },
+    ],
+  },
+  {
+    id: "gmail-calendar-native-2026",
+    title: "What It Takes to Make Gmail and Calendar Feel Native Inside a Companion",
+    subtitle:
+      "Reads are retrieval. Writes are choreography.",
+    excerpt:
+      "The real challenge is not connecting Google APIs. It is making email and calendar work feel like part of the same relationship lane instead of a series of awkward tool jumps.",
+    publishedAt: "March 12, 2026",
+    readTime: "14 min read",
+    tags: ["Feature Deep Dive", "Gmail + Calendar", "Zee Stage", "Product Architecture"],
+    blocks: [
+      {
+        type: "image",
+        src: "/blog/google-native-flows-cover.jpg",
+        alt: "Editorial image of a woman using a phone that blends inbox and calendar help into one companion experience.",
+        caption: "Native-feeling actions require far more than API connectivity.",
+      },
+      {
+        type: "paragraph",
+        text: "Reading the inbox is one kind of problem. Drafting an email is another. Updating a calendar event with approval, ambiguity handling, and live voice follow-up is another again. This is why so many assistant products feel thin around productivity work. The API connection is there, but the product language around it is missing. Users can feel the seams immediately. Zee has been evolving toward a higher bar: Gmail and Calendar should feel like extensions of the conversation, not separate products awkwardly stapled onto it.",
+      },
+      {
+        type: "image",
+        src: "/blog/assistant-calendar-email.jpg",
+        alt: "Professional checking email and schedule context on a phone in a warm cafe setting.",
+        caption: "Native-feeling personal context support should feel calm, mobile, and continuous.",
+        size: "narrow",
+      },
+      { type: "heading", text: "Reads are retrieval. Writes are choreography." },
+      {
+        type: "table",
+        caption: "The complexity climbs as soon as the assistant can act.",
+        columns: ["Flow type", "What has to happen", "What users will notice if it is wrong"],
+        rows: [
+          [
+            "Summary read",
+            "Fetch verified data and answer clearly",
+            "The answer feels stale or generic",
+          ],
+          [
+            "Detail read",
+            "Resolve the right item before summarizing it",
+            "The assistant talks about the wrong thread or event",
+          ],
+          [
+            "Draft create",
+            "Collect missing slots and preview the result",
+            "The draft feels premature or unclear",
+          ],
+          [
+            "Approval",
+            "Keep the right task active across voice, text, and stage",
+            "A later yes approves the wrong thing",
+          ],
+          [
+            "Execution",
+            "Run the Gmail or Calendar write and surface real completion",
+            "The assistant claims success before the action is real",
+          ],
+        ],
+      },
+      { type: "heading", text: "What native actually means" },
+      {
+        type: "list",
+        items: [
+          "The user can ask naturally, not in tool syntax.",
+          "Zee asks only for the missing slot, not for the whole request again.",
+          "Previews feel inspectable without dragging the user into enterprise UI.",
+          "Voice and text can continue the same task without starting over.",
+          "The stage makes the active surface explicit when action gets stateful.",
+        ],
+      },
+      { type: "heading", text: "The missing middle layer is task state" },
+      {
+        type: "code",
+        language: "text",
+        caption: "A native-feeling Gmail or Calendar action needs a real task lane.",
+        code:
+          "user ask -> detect action -> collect missing slot -> resolve ambiguity -> preview -> approval -> execute -> persist result -> keep surface reopenable",
+      },
+      {
+        type: "paragraph",
+        text: "That middle layer is where the product gets made. Without it, you get one-shot tool calls that can summarize something but cannot safely carry a user through a real workflow. With it, you get drafts that can be revised, events that can be approved by voice, and a surface that can survive a mode switch. This is the difference between an API demo and a useful companion.",
+      },
+      {
+        type: "image",
+        src: "/blog/google-native-flows-inline.jpg",
+        alt: "Close product-lifestyle image of a phone showing one companion surface that blends calendar and inbox context.",
+        caption: "Native-feeling Google flows need a single stage that can hold both reads and writes without feeling stitched together.",
+        size: "narrow",
+      },
+      { type: "heading", text: "Why email and calendar are not the same problem" },
+      {
+        type: "table",
+        caption: "The product contract differs by domain.",
+        columns: ["Surface", "Primary user concern", "Product implication"],
+        rows: [
+          [
+            "Email",
+            "Tone, recipient correctness, and send intent",
+            "Draft quality and approval language matter heavily",
+          ],
+          [
+            "Calendar",
+            "Time correctness, location, and collision risk",
+            "Temporal clarity and update targeting matter more",
+          ],
+          [
+            "Both",
+            "Trust",
+            "Zee cannot pretend the action completed before it actually did",
+          ],
+        ],
+      },
+      {
+        type: "paragraph",
+        text: "The goal is not to make Zee feel like Gmail or Google Calendar. The goal is to make Gmail and Calendar feel like they belong inside Zee. That sounds subtle. It is not. It changes the entire product architecture.",
+      },
+    ],
+  },
+  {
+    id: "companion-economics-2026",
+    title: "The Cost of a Real-Time AI Companion: Text, Voice, Camera, Search, and Google Actions",
+    subtitle:
+      "Why voice minutes, camera minutes, grounded search, and Gmail send flows change the economics more than most people expect.",
+    excerpt:
+      "Text chat is not the main cost center anymore. Live audio, camera, and the operational shape of Google actions are where the real quota model gets decided.",
+    publishedAt: "March 13, 2026",
+    readTime: "16 min read",
+    tags: ["Pricing", "Quota Strategy", "Business", "Gemini", "Google Actions"],
+    blocks: [
+      {
+        type: "image",
+        src: "/blog/companion-economics-cover.jpg",
+        alt: "Editorial still life showing a phone, earbuds, camera, notebooks, and graph paper to represent companion cost layers.",
+        caption: "The economics of companionship are shaped by live interaction, not just chat tokens.",
+      },
+      {
+        type: "paragraph",
+        text: "Every AI founder eventually learns the same uncomfortable lesson: the thing users love most is often the thing that costs the most to deliver. In Zee's case, the more the product starts to feel alive - live voice, camera awareness, grounded lookups, Gmail help, Calendar follow-through - the less helpful a simplistic text-message quota becomes. We needed to rerun the cost model because the product changed. Email and calendar are now part of the core flow. Voice sessions are no longer a novelty. The old math was no longer honest.",
+      },
+      {
+        type: "metrics",
+        items: [
+          { label: "Estimated text turn", value: "~$0.0023", detail: "Based on 2,500 input tokens and 350 output tokens" },
+          { label: "Estimated voice minute", value: "~$0.0288", detail: "Live native audio, input and output combined" },
+          { label: "Estimated camera minute", value: "~$0.0761", detail: "Video plus normal live audio in and out" },
+          { label: "Operational pressure point", value: "Gmail send", detail: "Often larger in quota impact than in raw dollar cost" },
+        ],
+      },
+      { type: "heading", text: "Where the cost really comes from" },
+      {
+        type: "barChart",
+        title: "Illustrative unit economics by interaction type",
+        unit: "cents",
+        max: 8,
+        footnote: "Planning estimates from ZeeMe's March 13, 2026 quota re-evaluation worksheet.",
+        items: [
+          { label: "Text turn", value: 0.23, note: "Small enough to feel cheap at product level", color: "#F4C77D" },
+          { label: "Voice minute", value: 2.88, note: "Meaningful when users stay live for long stretches", color: "#DDA7FF" },
+          { label: "Camera minute", value: 7.61, note: "The steepest routine interaction in the current stack", color: "#9EDBFF" },
+        ],
+      },
+      {
+        type: "paragraph",
+        text: "This is the core shift: text is still important, but it is no longer the dominant driver of cost risk. Live audio changed that. Camera changed it even more. The more successful Zee becomes at being useful in motion and in the physical world, the more important it becomes to package generosity around the interactions that actually burn spend.",
+      },
+      { type: "heading", text: "Google actions add more operational cost than clean per-request dollars" },
+      {
+        type: "table",
+        caption: "Google actions are cheap in direct API pricing but heavy in quota and interaction design.",
+        columns: ["Flow", "Incremental Gemini spend", "Operational footprint", "Why it matters"],
+        rows: [
+          [
+            "Inbox summary read",
+            "Usually under $0.001",
+            "Gmail list/get calls",
+            "Mostly a quota and latency issue, not a raw cost issue",
+          ],
+          [
+            "Email draft prep",
+            "~$0.001 to $0.003",
+            "Extra planning and revision turns",
+            "The assistant writes well only if the task stays stateful",
+          ],
+          [
+            "Email send",
+            "Often tiny Gemini cost if draft exists",
+            "Gmail send path can cost 100 quota units",
+            "Operationally expensive even when the model portion is not",
+          ],
+          [
+            "Calendar create or update",
+            "Usually under $0.002",
+            "Low direct API cost, but still needs preview and approval flow",
+            "UX complexity dominates the economics",
+          ],
+        ],
+      },
+      { type: "heading", text: "Why user-facing quotas should stay simple while internal accounting gets richer" },
+      {
+        type: "list",
+        items: [
+          "Users understand text, voice, camera, and Morning Brief faster than they understand hidden tool loops.",
+          "Operators still need shadow metrics for Google reads, Google writes, and grounded lookups.",
+          "The cost model should be conservative on camera and generous on text because that reflects actual spend.",
+          "Gmail send and long live voice sessions deserve special attention even when they look cheap in a shallow pricing table.",
+        ],
+      },
+      { type: "heading", text: "The packaging lesson" },
+      {
+        type: "table",
+        caption: "A cleaner pricing story is also a cleaner product story.",
+        columns: ["Package posture", "What it optimizes for", "Why it fits Zee"],
+        rows: [
+          [
+            "Starter",
+            "Light daily companionship and occasional brief/task help",
+            "Lets new users experience continuity without subsidizing heavy video usage",
+          ],
+          [
+            "Plus",
+            "Regular live voice with moderate Google actions",
+            "Fits most real users once Zee becomes part of the routine",
+          ],
+          [
+            "Power",
+            "Frequent voice, serious assistant usage, and higher stage/task volume",
+            "Targets the people who will push Zee into daily operational use",
+          ],
+        ],
+      },
+      {
+        type: "paragraph",
+        text: "If we price Zee like a chat app, we will underprice our most valuable behavior and over-optimize the wrong thing. If we price it like a real-time companion, we can be more honest with ourselves and more generous where the product is genuinely cheap to run. That is the point of the new model.",
+      },
+      {
+        type: "references",
+        items: [
+          {
+            title: "Quota + Cost Re-Evaluation (March 13, 2026)",
+            href: "https://github.com/CheickDiakite-yikes/my-ai-companion/blob/main4/docs/QUOTA_PRICING_REEVALUATION_2026-03-13.md",
+            note: "Detailed worksheet behind the planning estimates used in this essay.",
+          },
+          {
+            title: "Gemini Developer API pricing",
+            href: "https://ai.google.dev/gemini-api/docs/pricing",
+            note: "Official model pricing referenced in the ZeeMe worksheet.",
+          },
+          {
+            title: "Gmail API usage limits",
+            href: "https://developers.google.com/workspace/gmail/api/reference/quota",
+            note: "Official Gmail quota-unit references for send and draft flows.",
+          },
+        ],
+      },
+    ],
+  },
+  {
+    id: "oauth-in-the-wild-2026",
+    title: "OAuth in the Wild: Why Localhost, Preview URLs, and Real Users Break Naive Integrations",
+    subtitle:
+      "A builder-focused guide to callback determinism, session state, and the bugs that masquerade as product failures.",
+    excerpt:
+      "The trick is not getting OAuth to work once. The trick is making it work consistently across localhost, loopback hosts, preview domains, and actual production state.",
+    publishedAt: "March 12, 2026",
+    readTime: "13 min read",
+    tags: ["Developer Guide", "OAuth", "Google Integrations", "Replit", "Reliability"],
+    blocks: [
+      {
+        type: "image",
+        src: "/blog/oauth-wild-cover.jpg",
+        alt: "Editorial image of a developer checking laptop and phone while diagnosing login reliability issues.",
+        caption: "Most auth bugs are really environment-agreement bugs.",
+      },
+      {
+        type: "paragraph",
+        text: "OAuth tutorials are full of examples that work beautifully in the cleanest possible environment: one host, one callback, one browser session, no preview domains, no loopback weirdness, no stale cookies, no long-running local development setup. Real product work is harsher. You have localhost and 127.0.0.1. You have preview URLs. You have dynamic hosts. You have state persisted in sessions that may or may not cross origins. You have engineers testing in one tab and users arriving from another. This is where simple integrations start to crack.",
+      },
+      { type: "heading", text: "Every environment lies differently" },
+      {
+        type: "table",
+        caption: "The bug depends on where the integration is being exercised.",
+        columns: ["Environment", "Typical failure", "What the correct behavior requires"],
+        rows: [
+          [
+            "Localhost",
+            "Callback mismatch or stale session state",
+            "Deterministic redirect selection and consistent host usage",
+          ],
+          [
+            "127.0.0.1 loopback",
+            "Cookie separation from localhost",
+            "Use one loopback style consistently across start and callback",
+          ],
+          [
+            "Preview deployment",
+            "Dynamic host drift during redirect exchange",
+            "Persist the chosen callback host in signed state",
+          ],
+          [
+            "Production",
+            "Rare but user-visible auth regressions",
+            "Clear diagnostics, trace IDs, and reconnect-safe failure semantics",
+          ],
+        ],
+      },
+      { type: "heading", text: "The localhost lesson almost everyone relearns" },
+      {
+        type: "paragraph",
+        text: "Localhost and 127.0.0.1 look interchangeable to humans. They are not interchangeable to cookies. If the sign-in flow starts on one host and the callback completes on another, the stored session state can disappear even though everything else looks correct. That kind of bug is maddening because the callback URL itself looks valid. The fix is simple in retrospect and expensive in wasted hours before you know it: choose one loopback host style for the full flow and keep it there.",
+      },
+      {
+        type: "list",
+        items: [
+          "Register both callback URIs if you truly need both host styles.",
+          "Do not manually paste callback URLs back into the browser.",
+          "Persist the chosen redirect host in state instead of recomputing it loosely later.",
+          "Treat preview-host behavior as a first-class environment, not a temporary exception.",
+        ],
+      },
+      { type: "heading", text: "State is not optional" },
+      {
+        type: "paragraph",
+        text: "A surprising number of auth problems that look like Google bugs are really state bugs. If the start step, callback step, and session store do not all agree on who the user is, which host was chosen, and whether the token exchange is still valid, your product will feel randomly unreliable. In a product like Zee, those failures are even more expensive because they block features that users experience as personal trust features: Gmail access, Calendar access, and continuity across devices.",
+      },
+      {
+        type: "callout",
+        title: "Auth bugs are often UX bugs in disguise",
+        text: "Users do not care that the issue was a callback mismatch. They only know that the product asked for trust and then failed at the moment that trust became concrete.",
+      },
+      { type: "heading", text: "What other Gemini product teams should copy" },
+      {
+        type: "list",
+        items: [
+          "Choose callback URIs deterministically and persist the decision in signed state.",
+          "Make one host style the documented local default and stick to it.",
+          "Return structured failure reasons and trace IDs instead of generic connect errors.",
+          "Test on the exact host pattern you will deploy, not just a nearby one.",
+          "Treat local, preview, and production auth as three separate quality gates.",
+        ],
+      },
+      {
+        type: "paragraph",
+        text: "OAuth is easy to underestimate because it often fails at the seam between platform truth and user expectation. That is exactly why it deserves more care, not less.",
+      },
+    ],
+  },
+  {
+    id: "continuity-is-the-product-2026",
+    title: "Continuity Is the Product: Why Voice and Text Must Share One Memory System",
+    subtitle:
+      "Users do not experience surfaces separately. They experience whether the same presence is still there.",
+    excerpt:
+      "A companion does not earn trust because one reply sounds warm. It earns trust because the relationship survives a mode switch, a gap in time, and the practical mess of the day.",
+    publishedAt: "March 12, 2026",
+    readTime: "15 min read",
+    tags: ["Product Philosophy", "Memory", "Voice + Text", "Continuity"],
+    blocks: [
+      {
+        type: "image",
+        src: "/blog/continuity-product-cover.jpg",
+        alt: "Editorial image of the same woman moving between voice and text in a warm home setting.",
+        caption: "Continuity is what users feel when system integrity becomes relationship integrity.",
+      },
+      {
+        type: "paragraph",
+        text: "A lot of AI products still behave as if voice mode and text mode are cousins. Zee cannot afford that. If the product wants to feel like one companion, voice and text have to behave like two doors into the same room. The memory system, the task state, the timeline, and the user model all need to converge on one relationship lane. Otherwise the product will always feel like separate sessions wearing the same name tag.",
+      },
+      {
+        type: "image",
+        src: "/blog/seamless-voice-text-continuity.jpg",
+        alt: "A person speaking to Zee outdoors while another scene shows the same conversation continuing in text indoors.",
+        caption: "Continuity should survive motion, noise, and a full shift in environment.",
+        size: "narrow",
+      },
+      {
+        type: "quote",
+        text: "Users do not ask whether the architecture is elegant. They ask, often silently, why they had to repeat themselves again.",
+      },
+      { type: "heading", text: "Transitions are where companion quality degrades fastest" },
+      {
+        type: "table",
+        caption: "Continuity is tested most sharply at boundaries, not in isolated turns.",
+        columns: ["Boundary", "What users feel when it breaks", "What the system must preserve"],
+        rows: [
+          [
+            "Voice to text",
+            "The companion suddenly feels like someone else",
+            "Shared thread history and active task context",
+          ],
+          [
+            "Short gap in time",
+            "Momentum disappears too quickly",
+            "Recent relevance and time anchoring",
+          ],
+          [
+            "Long gap in time",
+            "The product forgets what matters",
+            "Durable memory and profile context with contamination controls",
+          ],
+          [
+            "Task interruption",
+            "The user loses confidence in follow-through",
+            "Persistent task state and recoverable stage surfaces",
+          ],
+        ],
+      },
+      { type: "heading", text: "Why shared memory beats clever prompt tricks" },
+      {
+        type: "paragraph",
+        text: "Prompting can help an assistant sound coherent. It cannot replace a continuity model. Voice transcripts need to land in the same conversation history as text messages. Background memory has to be assembled with hygiene, not just maximal recall. Old failure phrasing has to be filtered so it does not poison future turns. And time has to be anchored properly so yesterday, tomorrow, and later tonight all mean what the user thinks they mean. This is what makes continuity measurable rather than anecdotal.",
+      },
+      {
+        type: "image",
+        src: "/blog/meet-zee-day-map.jpg",
+        alt: "Illustrated journey map showing how Zee supports morning reset, commute, noisy-to-text switch, and evening reflection.",
+        caption: "Continuity is most visible when the day bends and the companion does not break.",
+        size: "narrow",
+      },
+      { type: "heading", text: "Three forms of continuity Zee has to protect" },
+      {
+        type: "list",
+        items: [
+          "Interaction continuity: the user can switch surfaces without reintroducing themselves.",
+          "Task continuity: a draft, event, or approval flow survives interruption and mode change.",
+          "Emotional continuity: the companion's tone feels like the same person, not a reset persona.",
+        ],
+      },
+      {
+        type: "callout",
+        title: "Memory quality is not the same as memory quantity",
+        text: "The goal is not to stuff as much history as possible into the model context. The goal is to assemble the right history, exclude poisoned context, and preserve the facts and signals that make the user feel known.",
+      },
+      { type: "heading", text: "What this changes in product decisions" },
+      {
+        type: "paragraph",
+        text: "Once continuity becomes the product, a lot of design decisions stop being cosmetic. Voice transcription persistence stops being implementation detail and becomes trust infrastructure. Zee Stage stops being a UI experiment and becomes continuity scaffolding for active work. Approval truth stops being a workflow nuance and becomes part of whether the relationship still feels believable. That is why the continuity problem sits underneath so much of what Zee is building now.",
+      },
+      {
+        type: "paragraph",
+        text: "In a companion product, coherence is not decoration. It is the thing the user came for. That is why continuity deserves first-principles treatment, not side-feature status.",
+      },
+    ],
+  },
+  {
+    id: "hidden-reliability-layer-2026",
+    title: "The Hidden Reliability Layer Behind Zee: Traces, State Machines, and Failure Classes",
+    subtitle:
+      "Why the warmest companion experiences still depend on brutally explicit runtime contracts.",
+    excerpt:
+      "When a companion feels random, the issue is usually not personality. It is state: where the task lives, what the system thinks is active, and whether the traces tell the truth.",
+    publishedAt: "March 12, 2026",
+    readTime: "15 min read",
+    tags: ["Engineering", "Incident Forensics", "Runtime Design", "Reliability"],
+    blocks: [
+      {
+        type: "image",
+        src: "/blog/reliability-layer-cover.jpg",
+        alt: "Editorial image of an engineer sketching system flows while studying the hidden reliability layer behind a companion.",
+        caption: "The user feels personality. The system survives on explicit boundaries.",
+      },
+      {
+        type: "paragraph",
+        text: "When people talk about AI companions, they usually talk about voice, warmth, empathy, tone, or memory. Those things matter. But the hidden layer underneath them is much more mechanical: task state, route integrity, tool-response contracts, stage selection, lookup timing, approval ownership, and the traces that let engineers prove what actually happened. If that layer is weak, even a well-written assistant will feel unstable. If that layer is strong, the product can keep feeling calm while doing hard things.",
+      },
+      {
+        type: "image",
+        src: "/blog/grounded-web-search.jpg",
+        alt: "A person using a phone and laptop while multiple information cards float around the workspace.",
+        caption: "The user sees one calm surface. The system underneath is coordinating many moving parts.",
+        size: "narrow",
+      },
+      { type: "heading", text: "Most assistant failures are not pure model failures" },
+      {
+        type: "table",
+        caption: "Symptoms often point at one layer while the root cause lives in another.",
+        columns: ["What the user sees", "What teams often blame", "What the actual owner may be"],
+        rows: [
+          [
+            "Zee answered strangely after a lookup",
+            "The model",
+            "Tool-response bridge, stale stage state, or missing trace boundary",
+          ],
+          [
+            "The wrong task got approved",
+            "Natural language ambiguity",
+            "Active-surface selection and task ownership",
+          ],
+          [
+            "A Google flow failed only in one environment",
+            "Google OAuth",
+            "Host consistency, session state, or callback determinism",
+          ],
+          [
+            "The assistant said done when nothing was done",
+            "Hallucination",
+            "Completion-language guardrails and execution truth boundary",
+          ],
+        ],
+      },
+      { type: "heading", text: "The state machine nobody sees" },
+      {
+        type: "ascii",
+        text:
+          "intent -> route -> tool call -> server fetch/plan -> stage or lookup -> approval or answer -> execution -> terminal result -> recoverable history",
+      },
+      {
+        type: "paragraph",
+        text: "Every arrow in that sequence is a place the product can wobble. That is why traces matter so much. Not because logs are glamorous, but because they let the team tell the difference between a model choice, a transport problem, a bad request envelope, an auth issue, and a UI reconciliation miss. Without that distinction, teams burn weeks on the wrong layer.",
+      },
+      { type: "heading", text: "Why traces matter to product people too" },
+      {
+        type: "metrics",
+        items: [
+          {
+            label: "Route integrity",
+            value: "Keeps intent ownership clean",
+            detail: "The right handler sees the right request at the right time",
+          },
+          {
+            label: "Stage truth",
+            value: "Prevents UI contradiction",
+            detail: "The visible surface should match the real task state",
+          },
+          {
+            label: "Failure classes",
+            value: "Make incidents actionable",
+            detail: "Timeout is not access denied, and both need different fixes",
+          },
+          {
+            label: "Recovery speed",
+            value: "Shortens iteration waste",
+            detail: "Teams can fix the right layer without theatrical debugging",
+          },
+        ],
+      },
+      {
+        type: "callout",
+        title: "Warm products still need hard edges",
+        text: "A companion can sound soft while the architecture behind it stays uncompromising about truth, ownership, and recoverability. In fact, that is usually the only way the softness survives contact with reality.",
+      },
+      { type: "heading", text: "How this changes the team" },
+      {
+        type: "list",
+        items: [
+          "You stop arguing about vibes and start isolating boundaries.",
+          "You can classify failures quickly instead of narrating them loosely.",
+          "You document runtime contracts because they directly shape product quality.",
+          "You stop treating UI consistency as secondary to model quality.",
+          "You build a product that can keep shipping without dissolving into superstition.",
+        ],
+      },
+      {
+        type: "paragraph",
+        text: "This reliability layer is hidden from users, and that is exactly how it should be. Users should only feel the benefit: a companion that seems to know where the conversation is, what still needs them, and when something is truly complete.",
+      },
+    ],
+  },
+  {
+    id: "private-by-design-2026",
+    title: "Private By Design: What That Should Mean When an AI Can Read Email and Calendar",
+    subtitle:
+      "A trust essay on scopes, approvals, storage boundaries, and truthful language.",
+    excerpt:
+      "Privacy in companion AI is not a slogan. It is a product made out of limits: what the model can see, when it can act, what it stores, and what it refuses to claim.",
+    publishedAt: "March 12, 2026",
+    readTime: "14 min read",
+    tags: ["Trust", "Privacy", "Google Context", "Security", "Product"],
+    blocks: [
+      {
+        type: "image",
+        src: "/blog/private-by-design-cover.jpg",
+        alt: "Editorial image of a man calmly reviewing phone permissions in a warm home setting.",
+        caption: "Privacy becomes real only when the product architecture enforces it.",
+      },
+      {
+        type: "paragraph",
+        text: "The phrase private by design gets used so often in AI that it risks becoming decorative. For a companion product, it cannot afford to be decorative. If Zee can read your email or check your calendar, the trust question becomes immediate. What can it access? Under what approval boundary? What gets stored? What is encrypted? What happens when a request fails? What language is the assistant allowed to use about actions it did not complete? Those are not footnotes. They are the product.",
+      },
+      {
+        type: "image",
+        src: "/blog/private-by-design-inline.jpg",
+        alt: "Quiet evening lifestyle scene of a man calmly reviewing phone permissions in a warm home setting.",
+        caption: "Privacy feels believable when the product gives the user a calm sense of control.",
+        size: "narrow",
+      },
+      { type: "heading", text: "The wrong privacy promise" },
+      {
+        type: "paragraph",
+        text: "The wrong promise is a vague one: trust us, we care about privacy. The right promise is concrete. We request the minimum scopes required for the behavior we are shipping. We keep Google data server-authoritative. We gate Gmail and Calendar writes behind approval unless the action already completed. We encrypt sensitive integration material at rest. We track failures explicitly. And we never pretend a user granted access they did not actually grant.",
+      },
+      { type: "heading", text: "What private by design actually means in practice" },
+      {
+        type: "list",
+        items: [
+          "Scope minimization: ask only for the Google scopes the feature truly needs.",
+          "Server authority: fetch personal data from verified tools, not model imagination.",
+          "Approval boundaries: writes remain previewed and user-approved before execution.",
+          "Storage discipline: protect tokens and integration material with encryption and access control.",
+          "Truthful runtime language: the assistant cannot narrate permissions or completion it does not have.",
+        ],
+      },
+      {
+        type: "table",
+        caption: "Trust is made of specific controls, not brand adjectives.",
+        columns: ["Control", "Why users should care", "What Zee's stance is"],
+        rows: [
+          [
+            "Read scopes vs write scopes",
+            "Users deserve to know what changed when a feature gets more powerful",
+            "Read and write capabilities are treated as separate feature boundaries",
+          ],
+          [
+            "Approval gating",
+            "Users need the chance to inspect before the system acts",
+            "Preview and approval remain part of the action contract",
+          ],
+          [
+            "Encrypted integration material",
+            "The most sensitive data should not live casually",
+            "Tokens and secrets are protected at rest",
+          ],
+          [
+            "Traceable failure semantics",
+            "Opaque errors make trust impossible to evaluate",
+            "Failures are classified and surfaced with runtime evidence",
+          ],
+        ],
+      },
+      { type: "heading", text: "Approval is also a privacy boundary" },
+      {
+        type: "paragraph",
+        text: "It is tempting to treat approvals as mere workflow friction. That is the wrong frame. Approvals are one of the cleanest privacy guarantees in the entire product. They create a visible pause between what Zee inferred and what Zee is actually allowed to do. That pause is not a weakness. It is one of the reasons a user can safely trust a companion with more practical power over time.",
+      },
+      {
+        type: "callout",
+        title: "A companion should never smuggle power",
+        text: "If the user has not approved the action, or the scope is not actually granted, Zee should not cross that boundary quietly. Good privacy posture is visible in the product's behavior.",
+      },
+      { type: "heading", text: "What we will not do" },
+      {
+        type: "list",
+        items: [
+          "We will not treat Gmail or Calendar access as a generic right the product automatically deserves.",
+          "We will not let the assistant fabricate personal-context data when a verified fetch is unavailable.",
+          "We will not use completion language to cover for missing execution truth.",
+          "We will not confuse a polished answer with a trustworthy system.",
+        ],
+      },
+      {
+        type: "paragraph",
+        text: "Private by design is only meaningful if it survives the moments when the product becomes powerful. That is the standard Zee should keep publishing against - and keep engineering toward.",
+      },
+      {
+        type: "references",
+        items: [
+          {
+            title: "Security Paper: Google Data Handling by Design",
+            href: "/blog/zeeme-google-data-handling-security-paper-2026",
+            note: "A deeper security architecture paper focused on Google data handling controls.",
+          },
+          {
+            title: "Google API Services User Data Policy",
+            href: "https://developers.google.com/terms/api-services-user-data-policy",
+            note: "Policy context for handling Google user data responsibly.",
+          },
+        ],
+      },
+    ],
+  },
   {
     id: "meet-zee-2026",
     title: "Meet Zee: Your Companion for Real Life, Not Just Chat",
@@ -1690,9 +2812,25 @@ const BLOG_POSTS: BlogPost[] = [
   },
 ];
 
+const BLOG_FEATURED_ID = "a-day-with-zee-2026" as const;
 const BLOG_PIN_ORDER = [
+  "a-day-with-zee-2026",
+  "zee-stage-missing-interface-2026",
+  "truthful-approval-2026",
+  "voice-real-life-2026",
+  "gmail-calendar-native-2026",
+  "companion-economics-2026",
+  "oauth-in-the-wild-2026",
+  "continuity-is-the-product-2026",
+  "hidden-reliability-layer-2026",
+  "private-by-design-2026",
   "meet-zee-2026",
+  "zeeme-google-context-gcp-field-report-2026",
   "zeeme-continuity-benchmark-paper-v-2026",
+  "zeeme-platform-thesis-2026",
+  "zeeme-engineering-case-study-2026",
+  "zeeme-memory-lab-paper-2026",
+  "zeeme-google-data-handling-security-paper-2026",
 ] as const;
 function getBlogCoverBlock(post: BlogPost): Extract<BlogPostBlock, { type: "image" }> | null {
   const cover = post.blocks.find((block): block is Extract<BlogPostBlock, { type: "image" }> => block.type === "image");
@@ -2305,6 +3443,14 @@ function InfoPageOverlay({
       return aPin - bPin;
     });
   }, []);
+  const featuredBlogPost =
+    page === "blog"
+      ? orderedBlogPosts.find((post) => post.id === BLOG_FEATURED_ID) ?? orderedBlogPosts[0] ?? null
+      : null;
+  const secondaryBlogPosts =
+    page === "blog"
+      ? orderedBlogPosts.filter((post) => post.id !== featuredBlogPost?.id)
+      : [];
   const activeBlogSections = useMemo(() => {
     if (!activeBlogPost) return [];
     let index = 0;
@@ -3384,10 +4530,16 @@ function InfoPageOverlay({
                         </pre>
                       );
                     }
+                    const imageShellClass =
+                      block.size === "narrow"
+                        ? "mx-auto max-w-3xl"
+                        : block.size === "wide"
+                          ? "md:-mx-8"
+                          : "";
                     return (
                       <figure
                         key={`${activeBlogPost.id}-image-${idx}`}
-                        className="border-y py-3"
+                        className={`border-y py-3 ${imageShellClass}`}
                         style={{
                           borderColor: "rgba(255, 217, 172, 0.2)",
                         }}
@@ -3396,7 +4548,10 @@ function InfoPageOverlay({
                           src={block.src}
                           alt={block.alt}
                           className="w-full border"
-                          style={{ borderColor: "rgba(255, 217, 172, 0.24)" }}
+                          style={{
+                            borderColor: "rgba(255, 217, 172, 0.24)",
+                            objectFit: block.fit === "contain" ? "contain" : "cover",
+                          }}
                         />
                         {block.caption && (
                           <figcaption
@@ -3414,7 +4569,109 @@ function InfoPageOverlay({
               </motion.article>
             ) : (
               <div className="space-y-6">
-                {orderedBlogPosts.map((post, idx) => (
+                {featuredBlogPost ? (
+                  (() => {
+                    const coverBlock = getBlogCoverBlock(featuredBlogPost);
+                    return (
+                      <motion.article
+                        initial={{ opacity: 0, y: 18 }}
+                        whileInView={{ opacity: 1, y: 0 }}
+                        viewport={{ once: true, margin: "-20px" }}
+                        transition={{ duration: 0.48, ease: [0.22, 1, 0.36, 1] }}
+                        className="border-b pb-10 md:pb-12"
+                        style={{ borderColor: "rgba(255, 217, 172, 0.18)" }}
+                      >
+                        <div
+                          className="mb-4 inline-flex items-center gap-2 border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.22em]"
+                          style={{
+                            borderColor: "rgba(255, 217, 172, 0.18)",
+                            background: "rgba(255, 206, 158, 0.06)",
+                            color: "rgba(255, 224, 196, 0.74)",
+                          }}
+                        >
+                          Featured Story
+                        </div>
+                        <div className="grid gap-6 md:grid-cols-[1.28fr_0.92fr] md:items-start">
+                          <div>
+                            {coverBlock ? (
+                              <figure
+                                className="overflow-hidden border"
+                                style={{
+                                  borderColor: "rgba(255, 217, 172, 0.2)",
+                                }}
+                              >
+                                <img
+                                  src={coverBlock.src}
+                                  alt={coverBlock.alt}
+                                  className="h-64 w-full object-cover md:h-[26rem]"
+                                  loading="lazy"
+                                />
+                              </figure>
+                            ) : null}
+                          </div>
+                          <div>
+                            <p
+                              className="mb-3 text-[11px] tracking-[0.24em] uppercase"
+                              style={{ color: "rgba(255, 214, 172, 0.44)" }}
+                            >
+                              {featuredBlogPost.publishedAt} · {featuredBlogPost.readTime}
+                            </p>
+                            <h3
+                              className="text-[1.85rem] leading-tight md:text-[2.4rem]"
+                              style={{ color: "#FFEED8", fontFamily: "'Fraunces', serif" }}
+                            >
+                              {featuredBlogPost.title}
+                            </h3>
+                            <p
+                              className="mt-3 text-[1rem] leading-[1.8]"
+                              style={{ color: "rgba(255, 224, 196, 0.82)" }}
+                            >
+                              {featuredBlogPost.subtitle}
+                            </p>
+                            <p
+                              className="mt-4 text-[15px] leading-[1.9]"
+                              style={{ color: "rgba(255, 224, 196, 0.72)" }}
+                            >
+                              {featuredBlogPost.excerpt}
+                            </p>
+                            <div className="mt-5 flex flex-wrap gap-2">
+                              {featuredBlogPost.tags.map((tag) => (
+                                <span
+                                  key={`${featuredBlogPost.id}-${tag}`}
+                                  className="border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em]"
+                                  style={{
+                                    borderColor: "rgba(255, 217, 172, 0.16)",
+                                    color: "rgba(255, 214, 172, 0.64)",
+                                    background: "rgba(255, 206, 158, 0.03)",
+                                  }}
+                                >
+                                  {tag}
+                                </span>
+                              ))}
+                            </div>
+                            <div className="mt-6">
+                              <button
+                                type="button"
+                                onClick={() => setActiveBlogPostId(featuredBlogPost.id)}
+                                className="inline-flex items-center gap-2 border px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.14em]"
+                                style={{
+                                  borderColor: "rgba(255, 217, 172, 0.22)",
+                                  color: "rgba(255, 220, 188, 0.8)",
+                                  background: "rgba(255, 206, 158, 0.05)",
+                                }}
+                                data-testid={`button-open-blog-post-${featuredBlogPost.id}`}
+                              >
+                                Read article
+                                <ArrowRight className="h-3.5 w-3.5" />
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      </motion.article>
+                    );
+                  })()
+                ) : null}
+                {secondaryBlogPosts.map((post, idx) => (
                   (() => {
                     const coverBlock = getBlogCoverBlock(post);
                     return (
@@ -3489,7 +4746,7 @@ function InfoPageOverlay({
                         }}
                         data-testid={`button-open-blog-post-${post.id}`}
                       >
-                        Read paper
+                        Read article
                         <ArrowRight className="h-3.5 w-3.5" />
                       </button>
                     </div>

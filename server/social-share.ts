@@ -29,11 +29,11 @@ const DEFAULT_DESCRIPTION =
 const DEFAULT_IMAGE_PATH = "/zeeme-og.png?v=20260211";
 
 const BLOG_ARCHIVE_SHARE: BlogShareEntry = {
-  title: "ZeeMe Research Archive",
+  title: "ZeeMe Journal",
   description:
-    "A curated mix of technical papers, field reports, and product stories on companion AI architecture, continuity, memory integrity, and reliability operations.",
+    "Long-form product stories, field reports, research papers, and technical essays on building a companion that actually works in real life.",
   imagePath: "/blog/og/zeeme-archive-og.png",
-  imageAlt: "ZeeMe Research Archive cover.",
+  imageAlt: "ZeeMe Journal cover.",
 };
 
 const ABOUT_SHARE: BlogShareEntry = {
@@ -61,6 +61,116 @@ const PRIVACY_SHARE: BlogShareEntry = {
 };
 
 const BLOG_POST_SHARE: Record<string, BlogShareEntry> = {
+  "a-day-with-zee-2026": {
+    title: "A Day With Zee",
+    description:
+      "A narrative product story about Morning Brief, commute voice, calendar help, inbox drafts, and evening continuity in one Zee relationship lane.",
+    imagePath: "/blog/a-day-with-zee-cover.jpg",
+    imageAlt:
+      "Editorial lifestyle image for A Day With Zee showing one man moving from morning coffee to commute voice to evening reflection.",
+    imageType: "image/jpeg",
+    imageWidth: 1536,
+    imageHeight: 1024,
+  },
+  "zee-stage-missing-interface-2026": {
+    title: "Zee Stage: The Missing Interface Between Conversation and Action",
+    description:
+      "Why chat alone breaks once an AI starts drafting, approving, and executing real tasks, and how Zee Stage closes that gap.",
+    imagePath: "/blog/zee-stage-cover.jpg",
+    imageAlt:
+      "Editorial product image of a woman holding a phone with a refined AI task surface open.",
+    imageType: "image/jpeg",
+    imageWidth: 1536,
+    imageHeight: 1024,
+  },
+  "truthful-approval-2026": {
+    title: "From Sounds Good to Actually Sent",
+    description:
+      "A long-form essay on hands-free approval, truthful execution language, and the UX contract behind voice-driven Gmail and Calendar actions.",
+    imagePath: "/blog/truthful-approval-cover.jpg",
+    imageAlt:
+      "Editorial image of a man approving an AI-assisted task by voice in a car at dusk.",
+    imageType: "image/jpeg",
+    imageWidth: 1536,
+    imageHeight: 1024,
+  },
+  "voice-real-life-2026": {
+    title: "Voice That Works in Real Life, Not Just Quiet Rooms",
+    description:
+      "An engineering and product essay on noise, interruption, mic tuning, and what it takes to make a voice companion trustworthy outside demos.",
+    imagePath: "/blog/voice-real-life-cover.jpg",
+    imageAlt:
+      "Editorial commuting image of a woman using a voice AI companion on a train platform at dusk.",
+    imageType: "image/jpeg",
+    imageWidth: 1536,
+    imageHeight: 1024,
+  },
+  "gmail-calendar-native-2026": {
+    title: "What It Takes to Make Gmail and Calendar Feel Native Inside a Companion",
+    description:
+      "A feature deep dive on ambiguity, preview state, approvals, and why native-feeling Google flows require more than API calls.",
+    imagePath: "/blog/google-native-flows-cover.jpg",
+    imageAlt:
+      "Editorial image of a woman using a phone that blends inbox and calendar help into one companion experience.",
+    imageType: "image/jpeg",
+    imageWidth: 1536,
+    imageHeight: 1024,
+  },
+  "companion-economics-2026": {
+    title: "The Cost of a Real-Time AI Companion",
+    description:
+      "A practical look at the economics of text, live voice, camera, grounded search, and Google actions in a modern companion product.",
+    imagePath: "/blog/companion-economics-cover.jpg",
+    imageAlt:
+      "Editorial still life showing a phone, earbuds, camera, notebooks, and graph paper to represent companion cost layers.",
+    imageType: "image/jpeg",
+    imageWidth: 1536,
+    imageHeight: 1024,
+  },
+  "oauth-in-the-wild-2026": {
+    title: "OAuth in the Wild",
+    description:
+      "A builder-focused guide to localhost, preview URLs, callback determinism, and the bugs that happen when environments drift.",
+    imagePath: "/blog/oauth-wild-cover.jpg",
+    imageAlt:
+      "Editorial image of a developer checking laptop and phone while diagnosing login reliability issues.",
+    imageType: "image/jpeg",
+    imageWidth: 1536,
+    imageHeight: 1024,
+  },
+  "continuity-is-the-product-2026": {
+    title: "Continuity Is the Product",
+    description:
+      "Why voice and text must share one memory system if a companion is going to feel like the same presence across the day.",
+    imagePath: "/blog/continuity-product-cover.jpg",
+    imageAlt:
+      "Editorial image of the same woman moving between voice and text in a warm home setting.",
+    imageType: "image/jpeg",
+    imageWidth: 1536,
+    imageHeight: 1024,
+  },
+  "hidden-reliability-layer-2026": {
+    title: "The Hidden Reliability Layer Behind Zee",
+    description:
+      "A deep dive into traces, state machines, and failure classes that keep a warm companion from feeling random.",
+    imagePath: "/blog/reliability-layer-cover.jpg",
+    imageAlt:
+      "Editorial image of an engineer sketching system flows while studying the hidden reliability layer behind a companion.",
+    imageType: "image/jpeg",
+    imageWidth: 1536,
+    imageHeight: 1024,
+  },
+  "private-by-design-2026": {
+    title: "Private By Design",
+    description:
+      "A trust essay on scopes, approvals, storage boundaries, and what privacy should mean when an AI can read your inbox and calendar.",
+    imagePath: "/blog/private-by-design-cover.jpg",
+    imageAlt:
+      "Editorial image of a man calmly reviewing phone permissions in a warm home setting.",
+    imageType: "image/jpeg",
+    imageWidth: 1536,
+    imageHeight: 1024,
+  },
   "meet-zee-2026": {
     title: "Meet Zee: Your Companion for Real Life",
     description:
