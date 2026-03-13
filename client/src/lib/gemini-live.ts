@@ -747,7 +747,7 @@ const LIVE_GOOGLE_PERSONAL_CONTEXT_FUNCTION_DECLARATIONS = [
   {
     name: "prepare_google_email_action",
     description:
-      "Prepare or continue an approval-gated Gmail draft, reply, or send action from the user's natural-language request. Use this for new requests and short follow-ups to the current draft/card such as send, save, approve, or revise. If required details are missing, stay in the Gmail action flow and ask only for what is missing.",
+      "Prepare or continue an approval-gated Gmail draft, reply, or send action from the user's natural-language request. Use this for new requests and short follow-ups to the current draft/card such as send, save, approve, or revise. If a current Gmail approval card is already active, explicit follow-ups should resolve that active task instead of starting over. If required details are missing, stay in the Gmail action flow and ask only for what is missing.",
     parameters: {
       type: "object",
       properties: {
@@ -759,7 +759,7 @@ const LIVE_GOOGLE_PERSONAL_CONTEXT_FUNCTION_DECLARATIONS = [
   {
     name: "prepare_google_calendar_action",
     description:
-      "Prepare or continue an approval-gated Google Calendar create or update action from the user's natural-language request. Use this for new requests and short follow-ups to the current event/card such as approve, sounds good, save it, go ahead, or revise. If required details are missing, stay in the calendar action flow and ask only for what is missing.",
+      "Prepare or continue an approval-gated Google Calendar create or update action from the user's natural-language request. Use this for new requests and short follow-ups to the current event/card such as approve, sounds good, save it, go ahead, or revise. If a current calendar approval card is already active, explicit follow-ups should resolve that active task instead of starting over. If required details are missing, stay in the calendar action flow and ask only for what is missing.",
     parameters: {
       type: "object",
       properties: {
@@ -998,6 +998,55 @@ function buildDirectPersonalContextReadFunctionCalls(
     });
   }
   return calls;
+}
+
+function buildDirectPersonalContextActionFunctionCalls(
+  query: string,
+  intent: LivePersonalContextIntent,
+  activeGoogleActionContext?: LiveGoogleActionContextHint | null,
+): Array<{ id: string; name: string; args: Record<string, unknown> }> {
+  const calls: Array<{ id: string; name: string; args: Record<string, unknown> }> = [];
+  const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  if (
+    intent === "email" ||
+    (intent === "both" && activeGoogleActionContext?.connector === "gmail")
+  ) {
+    calls.push({
+      id: crypto.randomUUID(),
+      name: "prepare_google_email_action",
+      args: { request: query },
+    });
+  }
+  if (
+    intent === "calendar" ||
+    (intent === "both" && activeGoogleActionContext?.connector === "calendar")
+  ) {
+    calls.push({
+      id: crypto.randomUUID(),
+      name: "prepare_google_calendar_action",
+      args: { request: query, timezone: timeZone },
+    });
+  }
+  return calls;
+}
+
+function extractChatDigestTexts(chatDigests: unknown): string[] {
+  if (!Array.isArray(chatDigests)) {
+    return [];
+  }
+  const texts: string[] = [];
+  for (const digest of chatDigests) {
+    const text =
+      digest &&
+      typeof digest === "object" &&
+      typeof (digest as { text?: unknown }).text === "string"
+        ? ((digest as { text: string }).text ?? "").trim()
+        : "";
+    if (text) {
+      texts.push(text);
+    }
+  }
+  return texts;
 }
 
 const LIVE_GOOGLE_PERSONAL_CONTEXT_TOOL_NAMES = new Set([
@@ -3089,6 +3138,40 @@ export class GeminiLiveVoiceSession {
     return sent;
   }
 
+  private sendGoogleActionVoiceSummary(params: {
+    digestTexts: string[];
+    toolNames: string[];
+    source: "direct_fallback";
+  }): boolean {
+    const spokenSummary = params.digestTexts.join(" ").trim();
+    if (!spokenSummary) {
+      return false;
+    }
+    const sent = this.sendClientContentSafely(
+      {
+        turns: `Respond out loud right now in 1 to 2 short sentences using only this verified Google action outcome. Do not call tools again. Do not claim a task is complete unless the verified outcome says it is complete. Verified Google action outcome: ${spokenSummary}`,
+        turnComplete: true,
+      },
+      "live.google_context.nudge_failed",
+      {
+        source: "google_action_voice_fallback",
+        toolNames: params.toolNames,
+      },
+    );
+    this.debug(
+      sent
+        ? "live.google_context.voice_action_summary_sent"
+        : "live.google_context.voice_action_summary_send_failed",
+      {
+        toolNames: params.toolNames,
+        digestCount: params.digestTexts.length,
+        spokenSummaryLength: spokenSummary.length,
+        source: params.source,
+      },
+    );
+    return sent;
+  }
+
   private scheduleGoogleReadVoiceFallback(params: {
     digestTexts: string[];
     toolNames: string[];
@@ -3431,6 +3514,65 @@ export class GeminiLiveVoiceSession {
       });
     } catch (error) {
       this.debug("live.google_context.direct_fallback_failed", {
+        reason,
+        message: error instanceof Error ? error.message : String(error),
+        functionNames: normalizedCalls.map((call) => call.name),
+      });
+      this.emitWebSearchStatus("idle");
+    }
+  }
+
+  private async runDirectPersonalContextActionFallback(
+    reason: "model_no_tool_call",
+  ): Promise<void> {
+    if (!this.pendingPersonalContextReadFallback || !this.conversationId) {
+      return;
+    }
+    const fallback = this.pendingPersonalContextReadFallback;
+    if (
+      isReadOnlyPersonalContextIntent(
+        fallback.text,
+        fallback.intent,
+        fallback.activeGoogleActionContext,
+      )
+    ) {
+      return;
+    }
+    const normalizedCalls = buildDirectPersonalContextActionFunctionCalls(
+      fallback.text,
+      fallback.intent,
+      fallback.activeGoogleActionContext,
+    );
+    if (normalizedCalls.length === 0) {
+      return;
+    }
+    const startedAt = Date.now();
+    this.debug("live.google_context.direct_action_fallback_triggered", {
+      reason,
+      intent: fallback.intent,
+      functionNames: normalizedCalls.map((call) => call.name),
+      textLength: fallback.text.length,
+      activeGoogleActionContext: fallback.activeGoogleActionContext,
+    });
+    try {
+      const payload = await this.requestLiveToolResponse(normalizedCalls);
+      this.applyLiveToolResponsePayload({
+        payload,
+        normalizedCalls,
+        toolCallStartedAt: startedAt,
+        forwardFunctionResponsesToSession: false,
+        allowGoogleReadVoiceFallback: false,
+      });
+      const digestTexts = extractChatDigestTexts(payload.chatDigests);
+      if (digestTexts.length > 0) {
+        this.sendGoogleActionVoiceSummary({
+          digestTexts,
+          toolNames: normalizedCalls.map((call) => call.name),
+          source: "direct_fallback",
+        });
+      }
+    } catch (error) {
+      this.debug("live.google_context.direct_action_fallback_failed", {
         reason,
         message: error instanceof Error ? error.message : String(error),
         functionNames: normalizedCalls.map((call) => call.name),
@@ -4779,10 +4921,11 @@ export class GeminiLiveVoiceSession {
             : !this.liveFunctionCallingEnabled
               ? "function_calling_disabled"
               : this.personalContextNudgeSentThisTurn
-                ? "model_ignored_nudge_and_tools"
-                : "model_did_not_use_available_tools",
+              ? "model_ignored_nudge_and_tools"
+              : "model_did_not_use_available_tools",
         });
         void this.runDirectPersonalContextReadFallback("model_no_tool_call");
+        void this.runDirectPersonalContextActionFallback("model_no_tool_call");
       }
       if (
         this.liveGoogleSearchEnabled &&

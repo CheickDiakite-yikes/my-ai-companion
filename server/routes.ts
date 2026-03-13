@@ -8035,35 +8035,16 @@ async function handleResolvedGoogleEmailFollowUp(params: {
 
   if (params.action === "send") {
     if (task.status === "approval_required") {
-      const pendingApproval = await params.storage.getPendingAgentApproval(task.id);
-      if (!pendingApproval) {
-        return { handled: false as const };
-      }
-
       const promoted = await promotePendingGoogleEmailTaskToSend({
         storage: params.storage,
         taskId: task.id,
         userId: params.userId,
       });
-      await params.storage.createMessage({
-        conversationId: task.conversationId,
-        sender: "assistant",
-        text: "I switched this draft into a send-ready approval. Review it and approve when you're ready.",
-        partIndex: 0,
-        uiPayload: {
-          kind: "agent_task_status",
-          task: promoted.task,
-          text: "Send approval ready",
-          googleActionPreview: promoted.preview,
-          googleContext: buildGoogleTargetContextMetadata({
-            connector: "gmail",
-            action: "send",
-            actionableTargetId: task.id,
-            candidateTargetIds: [task.id],
-            sourceTurnId: params.requestedByMessageId,
-            selectionReason: "manual_selection",
-          }),
-        },
+      const result = await approveAndExecuteGoogleActionTask({
+        storage: params.storage,
+        taskId: task.id,
+        userId: params.userId,
+        onEvent: params.onEvent,
       });
 
       const assistantMessages = await collectRecentAssistantTaskMessages({
@@ -8078,19 +8059,27 @@ async function handleResolvedGoogleEmailFollowUp(params: {
           ? assistantMessages
           : [
               {
-                id: `google-action-send-preview-${task.id}`,
+                id: `google-action-send-executed-${task.id}`,
                 conversationId: params.conversationId,
                 sender: "assistant",
                 turnId: randomUUID(),
                 partIndex: 0,
-                text: "I switched this draft into a send-ready approval. Review it and approve when you're ready.",
+                text: "Email sent.",
                 createdAt: new Date(),
                 attachments: [],
                 uiPayload: {
                   kind: "agent_task_status",
-                  task: promoted.task,
-                  text: "Send approval ready",
+                  task: result,
+                  text: "Email sent",
                   googleActionPreview: promoted.preview,
+                  googleContext: buildGoogleTargetContextMetadata({
+                    connector: "gmail",
+                    action: "send",
+                    actionableTargetId: task.id,
+                    candidateTargetIds: [task.id],
+                    sourceTurnId: params.requestedByMessageId,
+                    selectionReason: "manual_selection",
+                  }),
                 },
               },
             ];
@@ -8102,11 +8091,11 @@ async function handleResolvedGoogleEmailFollowUp(params: {
         legacyAssistantMessage: makeLegacyAssistantMessage(
           finalizedAssistantMessages,
         ),
-        model: "google_action_task_send_promotion_v1",
+        model: "google_action_task_send_v1",
         decisionPath: "agent_task" as const,
         decisionPathReason: "task_started" as const,
-        awaitingApproval: true,
-        task: promoted.task,
+        awaitingApproval: false,
+        task: result,
       };
     }
 
@@ -9544,28 +9533,12 @@ async function maybeHandleGoogleActionTask(params: {
           taskId: task.id,
           userId: params.userId,
         });
-        await params.storage.createMessage({
-          conversationId: task.conversationId,
-          sender: "assistant",
-          text: "I switched this draft into a send-ready approval. Review it and approve when you're ready.",
-          partIndex: 0,
-          uiPayload: {
-            kind: "agent_task_status",
-            task: promoted.task,
-            text: "Send approval ready",
-            googleActionPreview: promoted.preview,
-              googleContext: buildGoogleTargetContextMetadata({
-                connector: "gmail",
-                action: "send",
-                actionableTargetId: task.id,
-                candidateTargetIds: [task.id],
-                sourceTurnId: params.userMessage.id,
-                selectionReason: "active_surface",
-                surfaceKey: params.clientGoogleActionContext?.surfaceKey ?? null,
-                selectionMode: params.clientGoogleActionContext?.selectionMode ?? null,
-              }),
-            },
-          });
+        const executedTask = await approveAndExecuteGoogleActionTask({
+          storage: params.storage,
+          taskId: task.id,
+          userId: params.userId,
+          onEvent: params.onEvent,
+        });
 
         const assistantMessages = await collectRecentAssistantTaskMessages({
           conversationId: params.conversationId,
@@ -9579,11 +9552,11 @@ async function maybeHandleGoogleActionTask(params: {
           kind: "ready" as const,
           assistantMessages,
           legacyAssistantMessage: makeLegacyAssistantMessage(assistantMessages),
-          model: "google_action_task_send_promotion_v1",
+          model: "google_action_task_send_v1",
           decisionPath: "agent_task" as const,
           decisionPathReason: "task_started" as const,
-          awaitingApproval: true,
-          task: promoted.task,
+          awaitingApproval: false,
+          task: executedTask,
         };
       }
 
@@ -13995,10 +13968,7 @@ export async function registerRoutes(
                 : parsed.clientTimeZone ?? null,
             );
             const conversationMessages = await storage.getMessages(conversation.id);
-            const latestUserMessage =
-              [...conversationMessages]
-                .reverse()
-                .find((message) => message.sender === "user") ?? null;
+            const liveToolTurnStartedAt = new Date();
             const googleConversationState = resolveLatestGoogleConversationState(
               conversationMessages,
             );
@@ -14045,10 +14015,8 @@ export async function registerRoutes(
               clientTimeZone: actionTimeZone,
               clientGoogleActionContext: parsed.googleActionContext ?? null,
               userMessage: {
-                id:
-                  latestUserMessage?.id ??
-                  `live-google-action-${randomUUID()}`,
-                createdAt: latestUserMessage?.createdAt ?? new Date(),
+                id: `live-google-action-${randomUUID()}`,
+                createdAt: liveToolTurnStartedAt,
               },
               onTrace: (event, metadata) => {
                 trace(req, event, metadata);

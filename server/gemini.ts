@@ -213,7 +213,7 @@ const LIVE_GOOGLE_PERSONAL_CONTEXT_ACTION_FUNCTION_DECLARATIONS: LiveFunctionDec
     {
       name: "prepare_google_email_action",
       description:
-        "Prepare or continue an approval-gated Gmail action such as drafting a reply, composing an email, or handling a short follow-up like send it, save it, approve, or revise. This creates an in-thread approval card instead of sending immediately.",
+        "Prepare or continue an approval-gated Gmail action such as drafting a reply, composing an email, or handling a short follow-up like send it, save it, approve, or revise. When a current Gmail approval card is already active, explicit follow-ups like send it, save it, or approve should resolve that active task instead of starting over.",
       parameters: {
         type: "object",
         properties: {
@@ -225,7 +225,7 @@ const LIVE_GOOGLE_PERSONAL_CONTEXT_ACTION_FUNCTION_DECLARATIONS: LiveFunctionDec
     {
       name: "prepare_google_calendar_action",
       description:
-        "Prepare or continue an approval-gated Google Calendar action such as creating or moving an event, or handling a short follow-up like I approve, sounds good, save it, go ahead, or revise. This creates an in-thread approval card instead of updating the calendar immediately.",
+        "Prepare or continue an approval-gated Google Calendar action such as creating or moving an event, or handling a short follow-up like I approve, sounds good, save it, go ahead, or revise. When a current calendar approval card is already active, explicit follow-ups should resolve that active task instead of starting a new preview.",
       parameters: {
         type: "object",
         properties: {
@@ -1419,6 +1419,7 @@ function composeLiveSystemInstruction(params: {
         "- If the user asks you to create/update/move a calendar event, call prepare_google_calendar_action instead of pretending it was updated.",
         '- Treat short follow-ups like "send it", "save it", "I approve", "sounds good", "edit that", "make it warmer", "book that", "put that on my calendar", "add location", or "move it to 4" as Google action requests that still require the Gmail or Calendar prepare tool.',
         '- Treat follow-ups like "put that on my calendar", "book that time", "block that off", "I approve", "sounds good", "save it", or "move it to 4" as calendar actions that still require prepare_google_calendar_action.',
+        "- Never say an email was sent, a draft was saved, or a calendar event was created unless the tool result explicitly says the action completed. If the tool result still says approval is needed, say that approval is still needed.",
         "- After detailed reads, prefer offering one grounded next step such as drafting a reply or updating the event.",
         "- If tools report google_not_connected or google_scope_missing, tell the user to connect/reconnect Google from Profile settings.",
         "- Never fabricate email or calendar information. Use only returned tool data.",
