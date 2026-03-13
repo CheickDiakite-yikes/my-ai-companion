@@ -1,0 +1,19 @@
+title = "ZeeMe gitleaks config"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Known generated bundle false positives from the asset commit."
+commits = ["1a6db3d2236873410a845349647f427730d8ed80"]
+
+[[rules]]
+id = "algolia-api-key"
+
+[[rules.allowlists]]
+description = "Generated web/remotion bundles can contain third-party public Algolia search keys."
+condition = "OR"
+paths = [
+  '''^build/.*bundle\.js$''',
+  '''^output/remotion/bundle/.*bundle\.js$''',
+]
