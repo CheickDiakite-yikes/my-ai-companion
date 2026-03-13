@@ -213,26 +213,109 @@ const memoryItemsQuerySchema = z.object({
   q: z.string().trim().max(120).optional(),
 });
 
+const googleClientActionContextSelectionReasonValues = [
+  "single_candidate",
+  "ambiguity_required",
+  "active_surface",
+  "recent_context",
+  "manual_selection",
+  "latest_actionable",
+  "clarification_session",
+] as const;
+const googleClientActionContextSelectionModeValues = [
+  "auto",
+  "manual",
+  "dismissed",
+] as const;
+
 const googleClientActionContextSchema = z.object({
   connector: z.enum(["gmail", "calendar"]).optional(),
   action: z.string().trim().min(1).max(40).optional(),
   actionableTargetId: z.string().trim().min(1).max(120).optional(),
   candidateTargetIds: z.array(z.string().trim().min(1).max(120)).max(8).optional(),
   sourceTurnId: z.string().trim().min(1).max(120).optional(),
-  selectionReason: z
-    .enum([
-      "single_candidate",
-      "ambiguity_required",
-      "active_surface",
-      "recent_context",
-      "manual_selection",
-      "latest_actionable",
-      "clarification_session",
-    ])
-    .optional(),
+  selectionReason: z.enum(googleClientActionContextSelectionReasonValues).optional(),
   surfaceKey: z.string().trim().min(1).max(240).optional(),
-  selectionMode: z.enum(["auto", "manual", "dismissed"]).optional(),
+  selectionMode: z.enum(googleClientActionContextSelectionModeValues).optional(),
 });
+
+function sanitizeGoogleClientActionContextInput(value: unknown): {
+  connector: "gmail" | "calendar";
+  action?: string;
+  actionableTargetId?: string;
+  candidateTargetIds?: string[];
+  sourceTurnId?: string;
+  selectionReason?: (typeof googleClientActionContextSelectionReasonValues)[number];
+  surfaceKey?: string;
+  selectionMode?: (typeof googleClientActionContextSelectionModeValues)[number];
+} | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+
+  const input = value as Record<string, unknown>;
+  const connector =
+    input.connector === "gmail" || input.connector === "calendar"
+      ? input.connector
+      : null;
+  if (!connector) {
+    return undefined;
+  }
+
+  const trimString = (candidate: unknown, maxLength: number): string | undefined => {
+    if (typeof candidate !== "string") return undefined;
+    const trimmed = candidate.trim();
+    if (!trimmed || trimmed.length > maxLength) return undefined;
+    return trimmed;
+  };
+
+  const candidateTargetIds = Array.isArray(input.candidateTargetIds)
+    ? input.candidateTargetIds
+        .map((candidate) => trimString(candidate, 120))
+        .filter((candidate): candidate is string => Boolean(candidate))
+        .slice(0, 8)
+    : undefined;
+
+  const selectionReason =
+    typeof input.selectionReason === "string" &&
+    (googleClientActionContextSelectionReasonValues as readonly string[]).includes(
+      input.selectionReason,
+    )
+      ? (input.selectionReason as (typeof googleClientActionContextSelectionReasonValues)[number])
+      : undefined;
+
+  const selectionMode =
+    typeof input.selectionMode === "string" &&
+    (googleClientActionContextSelectionModeValues as readonly string[]).includes(
+      input.selectionMode,
+    )
+      ? (input.selectionMode as (typeof googleClientActionContextSelectionModeValues)[number])
+      : undefined;
+
+  return {
+    connector,
+    ...(trimString(input.action, 40) ? { action: trimString(input.action, 40) } : {}),
+    ...(trimString(input.actionableTargetId, 120)
+      ? { actionableTargetId: trimString(input.actionableTargetId, 120) }
+      : {}),
+    ...(candidateTargetIds && candidateTargetIds.length > 0
+      ? { candidateTargetIds }
+      : {}),
+    ...(trimString(input.sourceTurnId, 120)
+      ? { sourceTurnId: trimString(input.sourceTurnId, 120) }
+      : {}),
+    ...(selectionReason ? { selectionReason } : {}),
+    ...(trimString(input.surfaceKey, 240)
+      ? { surfaceKey: trimString(input.surfaceKey, 240) }
+      : {}),
+    ...(selectionMode ? { selectionMode } : {}),
+  };
+}
+
+const googleClientActionContextInputSchema = z.preprocess(
+  (value) => sanitizeGoogleClientActionContextInput(value),
+  googleClientActionContextSchema.optional(),
+);
 
 const chatRespondSchema = z
   .object({
@@ -242,7 +325,7 @@ const chatRespondSchema = z
     persona: personaInputSchema.optional(),
     clientTimeZone: z.string().trim().min(1).max(80).optional(),
     existingUserMessageId: z.string().uuid().optional(),
-    googleActionContext: googleClientActionContextSchema.optional(),
+    googleActionContext: googleClientActionContextInputSchema,
   })
   .superRefine((value, ctx) => {
     if (value.text.length === 0 && value.attachmentIds.length === 0) {
@@ -337,7 +420,7 @@ const liveToolResponseSchema = z.object({
     )
     .min(1, "At least one function call is required"),
   clientTimeZone: z.string().trim().min(1).max(80).optional(),
-  googleActionContext: googleClientActionContextSchema.optional(),
+  googleActionContext: googleClientActionContextInputSchema,
 });
 
 const googleScopeModeSchema = z.enum(["read", "write"]);
