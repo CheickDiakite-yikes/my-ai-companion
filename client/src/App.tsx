@@ -15614,11 +15614,8 @@ function App() {
           });
         },
         getGoogleActionContext: () =>
-          activeVoiceGoogleActionContextRef.current
-            ? {
-                ...(activeVoiceGoogleActionContextRef.current ?? {}),
-              }
-            : null,
+          sanitizeGoogleActionContext(activeVoiceGoogleActionContextRef.current) ??
+          null,
         onConversationMutated: ({ conversationId: mutatedConversationId }) => {
           void refreshConversationAfterLiveToolResponse(mutatedConversationId);
         },
@@ -16157,7 +16154,8 @@ function App() {
             onSendMessage={handleSendMessage}
             onTraceStageEvent={traceVoiceStageEvent}
             onStageContextChange={(context) => {
-              activeVoiceGoogleActionContextRef.current = context;
+              activeVoiceGoogleActionContextRef.current =
+                sanitizeGoogleActionContext(context) ?? null;
             }}
             liveDebug={{
               enabled: liveDebugEnabled,
