@@ -26,7 +26,10 @@ type BlogShareEntry = {
 const DEFAULT_TITLE = "Zeeme — Your AI Companion, Always Here for You";
 const DEFAULT_DESCRIPTION =
   "Zeeme is your personal AI companion for voice and text chat. Talk, listen, and grow together with Zee — always here for you.";
-const DEFAULT_IMAGE_PATH = "/zeeme-og.png?v=20260211";
+const DEFAULT_IMAGE_PATH = "/zeeme-og.jpg?v=20260313b";
+const DEFAULT_IMAGE_TYPE = "image/jpeg";
+const DEFAULT_IMAGE_WIDTH = 1200;
+const DEFAULT_IMAGE_HEIGHT = 630;
 
 const BLOG_ARCHIVE_SHARE: BlogShareEntry = {
   title: "ZeeMe Journal",
@@ -296,9 +299,9 @@ export function resolveShareMetaForPath(
       canonicalUrl,
       ogType: "website",
       imageUrl: joinUrl(origin, ABOUT_SHARE.imagePath),
-      imageType: "image/png",
-      imageWidth: 1536,
-      imageHeight: 1024,
+      imageType: DEFAULT_IMAGE_TYPE,
+      imageWidth: DEFAULT_IMAGE_WIDTH,
+      imageHeight: DEFAULT_IMAGE_HEIGHT,
       imageAlt: ABOUT_SHARE.imageAlt,
       twitterCard: "summary_large_image",
     };
@@ -311,9 +314,9 @@ export function resolveShareMetaForPath(
       canonicalUrl,
       ogType: "website",
       imageUrl: joinUrl(origin, TERMS_SHARE.imagePath),
-      imageType: "image/png",
-      imageWidth: 1536,
-      imageHeight: 1024,
+      imageType: DEFAULT_IMAGE_TYPE,
+      imageWidth: DEFAULT_IMAGE_WIDTH,
+      imageHeight: DEFAULT_IMAGE_HEIGHT,
       imageAlt: TERMS_SHARE.imageAlt,
       twitterCard: "summary_large_image",
     };
@@ -326,9 +329,9 @@ export function resolveShareMetaForPath(
       canonicalUrl,
       ogType: "website",
       imageUrl: joinUrl(origin, PRIVACY_SHARE.imagePath),
-      imageType: "image/png",
-      imageWidth: 1536,
-      imageHeight: 1024,
+      imageType: DEFAULT_IMAGE_TYPE,
+      imageWidth: DEFAULT_IMAGE_WIDTH,
+      imageHeight: DEFAULT_IMAGE_HEIGHT,
       imageAlt: PRIVACY_SHARE.imageAlt,
       twitterCard: "summary_large_image",
     };
@@ -341,9 +344,9 @@ export function resolveShareMetaForPath(
       canonicalUrl,
       ogType: "website",
       imageUrl: joinUrl(origin, BLOG_ARCHIVE_SHARE.imagePath),
-      imageType: "image/png",
-      imageWidth: 1536,
-      imageHeight: 1024,
+      imageType: BLOG_ARCHIVE_SHARE.imageType ?? "image/png",
+      imageWidth: BLOG_ARCHIVE_SHARE.imageWidth ?? 1536,
+      imageHeight: BLOG_ARCHIVE_SHARE.imageHeight ?? 1024,
       imageAlt: BLOG_ARCHIVE_SHARE.imageAlt,
       twitterCard: "summary_large_image",
     };
@@ -374,9 +377,9 @@ export function resolveShareMetaForPath(
     canonicalUrl: joinUrl(origin, "/"),
     ogType: "website",
     imageUrl: joinUrl(origin, DEFAULT_IMAGE_PATH),
-    imageType: "image/png",
-    imageWidth: 1536,
-    imageHeight: 1024,
+    imageType: DEFAULT_IMAGE_TYPE,
+    imageWidth: DEFAULT_IMAGE_WIDTH,
+    imageHeight: DEFAULT_IMAGE_HEIGHT,
     imageAlt: "Zeeme — Zee and Me. Your AI companion, always here for you.",
     twitterCard: "summary_large_image",
   };
