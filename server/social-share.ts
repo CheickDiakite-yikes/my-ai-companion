@@ -26,10 +26,10 @@ type BlogShareEntry = {
 const DEFAULT_TITLE = "Zeeme — Your AI Companion, Always Here for You";
 const DEFAULT_DESCRIPTION =
   "Zeeme is your personal AI companion for voice and text chat. Talk, listen, and grow together with Zee — always here for you.";
-const DEFAULT_IMAGE_PATH = "/zeeme-og.jpg?v=20260313b";
+const DEFAULT_IMAGE_PATH = "/zeeme-og.jpg?v=20260313c";
 const DEFAULT_IMAGE_TYPE = "image/jpeg";
 const DEFAULT_IMAGE_WIDTH = 1200;
-const DEFAULT_IMAGE_HEIGHT = 630;
+const DEFAULT_IMAGE_HEIGHT = 800;
 
 const BLOG_ARCHIVE_SHARE: BlogShareEntry = {
   title: "ZeeMe Journal",
