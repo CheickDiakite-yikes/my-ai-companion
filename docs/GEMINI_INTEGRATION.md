@@ -1,109 +1,263 @@
 # Gemini Integration Notes
 
-Last Updated: 2026-02-13
+Last Updated: 2026-03-12
 
-## Models In Use
-- Text: `gemini-3-flash-preview`
-- Live voice: `gemini-2.5-flash-native-audio-preview-12-2025`
+This document is the technical integration reference for ZeeMe's Gemini usage across text chat, live voice, grounding, and Google personal-context tool calls.
 
-## Prompt Privacy Contract
-- Persona/system prompt content is private and server-side only.
-- Public documentation must not include raw private prompt wording.
-- Runtime behavior can be documented without exposing private prompt text.
+---
 
-## Implemented Endpoints
+## 1) Models In Use
 
-## `POST /api/chat/respond`
-Creates a user message, generates assistant reply with Gemini text model, and persists assistant reply.
+| Purpose | Model | Source of truth |
+|---|---|---|
+| Text chat | `gemini-3-flash-preview` | `GEMINI_TEXT_MODEL` fallback |
+| Live voice | `gemini-2.5-flash-native-audio-preview-12-2025` | `GEMINI_LIVE_MODEL` fallback |
 
-Request body:
-```json
-{
-  "conversationId": "uuid-or-id",
-  "text": "user message",
-  "persona": "Zee"
-}
-```
+Notes:
+- Text mode is server-authoritative and uses Gemini through `generateContent` / streaming equivalents.
+- Live voice uses Gemini Live with native audio and session token minting.
 
-## `POST /api/chat/respond/stream`
-Streaming text endpoint with NDJSON events for progressive rendering.
+---
 
-Event order:
+## 2) Prompt Privacy Contract
+
+- Zee's private persona prompt remains server-side only.
+- Public docs may describe behavior and guardrails, but must not expose private system-prompt text verbatim.
+- Runtime prompt behavior is layered from:
+  - persona
+  - profile
+  - response-style preferences
+  - memory context
+  - time grounding
+  - tool policies
+
+---
+
+## 3) Text Chat Integration
+
+### Core endpoints
+- `POST /api/chat/respond`
+- `POST /api/chat/respond/stream`
+
+### Streaming event order
+
 ```text
 ack -> delta* -> part_final* -> final | error
 ```
 
-## `POST /api/live/token`
-Creates an ephemeral token for Gemini Live sessions using constrained setup config and memory hydration.
+### Text-mode behavior
 
-Request body:
-```json
-{
-  "conversationId": "conversation-uuid",
-  "persona": "Zee",
-  "voice": "Kore",
-  "responseModality": "AUDIO",
-  "memoryModeOverride": "safe_selective",
-  "deviceClass": "mobile"
-}
-```
+Text mode currently supports:
+- normal conversation
+- Google Search grounding for fresh/current asks
+- Morning Brief
+- Gmail/Calendar reads
+- Gmail/Calendar detail reads
+- approval-gated Gmail/Calendar write planning
 
-Response includes:
-- token/session metadata
-- `memoryMeta` (active thread, cross-chat, fallback path, build time)
-- `configSummary` (low-latency mode, activity handling, VAD, thinking budget, output tokens)
+### Important text-mode guardrails
 
-## `POST /api/conversations/:id/voice-transcript`
-Persists live transcription segments in shared chat memory.
+- do not fabricate memory facts
+- do not fabricate Google data
+- inject current time context before the latest user message
+- inject Google personal-context results immediately before the latest user message
+- use task/runtime state when the user is continuing an existing Gmail/Calendar flow
 
-Request body:
-```json
-{
-  "sender": "user",
-  "text": "transcribed segment"
-}
-```
+---
 
-## Shared Memory Stitching
-- Voice transcripts and text messages are persisted into the same `messages` table.
-- Text generation and live token creation both stitch memory from:
-  - current thread
-  - cross-chat relevant context (if enabled)
-  - profile context
-  - durable memory items
-- Memory build gracefully degrades: full -> active-thread-only -> persona-only.
+## 4) Live Voice Integration
 
-## Live Voice Reliability Baseline
-Current stable priorities:
-1. prevent false interruptions
-2. preserve response completeness
-3. preserve mobile compatibility
+### Core endpoint
+- `POST /api/live/token`
 
-Key settings currently used in production profile:
-- `GEMINI_LIVE_ACTIVITY_HANDLING=NO_INTERRUPTION`
-- `GEMINI_LIVE_PROACTIVE_AUDIO=false`
-- `GEMINI_LIVE_FORCE_ALWAYS_RESPOND=true`
-- `GEMINI_LIVE_VAD_START_SENSITIVITY=LOW`
-- `GEMINI_LIVE_MAX_OUTPUT_TOKENS=1000`
-- `VITE_LIVE_AUDIO_NOISE_GATE_ENABLED=false`
-- `VITE_LIVE_AUDIO_SUPPRESS_INPUT_WHILE_ASSISTANT_SPEAKING=true`
-- `VITE_LIVE_AUDIO_SUPPRESS_USER_TRANSCRIPT_DURING_ASSISTANT_SPEECH=true`
+### Response shape highlights
+- ephemeral token
+- `memoryMeta`
+- `configSummary`
 
-## Trace-Driven Debugging Signals
-- `interrupted=true`:
-  - indicates barge-in/turn interruption path
-- `generationComplete=true` then `turnComplete=true` with `interrupted=false`:
-  - indicates normal completion path (short response is likely budget/style, not cut-off)
-- no transcript + no server content after session open:
-  - indicates capture or transport issue
+### Current Live configuration goals
+- client-managed interruption and activity signaling
+- transcript continuity into shared chat history
+- context window compression enabled
+- session resumption enabled
+- grounding and personal-context tools enabled only when server/runtime gates allow them
 
-## Agentic Integration Status
-- Agentic tasks share the same user-facing chat lane.
-- Runtime task orchestration is server-side and sandboxed.
-- Current shipped artifact type: mini-games.
-- Task events stream in-thread (`task_created` ... `task_artifact_ready` / `task_failed`).
+### Stable Live assumptions
+- native audio mode remains active
+- `speechConfig.languageCode` is intentionally not forced for native audio
+- transcript text is treated as fallible and context-dependent
 
-## Observability
-- Every API response includes `x-trace-id`.
-- Structured logs redact sensitive fields (`token`, `secret`, `password`, `apiKey`, signatures).
-- Live session traces include token config summary and audio capture config for forensic analysis.
+---
+
+## 5) Live Tool-Response Bridge
+
+### Endpoint
+- `POST /api/live/tool-response`
+
+### What it does
+
+It is the bridge between Gemini Live function calls and ZeeMe's server-authoritative Gmail/Calendar/Morning Brief handling.
+
+The route:
+1. validates and sanitizes the incoming tool-response request
+2. enforces auth, conversation ownership, and feature gates
+3. resolves Google tokens/scopes as needed
+4. fetches data or prepares/executes task state
+5. returns `functionResponses` for the live session
+6. returns optional `chatDigests`, `resolvedFunctionCalls`, and `webSearchEvents`
+
+### Supported function families
+
+Read/detail:
+- `get_user_emails`
+- `get_calendar_events`
+- `get_email_thread_detail`
+- `get_calendar_event_detail`
+
+Write prep:
+- `prepare_google_email_action`
+- `prepare_google_calendar_action`
+
+Morning Brief:
+- `get_morning_brief`
+- `get_inbox_digest`
+
+---
+
+## 6) Request Envelope Hardening
+
+The live tool-response request is hardened on both client and server.
+
+### Client behavior
+- trims `conversationId`
+- normalizes tool-call ids and names
+- accepts alias fields:
+  - `callId`
+  - `functionCallId`
+  - `functionName`
+  - `arguments`
+- sanitizes optional `googleActionContext`
+- retries once with a minimal payload if the server rejects optional fields
+
+### Server behavior
+- preprocesses the entire request before Zod validation
+- sanitizes:
+  - `conversationId`
+  - `clientTimeZone`
+  - `functionCalls`
+  - `googleActionContext`
+- traces invalid payloads as `live.tool_response.invalid_request`
+
+This contract exists because Live tool-call payload shape drift or stale deploy mismatches can otherwise break Gmail/Calendar voice flows before any real tool work occurs.
+
+---
+
+## 7) Google Personal Context Tool Policy
+
+### Read tools
+
+Use these only for verified inbox/calendar data:
+- `get_user_emails`
+- `get_calendar_events`
+- `get_email_thread_detail`
+- `get_calendar_event_detail`
+
+The model should call them instead of improvising.
+
+### Write tools
+
+Use these for approval-gated Gmail/Calendar actions:
+- `prepare_google_email_action`
+- `prepare_google_calendar_action`
+
+They are used for:
+- compose/reply/send email
+- save as draft
+- create calendar event
+- update/move calendar event
+- short follow-up approvals and revisions
+
+They are **not** blind “do it now” tools.
+They are task-aware preparation tools that can:
+- clarify
+- disambiguate
+- require scope upgrade
+- create approval preview
+- continue active task state
+
+---
+
+## 8) Live Instruction Priorities
+
+Current live prompt behavior prioritizes:
+
+1. casual, charitable interpretation of voice input
+2. freshness grounding for time-sensitive asks
+3. verified Gmail/Calendar tool use
+4. stateful approval flows for Gmail/Calendar writes
+5. truthful completion wording
+
+Important live instruction rules now in effect:
+- short follow-ups like `send it`, `save it`, `sounds good`, `I approve`, `move it to 4`, and `book that` are treated as Google action continuations, not generic conversation
+- Zee must never claim a Gmail/Calendar action completed unless the tool result explicitly says it completed
+- when only a recipient is provided for email, Zee should ask for subject/body detail instead of acting as if the draft is done
+- when event title or time is missing, Zee should ask only for that missing slot
+
+---
+
+## 9) Google Action Result States
+
+The Google action tool path can surface these response states:
+
+| State | Meaning |
+|---|---|
+| `clarification_needed` | missing slot or follow-up needed |
+| `approval_required` | preview exists and user approval is still needed |
+| `upgrade_required` | Google is disconnected or missing required scopes |
+| `in_progress` | execution accepted and running |
+| `completed` | Gmail/Calendar write completed |
+| `cancelled` | task/session was cancelled |
+
+Result truthfulness contract:
+- if approval is still required, the assistant must say so
+- if execution completed, the assistant can say `draft saved`, `email sent`, `event created`, or `event updated`
+
+---
+
+## 10) Observability
+
+### Server traces
+- `live.token.*`
+- `live.tool_response.requested`
+- `live.tool_response.generated`
+- `live.tool_response.invalid_request`
+- `live.tool.emails.*`
+- `live.tool.calendar.*`
+- `live.tool.calendar_detail.*`
+- `live.tool.google_action.context`
+- `live.tool.google_action.handled`
+
+### Client traces
+- `live.tool_call.received`
+- `live.tool_call.forwarding`
+- `live.tool_call.http_retrying_minimal`
+- `live.tool_call.http_failed`
+- `live.tool_call.responded`
+- `live.google_context.*`
+
+### Required debugging rule
+
+When voice Gmail/Calendar behavior fails, do not jump straight to “model issue.”
+First classify:
+1. tool never called
+2. tool called but bridge failed
+3. bridge succeeded but server tool failed
+4. tool result returned but assistant handoff/stage state was wrong
+
+---
+
+## 11) Related Documents
+
+- [README.md](/Users/cheickdiakite/Codex/my-ai-companion/README.md)
+- [docs/ZEE_STAGE_GOOGLE_ACTIONS.md](/Users/cheickdiakite/Codex/my-ai-companion/docs/ZEE_STAGE_GOOGLE_ACTIONS.md)
+- [docs/LIVE_VOICE_REPLIT_CHECKLIST.md](/Users/cheickdiakite/Codex/my-ai-companion/docs/LIVE_VOICE_REPLIT_CHECKLIST.md)
