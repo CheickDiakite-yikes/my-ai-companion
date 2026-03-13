@@ -104,8 +104,26 @@ interface BlogPost {
   publishedAt: string;
   readTime: string;
   tags: string[];
+  categories: Exclude<BlogArchiveFilterId, "all">[];
   blocks: BlogPostBlock[];
 }
+
+type BlogArchiveFilterId =
+  | "all"
+  | "marketing"
+  | "product"
+  | "technical"
+  | "research"
+  | "trust"
+  | "reports"
+  | "launches";
+
+type BlogArchiveFilter = {
+  id: BlogArchiveFilterId;
+  label: string;
+  leadLabel: string;
+  description: string;
+};
 
 interface LandingUseCaseStory {
   id: string;
@@ -349,6 +367,7 @@ const BLOG_POSTS: BlogPost[] = [
     publishedAt: "March 13, 2026",
     readTime: "14 min read",
     tags: ["Featured Story", "Product", "Voice + Text", "Gmail + Calendar", "Morning Brief"],
+    categories: ["marketing", "product"],
     blocks: [
       {
         type: "image",
@@ -505,6 +524,7 @@ const BLOG_POSTS: BlogPost[] = [
     publishedAt: "March 13, 2026",
     readTime: "12 min read",
     tags: ["Feature Highlight", "Product Strategy", "Zee Stage", "Gmail + Calendar"],
+    categories: ["product", "technical"],
     blocks: [
       {
         type: "image",
@@ -591,6 +611,7 @@ const BLOG_POSTS: BlogPost[] = [
     publishedAt: "March 13, 2026",
     readTime: "13 min read",
     tags: ["Voice UX", "Approvals", "Gmail + Calendar", "Reliability"],
+    categories: ["product", "technical", "trust"],
     blocks: [
       {
         type: "image",
@@ -686,6 +707,7 @@ const BLOG_POSTS: BlogPost[] = [
     publishedAt: "March 12, 2026",
     readTime: "15 min read",
     tags: ["Voice Reliability", "Product", "Live API", "User Experience"],
+    categories: ["marketing", "product", "technical"],
     blocks: [
       {
         type: "image",
@@ -793,6 +815,7 @@ const BLOG_POSTS: BlogPost[] = [
     publishedAt: "March 12, 2026",
     readTime: "14 min read",
     tags: ["Feature Deep Dive", "Gmail + Calendar", "Zee Stage", "Product Architecture"],
+    categories: ["product", "technical"],
     blocks: [
       {
         type: "image",
@@ -913,6 +936,7 @@ const BLOG_POSTS: BlogPost[] = [
     publishedAt: "March 13, 2026",
     readTime: "16 min read",
     tags: ["Pricing", "Quota Strategy", "Business", "Gemini", "Google Actions"],
+    categories: ["marketing", "product", "technical"],
     blocks: [
       {
         type: "image",
@@ -1051,6 +1075,7 @@ const BLOG_POSTS: BlogPost[] = [
     publishedAt: "March 12, 2026",
     readTime: "13 min read",
     tags: ["Developer Guide", "OAuth", "Google Integrations", "Replit", "Reliability"],
+    categories: ["technical"],
     blocks: [
       {
         type: "image",
@@ -1141,6 +1166,7 @@ const BLOG_POSTS: BlogPost[] = [
     publishedAt: "March 12, 2026",
     readTime: "15 min read",
     tags: ["Product Philosophy", "Memory", "Voice + Text", "Continuity"],
+    categories: ["marketing", "product", "technical"],
     blocks: [
       {
         type: "image",
@@ -1238,6 +1264,7 @@ const BLOG_POSTS: BlogPost[] = [
     publishedAt: "March 12, 2026",
     readTime: "15 min read",
     tags: ["Engineering", "Incident Forensics", "Runtime Design", "Reliability"],
+    categories: ["technical"],
     blocks: [
       {
         type: "image",
@@ -1352,6 +1379,7 @@ const BLOG_POSTS: BlogPost[] = [
     publishedAt: "March 12, 2026",
     readTime: "14 min read",
     tags: ["Trust", "Privacy", "Google Context", "Security", "Product"],
+    categories: ["trust", "marketing", "technical"],
     blocks: [
       {
         type: "image",
@@ -1464,6 +1492,7 @@ const BLOG_POSTS: BlogPost[] = [
     publishedAt: "March 6, 2026",
     readTime: "7 min read",
     tags: ["Product", "Companion", "Voice + Text", "Launch"],
+    categories: ["marketing", "launches"],
     blocks: [
       {
         type: "image",
@@ -1593,6 +1622,7 @@ const BLOG_POSTS: BlogPost[] = [
       "GCP",
       "Incident Forensics",
     ],
+    categories: ["reports", "technical"],
     blocks: [
       {
         type: "image",
@@ -1796,6 +1826,7 @@ const BLOG_POSTS: BlogPost[] = [
     publishedAt: "February 26, 2026",
     readTime: "32 min read",
     tags: ["Research Paper", "Companion OS", "Architecture", "Voice + Text"],
+    categories: ["research", "technical"],
     blocks: [
       {
         type: "image",
@@ -1992,6 +2023,7 @@ const BLOG_POSTS: BlogPost[] = [
     publishedAt: "February 26, 2026",
     readTime: "29 min read",
     tags: ["Case Study", "Agentic Coding", "Build Journey", "Reliability"],
+    categories: ["reports", "technical"],
     blocks: [
       {
         type: "image",
@@ -2179,6 +2211,7 @@ const BLOG_POSTS: BlogPost[] = [
     publishedAt: "February 26, 2026",
     readTime: "24 min read",
     tags: ["Research Paper", "Memory", "Temporal Grounding", "Companion Reliability"],
+    categories: ["research", "technical"],
     blocks: [
       {
         type: "image",
@@ -2326,6 +2359,7 @@ const BLOG_POSTS: BlogPost[] = [
       "Companion Reliability",
       "Competitive Analysis",
     ],
+    categories: ["research", "technical"],
     blocks: [
       {
         type: "image",
@@ -2618,6 +2652,7 @@ const BLOG_POSTS: BlogPost[] = [
       "GCP Operations",
       "Data Handling",
     ],
+    categories: ["research", "trust", "technical"],
     blocks: [
       {
         type: "image",
@@ -2832,6 +2867,66 @@ const BLOG_PIN_ORDER = [
   "zeeme-memory-lab-paper-2026",
   "zeeme-google-data-handling-security-paper-2026",
 ] as const;
+
+const BLOG_ARCHIVE_FILTERS: BlogArchiveFilter[] = [
+  {
+    id: "all",
+    label: "All",
+    leadLabel: "Featured Story",
+    description: "Everything in the journal.",
+  },
+  {
+    id: "marketing",
+    label: "Marketing",
+    leadLabel: "Marketing Pick",
+    description: "Narrative, launch, and conversion-focused storytelling.",
+  },
+  {
+    id: "product",
+    label: "Product",
+    leadLabel: "Product Pick",
+    description: "Feature strategy, companion UX, and product design thinking.",
+  },
+  {
+    id: "technical",
+    label: "Technical",
+    leadLabel: "Technical Pick",
+    description: "Architecture, debugging, systems behavior, and builder lessons.",
+  },
+  {
+    id: "research",
+    label: "Research",
+    leadLabel: "Research Pick",
+    description: "Long-form papers, benchmark thinking, and technical frameworks.",
+  },
+  {
+    id: "trust",
+    label: "Trust",
+    leadLabel: "Trust Pick",
+    description: "Privacy, security, safety boundaries, and truthful product behavior.",
+  },
+  {
+    id: "reports",
+    label: "Reports",
+    leadLabel: "Report Pick",
+    description: "Field reports, case studies, and operational retrospectives.",
+  },
+  {
+    id: "launches",
+    label: "Launches",
+    leadLabel: "Launch Pick",
+    description: "Launch stories, release moments, and major public updates.",
+  },
+];
+
+function normalizeBlogArchiveFilterId(raw: string | null): BlogArchiveFilterId {
+  if (!raw) return "all";
+  const normalized = raw.trim().toLowerCase();
+  return BLOG_ARCHIVE_FILTERS.some((filter) => filter.id === normalized)
+    ? (normalized as BlogArchiveFilterId)
+    : "all";
+}
+
 function getBlogCoverBlock(post: BlogPost): Extract<BlogPostBlock, { type: "image" }> | null {
   const cover = post.blocks.find((block): block is Extract<BlogPostBlock, { type: "image" }> => block.type === "image");
   return cover ?? null;
@@ -3424,6 +3519,8 @@ function InfoPageOverlay({
 }) {
   const content = INFO_PAGE_CONTENT[page];
   const [activeBlogPostId, setActiveBlogPostId] = useState<string | null>(null);
+  const [activeBlogFilter, setActiveBlogFilter] =
+    useState<BlogArchiveFilterId>("all");
   const [shareNotice, setShareNotice] = useState<string | null>(null);
 
   const activeBlogPost =
@@ -3443,13 +3540,46 @@ function InfoPageOverlay({
       return aPin - bPin;
     });
   }, []);
-  const featuredBlogPost =
+  const activeBlogFilterMeta = useMemo(
+    () =>
+      BLOG_ARCHIVE_FILTERS.find((filter) => filter.id === activeBlogFilter) ??
+      BLOG_ARCHIVE_FILTERS[0],
+    [activeBlogFilter],
+  );
+  const blogFilterCounts = useMemo(() => {
+    const counts = new Map<BlogArchiveFilterId, number>();
+    BLOG_ARCHIVE_FILTERS.forEach((filter) => {
+      counts.set(
+        filter.id,
+        filter.id === "all"
+          ? orderedBlogPosts.length
+          : orderedBlogPosts.filter((post) =>
+              post.categories.includes(
+                filter.id as Exclude<BlogArchiveFilterId, "all">,
+              ),
+            ).length,
+      );
+    });
+    return counts;
+  }, [orderedBlogPosts]);
+  const filteredBlogPosts = useMemo(() => {
+    if (page !== "blog") return [];
+    if (activeBlogFilter === "all") return orderedBlogPosts;
+    return orderedBlogPosts.filter((post) =>
+      post.categories.includes(activeBlogFilter),
+    );
+  }, [page, orderedBlogPosts, activeBlogFilter]);
+  const archiveLeadBlogPost =
     page === "blog"
-      ? orderedBlogPosts.find((post) => post.id === BLOG_FEATURED_ID) ?? orderedBlogPosts[0] ?? null
+      ? activeBlogFilter === "all"
+        ? orderedBlogPosts.find((post) => post.id === BLOG_FEATURED_ID) ??
+          filteredBlogPosts[0] ??
+          null
+        : filteredBlogPosts[0] ?? null
       : null;
-  const secondaryBlogPosts =
+  const archiveSecondaryBlogPosts =
     page === "blog"
-      ? orderedBlogPosts.filter((post) => post.id !== featuredBlogPost?.id)
+      ? filteredBlogPosts.filter((post) => post.id !== archiveLeadBlogPost?.id)
       : [];
   const activeBlogSections = useMemo(() => {
     if (!activeBlogPost) return [];
@@ -3473,33 +3603,45 @@ function InfoPageOverlay({
   useEffect(() => {
     if (page !== "blog") {
       setActiveBlogPostId(null);
+      setActiveBlogFilter("all");
       setShareNotice(null);
     }
   }, [page]);
 
   useEffect(() => {
     if (page !== "blog" || typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    setActiveBlogFilter(
+      normalizeBlogArchiveFilterId(url.searchParams.get("category")),
+    );
     const pathname = window.location.pathname.replace(/\/+$/, "") || "/";
-    if (!pathname.startsWith("/blog/")) return;
+    if (!pathname.startsWith("/blog/")) {
+      setActiveBlogPostId(null);
+      return;
+    }
     const deepLinkedPostId = decodeURIComponent(pathname.slice("/blog/".length));
     const exists = BLOG_POSTS.some((post) => post.id === deepLinkedPostId);
-    if (exists) {
-      setActiveBlogPostId(deepLinkedPostId);
-    }
+    setActiveBlogPostId(exists ? deepLinkedPostId : null);
   }, [page]);
 
   useEffect(() => {
     if (page !== "blog" || typeof window === "undefined") return;
+    const currentHref = `${window.location.pathname}${window.location.search}`;
     const url = new URL(window.location.href);
     const nextPath = activeBlogPostId
       ? `/blog/${encodeURIComponent(activeBlogPostId)}`
       : "/blog";
-    if (url.pathname !== nextPath) {
-      url.pathname = nextPath;
-      url.hash = "";
-      window.history.replaceState({}, "", `${url.pathname}${url.search}`);
+    if (activeBlogFilter === "all") {
+      url.searchParams.delete("category");
+    } else {
+      url.searchParams.set("category", activeBlogFilter);
     }
-  }, [page, activeBlogPostId]);
+    const nextSearch = url.searchParams.toString();
+    const nextHref = `${nextPath}${nextSearch ? `?${nextSearch}` : ""}`;
+    if (currentHref !== nextHref) {
+      window.history.replaceState({}, "", nextHref);
+    }
+  }, [page, activeBlogPostId, activeBlogFilter]);
 
   useEffect(() => {
     if (!shareNotice) return;
@@ -4569,9 +4711,124 @@ function InfoPageOverlay({
               </motion.article>
             ) : (
               <div className="space-y-6">
-                {featuredBlogPost ? (
+                <section
+                  className="border px-4 py-4 md:px-5"
+                  style={{
+                    borderColor: "rgba(255, 217, 172, 0.16)",
+                    background:
+                      "linear-gradient(180deg, rgba(255, 206, 158, 0.05), rgba(255, 206, 158, 0.02))",
+                  }}
+                >
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="max-w-lg">
+                      <p
+                        className="text-[10px] font-semibold uppercase tracking-[0.24em]"
+                        style={{ color: "rgba(255, 214, 172, 0.58)" }}
+                      >
+                        Browse by lane
+                      </p>
+                      <p
+                        className="mt-2 text-sm leading-relaxed"
+                        style={{ color: "rgba(255, 224, 196, 0.76)" }}
+                      >
+                        {activeBlogFilterMeta.description}
+                      </p>
+                    </div>
+                    <p
+                      className="text-[11px] uppercase tracking-[0.2em]"
+                      style={{ color: "rgba(255, 214, 172, 0.42)" }}
+                    >
+                      {blogFilterCounts.get(activeBlogFilter) ?? 0}{" "}
+                      {(blogFilterCounts.get(activeBlogFilter) ?? 0) === 1
+                        ? "story"
+                        : "stories"}
+                    </p>
+                  </div>
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    {BLOG_ARCHIVE_FILTERS.map((filter) => {
+                      const isActive = filter.id === activeBlogFilter;
+                      const count = blogFilterCounts.get(filter.id) ?? 0;
+                      return (
+                        <button
+                          key={filter.id}
+                          type="button"
+                          onClick={() => setActiveBlogFilter(filter.id)}
+                          className="inline-flex items-center gap-2 border px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] transition-transform hover:scale-[1.01]"
+                          style={{
+                            borderColor: isActive
+                              ? "rgba(255, 217, 172, 0.34)"
+                              : "rgba(255, 217, 172, 0.16)",
+                            color: isActive
+                              ? "#FFEED8"
+                              : "rgba(255, 220, 188, 0.74)",
+                            background: isActive
+                              ? "rgba(255, 206, 158, 0.12)"
+                              : "rgba(255, 206, 158, 0.03)",
+                          }}
+                          aria-pressed={isActive}
+                          data-testid={`button-blog-filter-${filter.id}`}
+                        >
+                          <span>{filter.label}</span>
+                          <span
+                            className="min-w-5 border px-1.5 py-0.5 text-[10px]"
+                            style={{
+                              borderColor: isActive
+                                ? "rgba(255, 217, 172, 0.28)"
+                                : "rgba(255, 217, 172, 0.14)",
+                              color: isActive
+                                ? "rgba(255, 232, 208, 0.88)"
+                                : "rgba(255, 214, 172, 0.66)",
+                              background: "rgba(255, 255, 255, 0.02)",
+                            }}
+                          >
+                            {count}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </section>
+                {filteredBlogPosts.length === 0 ? (
+                  <section
+                    className="border px-5 py-8 text-center"
+                    style={{
+                      borderColor: "rgba(255, 217, 172, 0.16)",
+                      background:
+                        "linear-gradient(180deg, rgba(255, 206, 158, 0.04), rgba(255, 206, 158, 0.015))",
+                    }}
+                  >
+                    <p
+                      className="text-[10px] font-semibold uppercase tracking-[0.24em]"
+                      style={{ color: "rgba(255, 214, 172, 0.52)" }}
+                    >
+                      Nothing here yet
+                    </p>
+                    <p
+                      className="mx-auto mt-3 max-w-md text-[15px] leading-[1.8]"
+                      style={{ color: "rgba(255, 224, 196, 0.74)" }}
+                    >
+                      This category does not have any published stories yet. Try
+                      another lane or reset the archive to everything.
+                    </p>
+                    {activeBlogFilter !== "all" ? (
+                      <button
+                        type="button"
+                        onClick={() => setActiveBlogFilter("all")}
+                        className="mt-5 inline-flex items-center gap-2 border px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.14em]"
+                        style={{
+                          borderColor: "rgba(255, 217, 172, 0.22)",
+                          color: "rgba(255, 220, 188, 0.8)",
+                          background: "rgba(255, 206, 158, 0.05)",
+                        }}
+                      >
+                        Show all stories
+                      </button>
+                    ) : null}
+                  </section>
+                ) : null}
+                {archiveLeadBlogPost ? (
                   (() => {
-                    const coverBlock = getBlogCoverBlock(featuredBlogPost);
+                    const coverBlock = getBlogCoverBlock(archiveLeadBlogPost);
                     return (
                       <motion.article
                         initial={{ opacity: 0, y: 18 }}
@@ -4589,7 +4846,7 @@ function InfoPageOverlay({
                             color: "rgba(255, 224, 196, 0.74)",
                           }}
                         >
-                          Featured Story
+                          {activeBlogFilterMeta.leadLabel}
                         </div>
                         <div className="grid gap-6 md:grid-cols-[1.28fr_0.92fr] md:items-start">
                           <div>
@@ -4614,30 +4871,30 @@ function InfoPageOverlay({
                               className="mb-3 text-[11px] tracking-[0.24em] uppercase"
                               style={{ color: "rgba(255, 214, 172, 0.44)" }}
                             >
-                              {featuredBlogPost.publishedAt} · {featuredBlogPost.readTime}
+                              {archiveLeadBlogPost.publishedAt} · {archiveLeadBlogPost.readTime}
                             </p>
                             <h3
                               className="text-[1.85rem] leading-tight md:text-[2.4rem]"
                               style={{ color: "#FFEED8", fontFamily: "'Fraunces', serif" }}
                             >
-                              {featuredBlogPost.title}
+                              {archiveLeadBlogPost.title}
                             </h3>
                             <p
                               className="mt-3 text-[1rem] leading-[1.8]"
                               style={{ color: "rgba(255, 224, 196, 0.82)" }}
                             >
-                              {featuredBlogPost.subtitle}
+                              {archiveLeadBlogPost.subtitle}
                             </p>
                             <p
                               className="mt-4 text-[15px] leading-[1.9]"
                               style={{ color: "rgba(255, 224, 196, 0.72)" }}
                             >
-                              {featuredBlogPost.excerpt}
+                              {archiveLeadBlogPost.excerpt}
                             </p>
                             <div className="mt-5 flex flex-wrap gap-2">
-                              {featuredBlogPost.tags.map((tag) => (
+                              {archiveLeadBlogPost.tags.map((tag) => (
                                 <span
-                                  key={`${featuredBlogPost.id}-${tag}`}
+                                  key={`${archiveLeadBlogPost.id}-${tag}`}
                                   className="border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em]"
                                   style={{
                                     borderColor: "rgba(255, 217, 172, 0.16)",
@@ -4652,14 +4909,14 @@ function InfoPageOverlay({
                             <div className="mt-6">
                               <button
                                 type="button"
-                                onClick={() => setActiveBlogPostId(featuredBlogPost.id)}
+                                onClick={() => setActiveBlogPostId(archiveLeadBlogPost.id)}
                                 className="inline-flex items-center gap-2 border px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.14em]"
                                 style={{
                                   borderColor: "rgba(255, 217, 172, 0.22)",
                                   color: "rgba(255, 220, 188, 0.8)",
                                   background: "rgba(255, 206, 158, 0.05)",
                                 }}
-                                data-testid={`button-open-blog-post-${featuredBlogPost.id}`}
+                                data-testid={`button-open-blog-post-${archiveLeadBlogPost.id}`}
                               >
                                 Read article
                                 <ArrowRight className="h-3.5 w-3.5" />
@@ -4671,7 +4928,7 @@ function InfoPageOverlay({
                     );
                   })()
                 ) : null}
-                {secondaryBlogPosts.map((post, idx) => (
+                {archiveSecondaryBlogPosts.map((post, idx) => (
                   (() => {
                     const coverBlock = getBlogCoverBlock(post);
                     return (
