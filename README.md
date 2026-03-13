@@ -451,7 +451,7 @@ Current stage surface types:
 │   ├── AGENTIC_ENGINEERING_GUIDE.md       # Full agentic feature engineering reference
 │   ├── AGENTIC_ROADMAP_V1.md             # Agentic feature roadmap
 │   ├── AGENT_MESSAGE_PURPOSE_BACKFILL.md  # Message purpose migration guide
-│   ├── QUOTA_PRICING_REEVALUATION_2026-02-16.md  # Cost model worksheet
+│   ├── QUOTA_PRICING_REEVALUATION_2026-03-13.md  # Cost model worksheet
 │   └── SKILLS_INDEX.md                    # Local skill pack index
 ├── services/
 │   └── morning-brief-gcp/                 # Optional Cloud Run Morning Brief gateway
@@ -499,6 +499,9 @@ All tables are defined in `shared/schema.ts` and `shared/models/auth.ts`. Schema
 - `morning_brief_run` — +1 per uncached Morning Brief execution
 - `gmail_digest_run` — +1 when Morning Brief runs inbox digest successfully
 - `creation_run`, `coding_task`, `document_task`, `presentation_task`, `presentation_image` — agentic quotas (archived)
+
+Current limitation:
+- Gmail and Calendar reads/writes are still costed indirectly through text/live usage rather than first-class `usage_events` metrics. That is acceptable for the current beta, but the March 2026 quota re-evaluation recommends shadow-metering Google reads, detail reads, write preparation, write execution, and grounded search separately before wider rollout.
 
 ### Task, approval, and artifact tables
 
@@ -1008,72 +1011,161 @@ ZeeMe uses server-authoritative rolling 30-day hard limits to manage API cost ex
 - Client proactively handles exhaustion states with clear messaging
 - Quota cache TTL is configurable via `BETA_QUOTA_CACHE_TTL_MS` (default 5 minutes)
 
-### Detailed cost model (planning baseline — February 2026)
+### Cost model (planning baseline — March 2026)
 
-This section estimates monthly per-user spend from your current quota controls and Morning Brief behavior.
+This section is the current planning envelope for ZeeMe's shipped quota controls, including the newer Gmail + Calendar flows.
 
-Assumptions used in this README:
-- Text turn average: `2,500` input tokens + `350` output tokens
-- Live audio estimate: `~32 audio tokens/second`
-- Camera estimate: `~258 video tokens/second` + normal live audio in/out
-- Morning Brief gateway: typically `1-3` grounded model calls per uncached run
-- Morning Brief cap: `MORNING_BRIEF_DAILY_CAP=3`, cache TTL `15` minutes
-
-Pricing references (verify before launch pricing decisions):
-- Gemini API pricing: [ai.google.dev/gemini-api/docs/pricing](https://ai.google.dev/gemini-api/docs/pricing)
-- Token guidance: [ai.google.dev/gemini-api/docs/tokens](https://ai.google.dev/gemini-api/docs/tokens)
+Official source links:
+- Gemini pricing: [ai.google.dev/gemini-api/docs/pricing](https://ai.google.dev/gemini-api/docs/pricing)
+- Gemini token guidance: [ai.google.dev/gemini-api/docs/tokens](https://ai.google.dev/gemini-api/docs/tokens)
+- Gmail API usage limits: [developers.google.com/workspace/gmail/api/reference/quota](https://developers.google.com/workspace/gmail/api/reference/quota)
+- Calendar API quota guide: [developers.google.com/workspace/calendar/api/guides/quota](https://developers.google.com/workspace/calendar/api/guides/quota)
 - Cloud Run pricing: [cloud.google.com/run/pricing](https://cloud.google.com/run/pricing)
+
+Current ZeeMe-relevant price inputs:
+- `gemini-3-flash-preview` text chat and Google-action planner:
+  - input `~$0.50 / 1M tokens`
+  - output `~$3.00 / 1M tokens`
+- `gemini-2.5-flash-native-audio-preview-12-2025` live voice:
+  - input audio/video `~$3.00 / 1M tokens`
+  - output audio `~$12.00 / 1M tokens`
+- `gemini-2.0-flash-lite` summarization/background utility:
+  - input `~$0.075 / 1M tokens`
+  - output `~$0.30 / 1M tokens`
+- `gemini-embedding-001`:
+  - input `~$0.15 / 1M tokens`
+- Google Search grounding:
+  - Gemini 3 models: `5,000` prompts/month free, then `~$14 / 1,000 search queries`
+  - Gemini 2.5 models: `1,500` RPD free, then `~$35 / 1,000 grounded prompts`
+
+Working assumptions used for planning:
+- Text turn average: `2,500` input tokens + `350` output tokens
+- Live audio estimate: `32` tokens/second in and `32` tokens/second out
+- Camera estimate: `263` video tokens/second plus live audio in/out
+- Morning Brief gateway: typically `1-3` grounded model calls per uncached run
+- Gmail/Calendar reads are usually deterministic server fetches plus the user's normal reply turn
+- Gmail/Calendar writes may add one or more extra Gemini planning/revision turns before the final API write
 
 #### Unit-cost formulas
 
 - `text_cost_per_msg = ((input_tokens * input_price_per_1M) + (output_tokens * output_price_per_1M)) / 1,000,000`
-- `voice_cost_per_min = 60 * ((audio_in_tps * audio_in_price_per_1M) + (audio_out_tps * audio_out_price_per_1M)) / 1,000,000`
-- `camera_cost_per_min = 60 * ((video_tps * text_or_video_input_price_per_1M) + (audio_in_tps * audio_in_price_per_1M) + (audio_out_tps * audio_out_price_per_1M)) / 1,000,000`
+- `voice_cost_per_min = 60 * ((audio_in_tps * input_audio_price_per_1M) + (audio_out_tps * output_audio_price_per_1M)) / 1,000,000`
+- `camera_cost_per_min = 60 * (((video_tps + audio_in_tps) * input_audio_video_price_per_1M) + (audio_out_tps * output_audio_price_per_1M)) / 1,000,000`
 
-#### Morning Brief run-cost formula
+Using the assumptions above:
+- text message: `~$0.0023`
+- voice minute: `~$0.0288`
+- camera minute: `~$0.0761`
 
-Grounding dominates Morning Brief cost:
-- `grounding_cost_per_run ~= grounded_calls_per_run * ($35 / 1,000)`
-- `= grounded_calls_per_run * $0.035`
+Important accounting note:
+- camera minutes are not additive on top of equal voice minutes; camera sessions already consume voice quota at the same time
+- a realistic hard-ceiling model therefore uses `voice_only_minutes = max(voice_minutes - camera_minutes, 0)`
 
-With current gateway behavior:
+#### Gmail + Calendar cost implications
+
+Google personal-context work adds two very different cost classes:
+
+1. Gemini cost:
+- Google-action routing (`prepare_google_email_action`, `prepare_google_calendar_action`)
+- email draft generation and revision
+- extra prompt/context tokens when Gmail or Calendar results are injected into text chat
+
+2. Google API operational quota:
+- Gmail is quota-unit based, not priced in ZeeMe's current billing model
+- Calendar requests are available at no additional cost, but are still rate-limited per project/per user
+
+What that means in practice:
+- Gmail/Calendar reads are not major dollar drivers by themselves
+- Gmail/Calendar writes are not expensive because of Google Workspace billing; they are heavier because they can trigger extra Gemini turns and approval loops
+- live voice remains the dominant marginal cost driver once a user spends meaningful time in voice mode
+
+Representative Google action footprints in the shipped code:
+
+| Flow | Gemini overhead | Google API footprint | Operational note |
+|---|---|---|---|
+| Inbox summary read | usually tiny incremental token cost on top of the user's normal reply | Gmail `messages.list` + up to `messages.get` per returned thread | at default `10` threads, Zee can burn roughly `55` Gmail quota units |
+| Email thread detail | small incremental token cost | Gmail search/list + `threads.get` | typical detail lookup is about `20` Gmail quota units |
+| New email draft | `0-1` AI router call + `0-1` draft-writer call | optional Gmail `drafts.create` on save | Gmail draft create is `10` quota units |
+| Send email | usually only approval parsing if draft already exists | Gmail `messages.send` or `drafts.send` | send operations are `100` Gmail quota units |
+| Calendar summary read | usually tiny incremental token cost | one Calendar `events.list` request | no direct Calendar API billing |
+| Calendar detail read | tiny incremental token cost | `events.list`/search + optional `events.get` | usually `1-2` Calendar requests |
+| Calendar create/update | often deterministic parse, sometimes one small AI-router turn | `events.insert` or `events.get` + `events.update` | no direct Calendar API billing, but per-minute quotas still apply |
+
+#### Quota-envelope estimates (current shipped quotas, base chat only)
+
+These are hard-ceiling planning envelopes for the quotas currently enforced in code, using the overlap-aware live-session math above and excluding Morning Brief/search grounding.
+
+| Tier | Approx. monthly cost per user (base chat only) |
+|---|---|
+| Default | `~$3.0` |
+| Power | `~$8.2` |
+| Privileged | `~$38.9` |
+
+Detailed worksheet: `docs/QUOTA_PRICING_REEVALUATION_2026-03-13.md`
+
+#### Morning Brief add-on estimates
+
+Morning Brief is still one of the few features that can outspend plain chat quickly because Gemini 2.5 grounding is materially pricier than standard Flash text.
+
+Grounding-only planning envelope:
 - low run: `1` grounded call => `~$0.035`
 - typical run: `2` grounded calls => `~$0.070`
 - heavy run: `3` grounded calls => `~$0.105`
 
-Token cost for brief generation is additive but usually much smaller than grounding call cost.
-
-#### Quota-envelope estimates (base chat usage, without Morning Brief)
-
-Using Gemini text/live assumptions from your current quota worksheet:
-
-| Tier | Approx. monthly cost per user (base chat only) |
-|---|---|
-| Default | `~$1.8` |
-| Power | `~$4.7` |
-| Privileged | `~$19.2` |
-
-Detailed worksheet: `docs/QUOTA_PRICING_REEVALUATION_2026-02-16.md`
-
-#### Morning Brief add-on estimates
-
 Per-user monthly Morning Brief add-on:
-- `1 brief/day` (`~30 runs/month`): `~$2.1` (typical grounding-only view)
-- at cap (`3 briefs/day`, `~90 runs/month`): `~$6.3`
+- `1 brief/day` (`~30 runs/month`): `~$1.1 - $3.2`
+- at cap (`3 briefs/day`, `~90 runs/month`): `~$3.2 - $9.5`
 
 Projected monthly total (`base chat + Morning Brief add-on`):
 
 | Tier | With ~1 brief/day | With max 3 briefs/day |
 |---|---|---|
-| Default | `~$3.9` | `~$8.1` |
-| Power | `~$6.8` | `~$11.0` |
-| Privileged | `~$21.3` | `~$25.5` |
+| Default | `~$4.1 - $6.2` | `~$6.2 - $12.4` |
+| Power | `~$9.3 - $11.4` | `~$11.4 - $17.6` |
+| Privileged | `~$40.0 - $42.1` | `~$42.1 - $48.4` |
+
+#### Recommended quota method
+
+For the next product phase, the best fit is a hybrid model:
+
+- Keep user-facing quotas simple:
+  - text replies
+  - voice minutes
+  - camera minutes
+  - Morning Brief runs
+- Add internal shadow metrics for cost/risk-heavy operations:
+  - `google_read`
+  - `google_detail_read`
+  - `google_write_prepare`
+  - `google_write_execute`
+  - `grounded_search_query`
+  - optional background metrics like `memory_summary_block` and `memory_embedding_job`
+- Use those shadow metrics for:
+  - abuse/risk throttling
+  - plan eligibility
+  - margin analysis
+  - alerting before a user becomes expensive
+
+Why this is the recommended shape:
+- users understand text/voice/camera much better than API-unit math
+- Gmail/Calendar costs are mostly hidden Gemini-loop overhead plus operational quota pressure, not a clean user-facing dollar event
+- search grounding and long voice sessions are much larger cost risks than a single draft save or event create
+
+#### Suggested future user packages
+
+These are recommended product packages, not the current hardcoded beta tiers:
+
+| Package | User-facing limits (30d) | Suggested hidden guardrails | Planning ceiling |
+|---|---|---|---|
+| Starter | `600` texts, `20` voice min, `10` camera min, `30` Morning Briefs | `~150` Google reads, `~25` Google writes, `~50` grounded searches | `~$2.4` base, `~$3.5 - $5.6` with daily Morning Brief |
+| Plus | `1,500` texts, `90` voice min, `30` camera min, `90` Morning Briefs | `~500` Google reads, `~100` Google writes, `~200` grounded searches | `~$7.5` base, `~$10.6 - $16.9` with daily Morning Brief |
+| Power | `5,000` texts, `300` voice min, `90` camera min, `180` Morning Briefs | `~1,500` Google reads, `~300` Google writes, `~800` grounded searches | `~$24.4` base, `~$30.7 - $43.3` with daily Morning Brief |
 
 Notes:
-- These are planning envelopes, not exact billing.
-- Real spend depends on retry rate, grounded-call count, prompt length, and response length.
-- If your project remains inside Google’s free grounded-request allowance, Morning Brief effective cost can be materially lower.
-- Cloud Run infra cost is typically secondary at this scale, and often absorbed by free tier during early-stage traffic.
+- These package suggestions intentionally trim camera time versus the current privileged beta tier because live video is now the steepest routine cost driver.
+- Gmail/Calendar writes should usually spend hidden Google-action budget, not user-visible text quota alone.
+- If you stay inside Google's free search-grounding allowance, actual spend can land materially below these envelopes.
+- Cloud Run infra remains secondary at this scale; model/tool usage is the primary planning variable.
 
 ---
 
@@ -2060,7 +2152,7 @@ npm run dev:handoff -- "brief summary of what was done"
 | `docs/MORNING_BRIEF_GCP_ROLLOUT.md` | Morning Brief Cloud Run + Gmail rollout and forensic runbook |
 | `docs/AGENTIC_ENGINEERING_GUIDE.md` | Full agentic feature engineering reference |
 | `docs/AGENTIC_ROADMAP_V1.md` | Agentic feature roadmap (archived scope) |
-| `docs/QUOTA_PRICING_REEVALUATION_2026-02-16.md` | Cost model worksheet |
+| `docs/QUOTA_PRICING_REEVALUATION_2026-03-13.md` | Cost model worksheet |
 
 ### Commit security
 

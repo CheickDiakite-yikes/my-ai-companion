@@ -1,6 +1,6 @@
 # Google Personal Context Tracker
 
-Last Updated: 2026-03-12
+Last Updated: 2026-03-13
 
 This tracker is now the shipped-state status document for Gmail + Calendar support across text mode, live voice, and Zee Stage.
 
@@ -219,3 +219,4 @@ Google personal context is considered healthy for a release slice when:
 - [docs/ZEE_STAGE_GOOGLE_ACTIONS.md](/Users/cheickdiakite/Codex/my-ai-companion/docs/ZEE_STAGE_GOOGLE_ACTIONS.md)
 - [docs/GEMINI_INTEGRATION.md](/Users/cheickdiakite/Codex/my-ai-companion/docs/GEMINI_INTEGRATION.md)
 - [docs/LIVE_VOICE_REPLIT_CHECKLIST.md](/Users/cheickdiakite/Codex/my-ai-companion/docs/LIVE_VOICE_REPLIT_CHECKLIST.md)
+- [docs/QUOTA_PRICING_REEVALUATION_2026-03-13.md](/Users/cheickdiakite/Codex/my-ai-companion/docs/QUOTA_PRICING_REEVALUATION_2026-03-13.md)
