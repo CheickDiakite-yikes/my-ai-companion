@@ -317,6 +317,73 @@ const googleClientActionContextInputSchema = z.preprocess(
   googleClientActionContextSchema.optional(),
 );
 
+function sanitizeLiveToolResponseFunctionCallInput(value: unknown): {
+  id: string;
+  name: string;
+  args?: unknown;
+} | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+
+  const input = value as Record<string, unknown>;
+  const trimString = (candidate: unknown, maxLength: number): string | undefined => {
+    if (typeof candidate !== "string") return undefined;
+    const trimmed = candidate.trim();
+    if (!trimmed || trimmed.length > maxLength) return undefined;
+    return trimmed;
+  };
+
+  const id =
+    trimString(input.id, 200) ??
+    trimString(input.callId, 200) ??
+    trimString(input.functionCallId, 200);
+  const name = trimString(input.name, 120) ?? trimString(input.functionName, 120);
+  if (!id || !name) {
+    return null;
+  }
+
+  const args = Object.prototype.hasOwnProperty.call(input, "args")
+    ? input.args
+    : Object.prototype.hasOwnProperty.call(input, "arguments")
+      ? input.arguments
+      : undefined;
+
+  return args === undefined ? { id, name } : { id, name, args };
+}
+
+function sanitizeLiveToolResponseInput(value: unknown): {
+  conversationId?: string;
+  functionCalls?: Array<{ id: string; name: string; args?: unknown }>;
+  clientTimeZone?: string;
+  googleActionContext?: ReturnType<typeof sanitizeGoogleClientActionContextInput>;
+} {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+
+  const input = value as Record<string, unknown>;
+  const conversationId =
+    typeof input.conversationId === "string" ? input.conversationId.trim() : undefined;
+  const clientTimeZone =
+    typeof input.clientTimeZone === "string" ? input.clientTimeZone.trim() : undefined;
+  const functionCalls = Array.isArray(input.functionCalls)
+    ? input.functionCalls
+        .map((call) => sanitizeLiveToolResponseFunctionCallInput(call))
+        .filter((call): call is { id: string; name: string; args?: unknown } => Boolean(call))
+    : undefined;
+  const googleActionContext = sanitizeGoogleClientActionContextInput(
+    input.googleActionContext,
+  );
+
+  return {
+    ...(conversationId ? { conversationId } : {}),
+    ...(functionCalls ? { functionCalls } : {}),
+    ...(clientTimeZone ? { clientTimeZone } : {}),
+    ...(googleActionContext ? { googleActionContext } : {}),
+  };
+}
+
 const chatRespondSchema = z
   .object({
     conversationId: z.string().min(1, "conversationId is required"),
@@ -408,20 +475,23 @@ const voiceTranscriptSchema = z.object({
     .max(8000, "Transcript text is too long"),
 });
 
-const liveToolResponseSchema = z.object({
-  conversationId: z.string().min(1, "conversationId is required"),
-  functionCalls: z
-    .array(
-      z.object({
-        id: z.string().min(1),
-        name: z.string().min(1),
-        args: z.unknown().optional(),
-      }),
-    )
-    .min(1, "At least one function call is required"),
-  clientTimeZone: z.string().trim().min(1).max(80).optional(),
-  googleActionContext: googleClientActionContextInputSchema,
-});
+const liveToolResponseSchema = z.preprocess(
+  (value) => sanitizeLiveToolResponseInput(value),
+  z.object({
+    conversationId: z.string().trim().min(1, "conversationId is required"),
+    functionCalls: z
+      .array(
+        z.object({
+          id: z.string().trim().min(1),
+          name: z.string().trim().min(1),
+          args: z.unknown().optional(),
+        }),
+      )
+      .min(1, "At least one function call is required"),
+    clientTimeZone: z.string().trim().min(1).max(80).optional(),
+    googleActionContext: googleClientActionContextInputSchema,
+  }),
+);
 
 const googleScopeModeSchema = z.enum(["read", "write"]);
 
@@ -14258,6 +14328,15 @@ export async function registerRoutes(
         });
       } catch (error) {
         if (error instanceof z.ZodError) {
+          trace(req, "live.tool_response.invalid_request", {
+            traceId: getTraceId(req),
+            issues: error.issues.slice(0, 5).map((issue) => ({
+              path: issue.path.join("."),
+              message: issue.message,
+              code: issue.code,
+            })),
+            elapsedMs: elapsedMs(startedAt),
+          });
           return res.status(400).json({
             message:
               error.issues[0]?.message ?? "Invalid live tool-response request",

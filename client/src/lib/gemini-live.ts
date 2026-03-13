@@ -151,6 +151,10 @@ export interface GeminiLiveVoiceSessionStartParams {
 type LiveGoogleActionContextHint = ReturnType<
   NonNullable<GeminiLiveVoiceSessionCallbacks["getGoogleActionContext"]>
 >;
+type LiveGoogleActionContextValue = Exclude<
+  LiveGoogleActionContextHint,
+  null | undefined
+>;
 
 type PendingGoogleReadVoiceSummary = {
   digestTexts: string[];
@@ -788,6 +792,98 @@ function normalizeFunctionCallArgs(args: unknown): Record<string, unknown> {
     return {};
   }
   return parsedArgs as Record<string, unknown>;
+}
+
+function normalizeLiveToolCall(
+  call: {
+    id?: unknown;
+    callId?: unknown;
+    functionCallId?: unknown;
+    name?: unknown;
+    functionName?: unknown;
+    args?: unknown;
+    arguments?: unknown;
+  } | null | undefined,
+): { id: string; name: string; args: Record<string, unknown> } | null {
+  if (!call || typeof call !== "object") {
+    return null;
+  }
+  const rawId =
+    typeof call.id === "string"
+      ? call.id
+      : typeof call.callId === "string"
+        ? call.callId
+        : typeof call.functionCallId === "string"
+          ? call.functionCallId
+          : "";
+  const rawName =
+    typeof call.name === "string"
+      ? call.name
+      : typeof call.functionName === "string"
+        ? call.functionName
+        : "";
+  const id = normalizeText(rawId);
+  const name = normalizeText(rawName);
+  if (!id || !name) {
+    return null;
+  }
+  const rawArgs = call.args ?? call.arguments;
+  return {
+    id,
+    name,
+    args: normalizeFunctionCallArgs(rawArgs),
+  };
+}
+
+function sanitizeLiveGoogleActionContext(
+  context: LiveGoogleActionContextHint,
+): LiveGoogleActionContextValue | undefined {
+  if (!context || typeof context !== "object") {
+    return undefined;
+  }
+  const connector =
+    context.connector === "gmail" || context.connector === "calendar"
+      ? context.connector
+      : undefined;
+  if (!connector) {
+    return undefined;
+  }
+  const selectionReason =
+    context.selectionReason === "single_candidate" ||
+    context.selectionReason === "ambiguity_required" ||
+    context.selectionReason === "active_surface" ||
+    context.selectionReason === "recent_context" ||
+    context.selectionReason === "manual_selection" ||
+    context.selectionReason === "latest_actionable" ||
+    context.selectionReason === "clarification_session"
+      ? context.selectionReason
+      : undefined;
+  const candidateTargetIds = Array.isArray(context.candidateTargetIds)
+    ? context.candidateTargetIds
+        .map((candidateId) => normalizeText(candidateId))
+        .filter((candidateId): candidateId is string => Boolean(candidateId))
+        .slice(0, 8)
+    : undefined;
+  return {
+    connector,
+    ...(normalizeText(context.action ?? undefined)
+      ? { action: normalizeText(context.action ?? undefined) }
+      : {}),
+    ...(normalizeText(context.actionableTargetId ?? undefined)
+      ? { actionableTargetId: normalizeText(context.actionableTargetId ?? undefined) }
+      : {}),
+    ...(candidateTargetIds && candidateTargetIds.length > 0
+      ? { candidateTargetIds }
+      : {}),
+    ...(normalizeText(context.sourceTurnId ?? undefined)
+      ? { sourceTurnId: normalizeText(context.sourceTurnId ?? undefined) }
+      : {}),
+    ...(selectionReason ? { selectionReason } : {}),
+    ...(normalizeText(context.surfaceKey ?? undefined)
+      ? { surfaceKey: normalizeText(context.surfaceKey ?? undefined) }
+      : {}),
+    ...(context.selectionMode ? { selectionMode: context.selectionMode } : {}),
+  };
 }
 
 function isLikelyLiveWebSearchQuery(text: string): boolean {
@@ -3210,27 +3306,76 @@ export class GeminiLiveVoiceSession {
     chatDigests?: unknown;
     webSearchEvents?: unknown;
   }> {
-    const googleActionContext = this.callbacks.getGoogleActionContext?.() ?? null;
+    const conversationId = normalizeText(this.conversationId ?? undefined);
+    const sanitizedCalls = normalizedCalls
+      .map((call) => normalizeLiveToolCall(call))
+      .filter(
+        (call): call is { id: string; name: string; args: Record<string, unknown> } =>
+          Boolean(call),
+      );
+    if (!conversationId || sanitizedCalls.length === 0) {
+      throw new Error("Live tool-response request is missing required fields");
+    }
+
+    const clientTimeZone = normalizeText(
+      Intl.DateTimeFormat().resolvedOptions().timeZone || undefined,
+    );
+    const googleActionContext = sanitizeLiveGoogleActionContext(
+      this.callbacks.getGoogleActionContext?.() ?? null,
+    );
+    const basePayload = {
+      conversationId,
+      functionCalls: sanitizedCalls,
+      ...(clientTimeZone ? { clientTimeZone } : {}),
+    };
+    const fullPayload = googleActionContext
+      ? { ...basePayload, googleActionContext }
+      : basePayload;
+
     this.debug("live.tool_call.forwarding", {
       endpoint: "/api/live/tool-response",
-      conversationId: this.conversationId,
-      functionNames: normalizedCalls.map((c) => c.name),
+      conversationId,
+      functionNames: sanitizedCalls.map((c) => c.name),
       googleActionContext,
     });
-    const response = await fetch("/api/live/tool-response", {
+    let response = await fetch("/api/live/tool-response", {
       method: "POST",
       credentials: "include",
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        conversationId: this.conversationId,
-        functionCalls: normalizedCalls,
-        clientTimeZone:
-          Intl.DateTimeFormat().resolvedOptions().timeZone || undefined,
-        googleActionContext: googleActionContext ?? undefined,
-      }),
+      body: JSON.stringify(fullPayload),
     });
+
+    if (
+      response.status === 400 &&
+      (googleActionContext !== undefined || clientTimeZone.length > 0)
+    ) {
+      let retryReason: string | null = null;
+      try {
+        const errorPayload = (await response.clone().json()) as {
+          message?: unknown;
+        };
+        retryReason =
+          typeof errorPayload.message === "string" ? errorPayload.message : null;
+      } catch {
+        retryReason = null;
+      }
+      this.debug("live.tool_call.http_retrying_minimal", {
+        status: response.status,
+        reason: retryReason,
+        conversationId,
+        functionNames: sanitizedCalls.map((call) => call.name),
+      });
+      response = await fetch("/api/live/tool-response", {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(basePayload),
+      });
+    }
 
     if (!response.ok) {
       let failureMessage = `Live tool-response request failed (${response.status})`;
@@ -3251,6 +3396,8 @@ export class GeminiLiveVoiceSession {
           status: response.status,
           traceId,
           message,
+          conversationId,
+          functionNames: sanitizedCalls.map((call) => call.name),
         });
         if (message) {
           failureMessage = `${failureMessage}: ${message}`;
@@ -5283,22 +5430,21 @@ export class GeminiLiveVoiceSession {
     const functionCalls =
       (
         toolCallPayload as {
-          functionCalls?: Array<{ id?: unknown; name?: unknown; args?: unknown }>;
+          functionCalls?: Array<{
+            id?: unknown;
+            callId?: unknown;
+            functionCallId?: unknown;
+            name?: unknown;
+            functionName?: unknown;
+            args?: unknown;
+            arguments?: unknown;
+          }>;
         }
       )?.functionCalls ?? [];
     if (!Array.isArray(functionCalls) || functionCalls.length === 0) return;
 
     const normalizedCalls = functionCalls
-      .map((call) => {
-        const id = typeof call.id === "string" ? call.id : "";
-        const name = typeof call.name === "string" ? call.name : "";
-        if (!id || !name) return null;
-        return {
-          id,
-          name,
-          args: normalizeFunctionCallArgs(call.args),
-        };
-      })
+      .map((call) => normalizeLiveToolCall(call))
       .filter((call): call is { id: string; name: string; args: Record<string, unknown> } =>
         Boolean(call),
       );
