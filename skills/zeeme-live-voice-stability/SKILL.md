@@ -5,6 +5,17 @@ description: Stabilize and debug ZeeMe live voice sessions that feel clipped, in
 
 # ZeeMe Live Voice Stability
 
+## Use This Skill For
+- user needs to shout or repeat to be heard
+- false interruptions or assistant cutoffs
+- no transcript after obvious speech
+- websocket/session churn during live audio
+- cross-device differences in capture or barge-in behavior
+
+## Do Not Use This Skill For
+- Gmail/Calendar OAuth setup, write gates, or stage/task ownership; use `$zeeme-agent-gmail-context-setup`
+- `/api/live/tool-response` validation failures or post-tool completion drift; use `$zeeme-gemini-forensics`
+
 ## Run This Workflow
 1. Capture a failing run with `?liveDebug=1` and export JSON (include at least one full assistant turn and one user interrupt attempt).
 2. Run `skills/zeeme-live-voice-stability/scripts/live_trace_summary.sh <trace-file>`.
@@ -20,6 +31,11 @@ description: Stabilize and debug ZeeMe live voice sessions that feel clipped, in
    - `effectiveInterruptMode=client_manual_activity`
 6. Apply secrets and redeploy if any `VITE_*` values changed.
 7. Re-run tests and compare trace signatures.
+
+## Stop And Reclassify When The Bug Is Not Capture
+- If user transcripts are accurate but Gmail/Calendar approvals do not execute, stop tuning thresholds and switch skills.
+- If the assistant claims `done` but the stage still says `Needs approval`, that is not a mic problem.
+- If a lookup chip or stage surface appears late or stays stale after the backend already finished, classify it as UI/state ownership, not voice capture.
 
 ## Platform Branching (Use One Skill, Not Separate Skills)
 - Keep phone vs laptop debugging inside this skill unless runtime architecture diverges.
@@ -67,6 +83,9 @@ description: Stabilize and debug ZeeMe live voice sessions that feel clipped, in
   - inspect reconnect/autoresume behavior by mode (voice vs camera)
 - user transcript appears while assistant is speaking:
   - suppress user transcript ingestion during assistant speech window
+- accurate transcript + failed tool follow-through:
+  - not a voice-stability problem
+  - switch to `$zeeme-gemini-forensics` or `$zeeme-agent-gmail-context-setup`
 
 ## Enforce Deployment Guardrails
 - Treat server settings and `VITE_*` settings differently:

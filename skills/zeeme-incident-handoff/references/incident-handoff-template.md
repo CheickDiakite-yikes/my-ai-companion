@@ -15,12 +15,17 @@
 ## Reproduction Envelope
 - Device/platform matrix where issue reproduces.
 - Session mode and relevant query params.
+- Host/origin used if local or tunneled.
 - Steps to reproduce in 3-8 deterministic steps.
 
 ## Evidence Summary (Trace-Based)
 - Event counts and ratios that indicate failure mode.
 - Mention trace IDs/files and timestamps.
 - Exclude raw transcript text from report body.
+- Record the final backend truth boundary:
+  - task state
+  - approval state
+  - whether assistant output matched that state
 
 ## Actions Already Attempted
 - Config/script/commit applied.

@@ -1,4 +1,4 @@
 interface:
   display_name: "ZeeMe Gemini Forensics"
-  short_description: "Diagnose live/token/chat failures with trace IDs"
-  default_prompt: "Use $zeeme-gemini-forensics to investigate Gemini token, stream, and voice transcript failures using traces."
+  short_description: "Diagnose live, tool-response, and chat failures with traces"
+  default_prompt: "Use $zeeme-gemini-forensics to investigate Gemini token, stream, tool-response, approval-truth, and voice transcript failures using traces."

@@ -1,4 +1,4 @@
 interface:
   display_name: "ZeeMe Replit Release Orchestration"
-  short_description: "Run Replit-first release sequence with hard gates"
-  default_prompt: "Use $zeeme-replit-release-orchestration to plan and enforce a safe Replit production rollout with rebuild and rollback controls."
+  short_description: "Run a gated Replit rollout for voice, chat, and stage changes"
+  default_prompt: "Use $zeeme-replit-release-orchestration to plan and enforce a safe Replit production rollout with rebuild controls, Google-action smoke checks, and rollback discipline."
