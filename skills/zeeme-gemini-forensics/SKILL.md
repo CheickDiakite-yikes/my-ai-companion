@@ -1,15 +1,41 @@
 ---
 name: zeeme-gemini-forensics
-description: Diagnose ZeeMe Gemini integration failures using trace IDs, structured logs, and endpoint-specific checks. Use for live token errors, chat stream failures, transcript issues, quota blocks, and model response anomalies.
+description: Diagnose ZeeMe Gemini integration failures using trace IDs, structured logs, and endpoint-specific checks. Use for live token errors, chat stream failures, live tool-response failures, Google-action approval drift, transcript issues, quota blocks, and model response anomalies.
 ---
 
 # ZeeMe Gemini Forensics
 
+## Use This Skill For
+- `502` or `400` failures on Gemini-backed endpoints
+- `/api/live/token`, `/api/chat/respond`, `/api/chat/stream`, or `/api/live/tool-response` incidents
+- voice/tool-response handoff failures after Gmail/Calendar reads or writes
+- assistant claims of `sent`, `saved`, or `created` that do not match backend task state
+- cross-environment drift where local and Replit disagree
+
+## Do Not Use This Skill For
+- OAuth connection setup or Google scope wiring; use `$zeeme-agent-gmail-context-setup`
+- microphone, VAD, or barge-in tuning; use `$zeeme-live-voice-stability`
+
 ## Run Trace-First Debugging
 1. Capture `x-trace-id` from the failed request.
 2. Run `skills/zeeme-gemini-forensics/scripts/trace_report.sh <trace-id> <log-file>`.
-3. Classify failure path: `live.token`, `chat.respond`, `chat.stream`, `voice.transcript`, or `quota`.
-4. Identify the first failing guardrail (validation, auth, quota, storage, schema, model call).
+3. Classify failure path:
+   - `live.token`
+   - `live.tool_response`
+   - `live.google_action`
+   - `chat.respond`
+   - `chat.stream`
+   - `voice.transcript`
+   - `quota`
+4. Identify the first failing guardrail:
+   - validation
+   - auth
+   - quota
+   - storage/schema
+   - route orchestration
+   - model call
+   - post-tool handoff
+   - stage truthfulness
 
 ## Run Transcript + Language Drift Forensics
 1. Capture a voice run with `?liveDebug=1` and export JSON.
@@ -33,6 +59,34 @@ description: Diagnose ZeeMe Gemini integration failures using trace IDs, structu
    - non-zero `live.audio.activity_window_no_input_transcription`
 3. Verify platform context (`deviceClass`, `platformClass`, `speechDetectionProfile.mode`) before changing thresholds.
 
+## Run Google Action Branching
+1. Decide whether the failure reproduces in:
+   - voice only
+   - text only
+   - both
+2. If it reproduces in both voice and text, suspect shared server routing or task-state logic before blaming Live API.
+3. If it reproduces only in voice, inspect:
+   - tool selection
+   - tool-response forwarding
+   - current-turn ownership
+   - voice-stage context propagation
+4. If it reproduces only in chat, inspect:
+   - ambiguity resolution
+   - fresh-intent vs stale-task preemption
+   - chronological task routing
+5. If the assistant claims completion but the task still says `Needs approval`, classify it as a truth-boundary failure, not successful execution.
+
+## Run `/api/live/tool-response` 400 Forensics
+1. Capture the response JSON body, not just the status code.
+2. Confirm whether the server emitted `live.tool_response.invalid_request`.
+3. Compare the request envelope against the minimal contract:
+   - `conversationId`
+   - `functionCalls[]` with valid `id`, `name`, and parsed args
+   - optional `googleActionContext`
+   - optional `clientTimeZone`
+4. If optional fields are suspect, retry mentally against the minimal envelope before changing Gmail/Calendar code.
+5. Treat envelope failure separately from tool execution failure.
+
 ## Run Cloud Run Gateway Forensics (Morning Brief)
 1. Resolve canonical URL:
    - `gcloud run services describe zeeme-morning-brief-gcp --region us-central1 --project <project-id> --format='value(status.url)'`
@@ -54,6 +108,8 @@ description: Diagnose ZeeMe Gemini integration failures using trace IDs, structu
 - Preserve sanitized logs only; never print secrets or signatures.
 - Separate local environment failures from Replit deployment failures.
 - Verify schema parity before blaming model APIs.
+- Separate provider failures from route/state-machine failures.
+- When Google actions are involved, record the final backend task state, not just the spoken/text reply.
 - Validate Cloud Run runtime IAM and Secret Manager bindings before treating errors as model instability.
 - Never log raw transcript payloads in public channels; log script/language metadata and event counts instead.
 

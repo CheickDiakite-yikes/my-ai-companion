@@ -1,5 +1,39 @@
 # Gemini Failure Patterns
 
+## 400 on `/api/live/tool-response`
+Symptom:
+- Replit or local voice read/write requests fail with `400 Bad Request` on `/api/live/tool-response`.
+- Gmail/Calendar logic never runs because the request is rejected up front.
+
+Root cause:
+- Request-envelope drift:
+  - malformed `functionCalls`
+  - null/empty `googleActionContext`
+  - client/server field-shape mismatch after Live API tool-call changes
+
+Fix:
+- Sanitize the full envelope on both client and server.
+- Preserve `live.tool_response.invalid_request` traces with the failing fields.
+- Retry mentally against the minimal envelope before editing tool logic.
+
+Guardrail:
+- Treat request validation failures separately from Gmail/Calendar execution failures.
+
+## Invalid or expired Google OAuth state during local setup
+Symptom:
+- Sign-in or connect callback returns `Invalid or expired OAuth state`.
+
+Root cause:
+- Local flow mixed `localhost` and `127.0.0.1`, so the session cookie and callback host stopped matching.
+- Stale callback tab reused after a restart or host swap.
+
+Fix:
+- Keep one loopback host end-to-end for browser origin plus both callback URIs.
+- Start the flow fresh from the app instead of reopening callback URLs directly.
+
+Guardrail:
+- Treat loopback host consistency as part of the OAuth contract, not a browser detail.
+
 ## 400 Invalid enum value (persona)
 Symptom:
 - Request rejected with message similar to invalid persona enum.
@@ -25,6 +59,37 @@ Fix:
 
 Guardrail:
 - Require schema verification in Replit on every DB-affecting merge.
+
+## Assistant says sent/created, but the task still needs approval
+Symptom:
+- Voice or chat says the email/event is done.
+- The stage/task card still shows `Needs approval`.
+
+Root cause:
+- Spoken/text completion drifted ahead of backend execution.
+- Approval phrase routed into generic companion handling or only refreshed the draft/event preview.
+
+Fix:
+- Only claim `sent`, `saved`, or `created` when the tool result explicitly confirms execution.
+- Route hands-free approval phrases to the active task target, not stale ambiguity state.
+
+Guardrail:
+- Backend task state is the truth boundary, not the assistant utterance.
+
+## New email/event request inherits an older pending task
+Symptom:
+- User says `new email`, `create an event`, or similar.
+- The system continues an older draft, ambiguity card, or calendar task instead.
+
+Root cause:
+- Stale Google action context or ambiguity ownership was not preempted by the fresh intent.
+
+Fix:
+- Explicit fresh-task phrases should supersede prior pending context unless the user explicitly selected the older task.
+- Validate both text and voice to determine whether the bug lives in shared task routing or live-stage propagation.
+
+Guardrail:
+- If both voice and text reproduce, do not spend time retuning live audio.
 
 ## Transcript looks truncated or only last words persist
 Symptom:

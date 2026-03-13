@@ -41,17 +41,23 @@ ZeeMe is a companion AI experience where users build a continuous relationship w
 - **Share images** in text chat via camera capture or photo library upload
 - **Share live camera** frames during voice sessions for visual context
 - **Run Morning Brief (text mode)** for a concise, grounded digest of top headlines and market context
-- **Query personal Google context** (unread Gmail + upcoming Calendar events) in both text and live voice via server-authoritative tool-calling with explicit tracing
+- **Query personal Google context** in both text and live voice, including inbox summaries, calendar overviews, detailed thread/event reads, and combined “emails + calendar” asks
+- **Draft, revise, save, send, and delete Gmail drafts** through approval-gated Zee flows that persist into the shared conversation thread
+- **Create and update Google Calendar events** through the same approval-gated task system used by Zee Stage
+- **Use Zee Stage** to see the current Gmail/Calendar lookup, draft, event preview, ambiguity picker, or approval surface while voice is active or after the call ends
 - **Personalize Zee** through profile settings, response style presets, and avatar customization
 - **Switch between voice and text** while staying in one stitched conversation thread with shared memory
 - **Customize appearance** with 4 color themes applied across the entire UI
 
 ### Recent platform additions (March 2026)
 
-- **Voice email/calendar retrieval is now trace-first**: Live tool calls (`get_user_emails`, `get_calendar_events`) route through `POST /api/live/tool-response` with structured server events (`live.tool.*`, `live.tool_response.*`) and explicit issue classification.
-- **OAuth callback handling is environment-safe**: Google connect flow now uses signed, TTL-bound OAuth state and prefers your configured callback URI in production (with optional host switching when explicitly enabled).
+- **Google personal-context writes are now first-class**: Zee can prepare Gmail compose/reply/send flows and Calendar create/update flows in both text and live voice using approval-gated task cards and shared Google action context.
+- **Zee Stage is now the canonical Google task surface**: the top “Open Zee Stage” chip can surface lookup summaries, ambiguity pickers, draft/event previews, and approval/result states across voice and text continuity.
+- **Live tool-response handling is hardened**: `POST /api/live/tool-response` now sanitizes the full request envelope on both client and server, tolerates alias fields from Live tool calls, traces invalid requests, and safely retries once with a minimal payload when optional fields are rejected.
+- **OAuth callback handling is environment-safe**: Google app sign-in and Google integration connect flow both use signed, TTL-bound OAuth state and support loopback-safe local testing on `127.0.0.1` and/or `localhost` when kept consistent per session.
+- **Voice approval and follow-up policy is stricter**: Zee is explicitly instructed to treat short phrases like `send it`, `save it`, `I approve`, and `sounds good` as Google action follow-ups, and never claim a draft/event completed unless the tool result explicitly says it did.
 - **Memory contamination hardening shipped**: Known "Google not connected" assistant fallbacks are filtered from memory context assembly to prevent stale operational phrasing from poisoning subsequent turns.
-- **Voice status UX uses explicit process events**: Voice path emits `webSearchEvents` (`searching`, `grounded`, `idle`) with intent-specific labels (for example, "Retrieving your emails…") so users see retrieval progress, not silent latency.
+- **Voice status UX uses explicit process events**: voice path emits `webSearchEvents` (`searching`, `grounded`, `idle`) with intent-specific labels for lookup/read stages, while Zee Stage owns actionable draft/event/approval surfaces.
 - **GCP Morning Brief reliability improved**: Cloud Run gateway remains optional but now participates in a clearer fallback contract (`brief_gcp_upstream_timeout` -> local grounded path with forensic breadcrumbs).
 
 ### Companion persona
@@ -92,8 +98,9 @@ When the master gate is `false` (current default), all agentic routing — build
 | Browser App (React + Vite SPA)      |             | Google APIs                          |
 |-------------------------------------|             |--------------------------------------|
 | Text chat UI + stream renderer      |             | Gmail API (readonly)                 |
-| Live voice/camera UI + Live WS      |             | Calendar API (events.readonly)       |
-| Google connect + status surfaces    |             | Search grounding                      |
+| Live voice/camera UI + Live WS      |             | Gmail API (compose/send)             |
+| Zee Stage + Google task surfaces    |             | Calendar API (events.readonly/write) |
+| Google connect + profile status     |             | Search grounding                     |
 +----------------+--------------------+             +------------------+-------------------+
                  |                                                       ^
                  | HTTP/NDJSON/JSON                                      | OAuth token + API calls
@@ -102,7 +109,7 @@ When the master gate is `false` (current default), all agentic routing — build
 | Express API (single origin server)                                                        |
 |-------------------------------------------------------------------------------------------|
 | auth/session  quota  memory context builder  chat orchestrator  live token mint          |
-| google intent detect + context injection  live tool-response executor  forensic tracing   |
+| google intent detect + context injection  google action/task executor  forensic tracing   |
 +----------------------+----------------------------+--------------------+------------------+
                        |                            |                    |
                        | Drizzle ORM                | signed media URLs  | @google/genai
@@ -129,8 +136,8 @@ When the master gate is `false` (current default), all agentic routing — build
 |---|---|---|---|---|
 | Text chat | `POST /api/chat/respond/stream` | Gemini text model (+ optional Google Search grounding) | user + assistant messages, usage events | `chat.stream.*`, `google.context.*` |
 | Live session bootstrap | `POST /api/live/token` | Gemini Live token API | usage prechecks, live memory build metadata | `live.token.*` |
-| Live function resolution | `POST /api/live/tool-response` | Gmail/Calendar APIs, brief gateway, optional local brief fallback | none directly (function responses are ephemeral) | `live.tool.*`, `live.tool_response.*` |
-| Google OAuth lifecycle | `GET /api/integrations/google/connect-url`, `GET /api/integrations/google/callback`, `GET /api/integrations/google/status` | Google OAuth endpoints | encrypted integration token row (`google_integrations`) | `google.integration.*` |
+| Live function resolution | `POST /api/live/tool-response` | Gmail/Calendar APIs, brief gateway, optional local brief fallback | read-path responses are ephemeral; write-path executions can create/update `agent_tasks`, `agent_steps`, `agent_approvals`, `agent_tool_calls`, and assistant UI messages | `live.tool.*`, `live.tool_response.*`, `google.action.*` |
+| Google OAuth lifecycle | `GET /api/auth/google/start`, `GET /api/auth/google/callback`, `GET /api/integrations/google/connect-url`, `GET /api/integrations/google/callback`, `GET /api/integrations/google/status` | Google OAuth endpoints | session user state + encrypted integration token row (`google_integrations`) | `google.auth.*`, `google.integration.*` |
 | Morning Brief orchestration | `POST /api/chat/respond*` + optional brief gateway calls | Cloud Run Brief gateway, Google Search grounding | brief cache entries + debug run history | `brief.*`, `google.context.*` |
 
 ### Runtime topology
@@ -212,14 +219,20 @@ Client starts voice call
   -> transcript-based search-intent detector can send grounding nudge
   -> model may emit function calls:
        - get_user_emails / get_calendar_events
+       - get_email_thread_detail / get_calendar_event_detail
+       - prepare_google_email_action / prepare_google_calendar_action
        - (optional) get_morning_brief / get_inbox_digest
   -> client forwards pending function calls to POST /api/live/tool-response
-  -> server resolves tool calls (Google OAuth + fetch + guardrails)
+  -> server resolves tool calls (Google OAuth + fetch/prepare + guardrails)
   -> server returns:
        - functionResponses[]
+       - resolvedFunctionCalls[]
        - chatDigests[] (optional human-readable digest)
        - webSearchEvents[] (searching/grounded/idle labels)
   -> client returns functionResponses back into Live session
+  -> client updates lookup lane or Zee Stage surface:
+       - lookup lane for read/search states
+       - Zee Stage for ambiguity, clarification, preview, approval, running, result
   -> model audio playback + transcript capture
   -> user transcript persistence filter:
        - drop punctuation-only / low-signal fragments
@@ -295,10 +308,76 @@ Voice path (server-gated, token-wired)
   -> enforce mode gates:
        - ENABLE_GOOGLE_PERSONAL_CONTEXT
        - ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE
+       - detail reads: ENABLE_GOOGLE_PERSONAL_CONTEXT_DETAIL_READS
+       - write handoff: ENABLE_GOOGLE_PERSONAL_CONTEXT_WRITES + ENABLE_VOICE_GOOGLE_WRITE_HANDOFF
   -> resolve auth + scoped token per function call
   -> return functionResponses[] to active live session
   -> emit webSearchEvents + trace diagnostics for each tool leg
 ```
+
+### Zee Stage and Google action lifecycle
+
+Zee Stage is the shared Gmail/Calendar task canvas that sits above the conversation lane. It is deliberately separate from the lightweight lookup/status lane.
+
+Two surface classes exist:
+
+- **Lookup surface**: short-lived read/progress state such as `Checking your calendar`, `Retrieving email details`, or `Inbox and calendar ready`.
+- **Zee Stage surface**: actionable or inspectable Gmail/Calendar UI such as:
+  - Gmail compose session
+  - Calendar clarification session
+  - Email/calendar ambiguity picker
+  - Approval-gated task preview
+  - Completed Gmail draft/email send result
+  - Completed Calendar create/update result
+
+Candidate selection rules in the current client:
+
+- The app derives stage candidates from the latest assistant UI payloads and unified task cards.
+- Actionable candidates outrank passive ones.
+- Pending approval outranks plain preview.
+- Very old terminal surfaces are pruned.
+- The most recent actionable surface becomes the default stage target unless the user manually pins another candidate.
+- While voice is active, the top chip remains the canonical manual entry point (`Open Zee Stage`).
+- After the voice session ends, the chip can still reopen the latest stage surface while idle.
+
+Google action lifecycle:
+
+```text
+User asks Zee to draft/send email or create/update calendar event
+  -> Gemini text/live prompt policy routes into prepare_google_email_action or prepare_google_calendar_action
+  -> server resolves current Google conversation state:
+       - pending task
+       - compose session
+       - calendar session
+       - ambiguity candidates
+       - recent actionable Gmail/Calendar tasks
+       - optional client-provided googleActionContext from Zee Stage
+  -> server decides one of:
+       - clarify (missing title/time/body/recipient/etc.)
+       - ambiguity_required
+       - upgrade_required (not connected / missing write scopes)
+       - ready (preview + approval gate)
+       - completed / cancelled / revised
+  -> assistant UI message persists the resulting preview/session/task
+  -> Zee Stage surfaces that state immediately
+  -> on explicit approval:
+       - voice follow-up routes back through prepare tool
+       - text/button approval routes through task approval endpoint
+  -> server executes Gmail/Calendar write
+  -> assistant UI message persists result
+  -> Zee Stage moves from approval -> running -> completed/failed
+```
+
+Current stage surface types:
+
+| Surface Type | Example | Backing payload/state |
+|---|---|---|
+| Lookup | `Checking your calendar...` | `webSearchEvents[]`, inferred lookup presentation |
+| Compose session | Missing recipient/subject/body follow-up | `google_compose_session` UI payload |
+| Calendar session | Missing event title or datetime | `google_calendar_session` UI payload |
+| Ambiguity | `Which email did you mean?` | `google_action_ambiguity` UI payload |
+| Task preview | Draft/event preview waiting for approval | unified `agent_task_status` card |
+| Task result | `Draft saved`, `Email sent`, `Event created`, `Event updated` | unified `agent_task_status` card + `googleActionResult` |
 
 ---
 
@@ -367,6 +446,7 @@ Voice path (server-gated, token-wired)
 │   ├── SESSION_LOG.md                     # Chronological session handoff log
 │   ├── AI_COMPANION_DESIGN_SPEC.md        # Original design spec + mockup reference
 │   ├── GEMINI_INTEGRATION.md              # Gemini API integration details
+│   ├── ZEE_STAGE_GOOGLE_ACTIONS.md        # Zee Stage + Gmail/Calendar read/write architecture
 │   ├── MORNING_BRIEF_GCP_ROLLOUT.md       # Morning Brief Cloud Run + Gmail rollout runbook
 │   ├── AGENTIC_ENGINEERING_GUIDE.md       # Full agentic feature engineering reference
 │   ├── AGENTIC_ROADMAP_V1.md             # Agentic feature roadmap
@@ -408,7 +488,8 @@ All tables are defined in `shared/schema.ts` and `shared/models/auth.ts`. Schema
 | `user_profiles` | Personalization fields — display name, bio, location, age, profession, gender, response style preset/note, Zee avatar preset/custom image refs, user avatar |
 | `voice_sessions` | Voice call analytics — duration, camera duration, timestamps |
 | `usage_events` | Rolling 30-day quota accounting by metric type |
-| `google_integrations` | Encrypted Google OAuth token linkage for read-only Gmail + Calendar access used by Morning Brief and direct personal-context queries |
+| `google_integrations` | Encrypted Google OAuth token linkage for Gmail + Calendar reads, detail reads, and approval-gated write actions (draft save/send, calendar create/update) |
+| `user_memory_items` | Durable semantic memory items extracted from conversation history, with embeddings and archive state |
 
 ### Quota metric types
 
@@ -419,18 +500,19 @@ All tables are defined in `shared/schema.ts` and `shared/models/auth.ts`. Schema
 - `gmail_digest_run` — +1 when Morning Brief runs inbox digest successfully
 - `creation_run`, `coding_task`, `document_task`, `presentation_task`, `presentation_image` — agentic quotas (archived)
 
-### Agentic tables (archived, schema retained)
+### Task, approval, and artifact tables
+
+The same task runtime tables now back live Google action flows, Zee Stage previews, and broader gated agentic features.
 
 | Table | Purpose |
 |---|---|
-| `agent_tasks` | Task lifecycle — status, kind, prompt, plan, error |
-| `agent_steps` | Individual execution steps within a task |
-| `agent_approvals` | Risk-gated approval requests |
-| `agent_artifacts` | Generated artifacts (games, docs, web builds) |
-| `agent_tool_calls` | Tool execution audit log |
-| `agent_offers` | Proactive/explicit creation offers |
-| `agent_intent_sessions` | Slot-based intent collection sessions |
-| `durable_memory_items` | Long-term extracted user facts/preferences/goals |
+| `agent_tasks` | Task lifecycle for Gmail drafts, Calendar actions, and gated agentic work — status, prompt, plan, errors |
+| `agent_steps` | User-visible timeline for phases like `approval` and `execute` |
+| `agent_approvals` | Pending/approved/denied approval records for irreversible Gmail/Calendar writes and other high-risk actions |
+| `agent_tool_calls` | Execution audit log for the actual Gmail/Calendar or agent tool operation |
+| `agent_artifacts` | Generated artifacts for broader agentic features (docs/web builds/etc.); schema remains active even when creation features are gated off |
+| `agent_offers` | Offer-gated task suggestions for broader agentic creation flows |
+| `agent_intent_sessions` | Slot-based clarification sessions for broader agentic work |
 
 ---
 
@@ -444,6 +526,8 @@ All routes are same-origin under `/api/*`. Auth routes are public; all others re
 |---|---|---|
 | `POST` | `/api/auth/register` | Create account (email + password) |
 | `POST` | `/api/auth/login` | Sign in |
+| `GET` | `/api/auth/google/start` | Start Google SSO sign-in for the app session |
+| `GET` | `/api/auth/google/callback` | Complete Google SSO sign-in and create app session |
 | `GET` | `/api/auth/user` | Get current session user |
 | `POST` | `/api/auth/logout` | Sign out |
 
@@ -497,21 +581,49 @@ Request body (high-level):
 - `functionCalls[]`:
   - `id`
   - `name`
-  - `args` (JSON string)
+  - `args` (JSON object)
+- `googleActionContext` (optional stage-selection hint):
+  - `connector`
+  - `action`
+  - `actionableTargetId`
+  - `candidateTargetIds[]`
+  - `sourceTurnId`
+  - `selectionReason`
+  - `surfaceKey`
+  - `selectionMode`
+
+Compatibility notes:
+- The browser client and server both sanitize minor envelope drift before validation.
+- Alias fields such as `callId`, `functionCallId`, `functionName`, and `arguments` are normalized into the canonical request shape.
+- If optional fields are rejected by an environment drift/build mismatch, the client retries once with a minimal payload (`conversationId` + `functionCalls` + optional timezone).
 
 Supported function names:
 - `get_user_emails`
 - `get_calendar_events`
+- `get_email_thread_detail`
+- `get_calendar_event_detail`
+- `prepare_google_email_action`
+- `prepare_google_calendar_action`
 - `get_morning_brief`
 - `get_inbox_digest`
 
 Response body (high-level):
 - `functionResponses[]`: one entry per function call id/name with either `result` or `error`
+- `resolvedFunctionCalls[]`: server mapping of requested function name to effective function name when reroutes occur
 - `chatDigests[]`: optional assistant-safe digest text blocks for UI
-- `webSearchEvents[]`: status telemetry used by client pills (`searching`, `grounded`, `idle`)
+- `webSearchEvents[]`: status telemetry used by lookup pills and Zee Stage lookup lane (`searching`, `grounded`, `idle`)
+
+Google action response states used by `prepare_google_email_action` / `prepare_google_calendar_action`:
+- `clarification_needed`
+- `approval_required`
+- `upgrade_required`
+- `in_progress`
+- `completed`
+- `cancelled`
 
 Common error codes from this endpoint:
 - `google_personal_context_voice_disabled`
+- `google_voice_write_handoff_disabled`
 - `brief_live_disabled`
 - `google_scope_missing`
 - `google_token_refresh_failed`
@@ -522,6 +634,10 @@ Common error codes from this endpoint:
 - `google_access_denied`
 - `google_timeout`
 - `brief_quota_blocked`
+
+Validation/observability notes:
+- Invalid request envelopes return `400` with `traceId`.
+- Server traces `live.tool_response.invalid_request` with failing Zod issue paths so bad payloads can be diagnosed from logs without guessing.
 
 ### Integrations and Diagnostics
 
@@ -617,14 +733,18 @@ Supported intent classes:
 - Unread/recency-filtered inbox asks (example: `can you summarize my unread emails from last day`)
 - Calendar scheduling asks (example: `what do i have on my calendar today?`)
 - Combined asks (example: `any key emails or events this week?`)
+- Detailed read asks (example: `open the latest email from Maya`, `what changed in that invite?`)
+- Gmail write asks (example: `draft an email to alex@example.com`, `send it`, `save it as a draft`, `reply and say Thursday works`)
+- Calendar write asks (example: `create a lunch with Maya tomorrow at 2`, `move it to 4`, `add location Blue Bottle`)
 
 Text-mode execution path:
 1. Detect intent from the latest user prompt.
 2. Resolve Google OAuth token with required scopes.
-3. Fetch Gmail digest and/or Calendar events.
-4. Build a live context block that explicitly marks current fetch results as source of truth.
-5. Insert that block immediately before the user’s current message in the model context window.
-6. On failure, return targeted guardrail messaging from classified issue kinds.
+3. For read/detail asks, fetch Gmail/Calendar data immediately.
+4. For write asks, route into the Google action task planner so Zee can create a preview, clarification session, or ambiguity card instead of improvising a fake success message.
+5. Build a live context block that explicitly marks current fetch results or current Google task state as source of truth.
+6. Insert that block immediately before the user’s current message in the model context window.
+7. On failure, return targeted guardrail messaging from classified issue kinds.
 
 Failure classification currently used in logs and guardrails:
 - `gmail_api_disabled`
@@ -633,10 +753,23 @@ Failure classification currently used in logs and guardrails:
 - `google_timeout`
 
 Voice-mode execution path:
-- Model function calls (`get_user_emails`, `get_calendar_events`) are resolved through `POST /api/live/tool-response`.
+- Model function calls are resolved through `POST /api/live/tool-response`.
+- Read/detail tool set:
+  - `get_user_emails`
+  - `get_calendar_events`
+  - `get_email_thread_detail`
+  - `get_calendar_event_detail`
+- Write/approval prep tool set:
+  - `prepare_google_email_action`
+  - `prepare_google_calendar_action`
 - Server gate requires both:
   - `ENABLE_GOOGLE_PERSONAL_CONTEXT=true`
   - `ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE=true`
+- Detail reads additionally require:
+  - `ENABLE_GOOGLE_PERSONAL_CONTEXT_DETAIL_READS=true`
+- Approval-gated voice write handoff additionally requires:
+  - `ENABLE_GOOGLE_PERSONAL_CONTEXT_WRITES=true`
+  - `ENABLE_VOICE_GOOGLE_WRITE_HANDOFF=true`
 - Live token contains `configSummary.googlePersonalContextFunctionCallingEnabled`, which is used by the client to decide whether to wire Google personal-context function declarations for the session.
 - If server gate is off, endpoint returns `google_personal_context_voice_disabled` with no partial execution.
 
@@ -644,15 +777,15 @@ Voice tool-resolution lane (runtime view):
 
 ```text
 live transcript intent
-  -> model emits functionCall(get_user_emails|get_calendar_events)
+  -> model emits functionCall(read/detail/prepare_google_* action)
     -> client: /api/live/tool-response
       -> auth + conversation ownership + feature gate checks
       -> resolve Google token + required scopes
-      -> fetch Gmail/Calendar
-      -> classify failures (api_disabled/access_denied/timeout)
-      -> return { functionResponses, webSearchEvents, traceId }
+      -> fetch Gmail/Calendar data or prepare Google action preview/session/task
+      -> classify failures (api_disabled/access_denied/timeout/not_connected/missing_write_scopes)
+      -> return { functionResponses, resolvedFunctionCalls, webSearchEvents, traceId }
     -> client sendToolResponse() back into Live session
-      -> assistant continues with grounded personal context
+      -> assistant continues with grounded personal context or approval-aware action follow-up
 ```
 
 Context placement rationale:
@@ -665,7 +798,9 @@ Observability fields for incident triage:
 - `calendarFetchIssueKind`
 - `calendarFetchIssueProjectNumber`
 - `live.tool.emails.*` / `live.tool.calendar.*` (server trace lifecycle)
+- `live.tool.google_action.*` and `google.action.*` (write-path planning/execution)
 - `live.tool_call.*` / `live.google_context.*` (client debug lifecycle)
+- `live.tool_response.invalid_request` (server-side parse failure classification for bad live envelopes)
 
 ### Morning Brief (text mode first, voice-safe by default)
 
@@ -741,6 +876,10 @@ Operational guardrails:
   - candidate clear-grace window
   - spike-resistant ambient-floor estimation
   - assistant/idle threshold caps
+- Voice prompt policy is explicitly tuned for casual speech:
+  - interpret short, slang-heavy, or imperfect utterances charitably
+  - use conversation context before asking the user to repeat
+  - route approval-like follow-ups back into Google prepare tools instead of pretending actions completed
 - Transcript pipeline includes script-family observability and mismatch events:
   - `live.transcript.received`
   - `live.transcript.language_mismatch_observed`
@@ -748,6 +887,7 @@ Operational guardrails:
   - `live.audio.activity_window_no_input_transcription`
 - Final validated transcript segments are persisted into the shared conversation `messages` table for text/voice continuity.
 - Live memory context includes a time anchor, recent turns, compressed history, cross-chat context, and profile facts.
+- Zee Stage can remain available after the voice session ends so the user can reopen the current Gmail/Calendar surface and finish approval or review work manually.
 
 ---
 
@@ -1005,19 +1145,27 @@ npm run db:push
 npm run dev
 ```
 
-The app will be available at `http://localhost:5000`.
+The app will be available at `http://127.0.0.1:5000` or `http://localhost:5000`, depending on your `HOST` setting.
+
+Recommended local baseline:
+- Use `.env.local.example` as the starting point for local Google + voice testing.
+- Prefer `127.0.0.1` when `localhost:5000` is already occupied by another desktop service on your machine.
+- Keep the browser host, OAuth redirect URIs, and callback env values on the **same loopback host** for a given session. Do not start on `127.0.0.1` and finish OAuth on `localhost`, or vice versa.
 
 > `.env` safety rule: keep every entry as plain `KEY=value` only (no trailing shell commands on the same line).  
 > Example: `DATABASE_URL=postgresql://postgres@127.0.0.1:5432/my_ai_companion_local`
 
 ### Google OAuth local + preview testing
 
-Use this flow when validating Gmail/Calendar integration in local dev and ephemeral preview hosts (for example Replit dev URLs):
+Use this flow when validating app Google sign-in plus Gmail/Calendar integration in local dev and ephemeral preview hosts (for example Replit dev URLs):
 
 1. Copy the committed local template and fill it in:
    - `cp .env.local.example .env.local`
    - The local dev server loads `.env` first, then `.env.local` as an override.
-2. In Google Cloud Console, open the OAuth web client used for local ZeeMe testing and add these **Authorized redirect URIs** exactly:
+2. In Google Cloud Console, open the OAuth web client used for local ZeeMe testing and add the loopback host you actually plan to use. Common choices:
+   - `http://127.0.0.1:5000/api/integrations/google/callback`
+   - `http://127.0.0.1:5000/api/auth/google/callback`
+   - or, if you truly use `localhost` instead:
    - `http://localhost:5000/api/integrations/google/callback`
    - `http://localhost:5000/api/auth/google/callback`
    - Optional phone/tunnel callback for Google integration: `https://<your-tunnel-host>/api/integrations/google/callback`
@@ -1025,20 +1173,51 @@ Use this flow when validating Gmail/Calendar integration in local dev and epheme
 3. Set baseline OAuth env values in `.env.local`:
    - `GOOGLE_OAUTH_CLIENT_ID`
    - `GOOGLE_OAUTH_CLIENT_SECRET`
-   - `GOOGLE_OAUTH_REDIRECT_URI=http://localhost:5000/api/integrations/google/callback`
-   - `GOOGLE_OAUTH_AUTH_REDIRECT_URI=http://localhost:5000/api/auth/google/callback`
+   - `GOOGLE_OAUTH_REDIRECT_URI=http://127.0.0.1:5000/api/integrations/google/callback` (or matching `localhost`)
+   - `GOOGLE_OAUTH_AUTH_REDIRECT_URI=http://127.0.0.1:5000/api/auth/google/callback` (or matching `localhost`)
    - `GOOGLE_OAUTH_STATE_SIGNING_SECRET` (recommended; falls back to `SESSION_SECRET` when unset)
    - `GOOGLE_INTEGRATION_ENCRYPTION_KEY`
 4. Start app with `npm run dev`.
-5. Request a connect URL:
+5. Sign into the app first using Google or email/password.
+6. Then request a connect URL:
    - `GET /api/integrations/google/connect-url`
-6. Confirm response includes:
+7. Confirm response includes:
    - `redirectUri`
    - `redirectSource` (`query_override`, `dynamic_host`, or `configured_env`)
    - `state` is now signed and TTL-bound; callback no longer depends on in-memory cache persistence.
-7. Complete OAuth and verify callback logs:
-   - `google.integration.callback.exchange_attempt`
-   - `google.integration.callback.connected`
+8. Complete OAuth and verify callback logs:
+   - App auth: `google.auth.start`, `google.auth.callback.*`
+   - Integration connect: `google.integration.callback.exchange_attempt`, `google.integration.callback.connected`
+
+Local host consistency rule:
+- App sign-in cookies are host-scoped.
+- Google integration state is signed against the exact redirect URI.
+- If you open the app on `127.0.0.1`, keep both app auth and integration callback URIs on `127.0.0.1`.
+- If you open the app on `localhost`, keep both on `localhost`.
+- Do not reuse stale callback tabs after changing hosts or restarting the server.
+
+Write-flow local testing notes:
+- Read-only Gmail/Calendar testing can use the default read scopes.
+- Approval-gated Gmail/Calendar writes require:
+  - Gmail compose/send scopes
+  - Calendar events write scope
+  - `ENABLE_GOOGLE_PERSONAL_CONTEXT_WRITES=true`
+  - `ENABLE_VOICE_GOOGLE_WRITE_HANDOFF=true`
+  - `VITE_ENABLE_GOOGLE_PERSONAL_CONTEXT_WRITES=true`
+- The committed `.env.local.example` already shows the recommended local write-flow baseline.
+
+After connecting Google locally, validate both auth layers separately:
+- App auth callback: `/api/auth/google/callback`
+- Google integration callback: `/api/integrations/google/callback`
+
+Then validate both interaction surfaces:
+- text-mode Gmail/Calendar asks
+- live voice Gmail/Calendar reads and Zee Stage write flows
+
+Common local failure pattern:
+- `POST /api/live/tool-response 400`
+  - usually means the frontend and backend disagree on the live tool-response payload shape or the deploy is stale
+  - recent builds sanitize the whole envelope and trace `live.tool_response.invalid_request`
 
 Optional (preview host override):
 - Set `VITE_GOOGLE_OAUTH_CONNECT_REDIRECT_URI` to a full callback URL ending with `/api/integrations/google/callback`.
@@ -1078,6 +1257,8 @@ Use `http://10.0.2.2:5000` for Android emulator, and your LAN IP for physical de
 | Script | Purpose |
 |---|---|
 | `npm run dev` | Start dev server (Express + Vite HMR) |
+| `npm run dev:quick` | Push schema then start dev server |
+| `npm run dev:all` | Push schema, run typecheck + voice checks, then start dev server |
 | `npm run build` | Production build (client + server) |
 | `npm run start` | Run production build |
 | `npm run check` | TypeScript type checking |
@@ -1160,8 +1341,10 @@ Source of truth: `.env.example`
 |---|---|---|
 | `GOOGLE_OAUTH_CLIENT_ID` | — | OAuth client ID for Gmail connector |
 | `GOOGLE_OAUTH_CLIENT_SECRET` | — | OAuth client secret |
+| `GOOGLE_OAUTH_AUTH_REDIRECT_URI` | — | Optional dedicated callback URI for app Google SSO (`/api/auth/google/callback`) |
+| `GOOGLE_AUTH_POST_LOGIN_REDIRECT` | `/` | Optional post-login redirect path after app Google SSO completes |
 | `GOOGLE_OAUTH_REDIRECT_URI` | — | Canonical OAuth callback URI (production recommended: `https://zeeme.io/api/integrations/google/callback`) |
-| `GOOGLE_OAUTH_SCOPES` | `openid,email,profile,https://www.googleapis.com/auth/gmail.readonly,https://www.googleapis.com/auth/calendar.events.readonly` | Scopes for read-only Gmail + Calendar access |
+| `GOOGLE_OAUTH_SCOPES` | `openid,email,profile,https://www.googleapis.com/auth/gmail.readonly,https://www.googleapis.com/auth/calendar.events.readonly` | Scopes for Google integration. Add `gmail.compose`, `gmail.send`, and `calendar.events` when testing approval-gated write flows |
 | `GOOGLE_OAUTH_STATE_SIGNING_SECRET` | — | Optional dedicated HMAC secret for signed OAuth state tokens (falls back to `SESSION_SECRET`) |
 | `ENABLE_GOOGLE_OAUTH_DYNAMIC_CALLBACK_HOST` | `true` in non-production, `false` in production | Allow callback host switching to current request host when it differs from configured redirect URI host |
 | `ENABLE_GOOGLE_OAUTH_REDIRECT_URI_OVERRIDE` | `true` in non-production, `false` in production | Allow `redirectUri` query overrides on `/api/integrations/google/connect-url` |
@@ -1181,12 +1364,24 @@ The selected callback is returned in API response as `redirectUri` + `redirectSo
 | `ENABLE_GOOGLE_PERSONAL_CONTEXT` | `true` | Master flag for Google personal-context features |
 | `ENABLE_GOOGLE_PERSONAL_CONTEXT_TEXT` | `true` | Enable personal-context injection/guardrails in text mode |
 | `ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE` | `false` | Recommended explicit server runtime gate. Note: code fallback is `true` when unset, so set this value in every environment for deterministic behavior |
+| `ENABLE_GOOGLE_PERSONAL_CONTEXT_DETAIL_READS` | `false` | Enable detail-read tools such as `get_email_thread_detail` and `get_calendar_event_detail` |
+| `ENABLE_GOOGLE_PERSONAL_CONTEXT_WRITES` | `false` | Enable approval-gated Gmail/Calendar write preparation on the server |
+| `ENABLE_VOICE_GOOGLE_WRITE_HANDOFF` | `false` | Allow live voice tool-response path to hand Gmail/Calendar write prep back into Zee Stage/task surfaces |
 | `VITE_ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE` | `false` | Legacy client diagnostic flag retained for telemetry visibility; does not authorize server fetches or override token/server gates |
+| `VITE_ENABLE_GOOGLE_PERSONAL_CONTEXT_WRITES` | `false` | Client UI gate for Gmail/Calendar write surfaces such as draft/event cards and Zee Stage editing affordances |
 
 Precedence notes:
 - Server endpoint behavior (`/api/live/tool-response`) is controlled by server runtime env values.
 - Live session function wiring is controlled by `configSummary.googlePersonalContextFunctionCallingEnabled` returned from `POST /api/live/token`.
 - `VITE_ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE` is not a hard authorization gate and should not be used as a security/control mechanism.
+- `VITE_ENABLE_GOOGLE_PERSONAL_CONTEXT_WRITES` controls whether the client renders the write/task surfaces; it does not grant backend write access by itself.
+- Voice Gmail/Calendar write behavior requires **all** of the following to be aligned:
+  - OAuth scopes include the required Gmail/Calendar write scopes
+  - `ENABLE_GOOGLE_PERSONAL_CONTEXT=true`
+  - `ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE=true`
+  - `ENABLE_GOOGLE_PERSONAL_CONTEXT_WRITES=true`
+  - `ENABLE_VOICE_GOOGLE_WRITE_HANDOFF=true`
+  - `VITE_ENABLE_GOOGLE_PERSONAL_CONTEXT_WRITES=true`
 
 ### Live voice / VAD configuration
 
@@ -1401,23 +1596,51 @@ ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE=true \
 npm run dev
 ```
 
+For Gmail/Calendar write-flow testing, also align:
+
+```bash
+ENABLE_GOOGLE_PERSONAL_CONTEXT_DETAIL_READS=true \
+ENABLE_GOOGLE_PERSONAL_CONTEXT_WRITES=true \
+ENABLE_VOICE_GOOGLE_WRITE_HANDOFF=true \
+VITE_ENABLE_GOOGLE_PERSONAL_CONTEXT_WRITES=true \
+npm run dev
+```
+
 3. Validate in-app voice prompts
 - "Summarize my unread emails from last day"
 - "What’s on my calendar today?"
 - "Any key emails or events this week?"
+- "Draft an email to alex@example.com asking if Thursday works"
+- "Save it as a draft"
+- "Send it"
+- "Create a calendar event Lunch with Maya tomorrow at 2"
+- "I approve"
+- "Move it to 4 and add Blue Bottle as the location"
 
 4. Confirm expected runtime traces
 - `live.tool.emails.start` / `live.tool.emails.success` (or `.failed`)
 - `live.tool.calendar.start` / `live.tool.calendar.success` (or `.failed`)
+- `live.tool.calendar_detail.*` / `live.tool.email_detail.*` when detail reads are enabled
+- `live.tool.google_action.context`
+- `live.tool.google_action.handled`
 - `live.tool_response.generated`
 - `live.tool_call.received` / `live.tool_call.responded` (client bridge diagnostics)
 - `live.google_context.searching` (intent-detected progress state)
+- `surface_resolved`, `surface_auto_switched`, `approval_requested`, and related Zee Stage trace events in client debug output when task surfaces are active
 - If disabled by configuration: `live.tool_response.disabled` with reason `google_personal_context_voice_disabled`
+- If request parsing fails: `live.tool_response.invalid_request`
 
 5. Confirm failure routing quality
 - API disabled scenario should classify to `*_api_disabled` with project number when available
 - Auth/scope issues should surface `google_access_denied` or `google_scope_missing`
 - Timeouts should classify as `google_timeout`
+- Voice write path disabled should surface `google_voice_write_handoff_disabled`
+
+6. Confirm user-visible Zee Stage behavior
+- Read-only asks should use the lookup/status lane and not leave stale approval cards behind.
+- Approval-gated asks should produce a Zee Stage surface, not only plain prose.
+- After approval, the surface should move out of `Needs approval` into running/completed state.
+- Manual reopen should still work from the top `Open Zee Stage` chip even after the call ends.
 
 ### Isolated local E2E tests
 
@@ -1470,11 +1693,17 @@ Voice email/calendar behavior is server-authoritative. Configure runtime flags e
 - Server runtime:
   - `ENABLE_GOOGLE_PERSONAL_CONTEXT=true`
   - `ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE=true`
+  - `ENABLE_GOOGLE_PERSONAL_CONTEXT_DETAIL_READS=true` (if using thread/event detail reads)
+  - `ENABLE_GOOGLE_PERSONAL_CONTEXT_WRITES=true` (if using Gmail/Calendar write previews and approvals)
+  - `ENABLE_VOICE_GOOGLE_WRITE_HANDOFF=true` (if voice approvals/follow-ups should continue into Zee Stage)
+- Client build:
+  - `VITE_ENABLE_GOOGLE_PERSONAL_CONTEXT_WRITES=true` (if the deployed client should render write/task surfaces)
 
 Live token responses should confirm:
 - `configSummary.googlePersonalContextFunctionCallingEnabled=true`
 
 If runtime env values change, restart/redeploy the server revision so token generation and `/api/live/tool-response` gate checks use the updated values.
+If any `VITE_*` Google/Zee Stage flag changes, perform a full rebuild/redeploy.
 
 ### Optional Morning Brief gateway (Cloud Run)
 
@@ -1647,12 +1876,18 @@ See full runbook: [docs/LIVE_VOICE_REPLIT_CHECKLIST.md](docs/LIVE_VOICE_REPLIT_C
   - `ENABLE_GOOGLE_PERSONAL_CONTEXT=true`
   - `ENABLE_GOOGLE_PERSONAL_CONTEXT_TEXT=true`
   - For voice-path testing: `ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE=true`
+  - For detail reads: `ENABLE_GOOGLE_PERSONAL_CONTEXT_DETAIL_READS=true`
+  - For Gmail/Calendar write previews: `ENABLE_GOOGLE_PERSONAL_CONTEXT_WRITES=true`
+  - For voice write follow-ups: `ENABLE_VOICE_GOOGLE_WRITE_HANDOFF=true`
 - Verify live token summary:
   - `POST /api/live/token` response includes `configSummary.googlePersonalContextFunctionCallingEnabled=true`
 - Verify OAuth scope + token setup:
   - `/api/integrations/google/status` returns `connected: true`
   - `GOOGLE_OAUTH_SCOPES` includes both Gmail and Calendar read-only scopes
+  - For write flows, add `gmail.compose`, `gmail.send`, and `calendar.events`
   - `GOOGLE_INTEGRATION_ENCRYPTION_KEY` is set and stable between deploys
+- Verify host consistency in local/dev:
+  - use the same host (`127.0.0.1` or `localhost`) for app page load, OAuth redirect URIs, and callback env vars
 - Inspect classified issue fields in traces:
   - `emailFetchIssueKind`, `emailFetchIssueProjectNumber`
   - `calendarFetchIssueKind`, `calendarFetchIssueProjectNumber`
@@ -1663,6 +1898,31 @@ See full runbook: [docs/LIVE_VOICE_REPLIT_CHECKLIST.md](docs/LIVE_VOICE_REPLIT_C
   - `*_api_disabled` -> enable that API in the indicated Google Cloud project
   - `google_access_denied` -> reconnect Google account/scopes
   - `google_timeout` -> retry and inspect upstream/network latency
+
+### `POST /api/live/tool-response` returns 400
+
+This means the live client reached the backend, but the tool-response request envelope failed validation before Gmail/Calendar work ran.
+
+What recent builds do:
+- client sanitizes the full payload before POST
+- server sanitizes alias fields such as `callId`, `functionCallId`, `functionName`, and `arguments`
+- server traces `live.tool_response.invalid_request`
+- client retries once with a minimal payload when optional fields are rejected
+
+What to check:
+- Client and server are on the same fresh build/redeploy
+- `conversationId` is present for the active voice session
+- Live tool call objects contain usable `id` + `name`
+- `googleActionContext` is not stale from an older build
+
+First traces to inspect:
+- Client: `live.tool_call.forwarding`, `live.tool_call.http_retrying_minimal`, `live.tool_call.http_failed`
+- Server: `live.tool_response.invalid_request`
+
+If this happens only in Replit after a code change:
+- rebuild/redeploy the client if any `VITE_*` flag or client code changed
+- restart/redeploy the server so `/api/live/tool-response` uses the new parser
+- retest with a fresh voice session rather than reusing an old tab/session
 
 ### Voice says Google context is text-only
 
@@ -1695,6 +1955,7 @@ Use this exact signal chain to isolate missing visibility:
 3. **Server tool execution**
    - Expect `live.tool_response.requested`
    - Expect `live.tool.emails.*` and/or `live.tool.calendar.*`
+   - For write flows expect `live.tool.google_action.context` and `live.tool.google_action.handled`
    - Expect `live.tool_response.generated`
 4. **Client response application**
    - Expect `live.tool_call.responded`
@@ -1703,6 +1964,7 @@ Use this exact signal chain to isolate missing visibility:
 If the chain breaks:
 - No step 2: model did not emit function calls for the turn (prompting/intent issue).
 - No step 3: browser request failed before server (network/auth/session issue).
+- Step 2 exists but the browser gets `400`: inspect `live.tool_response.invalid_request` on the server and confirm the Replit deployment is running the latest client + server pair.
 - Step 3 exists but ends with failure: inspect `traceId` from `/api/live/tool-response` response payload and server trace logs for classified fetch/auth code.
 
 ### Web search not triggering or stale current-events answers
@@ -1794,6 +2056,7 @@ npm run dev:handoff -- "brief summary of what was done"
 | `docs/SESSION_LOG.md` | Chronological handoff log |
 | `docs/AI_COMPANION_DESIGN_SPEC.md` | Original design spec and mockup reference |
 | `docs/GEMINI_INTEGRATION.md` | Gemini API integration details |
+| `docs/ZEE_STAGE_GOOGLE_ACTIONS.md` | Detailed Gmail/Calendar + Zee Stage architecture and runbook |
 | `docs/MORNING_BRIEF_GCP_ROLLOUT.md` | Morning Brief Cloud Run + Gmail rollout and forensic runbook |
 | `docs/AGENTIC_ENGINEERING_GUIDE.md` | Full agentic feature engineering reference |
 | `docs/AGENTIC_ROADMAP_V1.md` | Agentic feature roadmap (archived scope) |

@@ -1,151 +1,221 @@
 # Google Personal Context Tracker
 
-## Scope Lock
+Last Updated: 2026-03-12
+
+This tracker is now the shipped-state status document for Gmail + Calendar support across text mode, live voice, and Zee Stage.
+
+---
+
+## 1) Scope Lock
+
 ### In Scope
-- Standalone Google Personal Context integration for Gmail + Calendar.
-- Profile-based Google connect/disconnect and status.
-- Text and Live Voice tool path support behind dedicated flags.
-- PII-safe observability events and deterministic failure codes.
-- Continuity workflow for restart/timeout-safe execution.
+- Gmail and Calendar reads in text mode
+- Gmail and Calendar reads in live voice mode
+- email thread detail reads
+- calendar event detail reads
+- approval-gated Gmail writes:
+  - draft create
+  - reply draft create
+  - save draft
+  - send email
+  - delete saved draft
+- approval-gated Calendar writes:
+  - event create
+  - event update
+- Zee Stage surfaces for lookup, ambiguity, clarification, preview, approval, and result
+- local/Replit OAuth and loopback-host testing guidance
+- live tool-response hardening and observability
 
 ### Out of Scope
-- Morning Brief logic changes, quotas, prompt coupling, or route coupling.
-- New DB migration for v1.
-- Gmail send/compose actions.
+- Morning Brief feature planning
+- Drive, Docs, Meet, or Maps connectors
+- removing the approval gate from Gmail/Calendar writes
 
-### Hard Constraint
-- **No Morning Brief coupling** for Google Personal Context feature behavior.
+### Hard Constraints
+- Google data must remain server-authoritative.
+- Gmail/Calendar writes must remain approval-gated unless execution already completed.
+- Voice and text must share one task/thread history for the same Google action.
 
-## Task Board
-- [x] `GPC-001`
-  - Status: `done`
-  - Owner: `codex`
-  - Dependencies: `none`
-  - Target files: `/Users/cheickdiakite/Codex/my-ai-companion/.env.example`, `/Users/cheickdiakite/Codex/my-ai-companion/server/routes.ts`
-  - Acceptance: standalone flags added and integration status endpoint no longer gated by Morning Brief flags.
+---
 
-- [x] `GPC-002`
-  - Status: `done`
-  - Owner: `codex`
-  - Dependencies: `GPC-001`
-  - Target files: `/Users/cheickdiakite/Codex/my-ai-companion/server/google-integration.ts`, `/Users/cheickdiakite/Codex/my-ai-companion/server/routes.ts`
-  - Acceptance: reusable token resolver exported with scope checks + refresh/decrypt failure handling.
+## 2) Current Capability Snapshot
 
-- [x] `GPC-003`
-  - Status: `done`
-  - Owner: `codex`
-  - Dependencies: `GPC-002`
-  - Target files: `/Users/cheickdiakite/Codex/my-ai-companion/server/google-integration.ts`, `/Users/cheickdiakite/Codex/my-ai-companion/shared/agent.ts`
-  - Acceptance: Calendar fetcher + contracts present for email/calendar flows.
+| Capability | Text | Voice | Zee Stage | Status |
+|---|---|---|---|---|
+| Gmail summary reads | Yes | Yes | Lookup lane | Shipped |
+| Calendar summary reads | Yes | Yes | Lookup lane | Shipped |
+| Email thread detail reads | Yes | Yes | Optional stage follow-up | Shipped behind `ENABLE_GOOGLE_PERSONAL_CONTEXT_DETAIL_READS` |
+| Calendar event detail reads | Yes | Yes | Optional stage follow-up | Shipped behind `ENABLE_GOOGLE_PERSONAL_CONTEXT_DETAIL_READS` |
+| Gmail draft compose/revise | Yes | Yes | Yes | Shipped behind write flags |
+| Gmail send/save follow-ups | Yes | Yes | Yes | Shipped behind write flags |
+| Gmail saved draft deletion | Yes | Text-first UI | Yes | Shipped |
+| Calendar create/update | Yes | Yes | Yes | Shipped behind write flags |
+| Hands-free approval follow-ups | Yes | Yes | Yes | Shipped, still needs manual QA soak |
+| Stage reopen while idle | N/A | Yes | Yes | Shipped |
 
-- [x] `GPC-004`
-  - Status: `done`
-  - Owner: `codex`
-  - Dependencies: `GPC-003`
-  - Target files: `/Users/cheickdiakite/Codex/my-ai-companion/server/gemini.ts`
-  - Acceptance: `get_user_emails` + `get_calendar_events` declarations wired into live token config and policy.
+---
 
-- [x] `GPC-005`
-  - Status: `done`
-  - Owner: `codex`
-  - Dependencies: `GPC-004`
-  - Target files: `/Users/cheickdiakite/Codex/my-ai-companion/server/routes.ts`, `/Users/cheickdiakite/Codex/my-ai-companion/client/src/lib/gemini-live.ts`, `/Users/cheickdiakite/Codex/my-ai-companion/client/src/App.tsx`
-  - Acceptance: voice tool-response handling for Gmail/Calendar behind `ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE`; client supports declarations and status labels.
+## 3) Required Runtime Flags
 
-- [x] `GPC-006`
-  - Status: `done`
-  - Owner: `codex`
-  - Dependencies: `GPC-003`
-  - Target files: `/Users/cheickdiakite/Codex/my-ai-companion/server/google-integration.ts`, `/Users/cheickdiakite/Codex/my-ai-companion/server/routes.ts`
-  - Acceptance: text + stream routes detect Google intent, fetch scoped data, inject strict anti-fabrication context.
+### Read-only baseline
+- `ENABLE_GOOGLE_PERSONAL_CONTEXT=true`
+- `ENABLE_GOOGLE_PERSONAL_CONTEXT_TEXT=true`
+- `ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE=true` for voice reads
 
-- [x] `GPC-007`
-  - Status: `done`
-  - Owner: `codex`
-  - Dependencies: `GPC-001`
-  - Target files: `/Users/cheickdiakite/Codex/my-ai-companion/client/src/App.tsx`
-  - Acceptance: Profile “Connected Accounts” section with connect/disconnect/status and scope badges.
+### Detail reads
+- `ENABLE_GOOGLE_PERSONAL_CONTEXT_DETAIL_READS=true`
 
-- [ ] `GPC-008`
-  - Status: `blocked`
-  - Owner: `codex`
-  - Dependencies: `GPC-001..GPC-007`
-  - Target files: `/Users/cheickdiakite/Codex/my-ai-companion/server/routes.ts`, `/Users/cheickdiakite/Codex/my-ai-companion/client/src/App.tsx`, `/Users/cheickdiakite/Codex/my-ai-companion/client/src/lib/gemini-live.ts`
-  - Acceptance: typecheck/tests green and no regressions in standard chat/voice/profile/morning-brief paths.
+### Write flows
+- `ENABLE_GOOGLE_PERSONAL_CONTEXT_WRITES=true`
+- `ENABLE_VOICE_GOOGLE_WRITE_HANDOFF=true`
+- `VITE_ENABLE_GOOGLE_PERSONAL_CONTEXT_WRITES=true`
 
-- [x] `GPC-009`
-  - Status: `done`
-  - Owner: `codex`
-  - Dependencies: `GPC-001..GPC-007`
-  - Target files: `/Users/cheickdiakite/Codex/my-ai-companion/script/google-personal-context-smoke.ts`, `/Users/cheickdiakite/Codex/my-ai-companion/script/google-personal-context-playwright-check.ts`, `/Users/cheickdiakite/Codex/my-ai-companion/script/google-personal-context-playwright-e2e.sh`, `/Users/cheickdiakite/Codex/my-ai-companion/package.json`
-  - Acceptance: robust prompt-intent smoke + Playwright text-mode flow checks for calendar/email/combined prompts are repeatable and passing.
+### OAuth scope expectations
 
-- [x] `GPC-010`
-  - Status: `done`
-  - Owner: `codex`
-  - Dependencies: `GPC-007`
-  - Target files: `/Users/cheickdiakite/Codex/my-ai-companion/server/routes.ts`, `/Users/cheickdiakite/Codex/my-ai-companion/server/google-integration.ts`, `/Users/cheickdiakite/Codex/my-ai-companion/client/src/App.tsx`
-  - Acceptance: connect-url endpoint returns stable contract (`connectUrl` + `url`) and structured error codes; Profile UI maps connect failures to actionable guidance.
+Read-only:
+- `gmail.readonly`
+- `calendar.events.readonly`
 
-## Current State Snapshot
-- Branch: `main3`
-- Latest commit SHA (base before in-progress changes): `e9e8262`
-- Expected env flags:
-  - `ENABLE_GOOGLE_PERSONAL_CONTEXT=true`
-  - `ENABLE_GOOGLE_PERSONAL_CONTEXT_TEXT=true`
-  - `ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE=false`
-  - `VITE_ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE=false`
-- Active rollout stage: `local implementation + verification`
+Write flows:
+- `gmail.compose`
+- `gmail.send`
+- `calendar.events`
 
-## Run Log
-- `2026-03-02 14:03 EST` Resume protocol executed (`npm run dev:context` + state files reviewed).
-- `2026-03-02 14:11 EST` Continued partial implementation from previous session; identified duplicate text-context injection and missing stream-context injection.
-- `2026-03-02 14:16 EST` Fixed route duplication and stream injection; cleaned unused Google auth imports in routes.
-- `2026-03-02 14:18 EST` Extended live client for standalone Google personal context declarations and dynamic status labels.
-- `2026-03-02 14:23 EST` Added Profile Connected Accounts UI with connect/disconnect/status + reconnect guidance.
-- `2026-03-02 14:24 EST` Tracker file created; task board synchronized.
-- `2026-03-02 14:26 EST` Validation run: `npm run check` passed, `npm run test:agent:smoke` passed.
-- `2026-03-02 14:26 EST` Validation blocker: `npm run test:agent:contract` failed in existing agent-contract scenario (`low_risk_task_id_missing` expecting agent task path, got companion reply due no attachment). Not introduced by this feature patch.
-- `2026-03-02 14:31 EST` Phase implementation complete for `GPC-001..GPC-007`; pending decision is contract baseline handling before marking `GPC-008` done.
-- `2026-03-03 09:22 EST` Added `inferGoogleEmailSinceDays` helper in `/server/google-integration.ts` and fixed regex escaping bug for “last day / yesterday / past week” parsing.
-- `2026-03-03 09:34 EST` Added deterministic smoke suite `/script/google-personal-context-smoke.ts` covering the 3 required prompts, time-range resolution, and email lookback parsing.
-- `2026-03-03 09:38 EST` Added Playwright e2e harness (`/script/google-personal-context-playwright-check.ts` + `/script/google-personal-context-playwright-e2e.sh`) and validated profile + prompt flows.
-- `2026-03-03 09:44 EST` Validation complete: `npm run check`, `npm run test:google-context:smoke`, and `npm run test:google-context:ui` all pass locally.
-- `2026-03-03 09:46 EST` Regression guardrail run: `npm run test:agent:smoke` passed after Google Personal Context test additions.
-- `2026-03-03 10:15 EST` Fixed Google connect contract mismatch (`url` vs `connectUrl`) by returning both fields from `/api/integrations/google/connect-url`.
-- `2026-03-03 10:16 EST` Added structured connect-url failure responses (`google_personal_context_disabled`, `google_oauth_not_configured`, `google_connect_invalid_request`, `google_connect_url_failed`) with trace logging + missing env diagnostics.
-- `2026-03-03 10:18 EST` Profile Connected Accounts now parses API errors and renders actionable messages for disabled flag, missing OAuth env vars, invalid request, and trace-linked fallback errors.
-- `2026-03-03 10:20 EST` Validation rerun passed: `npm run check`, `npm run test:google-context:smoke`, `npm run test:google-context:ui`.
-- `2026-03-03 11:18 EST` Unread-email reliability patch started for prompt: “can you summarize my unread emails from last day”; added `emailUnreadOnly` + `emailSinceDays` intent context, improved Gmail no-results assistant instructions, and wired live `get_user_emails.unreadOnly`.
-- `2026-03-03 11:22 EST` Validation passed for patch slice: `npm run check` and `npm run test:google-context:smoke`.
-- `2026-03-03 15:12 EST` Forensic review of production-like logs showed deterministic auth failure (`google.context.auth.failed` with `google_not_connected`) while model still produced conversational diagnostics; root cause confirmed as missing hard guardrail on auth-failure path.
-- `2026-03-03 15:18 EST` Added server-side guardrail for Google Personal Context in `/api/chat/respond` and `/api/chat/respond/stream`: auth/scope/token failures now short-circuit to deterministic user action message (connect/reconnect), bypassing model improvisation.
-- `2026-03-03 15:22 EST` Validation passed after guardrail patch: `npm run check`, `npm run test:google-context:smoke`, and `npm run test:agent:smoke`.
-- `2026-03-03 15:32 EST` Added callback failure reason propagation (`google_integration_reason` + `traceId`) and client-side reason mapping so OAuth callback misconfigurations (including invalid `GOOGLE_INTEGRATION_ENCRYPTION_KEY`) display actionable messages.
-- `2026-03-03 15:40 EST` Started encryption-key preflight hardening task: add startup validation logging and fail-fast connect-url validation when `GOOGLE_INTEGRATION_ENCRYPTION_KEY` is missing/invalid.
-- `2026-03-03 15:48 EST` Completed encryption-key preflight hardening:
-  - added non-throwing key health probe in `/server/google-integration-crypto.ts`
-  - included `GOOGLE_INTEGRATION_ENCRYPTION_KEY` in connect-url config diagnostics via `/server/google-integration.ts`
-  - added startup preflight log in `/server/index.ts`
-  - updated connect-url + client config error wording for OAuth/encryption key misconfiguration.
-- `2026-03-03 15:49 EST` Validation passed after hardening patch: `npm run check` and `npm run test:google-context:smoke`.
+---
 
-## Open Decisions / Blockers
-- Decision needed: whether to keep voice Google Personal Context default OFF in production rollout.
-  - Impact: controls exposure of live function-calling behavior during soak period.
-  - Temporary default: keep OFF (`ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE=false`) until text path validation completes.
-- Blocker: agent contract suite currently fails on pre-existing low-risk mini-game scenario in local contract harness.
-  - Impact: full contract green gate unavailable from this session baseline.
-  - Temporary default: proceed with targeted Google-context validation + smoke/typecheck while leaving contract baseline issue isolated.
+## 4) Architecture Status
 
-## Resume Checklist
-1. Read this file first.
-2. Run status and compile checks:
-   - `git status --short`
-   - `npm run check`
-3. If check fails, inspect first:
-   - `/Users/cheickdiakite/Codex/my-ai-companion/server/routes.ts`
-   - `/Users/cheickdiakite/Codex/my-ai-companion/client/src/App.tsx`
-   - `/Users/cheickdiakite/Codex/my-ai-companion/client/src/lib/gemini-live.ts`
-4. Re-run focused validation of Google routes after compile passes.
-5. Update this tracker before commit and at end-of-session handoff.
+### Server
+
+Shipped:
+- Google token resolution + scope enforcement
+- Gmail summary/detail fetchers
+- Calendar summary/detail fetchers
+- Google action planner for Gmail/Calendar
+- task/approval execution for Gmail/Calendar writes
+- guardrails for auth failure, missing scopes, timeouts, and API-disabled states
+
+### Client
+
+Shipped:
+- live tool bridge in `client/src/lib/gemini-live.ts`
+- Zee Stage candidate selection and rail switching
+- lookup lane vs stage separation
+- manual stage reopen via top chip
+- write-surface rendering behind `VITE_ENABLE_GOOGLE_PERSONAL_CONTEXT_WRITES`
+- context propagation from active stage into send/live flows
+
+### Observability
+
+Shipped:
+- `live.tool_response.*`
+- `live.tool.*`
+- `live.tool.google_action.*`
+- `live.google_context.*`
+- stage-selection trace events
+- invalid-request tracing for live tool-response envelope parse failures
+
+---
+
+## 5) Major Milestones Completed
+
+| Date | Milestone | Outcome |
+|---|---|---|
+| 2026-03-02 | Standalone Google personal-context baseline | Text + voice read path, connect/disconnect/status, smoke/UI tests |
+| 2026-03-03 | Auth and callback hardening | structured Google connect failures, encryption-key diagnostics, auth-failure guardrails |
+| 2026-03-04 to 2026-03-08 | Gmail draft + Calendar preview work | ambiguity picker, preview cards, unified Google task routing |
+| 2026-03-09 | Zee Stage introduced | Smart voice stage / task canvas on top of live voice |
+| 2026-03-10 to 2026-03-11 | Voice compose + approval improvements | top-chip stage entry, better follow-up instructions, voice approval handling |
+| 2026-03-12 | Local/Replit hardening | loopback-safe local auth recipe, live tool-response request sanitation, invalid-request tracing |
+
+---
+
+## 6) Current Risks
+
+### Still worth watching
+- chronology mistakes when a user jumps from one Google task to another quickly
+- stale lookup surfaces outliving the active actionable surface
+- voice approval phrases that sound generic but should target the current Gmail vs Calendar task correctly
+- Replit stale-deploy mismatches between client and server on Live tool-response changes
+
+### Explicit non-risks now covered by shipped fixes
+- `googleActionContext` null-field parse failures alone should no longer crash live tool-response
+- loopback host switching is documented and supported when kept consistent
+- the stage chip naming is standardized on `Open Zee Stage`
+
+---
+
+## 7) Manual QA Matrix
+
+### Read path
+- `Summarize my unread emails from last day`
+- `What do I have on my calendar tomorrow?`
+- `Any key emails or events this week?`
+
+### Detail reads
+- `Open the latest email from Maya`
+- `What changed in that invite?`
+
+### Gmail write path
+- `Draft an email to alex@example.com asking if Thursday works`
+- `Save it as a draft`
+- `Send it`
+- `Make it warmer`
+- `Change the recipient to maya@example.com`
+
+### Calendar write path
+- `Create a calendar event Lunch with Maya tomorrow at 2`
+- `I approve`
+- `Move it to 4`
+- `Add Blue Bottle as the location`
+
+### Stage continuity
+- open stage during active voice
+- dismiss stage during voice, then reopen from top chip
+- end call and reopen current stage while idle
+- switch from calendar task to email task and confirm old task no longer steals approvals
+
+---
+
+## 8) Expected Trace Anchors
+
+### Voice reads
+- `live.tool_call.received`
+- `live.tool_response.requested`
+- `live.tool.emails.*` or `live.tool.calendar.*`
+- `live.tool_response.generated`
+- `live.tool_call.responded`
+
+### Voice writes
+- `live.tool.google_action.context`
+- `live.tool.google_action.handled`
+- stage trace events for `surface_resolved`, `surface_auto_switched`, `approval_requested`
+
+### Failure triage
+- `live.tool_response.invalid_request`
+- `google_access_denied`
+- `google_scope_missing`
+- `google_timeout`
+- `google_voice_write_handoff_disabled`
+
+---
+
+## 9) Current Definition of Done
+
+Google personal context is considered healthy for a release slice when:
+- read flows work in both text and voice
+- detail reads work when the flag is enabled
+- Gmail and Calendar write previews appear in text and voice
+- hands-free approval follow-ups execute the right task
+- Zee never claims completion before the task result is real
+- Zee Stage and lookup lane stay aligned with the actual Google task state
+- no `live.tool_response.invalid_request` appears in healthy smoke runs
+
+---
+
+## 10) Related Documents
+
+- [README.md](/Users/cheickdiakite/Codex/my-ai-companion/README.md)
+- [docs/ZEE_STAGE_GOOGLE_ACTIONS.md](/Users/cheickdiakite/Codex/my-ai-companion/docs/ZEE_STAGE_GOOGLE_ACTIONS.md)
+- [docs/GEMINI_INTEGRATION.md](/Users/cheickdiakite/Codex/my-ai-companion/docs/GEMINI_INTEGRATION.md)
+- [docs/LIVE_VOICE_REPLIT_CHECKLIST.md](/Users/cheickdiakite/Codex/my-ai-companion/docs/LIVE_VOICE_REPLIT_CHECKLIST.md)

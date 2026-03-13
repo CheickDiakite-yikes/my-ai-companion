@@ -120,6 +120,37 @@ Actions:
 - disable client noise gate for baseline stability runs
 - verify browser mic permission + secure origin + foreground tab
 
+### 8) Accurate transcript, but Gmail/Calendar approval never executes
+Primary markers:
+- user transcript clearly captured phrases such as `send it`, `save it`, or `sounds good`
+- task or stage still shows `Needs approval`
+- no corresponding execution/completion transition after the approval phrase
+
+Likely causes:
+- Google action routing or approval execution bug
+- stale task ownership or ambiguity state
+- assistant language claimed completion before backend confirmation
+
+Actions:
+- stop tuning capture thresholds
+- switch to `$zeeme-agent-gmail-context-setup` or `$zeeme-gemini-forensics`
+- inspect active task target, approval routing, and final backend task status
+
+### 9) Lookup UI appears late or lingers after the answer is already ready
+Primary markers:
+- speech capture looks healthy
+- backend/tool traces show success before the lookup chip settles
+- actionable stage surface exists while lookup UI still owns the interaction
+
+Likely causes:
+- client stage/lookup ownership bug
+- delayed UI-state transition, not Live API capture instability
+
+Actions:
+- classify as client state-machine/UI bug
+- do not retune VAD or mic thresholds
+- inspect the lookup/stage handoff logic and active surface ownership
+
 ## Stable Profiles
 ### Stable (general)
 ```json

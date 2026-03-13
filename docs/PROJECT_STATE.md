@@ -1,6 +1,6 @@
 # Project State: ZeeMe
 
-Last Updated: 2026-03-06
+Last Updated: 2026-03-12
 
 ## How To Resume Any Session
 1. Run `npm run dev:context`.
@@ -13,6 +13,9 @@ Last Updated: 2026-03-06
 Ship a production-grade multimodal AI companion where voice and text share one memory thread, with reliable personalization, image/camera context, quota safety, and App Store-ready UX quality.
 
 ## Current Focus
+- Keep Gmail/Calendar text and live voice behavior aligned through Zee Stage and shared Google task state.
+- Eliminate chronology drift so short follow-ups like `send it`, `save it`, and `sounds good` target the correct active Gmail/Calendar task.
+- Keep live tool-response handling resilient across local/Replit deploy drift with trace-first parsing and retry behavior.
 - Keep live voice speech detection stable at normal speaking volume across iPhone Safari, Android Chrome, and desktop browsers.
 - Maintain trace-first incident response so transcript/mic failures can be diagnosed from exported live-debug JSON in minutes.
 - Keep Replit deployment profiles and local defaults aligned so production behavior is reproducible locally.
@@ -23,6 +26,23 @@ Ship a production-grade multimodal AI companion where voice and text share one m
 - Keep Replit and local schema/runtime behavior strictly synchronized.
 
 ## What Was Just Completed
+- Google personal-context write path matured:
+  - Gmail draft/reply/save/send flows now run through approval-gated task state
+  - Calendar create/update flows now use the same unified task/approval runtime
+  - detailed email/event reads are available behind explicit flagging
+- Zee Stage behavior was tightened:
+  - top chip is now the canonical manual stage entry point
+  - stage can reopen while idle
+  - actionable Google surfaces outrank passive lookup surfaces
+- Local and Replit Google testing flow hardened:
+  - loopback-safe local OAuth recipe (`127.0.0.1` / `localhost` host consistency)
+  - separate app-auth and integration callback documentation
+  - `.env.local.example` now reflects write-flow testing requirements
+- Live tool-response request path hardened:
+  - client and server sanitize the full request envelope
+  - alias fields from Live tool calls are tolerated
+  - invalid request parse failures are traced as `live.tool_response.invalid_request`
+  - client retries once with a minimal payload if optional fields are rejected
 - Live voice speech detector hardening shipped:
   - candidate hysteresis + clear-grace tracking
   - spike-resistant ambient-floor estimation
@@ -67,6 +87,10 @@ Ship a production-grade multimodal AI companion where voice and text share one m
 - Auth, onboarding, conversations, and message persistence.
 - Text replies via Gemini with streaming and legacy compatibility.
 - Live voice sessions with token minting and transcript persistence.
+- Gmail and Calendar reads in both text and live voice.
+- Gmail/Calendar detail reads behind explicit feature flags.
+- Approval-gated Gmail draft, send, save, and Calendar create/update flows using the unified task runtime.
+- Zee Stage surface selection, manual reopen, and shared task continuity across voice/text.
 - Attachment upload/delete/signature flow and media retrieval.
 - Profile and preference persistence (including Zee avatar + theme).
 - Quota accounting and route enforcement with branded 429 responses.
@@ -88,6 +112,9 @@ Ship a production-grade multimodal AI companion where voice and text share one m
   - legacy relabel/backfill tooling exists
 
 ## Known Gaps
+- Google follow-up chronology still needs ongoing QA soak, especially when users switch rapidly between unrelated Gmail and Calendar tasks.
+- Zee Stage vs lookup-lane timing can still regress if client-only heuristics drift from server task state.
+- Hands-free approval phrasing needs continued real-device validation across more natural speaking styles.
 - Some runs can still terminate early with minimal close-only traces (session closes before meaningful media exchange); this needs a dedicated lifecycle/race audit.
 - Build-intent misroutes still occur in edge cases and need stronger deterministic test coverage.
 - Some task flows can still regress into plain chat verbosity instead of clean artifact-first delivery.
@@ -97,13 +124,19 @@ Ship a production-grade multimodal AI companion where voice and text share one m
 - Mobile voice still needs longer soak/evidence runs across real iPhone + Android browser conditions.
 
 ## Next Steps (Priority Order)
-1. Add forensic task failure tracing pack:
+1. Finish Google task continuity hardening:
+   - stale lookup ownership
+   - rapid task switching
+   - explicit old-task vs new-task follow-up disambiguation
+2. Build deterministic Gmail/Calendar regression scenarios for text + live voice:
+   - read
+   - detail read
+   - ambiguity
+   - clarification
+   - approval
+   - result parity
+3. Add forensic task failure tracing pack:
    - decision reason, intent-session state, slot resolution, assumptions, qa summary, publish reason.
-2. Build deterministic scenario regression suite for agent requests:
-   - cover letter, resume, research paper, guide, presentation, landing page, mini-game.
-3. Tighten routing and continuity guardrails:
-   - explicit build asks always confirmation-gated
-   - active intent session continuation lock for follow-ups.
 4. Harden doc/presentation publish quality gates and eliminate raw artifact leakage in normal chat bubbles.
 5. Run cross-device voice soak tests and complete native packaging decision for TestFlight path.
 

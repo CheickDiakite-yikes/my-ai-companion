@@ -1,6 +1,6 @@
 # Live Voice Replit Operations Checklist
 
-Last Updated: 2026-03-06
+Last Updated: 2026-03-12
 
 This is the production runbook for ZeeMe live voice reliability on Replit.  
 It is designed so any engineer can diagnose and stabilize voice regressions without guessing.
@@ -15,6 +15,8 @@ It is designed so any engineer can diagnose and stabilize voice regressions with
 - Mic capture + client speech detector + interrupt path
 - Transcript ingestion + persistence continuity into shared text chat history
 - Live function call bridge (`POST /api/live/tool-response`)
+- Zee Stage lookup/task surface behavior during and after live voice
+- Gmail/Calendar read, detail-read, and approval-gated write flows
 
 ### Non-negotiable invariants
 - No DB migrations are required for live voice tuning.
@@ -22,6 +24,7 @@ It is designed so any engineer can diagnose and stabilize voice regressions with
 - `speechConfig.languageCode` remains unset in native audio mode.
 - Transcript persistence path remains enabled for continuity with text mode.
 - Any `VITE_*` change requires full rebuild/redeploy (restart alone is insufficient).
+- Any Google write-surface validation requires both runtime and build-time flags to be aligned.
 
 ---
 
@@ -50,6 +53,22 @@ After deploy, `POST /api/live/token` response `configSummary` should show:
 - `maxOutputTokens>=1000`
 - `nativeAudioLanguageMode=auto_detect`
 - non-empty `effectiveLanguageHint` + valid `languageHintSource`
+- when Google personal context voice is enabled:
+  - `googlePersonalContextFunctionCallingEnabled=true`
+
+### Baseline Google write-flow expectations
+
+For Zee Stage Gmail/Calendar write validation, also align:
+- `ENABLE_GOOGLE_PERSONAL_CONTEXT=true`
+- `ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE=true`
+- `ENABLE_GOOGLE_PERSONAL_CONTEXT_WRITES=true`
+- `ENABLE_VOICE_GOOGLE_WRITE_HANDOFF=true`
+- `VITE_ENABLE_GOOGLE_PERSONAL_CONTEXT_WRITES=true`
+
+OAuth scopes must include:
+- `gmail.compose`
+- `gmail.send`
+- `calendar.events`
 
 ---
 
@@ -99,6 +118,8 @@ skills/zeeme-live-voice-stability/scripts/live_trace_summary.sh /path/to/live-de
 | `language mismatch observed` frequent for same-language speaking | Transcript language/script drift | Validate language hints sent to token route; inspect low-signal transcript discard behavior |
 | Interrupt button pressed but no `activityStart sent` | UI interrupt not reaching live session | Debug interrupt path before touching audio thresholds |
 | Assistant cuts off on phone from handling/tap noise | Auto-barge-in too permissive during assistant window | Tighten mobile assistant barge-in min duration/peak and lower assistant candidate clear target |
+| `POST /api/live/tool-response` returns 400 | Live tool-response envelope failed validation before Gmail/Calendar logic ran | Inspect `live.tool_response.invalid_request`, then confirm fresh client + server deploy pair |
+| Zee says `sent` or `created` but stage still shows `Needs approval` | spoken confirmation drift or stale task target | Verify latest Google action result/task status and current Zee Stage target before changing prompts |
 
 ---
 
@@ -153,11 +174,30 @@ Run these three scenarios after each voice tuning change:
    - Expect low-signal fragments to be filtered when appropriate
    - No catastrophic session collapse
 
+4. Gmail read + detail read
+   - `Summarize my unread emails from last day`
+   - `Open the latest email from Maya`
+   - Expect lookup lane -> grounded reply -> no stale approval card takeover
+
+5. Gmail write + approval
+   - `Draft an email to alex@example.com asking if Thursday works`
+   - `Save it` or `Send it`
+   - Expect Zee Stage preview, approval/running/completed transitions, and truthful spoken confirmation
+
+6. Calendar create/update + approval
+   - `Create a calendar event Lunch with Maya tomorrow at 2`
+   - `I approve`
+   - `Move it to 4 and add Blue Bottle as the location`
+   - Expect Zee Stage preview, approval/running/completed transitions, and result card parity with spoken output
+
 ### Acceptance criteria
 - No socket lifecycle errors in summary.
 - `activity windows without transcription` is zero or explainable edge-case only.
 - Voice interruption still works (`interrupt_button_pressed` + `interrupt_requested` + `interrupt_acknowledged`).
 - User transcript continuity remains intact into text chat history.
+- No `live.tool_response.invalid_request` events during healthy Gmail/Calendar voice tests.
+- Zee Stage does not remain stuck on stale lookup or stale approval surfaces after the task progresses.
+- Spoken Gmail/Calendar completion matches the persisted Zee Stage/task result.
 
 ---
 

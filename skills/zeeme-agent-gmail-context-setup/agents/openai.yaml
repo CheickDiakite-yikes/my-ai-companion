@@ -1,4 +1,4 @@
 interface:
   display_name: "ZeeMe Agent Gmail Setup"
-  short_description: "Set up and debug Gmail/Calendar agent context safely."
-  default_prompt: "Use $zeeme-agent-gmail-context-setup to configure and validate Gmail/Calendar context for ZeeMe agents with deterministic checks."
+  short_description: "Set up and debug Google context, Zee Stage, and approvals."
+  default_prompt: "Use $zeeme-agent-gmail-context-setup to configure and validate Gmail/Calendar context, Zee Stage behavior, and hands-free approvals with deterministic checks."
