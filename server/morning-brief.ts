@@ -301,10 +301,10 @@ function extractRssSourceUrl(itemXml: string): string | null {
   const sourceMatch = itemXml.match(/<source[^>]*url="([^"]+)"[^>]*>/i);
   if (sourceMatch?.[1]) {
     const url = decodeXmlEntities(sourceMatch[1]).trim();
-    return url || null;
+    return normalizeBriefSourceUrl(url);
   }
   const link = extractRssTagValue(itemXml, "link");
-  return link || null;
+  return normalizeBriefSourceUrl(link);
 }
 
 function toIsoOrNull(raw: string): string | null {
@@ -448,8 +448,8 @@ function toHeadlineItems(value: unknown): MorningBriefHeadlineItem[] {
       title,
       summary,
       sourceUrl:
-        typeof record.sourceUrl === "string" && record.sourceUrl.trim()
-          ? record.sourceUrl.trim()
+        typeof record.sourceUrl === "string"
+          ? normalizeBriefSourceUrl(record.sourceUrl.trim())
           : null,
       publishedAt:
         typeof record.publishedAt === "string" && record.publishedAt.trim()
@@ -466,6 +466,76 @@ function toStringArray(value: unknown): string[] {
     .filter((item): item is string => typeof item === "string")
     .map((item) => item.trim())
     .filter((item) => item.length > 0);
+}
+
+const BRIEF_INTERNAL_SOURCE_HOSTS = new Set([
+  "vertexaisearch.cloud.google.com",
+  "vertexaisearch.googleapis.com",
+]);
+
+const BRIEF_REDIRECT_QUERY_KEYS = [
+  "url",
+  "u",
+  "target",
+  "targetUrl",
+  "redirect",
+  "redirectUrl",
+  "dest",
+  "destination",
+  "sourceUrl",
+  "link",
+  "href",
+] as const;
+
+function tryParseHttpUrl(value: string): URL | null {
+  try {
+    const url = new URL(value);
+    if (url.protocol === "http:" || url.protocol === "https:") {
+      return url;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function normalizeBriefSourceUrl(raw: string): string | null {
+  const direct = tryParseHttpUrl(raw);
+  if (!direct) return null;
+
+  for (const key of BRIEF_REDIRECT_QUERY_KEYS) {
+    const candidate = direct.searchParams.get(key);
+    if (!candidate) continue;
+    const nested = tryParseHttpUrl(candidate.trim());
+    if (nested) {
+      nested.hash = "";
+      return nested.toString();
+    }
+  }
+
+  if (BRIEF_INTERNAL_SOURCE_HOSTS.has(direct.hostname.toLowerCase())) {
+    return null;
+  }
+
+  direct.hash = "";
+  return direct.toString();
+}
+
+function toCitationUrlArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return dedupeStrings(
+    value
+      .filter((item): item is string => typeof item === "string")
+      .map((item) => normalizeBriefSourceUrl(item.trim()))
+      .filter((item): item is string => Boolean(item)),
+  );
+}
+
+function formatBriefCitationMarkdown(source: string): string {
+  const parsed = tryParseHttpUrl(source);
+  if (!parsed) return `- ${source}`;
+  const label = parsed.hostname.replace(/^www\./, "");
+  return `- [${label}](${parsed.toString()})`;
 }
 
 function toInboxItems(value: unknown): InboxDigestItem[] {
@@ -634,7 +704,7 @@ async function fetchNewsAndMarkets(input: {
         typeof gatewayResponse.marketSnapshot === "string"
           ? gatewayResponse.marketSnapshot.trim()
           : "";
-      const citations = toStringArray(gatewayResponse.citations);
+      const citations = toCitationUrlArray(gatewayResponse.citations);
       const partialFailures = toStringArray(
         gatewayResponse.partialFailures,
       ).filter((code): code is MorningBriefFailureCode =>
@@ -775,7 +845,7 @@ async function fetchNewsAndMarkets(input: {
       typeof record.marketSnapshot === "string" && record.marketSnapshot.trim()
         ? record.marketSnapshot.trim()
         : "Market snapshot unavailable right now.";
-    let citations = toStringArray(record.citations);
+    let citations = toCitationUrlArray(record.citations);
 
     if (
       headlineItems.length === 0 ||
@@ -954,7 +1024,7 @@ async function composeMorningBriefViaGateway(input: {
         ? gatewayResponse.marketSnapshot.trim()
         : input.marketSnapshot;
     const inboxHighlights = toInboxItems(gatewayResponse.inboxHighlights);
-    const citations = toStringArray(gatewayResponse.citations);
+    const citations = toCitationUrlArray(gatewayResponse.citations);
     const partialFailures = Array.from(
       new Set([
         ...input.partialFailures,
@@ -1037,7 +1107,12 @@ export function renderMorningBriefForChat(
     bulletLines.push("- No verified headlines available right now.");
   } else {
     for (const item of brief.headlineItems.slice(0, MAX_NEWS_ITEMS)) {
-      const sourceSuffix = item.sourceUrl ? ` ([source](${item.sourceUrl}))` : "";
+      const normalizedSourceUrl = item.sourceUrl
+        ? normalizeBriefSourceUrl(item.sourceUrl)
+        : null;
+      const sourceSuffix = normalizedSourceUrl
+        ? ` ([source](${normalizedSourceUrl}))`
+        : "";
       bulletLines.push(`- **${item.title}**: ${item.summary}${sourceSuffix}`);
     }
   }
@@ -1066,11 +1141,17 @@ export function renderMorningBriefForChat(
     );
   }
 
-  if (brief.citations.length > 0) {
+  const safeCitations = dedupeStrings(
+    brief.citations
+      .map((source) => normalizeBriefSourceUrl(source))
+      .filter((source): source is string => Boolean(source)),
+  );
+
+  if (safeCitations.length > 0) {
     bulletLines.push("");
     bulletLines.push("### SOURCES");
-    for (const source of brief.citations.slice(0, 10)) {
-      bulletLines.push(`- ${source}`);
+    for (const source of safeCitations.slice(0, 10)) {
+      bulletLines.push(formatBriefCitationMarkdown(source));
     }
   }
 

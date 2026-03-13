@@ -190,6 +190,147 @@ function sanitizeSplitTokenArtifacts(text: string): string {
   return normalizeWordSpacing(cleaned);
 }
 
+function isTransientLiveReconnectError(error: string | null | undefined): boolean {
+  if (!error) return false;
+  return /live (voice|camera) session ended\./i.test(error) && /reconnect to continue/i.test(error);
+}
+
+const SOFT_WALKTHROUGH_STORAGE_KEY = "zeeme-soft-walkthrough-v3";
+type SoftWalkthroughStepId =
+  | "voice-selector"
+  | "profile-entry"
+  | "google-connections"
+  | "zee-avatar"
+  | "profile-avatar"
+  | "profile-bio"
+  | "zee-tone";
+
+type SoftWalkthroughStep = {
+  id: SoftWalkthroughStepId;
+  screen: "voice" | "profile";
+  selector: string;
+  eyebrow: string;
+  title: string;
+  detail: string;
+  align: "start" | "center" | "end";
+  preferredPlacement: "top" | "bottom";
+  maxWidth?: number;
+};
+
+const SOFT_WALKTHROUGH_STEPS: SoftWalkthroughStep[] = [
+  {
+    id: "voice-selector",
+    screen: "voice",
+    selector: '[data-testid="button-persona-selector"]',
+    eyebrow: "Voice",
+    title: "Start by choosing the voice that feels right.",
+    detail:
+      "You can switch Zee's voice any time from the top-left card. Your choice stays with you.",
+    align: "start",
+    preferredPlacement: "bottom",
+    maxWidth: 214,
+  },
+  {
+    id: "profile-entry",
+    screen: "voice",
+    selector: '[data-testid="button-profile"]',
+    eyebrow: "Profile",
+    title: "Your profile lives up here.",
+    detail:
+      "This opens your personal settings, where you can shape how Zee looks, sounds, and remembers you.",
+    align: "end",
+    preferredPlacement: "bottom",
+    maxWidth: 214,
+  },
+  {
+    id: "google-connections",
+    screen: "profile",
+    selector: '[data-testid="panel-google-connections"]',
+    eyebrow: "Connections",
+    title: "Google connection is optional, but powerful.",
+    detail:
+      "Connect Gmail and Calendar here if you want Zee to help with your inbox, events, and Morning Brief context.",
+    align: "start",
+    preferredPlacement: "bottom",
+    maxWidth: 220,
+  },
+  {
+    id: "zee-avatar",
+    screen: "profile",
+    selector: '[data-testid="panel-zee-avatar"]',
+    eyebrow: "Zee Avatar",
+    title: "This is where you shape Zee's look.",
+    detail:
+      "Pick a preset face for Zee or upload a custom avatar if you want her visual style to feel more like yours.",
+    align: "start",
+    preferredPlacement: "bottom",
+    maxWidth: 224,
+  },
+  {
+    id: "profile-avatar",
+    screen: "profile",
+    selector: '[data-testid="button-edit-avatar"]',
+    eyebrow: "Avatar",
+    title: "You can upload your own profile photo here.",
+    detail:
+      "A personal avatar makes the app feel more yours and gives Zee a clearer sense of who she is talking to.",
+    align: "center",
+    preferredPlacement: "bottom",
+    maxWidth: 208,
+  },
+  {
+    id: "profile-bio",
+    screen: "profile",
+    selector: '[data-testid="input-profile-bio"]',
+    eyebrow: "Bio",
+    title: "Your bio teaches Zee your vibe.",
+    detail:
+      "Add your goals, personality, or context so Zee can respond with better continuity and a more personal touch.",
+    align: "start",
+    preferredPlacement: "top",
+    maxWidth: 220,
+  },
+  {
+    id: "zee-tone",
+    screen: "profile",
+    selector: '[data-testid="select-profile-style-preset"]',
+    eyebrow: "Tone",
+    title: "You can tune how Zee responds.",
+    detail:
+      "Choose a response style that feels more balanced, warm, direct, or playful. You can refine it any time.",
+    align: "start",
+    preferredPlacement: "top",
+    maxWidth: 220,
+  },
+];
+
+function hasCompletedSoftWalkthrough(): boolean {
+  if (typeof window === "undefined") return true;
+  try {
+    return window.localStorage.getItem(SOFT_WALKTHROUGH_STORAGE_KEY) === "done";
+  } catch {
+    return false;
+  }
+}
+
+function markSoftWalkthroughComplete() {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(SOFT_WALKTHROUGH_STORAGE_KEY, "done");
+  } catch {
+    // Ignore storage failures so the tutorial never blocks the app.
+  }
+}
+
+function resetSoftWalkthroughProgress() {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.removeItem(SOFT_WALKTHROUGH_STORAGE_KEY);
+  } catch {
+    // Ignore storage failures so replay still works for this session.
+  }
+}
+
 function renderSimpleMarkdown(text: string): React.ReactNode {
   const lines = text.split("\n");
   const elements: React.ReactNode[] = [];
@@ -234,7 +375,7 @@ function renderSimpleMarkdown(text: string): React.ReactNode {
       } else if (match[7] && match[8]) {
         parts.push(
           <a key={`link-${inlineKey++}`} href={match[8]} target="_blank" rel="noopener noreferrer"
-            className="underline decoration-2 underline-offset-4 font-bold hover:opacity-80 transition-opacity"
+            className="break-all [overflow-wrap:anywhere] underline decoration-2 underline-offset-4 font-bold hover:opacity-80 transition-opacity"
             style={{ color: "var(--app-assistant-bubble-text)" }}
           >{match[7]}</a>
         );
@@ -243,7 +384,7 @@ function renderSimpleMarkdown(text: string): React.ReactNode {
         try { domain = new URL(match[9]).hostname.replace(/^www\./, ""); } catch { domain = match[9].slice(0, 30); }
         parts.push(
           <a key={`url-${inlineKey++}`} href={match[9]} target="_blank" rel="noopener noreferrer"
-            className="underline decoration-2 underline-offset-4 font-bold hover:opacity-80 transition-opacity"
+            className="break-all [overflow-wrap:anywhere] underline decoration-2 underline-offset-4 font-bold hover:opacity-80 transition-opacity"
             style={{ color: "var(--app-assistant-bubble-text)" }}
           >{domain}</a>
         );
@@ -6564,12 +6705,15 @@ const ProfileView = ({
   onUploadAvatar,
   onUploadZeeAvatar,
   onReplayOnboarding,
+  onReplayWalkthrough,
   onOpenSettings,
   onOpenOutputsHistory,
   onLogout,
   quotaSummary,
   quotaTier,
   isQuotaLoading,
+  walkthroughActive,
+  walkthroughStepId,
 }: {
   onClose: () => void;
   user: any;
@@ -6595,12 +6739,15 @@ const ProfileView = ({
   onUploadAvatar: (file: File) => Promise<void>;
   onUploadZeeAvatar: (file: File) => Promise<void>;
   onReplayOnboarding: () => void;
+  onReplayWalkthrough: () => void;
   onOpenSettings: () => void;
   onOpenOutputsHistory: () => void;
   onLogout: () => void;
   quotaSummary?: QuotaSummaryData;
   quotaTier?: QuotaTier;
   isQuotaLoading: boolean;
+  walkthroughActive?: boolean;
+  walkthroughStepId?: SoftWalkthroughStepId | null;
 }) => {
   const queryClient = useQueryClient();
   const avatarInputId = useId();
@@ -6753,6 +6900,49 @@ const ProfileView = ({
       queryKey: GOOGLE_INTEGRATION_STATUS_QUERY_KEY,
     });
   }, [queryClient]);
+
+  useEffect(() => {
+    if (!walkthroughActive || !walkthroughStepId) {
+      return;
+    }
+
+    if (walkthroughStepId === "google-connections") {
+      setConnectedAccountsOpen(true);
+    }
+    if (walkthroughStepId === "zee-avatar") {
+      setZeeAvatarOpen(true);
+    }
+    if (walkthroughStepId === "profile-bio") {
+      setPersonalizationOpen(true);
+    }
+    if (walkthroughStepId === "zee-tone") {
+      setResponseStyleOpen(true);
+    }
+
+    const selectorByStep: Partial<Record<SoftWalkthroughStepId, string>> = {
+      "google-connections": '[data-testid="panel-google-connections"]',
+      "zee-avatar": '[data-testid="panel-zee-avatar"]',
+      "profile-avatar": '[data-testid="button-edit-avatar"]',
+      "profile-bio": '[data-testid="input-profile-bio"]',
+      "zee-tone": '[data-testid="select-profile-style-preset"]',
+    };
+
+    const selector = selectorByStep[walkthroughStepId];
+    if (!selector) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      const target = document.querySelector(selector);
+      if (target instanceof HTMLElement) {
+        target.scrollIntoView({ block: "center", behavior: "smooth" });
+      }
+    }, 160);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [walkthroughActive, walkthroughStepId]);
 
   const bioWordCount = bio.trim().length === 0 ? 0 : bio.trim().split(/\s+/).length;
   const bioWordLimit = 1000;
@@ -6978,7 +7168,11 @@ const ProfileView = ({
                     transition={{ duration: 0.25, ease: "easeInOut" }}
                     className="overflow-hidden"
                   >
-                    <div className="rounded-xl p-4 shadow-sm border space-y-3" style={themedCardStyle}>
+                    <div
+                      className="rounded-xl p-4 shadow-sm border space-y-3"
+                      style={themedCardStyle}
+                      data-testid="panel-connected-accounts"
+                    >
                       <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between">
                         <span className="font-medium" style={{ color: "var(--app-on-dark)" }}>
                           Email
@@ -7006,6 +7200,19 @@ const ProfileView = ({
                         data-testid="button-replay-onboarding"
                       >
                         Replay onboarding
+                      </button>
+                      <button
+                        type="button"
+                        onClick={onReplayWalkthrough}
+                        className="w-full rounded-xl border px-3 py-2 text-sm font-medium transition-colors hover:opacity-95"
+                        style={{
+                          borderColor: "var(--app-soft-card-border)",
+                          backgroundColor: "var(--app-soft-card-bg)",
+                          color: "var(--app-on-dark)",
+                        }}
+                        data-testid="button-replay-quick-tour"
+                      >
+                        Replay quick tour
                       </button>
                       {ENABLE_AGENTIC_CREATIONS && (
                         <button
@@ -7058,7 +7265,11 @@ const ProfileView = ({
                     transition={{ duration: 0.25, ease: "easeInOut" }}
                     className="overflow-hidden"
                   >
-                    <div className="rounded-xl p-4 shadow-sm border space-y-3" style={themedCardStyle}>
+                    <div
+                      className="rounded-xl p-4 shadow-sm border space-y-3"
+                      style={themedCardStyle}
+                      data-testid="panel-google-connections"
+                    >
                       {googleIntegrationQuery.isLoading && (
                         <p className="text-xs" style={{ color: "var(--app-on-dark-muted)" }}>
                           Checking Google connection...
@@ -7422,7 +7633,11 @@ const ProfileView = ({
               >
                 Zee Avatar
               </h3>
-              <div className="rounded-xl shadow-sm border overflow-hidden" style={themedCardStyle}>
+              <div
+                className="rounded-xl shadow-sm border overflow-hidden"
+                style={themedCardStyle}
+                data-testid="panel-zee-avatar"
+              >
                 <button
                   type="button"
                   onClick={() => setZeeAvatarOpen((prev) => !prev)}
@@ -8352,7 +8567,7 @@ const SharedHeader = ({
   assistantName,
   selectedVoice,
   setSelectedVoice,
-  onProfile, 
+  onProfile,
   isActive, 
   duration,
   mode,
@@ -8361,7 +8576,7 @@ const SharedHeader = ({
   assistantName: Persona,
   selectedVoice: LiveVoiceName,
   setSelectedVoice: (voice: LiveVoiceName) => void,
-  onProfile: () => void, 
+  onProfile: () => void,
   isActive: boolean,
   duration: number,
   mode: Mode,
@@ -8476,7 +8691,13 @@ const SharedHeader = ({
       </AnimatePresence>
 
       <div className="pointer-events-auto">
-        <Button variant="ghost" size="icon" className="rounded-full w-12 h-12" onClick={onProfile} data-testid="button-profile">
+        <Button
+          variant="ghost"
+          size="icon"
+          className="rounded-full w-12 h-12"
+          onClick={onProfile}
+          data-testid="button-profile"
+        >
           <div
             className="w-full h-full rounded-full overflow-hidden p-0.5"
             style={{
@@ -9148,7 +9369,7 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
             assistantName={assistantName}
             selectedVoice={selectedVoice}
             setSelectedVoice={setSelectedVoice}
-            onProfile={onProfile} 
+            onProfile={onProfile}
             isActive={isActive} 
             duration={duration} 
             mode={mode}
@@ -11822,7 +12043,7 @@ const TextView = ({
       <div
         ref={scrollRef}
         onScroll={handleScroll}
-        className="flex-1 overflow-y-auto p-4"
+        className="flex-1 overflow-x-hidden overflow-y-auto p-4"
         style={{
           paddingTop: "clamp(6.75rem, 19vh, 10rem)",
           paddingBottom: "max(5.5rem, calc(env(safe-area-inset-bottom) + 4.5rem))",
@@ -11859,7 +12080,7 @@ const TextView = ({
                   "flex items-end gap-2",
                   isUnifiedTaskCard
                     ? "w-full min-w-0 max-w-[calc(100%-2.5rem)] sm:max-w-[88%]"
-                    : "max-w-[80%]",
+                    : "min-w-0 max-w-[80%]",
                 )}
               >
                 {msg.sender !== "user" && (
@@ -11873,7 +12094,7 @@ const TextView = ({
                 )}
                 <div
                   className={cn(
-                    "min-w-0 text-sm leading-relaxed",
+                    "min-w-0 max-w-full break-words [overflow-wrap:anywhere] text-sm leading-relaxed",
                     !isUnifiedTaskCard && "rounded-2xl shadow-sm",
                     !isUnifiedTaskCard &&
                       (msg.sender === "user"
@@ -11906,7 +12127,14 @@ const TextView = ({
                       ))}
                     </div>
                   )}
-                  <div className={isUnifiedTaskCard ? "" : `px-5 py-3 ${msg.sender === "user" ? "whitespace-pre-wrap" : ""}`}>
+                  <div
+                    className={cn(
+                      isUnifiedTaskCard ? "" : "px-5 py-3",
+                      !isUnifiedTaskCard &&
+                        "min-w-0 max-w-full break-words [overflow-wrap:anywhere]",
+                      msg.sender === "user" && "whitespace-pre-wrap",
+                    )}
+                  >
                     {msg.isTyping ? (() => {
                       const prevUserMsg = renderItems.slice(0, idx).reverse().find(i => i.message.sender === "user");
                       const isBriefLoading = prevUserMsg?.message.text?.toLowerCase().includes("morning brief");
@@ -12649,6 +12877,359 @@ const OutputsHistoryView = ({
   );
 };
 
+const SoftWalkthroughBubble = ({
+  eyebrow,
+  title,
+  detail,
+  stepIndex,
+  totalSteps,
+  isLastStep,
+  onNext,
+  onSnooze,
+  placement,
+  arrowOffset,
+}: {
+  eyebrow: string;
+  title: string;
+  detail: string;
+  stepIndex: number;
+  totalSteps: number;
+  isLastStep: boolean;
+  onNext: () => void;
+  onSnooze: () => void;
+  placement: "top" | "bottom";
+  arrowOffset: number;
+}) => {
+  const arrowStyle =
+    placement === "bottom"
+      ? {
+          top: -8,
+          left: arrowOffset,
+          background:
+            "linear-gradient(180deg, color-mix(in srgb, var(--app-soft-card-bg) 95%, rgba(255,246,226,0.28)), color-mix(in srgb, var(--app-header-bg) 92%, rgba(255,211,163,0.12)))",
+        }
+      : {
+          bottom: -8,
+          left: arrowOffset,
+          background:
+            "linear-gradient(180deg, color-mix(in srgb, var(--app-header-bg) 92%, rgba(255,211,163,0.12)), color-mix(in srgb, var(--app-soft-card-bg) 95%, rgba(255,246,226,0.28)))",
+        };
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 16, scale: 0.985 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      exit={{ opacity: 0, y: 10, scale: 0.96 }}
+      transition={{ duration: 0.28, ease: "easeOut" }}
+      className="relative w-full rounded-[1.45rem] border px-4 py-3 backdrop-blur-xl"
+      style={{
+        background:
+          "linear-gradient(180deg, color-mix(in srgb, var(--app-soft-card-bg) 95%, rgba(255,246,226,0.28)), color-mix(in srgb, var(--app-header-bg) 92%, rgba(255,211,163,0.12)))",
+        borderColor: "color-mix(in srgb, var(--app-soft-card-border) 88%, rgba(255,232,199,0.3))",
+        boxShadow: "0 18px 34px rgba(23, 9, 8, 0.2)",
+      }}
+    >
+      <div
+        className="absolute h-4 w-4 rotate-45 border"
+        style={{
+          ...arrowStyle,
+          borderColor:
+            "color-mix(in srgb, var(--app-soft-card-border) 85%, rgba(255,232,199,0.26))",
+        }}
+      />
+      <div
+        className="mb-2 inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.26em]"
+        style={{
+          backgroundColor: "color-mix(in srgb, var(--app-soft-card-bg) 78%, transparent)",
+          color: "var(--app-on-dark-muted)",
+        }}
+      >
+        <Sparkles className="h-3 w-3" />
+        {eyebrow}
+      </div>
+      <p
+        className="text-[0.9rem] font-semibold leading-5"
+        style={{ color: "var(--app-on-dark)" }}
+      >
+        {title}
+      </p>
+      <p
+        className="mt-1 text-[0.73rem] leading-5"
+        style={{ color: "var(--app-on-dark-muted)" }}
+      >
+        {detail}
+      </p>
+      <div className="mt-3 flex items-center justify-between gap-2">
+        <span
+          className="text-[0.68rem] font-medium uppercase tracking-[0.18em]"
+          style={{ color: "var(--app-on-dark-muted)" }}
+        >
+          {stepIndex + 1} / {totalSteps}
+        </span>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            className="rounded-full border px-3 py-1.5 text-[0.76rem] font-medium transition-opacity hover:opacity-90"
+            style={{
+              borderColor: "var(--app-soft-card-border)",
+              backgroundColor:
+                "color-mix(in srgb, var(--app-soft-card-bg) 84%, rgba(255,240,214,0.08))",
+              color: "var(--app-on-dark-muted)",
+            }}
+            onClick={onSnooze}
+            data-testid="button-soft-walkthrough-snooze"
+          >
+            Skip
+          </button>
+          <button
+            type="button"
+            className="rounded-full border px-3 py-1.5 text-[0.76rem] font-semibold transition-opacity hover:opacity-95"
+            style={{
+              borderColor:
+                "color-mix(in srgb, var(--app-accent) 58%, rgba(255,232,199,0.34))",
+              background:
+                "linear-gradient(135deg, color-mix(in srgb, var(--app-accent) 22%, rgba(255,240,214,0.26)), color-mix(in srgb, var(--app-soft-card-bg) 88%, rgba(255,240,214,0.08)))",
+              color: "var(--app-on-dark)",
+            }}
+            onClick={onNext}
+            data-testid="button-soft-walkthrough-next"
+          >
+            {isLastStep ? "Done" : "Next"}
+          </button>
+        </div>
+      </div>
+    </motion.div>
+  );
+};
+
+const SoftWalkthroughOverlay = ({
+  visible,
+  step,
+  stepIndex,
+  totalSteps,
+  onNext,
+  onSnooze,
+}: {
+  visible: boolean;
+  step: SoftWalkthroughStep | null;
+  stepIndex: number;
+  totalSteps: number;
+  onNext: () => void;
+  onSnooze: () => void;
+}) => {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const bubbleRef = useRef<HTMLDivElement | null>(null);
+  const [highlightRect, setHighlightRect] = useState<{
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+    radius: number;
+  } | null>(null);
+  const [bubbleHeight, setBubbleHeight] = useState(190);
+
+  useEffect(() => {
+    if (!visible || !step) {
+      setHighlightRect(null);
+      return;
+    }
+
+    const updateRect = () => {
+      const container = containerRef.current;
+      const target = document.querySelector(step.selector);
+      if (!(container instanceof HTMLElement) || !(target instanceof HTMLElement)) {
+        setHighlightRect(null);
+        return;
+      }
+
+      const containerBox = container.getBoundingClientRect();
+      const targetBox = target.getBoundingClientRect();
+      const padding = step.screen === "voice" ? 10 : 8;
+      setHighlightRect({
+        left: targetBox.left - containerBox.left - padding,
+        top: targetBox.top - containerBox.top - padding,
+        width: targetBox.width + padding * 2,
+        height: targetBox.height + padding * 2,
+        radius: step.id === "profile-entry" || step.id === "profile-avatar" ? 28 : 24,
+      });
+    };
+
+    updateRect();
+
+    const resizeObserver =
+      typeof ResizeObserver !== "undefined" ? new ResizeObserver(updateRect) : null;
+    const mutationObserver =
+      typeof MutationObserver !== "undefined" ? new MutationObserver(updateRect) : null;
+    const container = containerRef.current;
+    const target = document.querySelector(step.selector);
+
+    if (resizeObserver && container instanceof HTMLElement) {
+      resizeObserver.observe(container);
+    }
+    if (resizeObserver && target instanceof HTMLElement) {
+      resizeObserver.observe(target);
+    }
+    mutationObserver?.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+    });
+
+    window.addEventListener("resize", updateRect);
+    window.addEventListener("scroll", updateRect, true);
+
+    return () => {
+      resizeObserver?.disconnect();
+      mutationObserver?.disconnect();
+      window.removeEventListener("resize", updateRect);
+      window.removeEventListener("scroll", updateRect, true);
+    };
+  }, [step, visible]);
+
+  useEffect(() => {
+    const bubble = bubbleRef.current;
+    if (!(bubble instanceof HTMLElement)) return;
+    const update = () => {
+      setBubbleHeight(bubble.getBoundingClientRect().height || 190);
+    };
+    update();
+    const resizeObserver =
+      typeof ResizeObserver !== "undefined" ? new ResizeObserver(update) : null;
+    resizeObserver?.observe(bubble);
+    return () => resizeObserver?.disconnect();
+  }, [step, visible]);
+
+  const bubbleLayout = useMemo(() => {
+    if (!highlightRect || !step) return null;
+    const container = containerRef.current;
+    const containerWidth = container?.clientWidth ?? 390;
+    const containerHeight = container?.clientHeight ?? 844;
+    const bubbleWidth = Math.min(step.maxWidth ?? 224, containerWidth - 20);
+    const gap = 10;
+    const horizontalPadding = 10;
+    const safeTop = 12;
+    const safeBottom = 88;
+    let left =
+      step.align === "start"
+        ? highlightRect.left
+        : step.align === "end"
+          ? highlightRect.left + highlightRect.width - bubbleWidth
+          : highlightRect.left + (highlightRect.width - bubbleWidth) / 2;
+    left = Math.max(horizontalPadding, Math.min(left, containerWidth - bubbleWidth - horizontalPadding));
+
+    let placement = step.preferredPlacement;
+    if (
+      placement === "top" &&
+      highlightRect.top - bubbleHeight - gap < safeTop
+    ) {
+      placement = "bottom";
+    }
+    if (
+      placement === "bottom" &&
+      highlightRect.top + highlightRect.height + bubbleHeight + gap >
+        containerHeight - safeBottom
+    ) {
+      placement = "top";
+    }
+
+    const top =
+      placement === "bottom"
+        ? highlightRect.top + highlightRect.height + gap
+        : highlightRect.top - bubbleHeight - gap;
+
+    const targetCenterX = highlightRect.left + highlightRect.width / 2;
+    const arrowOffset = Math.max(
+      18,
+      Math.min(targetCenterX - left - 8, bubbleWidth - 34),
+    );
+
+    return {
+      left,
+      top: Math.max(safeTop, Math.min(top, containerHeight - bubbleHeight - safeBottom)),
+      width: bubbleWidth,
+      placement,
+      arrowOffset,
+    };
+  }, [bubbleHeight, highlightRect, step]);
+
+  return (
+    <AnimatePresence>
+      {visible && step && (
+        <motion.div
+          ref={containerRef}
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.18, ease: "easeOut" }}
+          className="absolute inset-0 z-[70] overflow-hidden pointer-events-auto"
+          data-testid="soft-walkthrough-overlay"
+        >
+          <div
+            className="absolute inset-0"
+            style={{ backgroundColor: "rgba(24, 10, 10, 0.14)" }}
+          />
+
+          {highlightRect && (
+            <motion.div
+              key={step.id}
+              initial={{ opacity: 0.3, scale: 0.98 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0.2, scale: 0.98 }}
+              transition={{ duration: 0.22, ease: "easeOut" }}
+              className="absolute border"
+              style={{
+                left: highlightRect.left,
+                top: highlightRect.top,
+                width: highlightRect.width,
+                height: highlightRect.height,
+                borderRadius: highlightRect.radius,
+                borderColor:
+                  "color-mix(in srgb, var(--app-accent) 58%, rgba(255,232,199,0.48))",
+                boxShadow:
+                  "0 0 0 1px rgba(255,232,199,0.2), 0 0 36px rgba(255,186,101,0.18)",
+              }}
+            >
+              <motion.div
+                className="absolute inset-0 rounded-[inherit]"
+                animate={{ opacity: [0.35, 0.9, 0.35] }}
+                transition={{ duration: 2.2, repeat: Infinity, ease: "easeInOut" }}
+                style={{
+                  boxShadow: "inset 0 0 0 1px rgba(255, 223, 176, 0.28)",
+                }}
+              />
+            </motion.div>
+          )}
+
+          {bubbleLayout && (
+            <div
+              ref={bubbleRef}
+              className="absolute"
+              style={{
+                left: bubbleLayout.left,
+                top: bubbleLayout.top,
+                width: bubbleLayout.width,
+              }}
+            >
+              <SoftWalkthroughBubble
+                eyebrow={step.eyebrow}
+                title={step.title}
+                detail={step.detail}
+                stepIndex={stepIndex}
+                totalSteps={totalSteps}
+                isLastStep={stepIndex === totalSteps - 1}
+                onNext={onNext}
+                onSnooze={onSnooze}
+                placement={bubbleLayout.placement}
+                arrowOffset={bubbleLayout.arrowOffset}
+              />
+            </div>
+          )}
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
+};
+
 const OnboardingView = ({
   onComplete,
   userName,
@@ -13021,6 +13602,10 @@ function App() {
 
   const [showMarketingLanding, setShowMarketingLanding] = useState(true);
   const [authEntryMode, setAuthEntryMode] = useState<"welcome" | "login">("welcome");
+  const [showSoftWalkthrough, setShowSoftWalkthrough] = useState(false);
+  const [softWalkthroughStepIndex, setSoftWalkthroughStepIndex] = useState(0);
+  const [softWalkthroughDismissedThisSession, setSoftWalkthroughDismissedThisSession] =
+    useState(false);
 
   const [mode, setMode] = useState<Mode>("voice");
   const [isCalling, setIsCalling] = useState(false);
@@ -13119,6 +13704,25 @@ function App() {
   const textSearchStartedAtRef = useRef<number | null>(null);
   const voiceSearchMinTimerRef = useRef<number | null>(null);
   const textSearchMinTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (!liveError) return;
+    if (mode === "text" && isTransientLiveReconnectError(liveError)) {
+      setLiveError(null);
+      return;
+    }
+    if (
+      isCalling ||
+      isLiveConnecting ||
+      !isTransientLiveReconnectError(liveError)
+    ) {
+      return;
+    }
+    const timeout = window.setTimeout(() => {
+      setLiveError((current) => (current === liveError ? null : current));
+    }, 4200);
+    return () => window.clearTimeout(timeout);
+  }, [isCalling, isLiveConnecting, liveError, mode]);
 
   const logLiveTrace = useCallback((
     event: string,
@@ -13412,6 +14016,9 @@ function App() {
   const [selectedTheme, setSelectedTheme] =
     useState<AppThemeId>(DEFAULT_APP_THEME_ID);
   const persona: Persona = ASSISTANT_NAME;
+  const activeSoftWalkthroughStep = showSoftWalkthrough
+    ? SOFT_WALKTHROUGH_STEPS[softWalkthroughStepIndex] ?? null
+    : null;
 
   useEffect(() => {
     if (preferences) {
@@ -13424,6 +14031,50 @@ function App() {
       }
     }
   }, [preferences]);
+
+  useEffect(() => {
+    if (!showSoftWalkthrough || !activeSoftWalkthroughStep) {
+      return;
+    }
+
+    if (activeSoftWalkthroughStep.screen === "voice") {
+      setMode("voice");
+      setShowSettings(false);
+      setShowOutputsHistory(false);
+      setShowProfile(false);
+      return;
+    }
+
+    setShowSettings(false);
+    setShowOutputsHistory(false);
+    setShowProfile(true);
+  }, [activeSoftWalkthroughStep, showSoftWalkthrough]);
+
+  useEffect(() => {
+    if (
+      !isAuthenticated ||
+      !preferences ||
+      showOnboarding ||
+      softWalkthroughDismissedThisSession ||
+      hasCompletedSoftWalkthrough()
+    ) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      setSoftWalkthroughStepIndex(0);
+      setShowSoftWalkthrough(true);
+    }, 650);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [
+    isAuthenticated,
+    preferences,
+    showOnboarding,
+    softWalkthroughDismissedThisSession,
+  ]);
 
   useEffect(() => {
     isVideoEnabledRef.current = isVideoEnabled;
@@ -13697,6 +14348,39 @@ function App() {
       onboardingCompleted: false,
     });
   };
+
+  const handleCompleteSoftWalkthrough = useCallback(() => {
+    markSoftWalkthroughComplete();
+    setSoftWalkthroughDismissedThisSession(false);
+    setSoftWalkthroughStepIndex(0);
+    setShowSoftWalkthrough(false);
+  }, []);
+
+  const handleSnoozeSoftWalkthrough = useCallback(() => {
+    setSoftWalkthroughDismissedThisSession(true);
+    setSoftWalkthroughStepIndex(0);
+    setShowSoftWalkthrough(false);
+  }, []);
+
+  const handleAdvanceSoftWalkthrough = useCallback(() => {
+    if (softWalkthroughStepIndex >= SOFT_WALKTHROUGH_STEPS.length - 1) {
+      handleCompleteSoftWalkthrough();
+      return;
+    }
+    setSoftWalkthroughStepIndex((current) => current + 1);
+  }, [handleCompleteSoftWalkthrough, softWalkthroughStepIndex]);
+
+  const handleReplaySoftWalkthrough = useCallback(() => {
+    resetSoftWalkthroughProgress();
+    setSoftWalkthroughDismissedThisSession(false);
+    setShowSettings(false);
+    setShowOutputsHistory(false);
+    setShowProfile(false);
+    setActiveArtifactId(null);
+    setMode("voice");
+    setSoftWalkthroughStepIndex(0);
+    setShowSoftWalkthrough(true);
+  }, []);
 
   const handleVoiceChange = (voice: LiveVoiceName) => {
     setSelectedVoice(voice);
@@ -16069,6 +16753,16 @@ function App() {
   const hasBriefInChat = messagesData.some(msg => 
     msg.sender === "assistant" && isBrief(msg.text)
   );
+  const canRenderSoftWalkthrough =
+    showSoftWalkthrough &&
+    !showOnboarding &&
+    !showSettings &&
+    !showOutputsHistory &&
+    !activeArtifactId &&
+    !isCalling &&
+    !isLiveConnecting &&
+    ((activeSoftWalkthroughStep?.screen === "voice" && mode === "voice" && !showProfile) ||
+      (activeSoftWalkthroughStep?.screen === "profile" && showProfile));
 
   return (
     <div
@@ -16087,6 +16781,15 @@ function App() {
         </AnimatePresence>
 
         <div className={cn("absolute inset-0", showOnboarding && "hidden")} aria-hidden={showOnboarding}>
+          <SoftWalkthroughOverlay
+            visible={canRenderSoftWalkthrough}
+            step={activeSoftWalkthroughStep}
+            stepIndex={softWalkthroughStepIndex}
+            totalSteps={SOFT_WALKTHROUGH_STEPS.length}
+            onNext={handleAdvanceSoftWalkthrough}
+            onSnooze={handleSnoozeSoftWalkthrough}
+          />
+
           <SharedFooter 
             persona={persona}
             mode={mode}
@@ -16185,6 +16888,7 @@ function App() {
                 onUploadAvatar={handleUploadProfileAvatar}
                 onUploadZeeAvatar={handleUploadZeeAvatar}
                 onReplayOnboarding={handleReplayOnboarding}
+                onReplayWalkthrough={handleReplaySoftWalkthrough}
                 onOpenSettings={() => setShowSettings(true)}
                 onOpenOutputsHistory={() => {
                   setShowSettings(false);
@@ -16195,6 +16899,8 @@ function App() {
                 quotaSummary={quotaSummary}
                 quotaTier={quotaTier}
                 isQuotaLoading={isQuotaLoading}
+                walkthroughActive={showSoftWalkthrough}
+                walkthroughStepId={activeSoftWalkthroughStep?.id ?? null}
               />
             )}
           </AnimatePresence>
@@ -16240,12 +16946,12 @@ function App() {
             )}
           </AnimatePresence>
 
-          {liveError && (
+          {mode === "voice" && liveError && (
             <div className="absolute bottom-24 left-1/2 -translate-x-1/2 z-[90] max-w-[85%] rounded-xl border border-red-400/30 bg-red-500/15 px-3 py-2 text-xs text-red-100 backdrop-blur-sm">
               {liveError}
             </div>
           )}
-          {!liveError && isLiveConnecting && (
+          {mode === "voice" && !liveError && isLiveConnecting && (
             <div
               className="absolute bottom-24 left-1/2 -translate-x-1/2 z-[90] max-w-[85%] rounded-xl border px-3 py-2 text-xs backdrop-blur-sm"
               style={{
