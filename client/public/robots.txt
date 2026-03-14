@@ -3,6 +3,9 @@ Allow: /
 Disallow: /api
 Disallow: /api/
 
+User-agent: OAI-SearchBot
+Allow: /
+
 User-agent: GPTBot
 Allow: /
 
@@ -12,4 +15,4 @@ Allow: /
 User-agent: Google-Extended
 Allow: /
 
-Sitemap: https://zeeme.replit.app/sitemap.xml
+Sitemap: https://zeeme.io/sitemap.xml

@@ -219,3 +219,31 @@ Use this file as a chronological handoff record so any new session can resume wo
   - Root cause: Rapid feature merges outpaced explicit memory-file updates.
   - Fix: Refreshed `PROJECT_STATE.md` + this session log entry with branch-accurate architecture.
   - Guardrail: After major runtime/routing merges, always update memory docs in the same session before handoff.
+
+## 2026-03-14 14:32 EDT - Live voice docs and qualification runbooks synced to shipped capture path
+- Completed:
+  - Updated `/Users/cheickdiakite/Codex/my-ai-companion/README.md` to reflect the current live voice capture architecture:
+    - AudioWorklet-based 16k PCM send path
+    - desktop vs mobile capture-profile assumptions
+    - expanded voice regression and release-gate commands
+    - processed-track and threshold-regression troubleshooting notes
+  - Updated `/Users/cheickdiakite/Codex/my-ai-companion/docs/LIVE_VOICE_REPLIT_CHECKLIST.md`:
+    - new stable capture assumptions
+    - publish guidance for desktop/iPhone/Android
+    - deterministic trace-audit command path
+    - explicit `replit.env` hygiene note
+  - Updated `/Users/cheickdiakite/Codex/my-ai-companion/docs/GEMINI_INTEGRATION.md` with the current browser capture contract and trace audit workflow.
+  - Updated `/Users/cheickdiakite/Codex/my-ai-companion/docs/PROJECT_STATE.md` so project memory matches current live voice priorities and qualification status.
+- Current state:
+  - Written docs now match the live voice system that is actually shipping on `main4`.
+  - Local/replit/live publish decisions can now point to one consistent qualification flow instead of ad hoc voice debugging.
+  - Android real-device qualification is still the main remaining publish confidence gap.
+- Next actions:
+  - Finish Android Chrome trace validation on the current deploy.
+  - Use healthy desktop + iPhone + Android traces as the new baseline before broader publish.
+  - Keep the runbooks updated whenever capture-path, speech-profile, or trace-audit contracts change.
+- Errors and fixes:
+  - Error: README and voice runbooks lagged behind the current AudioWorklet capture path and qualification commands.
+  - Root cause: rapid live voice stabilization work landed faster than doc updates.
+  - Fix: refreshed core docs to match the current code and release process.
+  - Guardrail: after any live voice capture or regression-tooling change, update README + Replit runbook in the same session.

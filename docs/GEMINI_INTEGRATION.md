@@ -1,6 +1,6 @@
 # Gemini Integration Notes
 
-Last Updated: 2026-03-13
+Last Updated: 2026-03-14
 
 This document is the technical integration reference for ZeeMe's Gemini usage across text chat, live voice, grounding, and Google personal-context tool calls.
 
@@ -82,10 +82,21 @@ Text mode currently supports:
 - session resumption enabled
 - grounding and personal-context tools enabled only when server/runtime gates allow them
 
+### Current browser capture contract
+
+- Browser mic audio is captured client-side and sent to Gemini Live as raw PCM with the existing payload shape:
+  - `realtimeInput.audio.data`
+  - `mimeType: "audio/pcm;rate=16000"`
+- Preferred input path is a dedicated `AudioWorklet` capture pipeline targeting `16kHz`.
+- `ScriptProcessorNode` remains only as a fallback path when `AudioWorklet` is unavailable.
+- Desktop capture should prefer echo-cancelled mono without `noiseSuppression` or `voiceIsolation`.
+- Mobile capture keeps a relaxed speech-detection profile and only falls back to more processed tracks later in the attempt order.
+
 ### Stable Live assumptions
 - native audio mode remains active
 - `speechConfig.languageCode` is intentionally not forced for native audio
 - transcript text is treated as fallible and context-dependent
+- desktop adaptive threshold floors are clamped to avoid `0.001x` regressions in exported traces
 
 ---
 
@@ -287,6 +298,26 @@ Reference worksheet:
 - `live.tool_call.http_failed`
 - `live.tool_call.responded`
 - `live.google_context.*`
+- `live.audio.capture_path`
+- `live.audio.capture_worklet_unavailable`
+- `live.audio.activity_window_transcription_received`
+- `live.audio.activity_window_no_input_transcription`
+- `live.transcript.received`
+
+### Trace audit tooling
+
+Use both:
+
+```bash
+skills/zeeme-live-voice-stability/scripts/live_trace_summary.sh /path/to/live-debug.json
+npm run test:voice:trace -- /path/to/live-debug.json
+```
+
+The summary is for fast human triage. The repo audit script is the deterministic regression gate for:
+- processed desktop tracks
+- collapsed desktop thresholds
+- interrupt acknowledgement drift
+- missing user transcript chunks during interrupted runs
 
 ### Required debugging rule
 

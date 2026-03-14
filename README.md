@@ -53,6 +53,9 @@ ZeeMe is a companion AI experience where users build a continuous relationship w
 
 - **Google personal-context writes are now first-class**: Zee can prepare Gmail compose/reply/send flows and Calendar create/update flows in both text and live voice using approval-gated task cards and shared Google action context.
 - **Zee Stage is now the canonical Google task surface**: the top “Open Zee Stage” chip can surface lookup summaries, ambiguity pickers, draft/event previews, and approval/result states across voice and text continuity.
+- **Live mic capture is now aligned to a 16k PCM AudioWorklet pipeline**: browser mic audio is captured through a dedicated input worklet, emitted as raw PCM `audio/pcm;rate=16000`, and kept compatible with the existing Gemini Live payload contract.
+- **Desktop/mobile capture profiles are more explicit**: desktop now prefers echo-cancelled mono tracks without `noiseSuppression` or `voiceIsolation`, while mobile keeps a more permissive `mobile_relaxed` speech profile and only falls back to heavier processing later.
+- **Voice qualification is now a first-class release gate**: the repo includes capture smoke tests, trace regression audits, browser-profile fixtures, and a one-command local qualifier before Replit or live rollout.
 - **Live tool-response handling is hardened**: `POST /api/live/tool-response` now sanitizes the full request envelope on both client and server, tolerates alias fields from Live tool calls, traces invalid requests, and safely retries once with a minimal payload when optional fields are rejected.
 - **OAuth callback handling is environment-safe**: Google app sign-in and Google integration connect flow both use signed, TTL-bound OAuth state and support loopback-safe local testing on `127.0.0.1` and/or `localhost` when kept consistent per session.
 - **Voice approval and follow-up policy is stricter**: Zee is explicitly instructed to treat short phrases like `send it`, `save it`, `I approve`, and `sounds good` as Google action follow-ups, and never claim a draft/event completed unless the tool result explicitly says it did.
@@ -208,6 +211,13 @@ Client starts voice call
         - outputAudioTranscription enabled
         - speechConfig.languageCode intentionally unset for native audio
   -> browser opens Gemini Live session via @google/genai
+  -> getUserMedia capture profile selection:
+       - desktop: prefer echo cancellation, avoid voiceIsolation/noiseSuppression
+       - mobile: use relaxed speech profile, processed capture only as fallback
+  -> dedicated input AudioWorklet:
+       - capture at 16kHz target context
+       - emit PCM16 chunks matching Gemini Live payload contract
+       - keep ScriptProcessorNode only as fallback path
   -> mic PCM stream -> sendRealtimeInput(audio)
   -> optional camera frames -> sendRealtimeInput(video) @ ~1 FPS
   -> client-side speech detector state machine:
@@ -282,6 +292,19 @@ stateDiagram-v2
     user_speaking --> cooldown: silenceMs >= endSilenceMinDurationMs
     cooldown --> idle: cooldownMs elapsed
 ```
+
+Current live voice reliability contract:
+
+- Mic payload contract stays exactly `audio/pcm;rate=16000` with raw PCM chunks over Gemini Live.
+- Desktop capture should prefer `echoCancellation=true`, `noiseSuppression=false`, and `voiceIsolation=false`; traces that show processed desktop tracks are considered regressions.
+- Speech detection runs in two profiles:
+  - `desktop_default`
+  - `mobile_relaxed`
+- Desktop adaptive thresholds are clamped so active/candidate thresholds do not collapse into the `0.001x` range.
+- Transcript continuity remains enabled:
+  - valid transcript rows persist into the shared `messages` table
+  - persisted live transcript rows are tagged with `message_source=voice_transcript`
+  - local-only `I couldn't catch that clearly` notices are diagnostic UI, not stored conversation history
 
 ### Google personal context flow (text + live voice)
 
@@ -415,6 +438,8 @@ Current stage surface types:
 │   │   │   └── use-toast.ts               # Toast notification hook
 │   │   └── lib/
 │   │       ├── gemini-live.ts             # Browser live voice/camera session client
+│   │       ├── live-input-capture.worklet.js # AudioWorklet mic capture -> PCM16 path
+│   │       ├── live-rms-processor.worklet.js # AudioWorklet RMS analysis for speech detection
 │   │       ├── app-theme.ts               # Theme definitions (4 themes) + CSS variable application
 │   │       ├── auth-utils.ts              # Client-side auth helpers
 │   │       ├── queryClient.ts             # Fetch helpers + trace headers
@@ -439,6 +464,8 @@ Current stage surface types:
 │   └── replit_integrations/auth/          # Replit Auth integration (unused, custom auth active)
 ├── shared/
 │   ├── schema.ts                          # Drizzle schema — all tables, enums, insert schemas, types
+│   ├── live-audio-capture.ts             # Shared mic profile selection + threshold clamp helpers
+│   ├── live-audio-compatibility.ts       # Browser/device audio compatibility + granted-track scoring
 │   ├── agent.ts                           # Shared agent event/artifact types (archived features)
 │   └── models/auth.ts                     # users + sessions table schema
 ├── docs/
@@ -459,7 +486,11 @@ Current stage surface types:
 │   ├── local-isolated-e2e.sh              # Isolated local integration tests
 │   ├── check-secrets.sh                   # Secret scanning script
 │   ├── dev-context.sh                     # Session context loader
-│   └── dev-handoff.sh                     # Session handoff helper
+│   ├── dev-handoff.sh                     # Session handoff helper
+│   ├── live-audio-capture-smoke.ts        # PCM worklet / flush / chunk smoke tests
+│   ├── live-trace-regression-smoke.ts     # Exported live-debug trace regression audit
+│   ├── live-voice-browser-profile-smoke.ts # Desktop/iPhone/Android browser-profile fixture smoke
+│   └── live-voice-qualify-local.sh        # One-command local voice qualification
 ├── .env.example                           # Safe placeholder env template
 ├── package.json                           # Dependencies + scripts
 ├── tsconfig.json                          # TypeScript config with path aliases
@@ -482,7 +513,7 @@ All tables are defined in `shared/schema.ts` and `shared/models/auth.ts`. Schema
 | `users` | Account identity — email, hashed password, timestamps |
 | `sessions` | express-session store (connect-pg-simple) |
 | `conversations` | User-owned chat threads, persona label, timestamps |
-| `messages` | Text + voice transcript entries. Supports multi-part assistant turns via `turnId` + `partIndex`. Includes `message_purpose` enum (`conversation`, `agent_ui`, `system`) for context filtering |
+| `messages` | Text + voice transcript entries. Supports multi-part assistant turns via `turnId` + `partIndex`. Includes `message_purpose` enum (`conversation`, `agent_ui`, `system`) for context filtering and `message_source` enum (`chat`, `voice_transcript`) so display cleanup can target persisted voice rows safely |
 | `message_attachments` | Image attachments for text chat — lifecycle: `pending` -> `bound` -> `deleted`. Signed media retrieval |
 | `user_preferences` | Selected voice, persona, theme, onboarding completion, memory mode, cross-chat memory toggle |
 | `user_profiles` | Personalization fields — display name, bio, location, age, profession, gender, response style preset/note, Zee avatar preset/custom image refs, user avatar |
@@ -1350,7 +1381,7 @@ Use `http://10.0.2.2:5000` for Android emulator, and your LAN IP for physical de
 |---|---|
 | `npm run dev` | Start dev server (Express + Vite HMR) |
 | `npm run dev:quick` | Push schema then start dev server |
-| `npm run dev:all` | Push schema, run typecheck + voice checks, then start dev server |
+| `npm run dev:all` | Push schema, run typecheck + live voice checks, then start dev server |
 | `npm run build` | Production build (client + server) |
 | `npm run start` | Run production build |
 | `npm run check` | TypeScript type checking |
@@ -1361,8 +1392,14 @@ Use `http://10.0.2.2:5000` for Android emulator, and your LAN IP for physical de
 | `npm run security:secrets:staged` | Scan staged files for secrets |
 | `npm run hooks:install` | Install pre-commit secret scanning hook |
 | `npm run test:local:e2e` | Run isolated local integration tests |
+| `npm run test:voice` | Full non-browser live voice regression suite |
+| `npm run test:voice:capture` | Smoke-check AudioWorklet capture, PCM chunking, and flush behavior |
 | `npm run test:voice:language` | Smoke-check language hint/script normalization |
+| `npm run test:voice:trace` | Audit exported `live-debug-*.json` traces for known regressions |
+| `npm run test:voice:transcript` | Smoke-check transcript display cleanup and voice transcript targeting |
 | `npm run test:voice:mobile` | Smoke-check mobile compatibility + speech profile defaults |
+| `npm run test:voice:profiles` | Run desktop/iPhone/Android browser-profile fixture matrix |
+| `npm run test:voice:qualify:local` | Run the full local live voice qualification sequence |
 | `npm run mobile:install` | Install dependencies for Expo wrapper (`mobile/`) |
 | `npm run mobile:start` | Start Expo dev server |
 | `npm run mobile:ios` | Run iOS native build via Expo |
@@ -1374,6 +1411,9 @@ Use `http://10.0.2.2:5000` for Android emulator, and your LAN IP for physical de
 ## 13) Environment Variables
 
 Source of truth: `.env.example`
+
+Operational note:
+- `replit.env` is a local operator reference only. It is gitignored and must never become the source of truth over `.env.example`, deployed secrets, or exported live-debug traces.
 
 ### Required
 
@@ -1508,7 +1548,7 @@ Precedence notes:
 |---|---|---|
 | `VITE_ENABLE_MORNING_BRIEF_VOICE_MODE` | `false` | Client guardrail for optional Live Morning Brief function loop |
 | `VITE_GOOGLE_OAUTH_CONNECT_REDIRECT_URI` | — | Optional dev-only callback override sent to `/api/integrations/google/connect-url` (must end with `/api/integrations/google/callback`) |
-| `VITE_LIVE_AUDIO_PROCESSOR_BUFFER_SIZE` | `512` | Audio processor buffer |
+| `VITE_LIVE_AUDIO_PROCESSOR_BUFFER_SIZE` | `512` | Output chunk sample count used by the AudioWorklet capture path (and ScriptProcessor fallback) before PCM encoding |
 | `VITE_LIVE_AUDIO_NOISE_GATE_ENABLED` | `false` | Client-side noise gate |
 | `VITE_LIVE_AUDIO_NOISE_GATE_RMS_THRESHOLD` | `0.006` | Base RMS floor for noise gate |
 | `VITE_LIVE_AUDIO_NOISE_GATE_HANGOVER_FRAMES` | `3` | Gate hangover frames after speech |
@@ -1631,14 +1671,29 @@ npm run check
 Run these after any live voice capture, transcript, token-config, or prompt-policy change:
 
 ```bash
+# full non-browser suite: capture + mobile profile + language + trace audit self-test + transcript cleanup
+npm run test:voice
+
+# AudioWorklet capture / PCM chunking / flush behavior
+npm run test:voice:capture
+
 # language hint normalization + transcript script handling
 npm run test:voice:language
+
+# exported live-debug regression audit
+npm run test:voice:trace -- /path/to/live-debug.json
 
 # token + optional trace-json contract smoke
 npm run test:voice:smoke -- --token-json /tmp/live-token-smoke.json
 
 # browser-level voice regression (synthetic mic + interrupt behavior)
 npm run test:voice:ui
+
+# browser-profile fixture matrix (desktop, iPhone-like, Android-like)
+npm run test:voice:profiles
+
+# one-command local qualification bundle
+npm run test:voice:qualify:local
 ```
 
 One-command local workflow options:
@@ -1650,6 +1705,34 @@ npm run dev:all
 # quick local run (db push + dev server)
 npm run dev:quick
 ```
+
+### Live voice release gate
+
+Before a Replit deploy or live publish, use this sequence:
+
+1. Run the local reliability suite:
+
+```bash
+npm run check
+npm run test:voice
+npm run test:voice:profiles
+npm run test:voice:ui
+```
+
+2. Rebuild/redeploy if any `VITE_*` value changed.
+3. Validate at least one real trace export on:
+   - desktop browser
+   - iPhone Safari
+   - Android Chrome
+4. Audit each exported trace:
+
+```bash
+npm run test:voice:trace -- /path/to/live-debug.json
+```
+
+Soft-publish guidance:
+- healthy desktop + iPhone traces are enough for limited live testing
+- broad publish should wait for a healthy Android trace too
 
 ### Google personal context tests
 
@@ -1944,6 +2027,7 @@ Use this exact order so you do not tune blindly:
 
 ```bash
 skills/zeeme-live-voice-stability/scripts/live_trace_summary.sh /path/to/live-debug.json
+npm run test:voice:trace -- /path/to/live-debug.json
 ```
 
 4. Classify by signature:
@@ -1952,6 +2036,8 @@ skills/zeeme-live-voice-stability/scripts/live_trace_summary.sh /path/to/live-de
 |---|---|---|
 | `speech candidate starts` very high, `speech user_speaking transitions` very low | Candidate churn (threshold pressure too high) | Tune candidate hysteresis / clear grace / ambient floor guard before touching server VAD |
 | `activityStart sent > 0` and `activity windows without transcription > 0` | Audio captured but no usable transcription for some windows | Check mic constraints, noise gate, and speech thresholds; verify browser mic permission and track settings |
+| Desktop trace shows `noiseSuppression=true` or `voiceIsolation=true` | Browser granted an over-processed desktop track | Verify capture path on latest build; desktop should prefer echo-cancelled mono without those settings |
+| Desktop `activeThreshold` or `candidateThreshold` falls into `0.001x` | Adaptive threshold regression | Verify latest threshold-clamp code is deployed; treat as regression before tuning runtime env |
 | Trace has only close events (example: `live.stop.completed`, `live.session.closed`, `live.session.closed_ignored_stale`) | Session closed before active media exchange | Check startup lifecycle and user action timing; verify socket open and no immediate teardown |
 | `socket send skipped (not open) > 0` | Send attempted after socket closed/closing | Fix lifecycle ordering before tuning thresholds |
 | `language mismatch observed` spikes while user stays in one language | Transcript drift | Verify language hint payload and low-signal transcript filtering; avoid forcing languageCode in native audio |

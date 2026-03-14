@@ -144,6 +144,126 @@ const orbConfig = {
   particleColor: "rgba(235, 186, 98, 0.6)",
 };
 
+const MARKETING_SITE_ORIGIN = "https://zeeme.io";
+const MARKETING_DEFAULT_IMAGE_URL = `${MARKETING_SITE_ORIGIN}/zeeme-og.jpg?v=20260314a`;
+const MARKETING_DEFAULT_KEYWORDS =
+  "AI companion, AI companion app, voice AI companion, AI executive assistant, personal AI assistant, live voice chat AI, Gmail and Calendar assistant, camera-aware AI, ZeeMe, Zee";
+
+const LANDING_FAQS = [
+  {
+    question: "What is ZeeMe?",
+    answer:
+      "ZeeMe is a multimodal AI companion centered on one continuous relationship with Zee across live voice and text chat.",
+  },
+  {
+    question: "Can ZeeMe work as an AI companion and an executive assistant?",
+    answer:
+      "Yes. ZeeMe blends warm companionship with practical help like Gmail and Google Calendar context, grounded web answers, and approval-aware task support.",
+  },
+  {
+    question: "How do live voice and text stay connected?",
+    answer:
+      "Voice transcripts can persist into the same shared conversation history as text, so users can switch modes without restarting context.",
+  },
+  {
+    question: "Can ZeeMe help with Gmail and Google Calendar?",
+    answer:
+      "Yes. When a user connects Google, ZeeMe can read inbox and calendar context, and it can prepare approval-gated Gmail and Calendar actions in supported flows.",
+  },
+  {
+    question: "Is ZeeMe private by design?",
+    answer:
+      "ZeeMe keeps authenticated chat and profile areas private, uses scoped integrations for Google features, and only exposes public product information on marketing pages.",
+  },
+] as const;
+
+type MarketingMetaConfig = {
+  title: string;
+  description: string;
+  path: string;
+  keywords?: string;
+  ogType?: "website" | "article";
+  imageUrl?: string;
+  articlePublishedTime?: string | null;
+  pageSchema?: Record<string, unknown> | null;
+  blogPostingSchema?: Record<string, unknown> | null;
+};
+
+function buildMarketingAbsoluteUrl(path: string): string {
+  return new URL(path.startsWith("/") ? path : `/${path}`, MARKETING_SITE_ORIGIN).toString();
+}
+
+function upsertHeadMeta(
+  attribute: "name" | "property",
+  key: string,
+  content: string | null | undefined,
+): void {
+  const selector = `meta[${attribute}="${key}"]`;
+  const existing = document.head.querySelector<HTMLMetaElement>(selector);
+  if (!content) {
+    existing?.remove();
+    return;
+  }
+  const element = existing ?? document.createElement("meta");
+  element.setAttribute(attribute, key);
+  element.setAttribute("content", content);
+  if (!existing) {
+    document.head.appendChild(element);
+  }
+}
+
+function upsertCanonicalLink(href: string): void {
+  const existing = document.head.querySelector<HTMLLinkElement>('link[rel="canonical"]');
+  const element = existing ?? document.createElement("link");
+  element.setAttribute("rel", "canonical");
+  element.setAttribute("href", href);
+  if (!existing) {
+    document.head.appendChild(element);
+  }
+}
+
+function upsertJsonLdScript(id: string, payload: Record<string, unknown> | null): void {
+  const existing = document.head.querySelector<HTMLScriptElement>(`script[data-zeeme-jsonld="${id}"]`);
+  if (!payload) {
+    existing?.remove();
+    return;
+  }
+  const script = existing ?? document.createElement("script");
+  script.type = "application/ld+json";
+  script.dataset.zeemeJsonld = id;
+  script.text = JSON.stringify(payload);
+  if (!existing) {
+    document.head.appendChild(script);
+  }
+}
+
+function applyMarketingMeta(config: MarketingMetaConfig): void {
+  const canonicalUrl = buildMarketingAbsoluteUrl(config.path);
+  const imageUrl = config.imageUrl ?? MARKETING_DEFAULT_IMAGE_URL;
+  document.title = config.title;
+  upsertHeadMeta("name", "description", config.description);
+  upsertHeadMeta("name", "keywords", config.keywords ?? MARKETING_DEFAULT_KEYWORDS);
+  upsertHeadMeta("property", "og:type", config.ogType ?? "website");
+  upsertHeadMeta("property", "og:title", config.title);
+  upsertHeadMeta("property", "og:description", config.description);
+  upsertHeadMeta("property", "og:url", canonicalUrl);
+  upsertHeadMeta("property", "og:image", imageUrl);
+  upsertHeadMeta("property", "og:image:secure_url", imageUrl);
+  upsertHeadMeta("name", "twitter:title", config.title);
+  upsertHeadMeta("name", "twitter:description", config.description);
+  upsertHeadMeta("name", "twitter:image", imageUrl);
+  upsertHeadMeta("property", "article:published_time", config.articlePublishedTime ?? null);
+  upsertCanonicalLink(canonicalUrl);
+  upsertJsonLdScript("marketing-page", config.pageSchema ?? null);
+  upsertJsonLdScript("marketing-blog-post", config.blogPostingSchema ?? null);
+}
+
+function parsePublishedAtToIso(publishedAt: string | null | undefined): string | null {
+  if (!publishedAt) return null;
+  const parsed = new Date(publishedAt);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+}
+
 const INFO_PAGE_CONTENT: Record<InfoPageId, InfoPageContent> = {
   about: {
     title: "About ZeeMe",
@@ -3649,6 +3769,147 @@ function InfoPageOverlay({
     return () => window.clearTimeout(timeout);
   }, [shareNotice]);
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    if (page === "blog" && activeBlogPost) {
+      const canonicalPath = `/blog/${encodeURIComponent(activeBlogPost.id)}`;
+      const coverBlock = getBlogCoverBlock(activeBlogPost);
+      const imageUrl = coverBlock?.src
+        ? buildMarketingAbsoluteUrl(coverBlock.src)
+        : MARKETING_DEFAULT_IMAGE_URL;
+      const publishedIso = parsePublishedAtToIso(activeBlogPost.publishedAt);
+      applyMarketingMeta({
+        title: `${activeBlogPost.title} | ZeeMe Blog`,
+        description: activeBlogPost.excerpt,
+        path: canonicalPath,
+        ogType: "article",
+        imageUrl,
+        articlePublishedTime: publishedIso,
+        pageSchema: {
+          "@context": "https://schema.org",
+          "@type": "WebPage",
+          name: activeBlogPost.title,
+          description: activeBlogPost.excerpt,
+          url: buildMarketingAbsoluteUrl(canonicalPath),
+          isPartOf: {
+            "@type": "WebSite",
+            name: "ZeeMe",
+            url: MARKETING_SITE_ORIGIN,
+          },
+        },
+        blogPostingSchema: {
+          "@context": "https://schema.org",
+          "@type": "BlogPosting",
+          headline: activeBlogPost.title,
+          description: activeBlogPost.excerpt,
+          image: [imageUrl],
+          author: {
+            "@type": "Organization",
+            name: "ZeeMe",
+          },
+          publisher: {
+            "@type": "Organization",
+            name: "ZeeMe",
+            logo: {
+              "@type": "ImageObject",
+              url: `${MARKETING_SITE_ORIGIN}/icon-512.png`,
+            },
+          },
+          mainEntityOfPage: buildMarketingAbsoluteUrl(canonicalPath),
+          url: buildMarketingAbsoluteUrl(canonicalPath),
+          keywords: activeBlogPost.tags.join(", "),
+          ...(publishedIso ? { datePublished: publishedIso } : {}),
+        },
+      });
+      return;
+    }
+
+    if (page === "blog") {
+      applyMarketingMeta({
+        title: "ZeeMe Blog | AI Companion, Voice, Reliability, and Product Thinking",
+        description:
+          "Read ZeeMe writing on AI companions, live voice reliability, Gmail and Calendar flows, privacy, continuity, and product design.",
+        path: "/blog",
+        pageSchema: {
+          "@context": "https://schema.org",
+          "@type": "Blog",
+          name: "ZeeMe Blog",
+          description:
+            "ZeeMe writes about AI companions, voice reliability, continuity, privacy, Gmail and Calendar flows, and product thinking.",
+          url: buildMarketingAbsoluteUrl("/blog"),
+          publisher: {
+            "@type": "Organization",
+            name: "ZeeMe",
+            url: MARKETING_SITE_ORIGIN,
+          },
+          blogPost: BLOG_POSTS.slice(0, 8).map((post) => ({
+            "@type": "BlogPosting",
+            headline: post.title,
+            url: buildMarketingAbsoluteUrl(`/blog/${encodeURIComponent(post.id)}`),
+          })),
+        },
+        blogPostingSchema: null,
+      });
+      return;
+    }
+
+    const metaByPage: Record<Exclude<InfoPageId, "blog">, MarketingMetaConfig> = {
+      about: {
+        title: "About ZeeMe | AI Companion for Life, Work, and Continuity",
+        description:
+          "Learn how ZeeMe is building an AI companion focused on warmth, continuity, trust, and practical everyday help.",
+        path: "/about",
+        pageSchema: {
+          "@context": "https://schema.org",
+          "@type": "AboutPage",
+          name: "About ZeeMe",
+          description:
+            "Background, mission, and product philosophy for ZeeMe, an AI companion focused on trust, continuity, and everyday usefulness.",
+          url: buildMarketingAbsoluteUrl("/about"),
+          about: {
+            "@type": "Organization",
+            name: "ZeeMe",
+            url: MARKETING_SITE_ORIGIN,
+          },
+        },
+      },
+      privacy: {
+        title: "Privacy Policy | ZeeMe",
+        description:
+          "Read ZeeMe's public privacy policy covering data handling, account information, Google integrations, and security boundaries.",
+        path: "/privacy",
+        pageSchema: {
+          "@context": "https://schema.org",
+          "@type": "WebPage",
+          name: "ZeeMe Privacy Policy",
+          description:
+            "Public privacy policy for ZeeMe covering account data, Google integrations, storage boundaries, and user control.",
+          url: buildMarketingAbsoluteUrl("/privacy"),
+        },
+      },
+      terms: {
+        title: "Terms of Service | ZeeMe",
+        description:
+          "Read ZeeMe's public terms of service, acceptable use rules, Google integration boundaries, and platform disclaimers.",
+        path: "/terms",
+        pageSchema: {
+          "@context": "https://schema.org",
+          "@type": "WebPage",
+          name: "ZeeMe Terms of Service",
+          description:
+            "Public terms of service for ZeeMe covering eligibility, acceptable use, Google integrations, and platform boundaries.",
+          url: buildMarketingAbsoluteUrl("/terms"),
+        },
+      },
+    };
+
+    applyMarketingMeta({
+      ...metaByPage[page],
+      blogPostingSchema: null,
+    });
+  }, [page, activeBlogPost]);
+
   const handleShareBlogPost = async (post: BlogPost) => {
     const shareUrl =
       typeof window !== "undefined"
@@ -5217,6 +5478,8 @@ export default function MarketingLandingPage({ onGetStarted, onSignIn }: Marketi
     [],
   );
 
+  const landingFaqs = useMemo(() => LANDING_FAQS, []);
+
   useEffect(() => {
     if (typeof window === "undefined") return;
     const syncFromPath = () => {
@@ -5249,6 +5512,18 @@ export default function MarketingLandingPage({ onGetStarted, onSignIn }: Marketi
       window.history.pushState({}, "", `${url.pathname}${url.search}`);
     }
   };
+
+  useEffect(() => {
+    if (typeof window === "undefined" || activeInfoPage) return;
+    applyMarketingMeta({
+      title: "ZeeMe | AI Companion for Voice, Text, and Everyday Life",
+      description:
+        "ZeeMe is an AI companion with live voice and text chat, Gmail and Google Calendar help, grounded web answers, camera-aware support, and one continuous conversation.",
+      path: "/",
+      pageSchema: null,
+      blogPostingSchema: null,
+    });
+  }, [activeInfoPage]);
 
   return (
     <>
@@ -5481,6 +5756,69 @@ export default function MarketingLandingPage({ onGetStarted, onSignIn }: Marketi
               </RevealSection>
 
               <TimelineMoments moments={companionMoments} />
+            </div>
+          </section>
+
+          <section className="px-6 py-28 relative" id="faq" aria-labelledby="landing-faq-heading">
+            <div className="max-w-5xl mx-auto">
+              <RevealSection className="text-center mb-18">
+                <div className="flex items-center justify-center gap-4 mb-6">
+                  <svg width="50" height="8" viewBox="0 0 50 8" fill="none" className="opacity-25">
+                    <path d="M0 4 C10 4, 12 1, 20 1 C28 1, 28 7, 38 7 C44 7, 47 5, 50 4" stroke="rgba(255, 214, 172, 0.7)" strokeWidth="0.8" fill="none" />
+                  </svg>
+                  <span className="text-[11px] tracking-[0.35em] uppercase" style={{ color: "rgba(255, 214, 172, 0.4)" }}>
+                    III
+                  </span>
+                  <svg width="50" height="8" viewBox="0 0 50 8" fill="none" className="opacity-25" style={{ transform: "scaleX(-1)" }}>
+                    <path d="M0 4 C10 4, 12 1, 20 1 C28 1, 28 7, 38 7 C44 7, 47 5, 50 4" stroke="rgba(255, 214, 172, 0.7)" strokeWidth="0.8" fill="none" />
+                  </svg>
+                </div>
+                <h2
+                  id="landing-faq-heading"
+                  className="text-3xl md:text-[3.2rem] font-semibold mb-4 tracking-tight leading-[1.08]"
+                  style={{ color: "#FFEFD8", fontFamily: "'Fraunces', serif" }}
+                >
+                  Questions people ask before meeting Zee
+                </h2>
+                <p
+                  className="text-base md:text-[17px] max-w-2xl mx-auto italic leading-[1.8]"
+                  style={{ color: "rgba(255, 226, 198, 0.6)", fontFamily: "'Fraunces', serif" }}
+                >
+                  A clearer public explanation of how ZeeMe works helps people, search engines, and AI assistants understand what the product really does.
+                </p>
+              </RevealSection>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {landingFaqs.map((item, index) => (
+                  <RevealSection key={item.question}>
+                    <article
+                      className="rounded-[1.75rem] border p-6 h-full"
+                      style={{
+                        background: "linear-gradient(180deg, rgba(55, 33, 30, 0.78), rgba(32, 18, 18, 0.92))",
+                        borderColor: "rgba(255, 217, 183, 0.12)",
+                        boxShadow: "0 18px 60px rgba(0, 0, 0, 0.16)",
+                      }}
+                      data-marketing-testid={`landing-faq-${index}`}
+                    >
+                      <p
+                        className="text-[11px] uppercase tracking-[0.28em] mb-3"
+                        style={{ color: "rgba(255, 214, 172, 0.42)" }}
+                      >
+                        FAQ {index + 1}
+                      </p>
+                      <h3
+                        className="text-xl mb-3 leading-snug"
+                        style={{ color: "#FFE7CA", fontFamily: "'Fraunces', serif" }}
+                      >
+                        {item.question}
+                      </h3>
+                      <p className="text-sm leading-[1.9]" style={{ color: "rgba(255, 228, 202, 0.72)" }}>
+                        {item.answer}
+                      </p>
+                    </article>
+                  </RevealSection>
+                ))}
+              </div>
             </div>
           </section>
 

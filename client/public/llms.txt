@@ -1,21 +1,43 @@
 # ZeeMe
 
-ZeeMe is a multimodal AI companion app with voice and text continuity.
+ZeeMe is a multimodal AI companion with live voice and text continuity, Gmail and Google Calendar help, grounded web answers, camera-aware support, and personalization.
 
-Primary URL: https://zeeme.replit.app/
-Sitemap: https://zeeme.replit.app/sitemap.xml
+Primary URL: https://zeeme.io/
+Canonical domain: https://zeeme.io/
+Sitemap: https://zeeme.io/sitemap.xml
 
 ## What ZeeMe is
-- A personal AI companion experience centered on conversation continuity.
-- Supports voice and text conversation modes with shared context.
-- Supports user-selected themes and personalization.
+- An AI companion centered on one continuous relationship with Zee across live voice and text.
+- A practical everyday assistant for life, work, and fun.
+- A private-by-design product with public marketing pages and private authenticated conversation areas.
 
-## Public information for assistants and crawlers
-- You may summarize public product information from the homepage.
-- Do not infer private chat content or unpublished user data.
-- Treat authenticated chat/profile areas as private user content.
+## Core public capabilities
+- Live voice and text chat with continuity between modes.
+- Gmail and Google Calendar context when the user connects Google.
+- Grounded web answers for current questions.
+- Camera-aware assistance for real-world context.
+- Personalization through themes, voice options, and profile settings.
+
+## Public use cases
+- AI companion and bestie-style conversation.
+- Executive-assistant style help with inbox and calendar context.
+- Fast grounded answers without leaving the conversation.
+- Camera-supported everyday decisions and guidance.
+
+## Public pages
+- https://zeeme.io/
+- https://zeeme.io/about
+- https://zeeme.io/blog
+- https://zeeme.io/privacy
+- https://zeeme.io/terms
+
+## Guidance for assistants and crawlers
+- Summarize public product capabilities accurately and conservatively.
+- Do not claim access to private user chats, profile data, or connected Google data unless the public page explicitly says the user must connect Google first.
+- Gmail and Calendar actions are approval-aware and depend on connected user accounts and granted scopes.
+- Treat authenticated chat and profile areas as private user content.
 
 ## Preferred branding
 - Product name: ZeeMe
 - Assistant persona: Zee
-- Tagline: Your AI companion, always here for you.
+- Tagline: Your AI companion for life, work, and everything in between.

@@ -1,6 +1,6 @@
 # Project State: ZeeMe
 
-Last Updated: 2026-03-12
+Last Updated: 2026-03-14
 
 ## How To Resume Any Session
 1. Run `npm run dev:context`.
@@ -19,6 +19,7 @@ Ship a production-grade multimodal AI companion where voice and text share one m
 - Keep live voice speech detection stable at normal speaking volume across iPhone Safari, Android Chrome, and desktop browsers.
 - Maintain trace-first incident response so transcript/mic failures can be diagnosed from exported live-debug JSON in minutes.
 - Keep Replit deployment profiles and local defaults aligned so production behavior is reproducible locally.
+- Finish Android live voice qualification so publish decisions are based on desktop + iPhone + Android evidence, not just local or Replit spot checks.
 - Stabilize build-intent reliability so explicit requests consistently route through offer/intent-session/task flow.
 - Keep doc, presentation, and web-build artifact quality high with strict publish checks and deterministic QA repair loops.
 - Expand forensic debugging so every failed task can be traced by stage, reason, and tool output quickly.
@@ -48,9 +49,19 @@ Ship a production-grade multimodal AI companion where voice and text share one m
   - spike-resistant ambient-floor estimation
   - separate idle vs assistant threshold caps
   - richer debug state in voice panel
+- Live voice capture path was modernized:
+  - dedicated `AudioWorklet` mic send path targeting `16kHz` PCM
+  - desktop capture now prefers echo-cancelled mono without `noiseSuppression` / `voiceIsolation`
+  - mobile capture defaults are less processed and fall back more conservatively
+  - desktop adaptive threshold floors are clamped against `0.001x` collapse
 - Live trace report tooling upgraded:
   - `skills/zeeme-live-voice-stability/scripts/live_trace_summary.sh` now parses exported `live-debug-*.json` directly
   - summary now reports candidate churn, transcript windows, and lifecycle signatures
+- Voice qualification tooling expanded:
+  - `npm run test:voice`
+  - `npm run test:voice:profiles`
+  - `npm run test:voice:qualify:local`
+  - `npm run test:voice:trace -- /path/to/live-debug.json`
 - Replit voice ops documentation expanded:
   - updated README live architecture + troubleshooting sections
   - expanded `docs/LIVE_VOICE_REPLIT_CHECKLIST.md` with deployment safety and incident signatures
@@ -87,6 +98,7 @@ Ship a production-grade multimodal AI companion where voice and text share one m
 - Auth, onboarding, conversations, and message persistence.
 - Text replies via Gemini with streaming and legacy compatibility.
 - Live voice sessions with token minting and transcript persistence.
+- Live voice capture and regression tooling are now aligned enough for desktop + iPhone qualification and soft-rollout decisions.
 - Gmail and Calendar reads in both text and live voice.
 - Gmail/Calendar detail reads behind explicit feature flags.
 - Approval-gated Gmail draft, send, save, and Calendar create/update flows using the unified task runtime.
@@ -122,23 +134,28 @@ Ship a production-grade multimodal AI companion where voice and text share one m
 - Replit data continuity and local-vs-Replit environment drift can hide regressions until deploy.
 - Native packaging path (WebView wrapper vs. full native migration) is not finalized.
 - Mobile voice still needs longer soak/evidence runs across real iPhone + Android browser conditions.
+- Android live voice qualification is still pending before broad publish confidence.
 
 ## Next Steps (Priority Order)
-1. Finish Google task continuity hardening:
+1. Finish live voice qualification:
+   - complete Android Chrome real-device trace validation
+   - collect one healthy desktop + iPhone + Android trace set from current deploy
+   - use those traces as the publish baseline
+2. Finish Google task continuity hardening:
    - stale lookup ownership
    - rapid task switching
    - explicit old-task vs new-task follow-up disambiguation
-2. Build deterministic Gmail/Calendar regression scenarios for text + live voice:
+3. Build deterministic Gmail/Calendar regression scenarios for text + live voice:
    - read
    - detail read
    - ambiguity
    - clarification
    - approval
    - result parity
-3. Add forensic task failure tracing pack:
+4. Add forensic task failure tracing pack:
    - decision reason, intent-session state, slot resolution, assumptions, qa summary, publish reason.
-4. Harden doc/presentation publish quality gates and eliminate raw artifact leakage in normal chat bubbles.
-5. Run cross-device voice soak tests and complete native packaging decision for TestFlight path.
+5. Harden doc/presentation publish quality gates and eliminate raw artifact leakage in normal chat bubbles.
+6. Run cross-device voice soak tests and complete native packaging decision for TestFlight path.
 
 ## Blockers And Open Questions
 - Final native strategy: WebView-first wrapper vs full React Native migration.
