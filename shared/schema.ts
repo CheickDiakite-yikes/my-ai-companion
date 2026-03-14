@@ -8,11 +8,23 @@ import {
   integer,
   boolean,
   index,
+  uniqueIndex,
   jsonb,
   customType,
+  date,
 } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { users } from "./models/auth";
+import {
+  telemetryBrowserFamilyValues,
+  telemetryConsentLevelValues,
+  telemetryEventNameValues,
+  telemetryEventSeverityValues,
+  telemetryOsFamilyValues,
+  telemetryPlatformClassValues,
+  telemetrySessionOutcomeValues,
+  telemetrySourceValues,
+} from "./telemetry";
 
 const vector = customType<{ data: string; driverParam: string }>({
   dataType() {
@@ -164,6 +176,209 @@ export const voiceSessions = pgTable("voice_sessions", {
   cameraDuration: integer("camera_duration").notNull().default(0),
   createdAt: timestamp("created_at").defaultNow(),
 });
+
+export const telemetrySourceEnum = pgEnum(
+  "telemetry_source",
+  telemetrySourceValues,
+);
+
+export const telemetryConsentLevelEnum = pgEnum(
+  "telemetry_consent_level",
+  telemetryConsentLevelValues,
+);
+
+export const telemetrySessionOutcomeEnum = pgEnum(
+  "telemetry_session_outcome",
+  telemetrySessionOutcomeValues,
+);
+
+export const telemetryEventSeverityEnum = pgEnum(
+  "telemetry_event_severity",
+  telemetryEventSeverityValues,
+);
+
+export const telemetryPlatformClassEnum = pgEnum(
+  "telemetry_platform_class",
+  telemetryPlatformClassValues,
+);
+
+export const telemetryBrowserFamilyEnum = pgEnum(
+  "telemetry_browser_family",
+  telemetryBrowserFamilyValues,
+);
+
+export const telemetryOsFamilyEnum = pgEnum(
+  "telemetry_os_family",
+  telemetryOsFamilyValues,
+);
+
+export const telemetryEventNameEnum = pgEnum(
+  "telemetry_event_name",
+  telemetryEventNameValues,
+);
+
+export const telemetrySessions = pgTable(
+  "telemetry_sessions",
+  {
+    id: varchar("id").primaryKey(),
+    userId: varchar("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    source: telemetrySourceEnum("source").notNull(),
+    consentLevel: telemetryConsentLevelEnum("consent_level")
+      .notNull()
+      .default("minimal"),
+    startedAt: timestamp("started_at").notNull(),
+    readyAt: timestamp("ready_at"),
+    endedAt: timestamp("ended_at"),
+    outcome: telemetrySessionOutcomeEnum("outcome"),
+    platformClass: telemetryPlatformClassEnum("platform_class")
+      .notNull()
+      .default("unknown"),
+    browserFamily: telemetryBrowserFamilyEnum("browser_family")
+      .notNull()
+      .default("other"),
+    osFamily: telemetryOsFamilyEnum("os_family")
+      .notNull()
+      .default("other"),
+    captureProfile: varchar("capture_profile").notNull().default("unknown"),
+    traceId: varchar("trace_id"),
+    liveRunId: varchar("live_run_id"),
+    timeToReadyMs: integer("time_to_ready_ms"),
+    timeToFirstUsableTranscriptMs: integer("time_to_first_usable_transcript_ms"),
+    timeToFirstAssistantResponseMs: integer("time_to_first_assistant_response_ms"),
+    speechWindowCount: integer("speech_window_count").notNull().default(0),
+    noUsableTranscriptWindowCount: integer("no_usable_transcript_window_count")
+      .notNull()
+      .default(0),
+    recoverableErrorCount: integer("recoverable_error_count")
+      .notNull()
+      .default(0),
+    fatalErrorCount: integer("fatal_error_count").notNull().default(0),
+    firstGoodConversation: boolean("first_good_conversation")
+      .notNull()
+      .default(false),
+    createdAt: timestamp("created_at").defaultNow(),
+  },
+  (table) => [
+    index("telemetry_sessions_user_created_idx").on(
+      table.userId,
+      table.createdAt,
+    ),
+    index("telemetry_sessions_source_created_idx").on(
+      table.source,
+      table.createdAt,
+    ),
+    index("telemetry_sessions_platform_created_idx").on(
+      table.platformClass,
+      table.browserFamily,
+      table.createdAt,
+    ),
+  ],
+);
+
+export const telemetryEvents = pgTable(
+  "telemetry_events",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    sessionId: varchar("session_id")
+      .notNull()
+      .references(() => telemetrySessions.id, { onDelete: "cascade" }),
+    userId: varchar("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    seq: integer("seq").notNull(),
+    eventName: telemetryEventNameEnum("event_name").notNull(),
+    severity: telemetryEventSeverityEnum("severity")
+      .notNull()
+      .default("info"),
+    at: timestamp("at").notNull(),
+    metrics: jsonb("metrics"),
+    tags: jsonb("tags"),
+    traceId: varchar("trace_id"),
+    createdAt: timestamp("created_at").defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("telemetry_events_session_seq_idx").on(
+      table.sessionId,
+      table.seq,
+    ),
+    index("telemetry_events_user_created_idx").on(table.userId, table.createdAt),
+    index("telemetry_events_name_created_idx").on(
+      table.eventName,
+      table.createdAt,
+    ),
+    index("telemetry_events_session_created_idx").on(
+      table.sessionId,
+      table.createdAt,
+    ),
+  ],
+);
+
+export const telemetryDailyRollups = pgTable(
+  "telemetry_daily_rollups",
+  {
+    day: date("day").notNull(),
+    source: telemetrySourceEnum("source").notNull(),
+    platformClass: telemetryPlatformClassEnum("platform_class")
+      .notNull()
+      .default("unknown"),
+    browserFamily: telemetryBrowserFamilyEnum("browser_family")
+      .notNull()
+      .default("other"),
+    captureProfile: varchar("capture_profile").notNull().default("unknown"),
+    sessionsStarted: integer("sessions_started").notNull().default(0),
+    sessionsReady: integer("sessions_ready").notNull().default(0),
+    healthySessions: integer("healthy_sessions").notNull().default(0),
+    degradedSessions: integer("degraded_sessions").notNull().default(0),
+    failedSessions: integer("failed_sessions").notNull().default(0),
+    firstGoodConversations: integer("first_good_conversations")
+      .notNull()
+      .default(0),
+    speechWindows: integer("speech_windows").notNull().default(0),
+    noUsableTranscriptWindows: integer("no_usable_transcript_windows")
+      .notNull()
+      .default(0),
+    medianReadyMs: integer("median_ready_ms"),
+    medianFirstTranscriptMs: integer("median_first_transcript_ms"),
+    medianFirstAssistantMs: integer("median_first_assistant_ms"),
+    createdAt: timestamp("created_at").defaultNow(),
+  },
+  (table) => [
+    uniqueIndex("telemetry_daily_rollups_dim_idx").on(
+      table.day,
+      table.source,
+      table.platformClass,
+      table.browserFamily,
+      table.captureProfile,
+    ),
+    index("telemetry_daily_rollups_day_idx").on(table.day),
+  ],
+);
+
+export const telemetryDebugReports = pgTable(
+  "telemetry_debug_reports",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    sessionId: varchar("session_id")
+      .notNull()
+      .references(() => telemetrySessions.id, { onDelete: "cascade" }),
+    userId: varchar("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    traceId: varchar("trace_id"),
+    payload: jsonb("payload").notNull(),
+    createdAt: timestamp("created_at").defaultNow(),
+    expiresAt: timestamp("expires_at").notNull(),
+  },
+  (table) => [
+    index("telemetry_debug_reports_user_created_idx").on(
+      table.userId,
+      table.createdAt,
+    ),
+    index("telemetry_debug_reports_expires_idx").on(table.expiresAt),
+  ],
+);
 
 export const usageEventMetricEnum = pgEnum("usage_event_metric", [
   "text_message",
@@ -674,6 +889,32 @@ export const insertVoiceSessionSchema = createInsertSchema(voiceSessions).omit({
   createdAt: true,
 });
 
+export const insertTelemetrySessionSchema = createInsertSchema(
+  telemetrySessions,
+).omit({
+  createdAt: true,
+});
+
+export const insertTelemetryEventSchema = createInsertSchema(
+  telemetryEvents,
+).omit({
+  id: true,
+  createdAt: true,
+});
+
+export const insertTelemetryDailyRollupSchema = createInsertSchema(
+  telemetryDailyRollups,
+).omit({
+  createdAt: true,
+});
+
+export const insertTelemetryDebugReportSchema = createInsertSchema(
+  telemetryDebugReports,
+).omit({
+  id: true,
+  createdAt: true,
+});
+
 export const insertUsageEventSchema = createInsertSchema(usageEvents).omit({
   id: true,
   createdAt: true,
@@ -751,6 +992,16 @@ export type InsertUserProfile = typeof userProfiles.$inferInsert;
 export type UserProfile = typeof userProfiles.$inferSelect;
 export type InsertVoiceSession = typeof voiceSessions.$inferInsert;
 export type VoiceSession = typeof voiceSessions.$inferSelect;
+export type InsertTelemetrySession = typeof telemetrySessions.$inferInsert;
+export type TelemetrySession = typeof telemetrySessions.$inferSelect;
+export type InsertTelemetryEvent = typeof telemetryEvents.$inferInsert;
+export type TelemetryEvent = typeof telemetryEvents.$inferSelect;
+export type InsertTelemetryDailyRollup =
+  typeof telemetryDailyRollups.$inferInsert;
+export type TelemetryDailyRollup = typeof telemetryDailyRollups.$inferSelect;
+export type InsertTelemetryDebugReport =
+  typeof telemetryDebugReports.$inferInsert;
+export type TelemetryDebugReport = typeof telemetryDebugReports.$inferSelect;
 export type InsertUsageEvent = typeof usageEvents.$inferInsert;
 export type UsageEvent = typeof usageEvents.$inferSelect;
 export type UsageEventMetric = typeof usageEventMetricEnum.enumValues[number];
@@ -787,5 +1038,18 @@ export type MemoryItemKind = typeof memoryItemKindEnum.enumValues[number];
 export type MemorySensitivity = typeof memorySensitivityEnum.enumValues[number];
 export type MessagePurpose = typeof messagePurposeEnum.enumValues[number];
 export type MessageSource = typeof messageSourceEnum.enumValues[number];
+export type TelemetrySource = typeof telemetrySourceEnum.enumValues[number];
+export type TelemetryConsentLevel =
+  typeof telemetryConsentLevelEnum.enumValues[number];
+export type TelemetrySessionOutcome =
+  typeof telemetrySessionOutcomeEnum.enumValues[number];
+export type TelemetryEventSeverity =
+  typeof telemetryEventSeverityEnum.enumValues[number];
+export type TelemetryPlatformClass =
+  typeof telemetryPlatformClassEnum.enumValues[number];
+export type TelemetryBrowserFamily =
+  typeof telemetryBrowserFamilyEnum.enumValues[number];
+export type TelemetryOsFamily = typeof telemetryOsFamilyEnum.enumValues[number];
+export type TelemetryEventName = typeof telemetryEventNameEnum.enumValues[number];
 export type GoogleIntegrationStatus =
   typeof googleIntegrationStatusEnum.enumValues[number];

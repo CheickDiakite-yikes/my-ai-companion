@@ -48,6 +48,11 @@
     "test:voice:qualify:local": "bash script/live-voice-qualify-local.sh",
     "test:voice:smoke": "tsx script/live-voice-smoke.ts",
     "test:voice:ui": "bash script/live-voice-playwright-e2e.sh",
+    "test:telemetry": "node --import tsx script/telemetry-smoke.ts",
+    "telemetry:summary": "node --import tsx script/telemetry-summary.ts",
+    "telemetry:regression": "node --import tsx script/telemetry-regression-check.ts",
+    "telemetry:rollup": "node --import tsx script/telemetry-rollup.ts",
+    "telemetry:retention": "node --import tsx script/telemetry-retention.ts",
     "backfill:message-purpose": "tsx script/backfill-agent-ui-message-purpose.ts",
     "db:push": "drizzle-kit push"
   },

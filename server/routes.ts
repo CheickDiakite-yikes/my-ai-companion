@@ -173,6 +173,10 @@ import {
 import {
   encryptGoogleToken,
 } from "./google-integration-crypto";
+import {
+  createTelemetryDebugReport,
+  ingestTelemetryBatch,
+} from "./telemetry";
 
 const personaInputSchema = z.string().trim().min(1).max(64);
 const liveVoiceSchema = z.enum(["Aoede", "Kore", "Charon", "Fenrir"]);
@@ -1066,6 +1070,18 @@ const ENABLE_GOOGLE_PERSONAL_CONTEXT_WRITES = parseBooleanFlag(
 );
 const ENABLE_VOICE_GOOGLE_WRITE_HANDOFF = parseBooleanFlag(
   process.env.ENABLE_VOICE_GOOGLE_WRITE_HANDOFF,
+  false,
+);
+const ENABLE_TELEMETRY_V1 = parseBooleanFlag(
+  process.env.ENABLE_TELEMETRY_V1,
+  true,
+);
+const ENABLE_TELEMETRY_DEBUG_REPORTS = parseBooleanFlag(
+  process.env.ENABLE_TELEMETRY_DEBUG_REPORTS,
+  false,
+);
+const ENABLE_TELEMETRY_ROLLUPS = parseBooleanFlag(
+  process.env.ENABLE_TELEMETRY_ROLLUPS,
   false,
 );
 const MORNING_BRIEF_DAILY_CAP = Math.max(
@@ -11446,6 +11462,97 @@ export async function registerRoutes(
       res.json(sessions);
     } catch (error) {
       res.status(500).json({ message: "Failed to fetch voice sessions" });
+    }
+  });
+
+  app.post("/api/telemetry/batch", isAuthenticated, async (req: any, res) => {
+    const startedAt = Date.now();
+    if (!ENABLE_TELEMETRY_V1) {
+      return res.status(204).end();
+    }
+    try {
+      const result = await ingestTelemetryBatch({
+        userId: req.session.userId,
+        requestTraceId: getTraceId(req),
+        batch: req.body,
+      });
+
+      trace(req, "telemetry.batch.ingested", {
+        sessionId: result.sessionId,
+        insertedEvents: result.insertedEvents,
+        discardedEvents: result.discardedEvents,
+        outcome: result.outcome,
+        elapsedMs: elapsedMs(startedAt),
+      });
+
+      return res.status(202).json({
+        ok: true,
+        sessionId: result.sessionId,
+        insertedEvents: result.insertedEvents,
+        discardedEvents: result.discardedEvents,
+        outcome: result.outcome,
+        traceId: getTraceId(req),
+      });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({
+          message: error.issues[0]?.message ?? "Invalid telemetry batch",
+          traceId: getTraceId(req),
+        });
+      }
+      traceError(req, "telemetry.batch.ingest.failed", error, {
+        elapsedMs: elapsedMs(startedAt),
+      });
+      return res.status(500).json({
+        message: "Failed to ingest telemetry batch",
+        traceId: getTraceId(req),
+      });
+    }
+  });
+
+  app.post("/api/telemetry/debug-report", isAuthenticated, async (req: any, res) => {
+    const startedAt = Date.now();
+    if (!ENABLE_TELEMETRY_V1 || !ENABLE_TELEMETRY_DEBUG_REPORTS) {
+      return res.status(404).json({
+        message: "Diagnostic reports are not enabled",
+        traceId: getTraceId(req),
+      });
+    }
+    try {
+      const result = await createTelemetryDebugReport({
+        userId: req.session.userId,
+        requestTraceId: getTraceId(req),
+        body: req.body,
+      });
+
+      trace(req, "telemetry.debug_report.created", {
+        reportId: result.reportId,
+        sessionId: result.sessionId,
+        expiresAt: result.expiresAt,
+        elapsedMs: elapsedMs(startedAt),
+      });
+
+      return res.status(201).json({
+        ok: true,
+        reportId: result.reportId,
+        sessionId: result.sessionId,
+        expiresAt: result.expiresAt,
+        traceId: getTraceId(req),
+      });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({
+          message: error.issues[0]?.message ?? "Invalid diagnostic report payload",
+          traceId: getTraceId(req),
+        });
+      }
+      traceError(req, "telemetry.debug_report.create.failed", error, {
+        elapsedMs: elapsedMs(startedAt),
+      });
+      return res.status(500).json({
+        message: "Failed to create diagnostic report",
+        traceId: getTraceId(req),
+      });
     }
   });
 

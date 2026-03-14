@@ -69,6 +69,12 @@ import {
   type LiveVoiceDebugState,
 } from "@/lib/gemini-live";
 import {
+  LiveVoiceTelemetryClient,
+  buildLiveVoiceTelemetryEnvironment,
+  sanitizeGrantedTrackMetrics,
+  uploadTelemetryDiagnosticReport,
+} from "@/lib/live-telemetry";
+import {
   APP_THEME_OPTIONS,
   DEFAULT_APP_THEME_ID,
   applyAppTheme,
@@ -113,6 +119,10 @@ import {
   sanitizeSplitTokenArtifacts,
 } from "@shared/message-text";
 import type { MessageSource } from "@shared/schema";
+import type {
+  TelemetryEventPayload,
+  TelemetryPlatformClass,
+} from "@shared/telemetry";
 
 import {
   DropdownMenu,
@@ -1326,6 +1336,18 @@ const ENABLE_JSON_RENDER_ARTIFACT_VIEWER = parseClientBooleanFlag(
   true,
 );
 
+const ENABLE_TELEMETRY_V1 = parseClientBooleanFlag(
+  (import.meta.env as Record<string, unknown>).VITE_ENABLE_TELEMETRY_V1 ??
+    (import.meta.env as Record<string, unknown>).ENABLE_TELEMETRY_V1,
+  true,
+);
+
+const ENABLE_TELEMETRY_DEBUG_REPORTS = parseClientBooleanFlag(
+  (import.meta.env as Record<string, unknown>).VITE_ENABLE_TELEMETRY_DEBUG_REPORTS ??
+    (import.meta.env as Record<string, unknown>).ENABLE_TELEMETRY_DEBUG_REPORTS,
+  false,
+);
+
 const GOOGLE_OAUTH_CONNECT_REDIRECT_URI_OVERRIDE = (() => {
   const raw = (import.meta.env as Record<string, unknown>)
     .VITE_GOOGLE_OAUTH_CONNECT_REDIRECT_URI;
@@ -1333,6 +1355,68 @@ const GOOGLE_OAUTH_CONNECT_REDIRECT_URI_OVERRIDE = (() => {
   const trimmed = raw.trim();
   return trimmed.length > 0 ? trimmed : null;
 })();
+
+function classifyLiveTelemetryError(message: string | null | undefined): string {
+  const normalized = (message ?? "").trim().toLowerCase();
+  if (!normalized) return "unknown";
+  if (normalized.includes("permission")) return "permission_denied";
+  if (normalized.includes("quota")) return "quota_blocked";
+  if (normalized.includes("timeout")) return "timeout";
+  if (normalized.includes("microphone")) return "microphone_unavailable";
+  if (normalized.includes("couldn't catch that clearly")) return "capture_unusable";
+  if (normalized.includes("reconnect")) return "session_reconnect";
+  if (normalized.includes("camera")) return "camera_error";
+  return normalized.replace(/[^a-z0-9]+/g, "_").slice(0, 64) || "unknown";
+}
+
+function classifyLiveTelemetryFailureStage(params: {
+  errorName?: string | null;
+  errorMessage?: string | null;
+  isLikelyMicFailure?: boolean;
+  isQuotaError?: boolean;
+}): "mic_permission" | "token" | "start" | "runtime" | "quota" | "unknown" {
+  if (params.isQuotaError) return "quota";
+  const name = (params.errorName ?? "").toLowerCase();
+  const message = (params.errorMessage ?? "").toLowerCase();
+  if (
+    params.isLikelyMicFailure ||
+    name.includes("notallowederror") ||
+    message.includes("microphone") ||
+    message.includes("permission") ||
+    message.includes("getusermedia")
+  ) {
+    return "mic_permission";
+  }
+  if (message.includes("token")) return "token";
+  if (message.includes("start")) return "start";
+  if (message.includes("socket") || message.includes("runtime")) return "runtime";
+  return "unknown";
+}
+
+function parseGoAwayTimeLeftSeconds(value: unknown): number | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  const parsed = Number.parseFloat(trimmed.replace(/s$/i, ""));
+  if (!Number.isFinite(parsed) || parsed < 0) return null;
+  return parsed;
+}
+
+function buildLiveDebugTracePayload(params: {
+  liveDebugState: LiveVoiceDebugState | null;
+  liveTokenConfigSummary: LiveTokenConfigSummary | null;
+  traces: LiveTraceEntry[];
+  telemetrySessionId?: string | null;
+  liveRunId?: string | null;
+}) {
+  return {
+    exportedAt: new Date().toISOString(),
+    telemetrySessionId: params.telemetrySessionId ?? null,
+    liveRunId: params.liveRunId ?? null,
+    speechState: params.liveDebugState,
+    tokenConfigSummary: params.liveTokenConfigSummary,
+    traces: params.traces,
+  };
+}
 
 const TASK_STATUS_PRECEDENCE: Record<AgentTaskSummary["status"], number> = {
   queued: 1,
@@ -8759,6 +8843,10 @@ interface VoiceLiveDebugPanelProps {
   tokenConfigSummary: LiveTokenConfigSummary | null;
   traces: LiveTraceEntry[];
   onExport: () => void;
+  canSendDiagnostics?: boolean;
+  diagnosticsSent?: boolean;
+  isSendingDiagnostics?: boolean;
+  onSendDiagnostics?: () => void;
 }
 
 const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, onProfile, assistantName, assistantAvatar, selectedVoice, setSelectedVoice, mode, setMode, duration, userProfileImage, isVideoEnabled, onToggleVideo, onFlipCamera, videoStream, isVideoTransitioning, cameraFacingMode, webLookupStatus, webLookupLabel, liveError, liveDebug, messages, liveTaskSnapshots, onOpenArtifact, onResolveApproval, onSendMessage, onTraceStageEvent, onStageContextChange }: {
@@ -9439,15 +9527,36 @@ const VoiceView = ({ isActive, isConnecting, onEndCall, onInterruptAssistant, on
                         Manual activity and trace diagnostics
                       </div>
                     </div>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="h-8 rounded-full px-3 text-[11px] uppercase tracking-[0.16em]"
-                      onClick={liveDebug.onExport}
-                    >
-                      Export JSON
-                    </Button>
+                    <div className="flex items-center gap-2">
+                      {ENABLE_TELEMETRY_DEBUG_REPORTS && (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="h-8 rounded-full px-3 text-[11px] uppercase tracking-[0.16em]"
+                          onClick={liveDebug.onSendDiagnostics}
+                          disabled={
+                            liveDebug.isSendingDiagnostics ||
+                            !liveDebug.canSendDiagnostics
+                          }
+                        >
+                          {liveDebug.isSendingDiagnostics
+                            ? "Sending"
+                            : liveDebug.diagnosticsSent
+                              ? "Sent"
+                              : "Send Diagnostics"}
+                        </Button>
+                      )}
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-8 rounded-full px-3 text-[11px] uppercase tracking-[0.16em]"
+                        onClick={liveDebug.onExport}
+                      >
+                        Export JSON
+                      </Button>
+                    </div>
                   </div>
                   <div className="space-y-3 px-4 py-3 text-xs" style={{ color: "var(--app-on-dark)" }}>
                     <div className="grid grid-cols-2 gap-2">
@@ -13708,6 +13817,12 @@ function App() {
   const liveTraceEntriesRef = useRef<LiveTraceEntry[]>([]);
   const liveDebugStateRef = useRef<LiveVoiceDebugState | null>(null);
   const liveTokenConfigSummaryRef = useRef<LiveTokenConfigSummary | null>(null);
+  const liveTelemetryRef = useRef<LiveVoiceTelemetryClient | null>(null);
+  const liveTelemetrySessionIdRef = useRef<string | null>(null);
+  const liveTelemetryStartedAtRef = useRef<number | null>(null);
+  const liveTelemetryEndedRef = useRef(false);
+  const liveTelemetryAssistantResponseActiveRef = useRef(false);
+  const liveTelemetryFirstAssistantResponseStartedRef = useRef(false);
   const forceOnboardingRef = useRef<boolean>(
     typeof window !== "undefined" &&
       new URLSearchParams(window.location.search).get("onboarding") === "1",
@@ -13724,6 +13839,12 @@ function App() {
   const textSearchStartedAtRef = useRef<number | null>(null);
   const voiceSearchMinTimerRef = useRef<number | null>(null);
   const textSearchMinTimerRef = useRef<number | null>(null);
+
+  if (liveTelemetryRef.current === null) {
+    liveTelemetryRef.current = new LiveVoiceTelemetryClient({
+      enabled: ENABLE_TELEMETRY_V1,
+    });
+  }
 
   useEffect(() => {
     liveDebugStateRef.current = liveDebugState;
@@ -13758,6 +13879,387 @@ function App() {
     return () => window.clearTimeout(timeout);
   }, [isCalling, isLiveConnecting, liveError, mode]);
 
+  useEffect(() => {
+    if (!ENABLE_TELEMETRY_V1) return undefined;
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "hidden") {
+        void liveTelemetryRef.current?.flush("pagehide");
+      }
+    };
+    const handlePageHide = () => {
+      void liveTelemetryRef.current?.flush("pagehide");
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("pagehide", handlePageHide);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("pagehide", handlePageHide);
+    };
+  }, []);
+
+  const recordLiveTelemetryEvent = useCallback(
+    (
+      event: Omit<TelemetryEventPayload, "seq" | "at"> & {
+        at?: number;
+      },
+    ) => {
+      if (!ENABLE_TELEMETRY_V1) return;
+      liveTelemetryRef.current?.record(event);
+    },
+    [],
+  );
+
+  const updateLiveTelemetryContext = useCallback(
+    (patch: {
+      traceId?: string | null;
+      liveRunId?: string | null;
+      platformClass?: TelemetryPlatformClass;
+      browserFamily?: ReturnType<typeof buildLiveVoiceTelemetryEnvironment>["browserFamily"];
+      osFamily?: ReturnType<typeof buildLiveVoiceTelemetryEnvironment>["osFamily"];
+      captureProfile?: string | null;
+    }) => {
+      if (!ENABLE_TELEMETRY_V1) return;
+      liveTelemetryRef.current?.updateSessionContext({
+        ...(patch.traceId ? { traceId: patch.traceId } : {}),
+        ...(patch.liveRunId ? { liveRunId: patch.liveRunId } : {}),
+        ...(patch.platformClass ? { platformClass: patch.platformClass } : {}),
+        ...(patch.browserFamily ? { browserFamily: patch.browserFamily } : {}),
+        ...(patch.osFamily ? { osFamily: patch.osFamily } : {}),
+        ...(patch.captureProfile ? { captureProfile: patch.captureProfile } : {}),
+      });
+    },
+    [],
+  );
+
+  const finalizeLiveTelemetrySession = useCallback(async () => {
+    if (!ENABLE_TELEMETRY_V1 || liveTelemetryEndedRef.current) {
+      return;
+    }
+    liveTelemetryEndedRef.current = true;
+    liveTelemetryAssistantResponseActiveRef.current = false;
+    liveTelemetryFirstAssistantResponseStartedRef.current = false;
+    await liveTelemetryRef.current?.finalize();
+    liveTelemetrySessionIdRef.current = null;
+    liveTelemetryStartedAtRef.current = null;
+  }, []);
+
+  const startLiveTelemetrySession = useCallback(
+    (params: { runId: string; startReason: "manual" | "auto_resume" }) => {
+      if (!ENABLE_TELEMETRY_V1) return null;
+      const compatibility = resolveLiveAudioCompatibilityProfile(
+        { userAgent: navigator.userAgent },
+      );
+      const environment = buildLiveVoiceTelemetryEnvironment({
+        userAgent: navigator.userAgent,
+        compatibilityPlatform: compatibility.platformClass,
+      });
+      const sessionId = liveTelemetryRef.current?.startSession({
+        source: "live_voice",
+        consentLevel: "minimal",
+        liveRunId: params.runId,
+        ...environment,
+      });
+      liveTelemetrySessionIdRef.current = sessionId ?? null;
+      liveTelemetryStartedAtRef.current = Date.now();
+      liveTelemetryEndedRef.current = false;
+      liveTelemetryAssistantResponseActiveRef.current = false;
+      liveTelemetryFirstAssistantResponseStartedRef.current = false;
+      recordLiveTelemetryEvent({
+        eventName: "session_started",
+        severity: "info",
+        tags: {
+          startReason: params.startReason,
+        },
+      });
+      return sessionId ?? null;
+    },
+    [recordLiveTelemetryEvent],
+  );
+
+  const handleLiveTraceForTelemetry = useCallback(
+    (event: string, metadata: Record<string, unknown>) => {
+      if (!ENABLE_TELEMETRY_V1 || !liveTelemetrySessionIdRef.current) {
+        return;
+      }
+
+      if (event === "live.token.created" && typeof metadata.traceId === "string") {
+        updateLiveTelemetryContext({ traceId: metadata.traceId });
+        return;
+      }
+
+      if (event === "live.start.ready") {
+        const startedAt = liveTelemetryStartedAtRef.current;
+        recordLiveTelemetryEvent({
+          eventName: "session_ready",
+          severity: "info",
+          metrics: {
+            timeToReadyMs:
+              typeof startedAt === "number"
+                ? Math.max(0, Date.now() - startedAt)
+                : 0,
+          },
+        });
+        return;
+      }
+
+      if (event === "live.start.failed") {
+        const startedAt = liveTelemetryStartedAtRef.current;
+        const error = typeof metadata.error === "string" ? metadata.error : null;
+        const failureStage = classifyLiveTelemetryFailureStage({
+          errorMessage: error,
+          isLikelyMicFailure: metadata.isLikelyMicFailure === true,
+          isQuotaError: error?.toLowerCase().includes("quota") ?? false,
+        });
+        recordLiveTelemetryEvent({
+          eventName: "session_failed",
+          severity: "error",
+          tags: {
+            failureStage,
+            errorClass: classifyLiveTelemetryError(error),
+          },
+          metrics:
+            typeof startedAt === "number"
+              ? {
+                  timeSinceStartMs: Math.max(0, Date.now() - startedAt),
+                }
+              : undefined,
+        });
+        return;
+      }
+
+      if (event === "live.audio.track_config_granted") {
+        const captureProfile =
+          typeof metadata.captureAttemptLabel === "string"
+            ? metadata.captureAttemptLabel
+            : "unknown";
+        updateLiveTelemetryContext({ captureProfile });
+        recordLiveTelemetryEvent({
+          eventName: "capture_profile_selected",
+          severity: "info",
+          tags: {
+            captureProfile,
+          },
+        });
+        recordLiveTelemetryEvent({
+          eventName: "track_config_granted",
+          severity: "info",
+          tags: {
+            analyzerKind:
+              liveDebugStateRef.current?.analyzerKind ?? "unknown",
+          },
+          metrics: sanitizeGrantedTrackMetrics(
+            metadata.settings as Record<string, unknown> | null | undefined,
+          ),
+        });
+        return;
+      }
+
+      if (
+        event === "live.audio.activity_window_transcription_received" ||
+        event === "live.audio.activity_window_no_input_transcription"
+      ) {
+        recordLiveTelemetryEvent({
+          eventName: "speech_window_completed",
+          severity:
+            event === "live.audio.activity_window_no_input_transcription"
+              ? "warn"
+              : "info",
+          tags: {
+            transcriptReceived: metadata.transcriptReceived === true,
+            usableTranscriptReceived: metadata.usableTranscriptReceived === true,
+            trigger:
+              typeof metadata.trigger === "string"
+                ? metadata.trigger
+                : typeof metadata.startReason === "string"
+                  ? metadata.startReason
+                  : undefined,
+          },
+          metrics: {
+            durationMs:
+              typeof metadata.durationMs === "number" ? metadata.durationMs : 0,
+            frameCount:
+              typeof metadata.frameCount === "number"
+                ? metadata.frameCount
+                : undefined,
+            speechLikeFrameCount:
+              typeof metadata.speechLikeFrameCount === "number"
+                ? metadata.speechLikeFrameCount
+                : undefined,
+            peakRms:
+              typeof metadata.peakRms === "number"
+                ? metadata.peakRms
+                : undefined,
+            averageRms:
+              typeof metadata.averageRms === "number"
+                ? metadata.averageRms
+                : undefined,
+            transcriptCharCount:
+              typeof metadata.transcriptCharCount === "number"
+                ? metadata.transcriptCharCount
+                : undefined,
+            transcriptLatencyMs:
+              typeof metadata.transcriptLatencyMs === "number"
+                ? metadata.transcriptLatencyMs
+                : undefined,
+          },
+        });
+        return;
+      }
+
+      if (event === "live.server.content") {
+        const hasAssistantOutput =
+          (typeof metadata.audioPartCount === "number" &&
+            metadata.audioPartCount > 0) ||
+          metadata.hasOutputTranscription === true;
+        const completionReason =
+          metadata.turnComplete === true
+            ? "turn_complete"
+            : metadata.generationComplete === true
+              ? "generation_complete"
+              : metadata.waitingForInput === true
+                ? "waiting_for_input"
+                : undefined;
+        if (
+          hasAssistantOutput &&
+          !liveTelemetryAssistantResponseActiveRef.current
+        ) {
+          liveTelemetryAssistantResponseActiveRef.current = true;
+          liveTelemetryFirstAssistantResponseStartedRef.current = true;
+          recordLiveTelemetryEvent({
+            eventName: "assistant_response_started",
+            severity: "info",
+            metrics: {
+              audioPartCount:
+                typeof metadata.audioPartCount === "number"
+                  ? metadata.audioPartCount
+                  : undefined,
+              hasOutputTranscription:
+                metadata.hasOutputTranscription === true,
+            },
+          });
+        }
+        if (completionReason && liveTelemetryAssistantResponseActiveRef.current) {
+          liveTelemetryAssistantResponseActiveRef.current = false;
+          recordLiveTelemetryEvent({
+            eventName: "assistant_response_completed",
+            severity: "info",
+            tags: {
+              completionReason,
+            },
+            metrics: {
+              audioPartCount:
+                typeof metadata.audioPartCount === "number"
+                  ? metadata.audioPartCount
+                  : undefined,
+              hasOutputTranscription:
+                metadata.hasOutputTranscription === true,
+            },
+          });
+        }
+        return;
+      }
+
+      if (event === "live.assistant.interrupt_requested") {
+        recordLiveTelemetryEvent({
+          eventName: "interrupt_requested",
+          severity: "info",
+          tags: {
+            source:
+              typeof metadata.source === "string" ? metadata.source : undefined,
+          },
+        });
+        return;
+      }
+
+      if (event === "live.assistant.interrupt_acknowledged") {
+        recordLiveTelemetryEvent({
+          eventName: "interrupt_acknowledged",
+          severity: "info",
+          tags: {
+            source:
+              typeof metadata.source === "string" ? metadata.source : undefined,
+          },
+        });
+        return;
+      }
+
+      if (event === "voice.transcript.persisted") {
+        recordLiveTelemetryEvent({
+          eventName: "transcript_persisted",
+          severity: "info",
+          tags: {
+            sender: metadata.sender === "assistant" ? "assistant" : "user",
+          },
+          metrics: {
+            textLength:
+              typeof metadata.textLength === "number"
+                ? metadata.textLength
+                : undefined,
+          },
+        });
+        return;
+      }
+
+      if (event === "voice.transcript.server_filtered") {
+        recordLiveTelemetryEvent({
+          eventName: "transcript_filtered",
+          severity: "warn",
+          tags: {
+            sender: metadata.sender === "assistant" ? "assistant" : "user",
+          },
+          metrics: {
+            textLength:
+              typeof metadata.textLength === "number"
+                ? metadata.textLength
+                : undefined,
+          },
+        });
+        return;
+      }
+
+      if (event === "voice.transcript.failed") {
+        recordLiveTelemetryEvent({
+          eventName: "transcript_failed",
+          severity: "error",
+          tags: {
+            sender: metadata.sender === "assistant" ? "assistant" : "user",
+          },
+          metrics: {
+            textLength:
+              typeof metadata.textLength === "number"
+                ? metadata.textLength
+                : undefined,
+          },
+        });
+        return;
+      }
+
+      if (event === "live.session_resumption.client_updated") {
+        recordLiveTelemetryEvent({
+          eventName: "session_resumption_updated",
+          severity: "info",
+          metrics: {
+            resumable: metadata.resumable === true,
+            handlePresent: metadata.handlePresent === true,
+          },
+        });
+        return;
+      }
+
+      if (event === "live.session.go_away.client_received") {
+        recordLiveTelemetryEvent({
+          eventName: "session_go_away_received",
+          severity: "warn",
+          metrics: {
+            timeLeftSeconds:
+              parseGoAwayTimeLeftSeconds(metadata.timeLeft) ?? undefined,
+          },
+        });
+      }
+    },
+    [recordLiveTelemetryEvent, updateLiveTelemetryContext],
+  );
+
   const logLiveTrace = useCallback((
     event: string,
     metadata: Record<string, unknown> = {},
@@ -13772,8 +14274,9 @@ function App() {
     if (liveDebugEnabled) {
       setLiveTraceEntries(nextEntries);
     }
+    handleLiveTraceForTelemetry(event, metadata);
     console.log("[LiveTrace]", event, metadata);
-  }, [liveDebugEnabled]);
+  }, [handleLiveTraceForTelemetry, liveDebugEnabled]);
 
   const setGoogleActionBusyLabel = useCallback((label: string | null) => {
     activeGoogleActionBusyLabelRef.current = label;
@@ -13781,12 +14284,13 @@ function App() {
   }, []);
 
   const exportLiveDebugTrace = useCallback(() => {
-    const payload = {
-      exportedAt: new Date().toISOString(),
-      speechState: liveDebugState,
-      tokenConfigSummary: liveTokenConfigSummary,
+    const payload = buildLiveDebugTracePayload({
+      liveDebugState,
+      liveTokenConfigSummary,
       traces: liveTraceEntriesRef.current,
-    };
+      telemetrySessionId: liveTelemetrySessionIdRef.current,
+      liveRunId: liveRunIdRef.current,
+    });
     const blob = new Blob([JSON.stringify(payload, null, 2)], {
       type: "application/json",
     });
@@ -14711,6 +15215,30 @@ function App() {
         ...body,
         traceId: extractTraceId(res, body),
       };
+    },
+  });
+
+  const sendDiagnosticReportMutation = useMutation({
+    mutationFn: async () => {
+      const sessionId = liveTelemetrySessionIdRef.current;
+      if (!sessionId) {
+        throw new Error("No active telemetry session to report");
+      }
+      const result = await uploadTelemetryDiagnosticReport({
+        enabled: ENABLE_TELEMETRY_DEBUG_REPORTS,
+        sessionId,
+        payload: buildLiveDebugTracePayload({
+          liveDebugState: liveDebugStateRef.current,
+          liveTokenConfigSummary: liveTokenConfigSummaryRef.current,
+          traces: liveTraceEntriesRef.current,
+          telemetrySessionId: sessionId,
+          liveRunId: liveRunIdRef.current,
+        }),
+      });
+      if (!result.ok) {
+        throw new Error("Failed to upload diagnostic report");
+      }
+      return result;
     },
   });
 
@@ -16010,6 +16538,24 @@ function App() {
       });
     }
 
+    if (liveTelemetrySessionIdRef.current) {
+      const startedAt = liveTelemetryStartedAtRef.current;
+      recordLiveTelemetryEvent({
+        eventName: "session_ended",
+        severity: "info",
+        tags: {
+          endReason: "manual_stop",
+        },
+        metrics:
+          typeof startedAt === "number"
+            ? {
+                durationMs: Math.max(0, Date.now() - startedAt),
+              }
+            : undefined,
+      });
+    }
+    await finalizeLiveTelemetrySession();
+
     liveConversationRef.current = null;
     liveRunIdRef.current = null;
     liveSessionResumptionHandleRef.current = null;
@@ -16075,6 +16621,11 @@ function App() {
     liveStartNonceRef.current = startNonce;
     const runId = createLocalId("live");
     liveRunIdRef.current = runId;
+    startLiveTelemetrySession({
+      runId,
+      startReason: options?.autoResumed ? "auto_resume" : "manual",
+    });
+    sendDiagnosticReportMutation.reset();
     setLiveError(null);
     setWebLookupStatus("voice", "idle");
     setIsLiveConnecting(true);
@@ -16126,6 +16677,28 @@ function App() {
             "Could not access your microphone. Please check your browser settings and try again."
           );
         }
+        recordLiveTelemetryEvent({
+          eventName: "session_failed",
+          severity: "error",
+          tags: {
+            failureStage: classifyLiveTelemetryFailureStage({
+              errorName: micError?.name ?? null,
+              errorMessage: msg,
+              isLikelyMicFailure: true,
+            }),
+            errorClass: classifyLiveTelemetryError(msg),
+          },
+          metrics:
+            typeof liveTelemetryStartedAtRef.current === "number"
+              ? {
+                  timeSinceStartMs: Math.max(
+                    0,
+                    Date.now() - liveTelemetryStartedAtRef.current,
+                  ),
+                }
+              : undefined,
+        });
+        await finalizeLiveTelemetrySession();
         try {
           await fetch("/api/live/client-error", {
             method: "POST",
@@ -16274,6 +16847,17 @@ function App() {
             runId,
             error: error.message,
           });
+          recordLiveTelemetryEvent({
+            eventName: isRecoverableLiveCaptureNotice(error.message)
+              ? "recoverable_error"
+              : "fatal_error",
+            severity: isRecoverableLiveCaptureNotice(error.message)
+              ? "warn"
+              : "error",
+            tags: {
+              errorClass: classifyLiveTelemetryError(error.message),
+            },
+          });
           setLiveError(error.message);
         },
         onClosed: (reason) => {
@@ -16289,12 +16873,33 @@ function App() {
           }
           pauseCameraUsageTracking();
           setWebLookupStatus("voice", "idle");
+          const shouldAutoResume = !manualLiveStopRef.current && hadVideoEnabled;
+          if (!liveTelemetryEndedRef.current && liveTelemetrySessionIdRef.current) {
+            const startedAt = liveTelemetryStartedAtRef.current;
+            recordLiveTelemetryEvent({
+              eventName: "session_ended",
+              severity: manualLiveStopRef.current ? "info" : "warn",
+              tags: {
+                endReason: manualLiveStopRef.current
+                  ? "manual_stop"
+                  : shouldAutoResume
+                    ? "auto_resume_close"
+                    : "unexpected_close",
+                ...(reason ? { closeReason: reason } : {}),
+              },
+              metrics:
+                typeof startedAt === "number"
+                  ? {
+                      durationMs: Math.max(0, Date.now() - startedAt),
+                    }
+                  : undefined,
+            });
+          }
           logLiveTrace("live.session.closed", {
             runId,
             reason: reason ?? "unknown",
             hadVideoEnabled,
           });
-          const shouldAutoResume = !manualLiveStopRef.current && hadVideoEnabled;
           setIsLiveConnecting(false);
           setIsCalling(false);
           setCallStartTime(null);
@@ -16324,16 +16929,26 @@ function App() {
               return;
             }
             autoResumeBudgetRef.current -= 1;
+            void transcriptQueueRef.current
+              .catch(() => undefined)
+              .then(() => finalizeLiveTelemetrySession());
             void startLiveSession({
               autoResumed: true,
               restoreVideo: hadVideoEnabled,
             });
           } else if (!manualLiveStopRef.current) {
+            void transcriptQueueRef.current
+              .catch(() => undefined)
+              .then(() => finalizeLiveTelemetrySession());
             setLiveError(
               hadVideoEnabled
                 ? "Live camera session ended. Reconnect to continue sharing video."
                 : "Live voice session ended. Reconnect to continue.",
             );
+          } else {
+            void transcriptQueueRef.current
+              .catch(() => undefined)
+              .then(() => finalizeLiveTelemetrySession());
           }
         },
         onDebug: (message, metadata) => {
@@ -16529,6 +17144,7 @@ function App() {
             ? undefined
             : micAttemptFailures,
       });
+      await finalizeLiveTelemetrySession();
     } finally {
       if (startNonce === liveStartNonceRef.current) {
         setIsLiveConnecting(false);
@@ -16936,6 +17552,16 @@ function App() {
               tokenConfigSummary: liveTokenConfigSummary,
               traces: liveTraceEntries,
               onExport: exportLiveDebugTrace,
+              canSendDiagnostics:
+                ENABLE_TELEMETRY_DEBUG_REPORTS &&
+                Boolean(liveTelemetrySessionIdRef.current),
+              diagnosticsSent: sendDiagnosticReportMutation.isSuccess,
+              isSendingDiagnostics: sendDiagnosticReportMutation.isPending,
+              onSendDiagnostics: () => {
+                void sendDiagnosticReportMutation.mutateAsync().catch(
+                  () => undefined,
+                );
+              },
             }}
           />
 
