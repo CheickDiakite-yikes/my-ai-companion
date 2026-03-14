@@ -73,8 +73,13 @@ const TRANSCRIPT_JOIN_SUFFIXES = new Set([
   "day",
   "ing",
   "lly",
+  "lier",
+  "ling",
   "py",
   "ppy",
+  "ry",
+  "t",
+  "ted",
   "zza",
 ]);
 
@@ -86,6 +91,10 @@ const TRANSCRIPT_JOIN_RIGHT_BLOCKLIST = new Set([
 
 const INLINE_PUNCTUATION_PATTERN = /\s+([,.;:!?])/g;
 const INLINE_PUNCTUATION_SPACING_PATTERN = /([,.;:!?])(?=[^\s"'%)\]}])/g;
+const INLINE_NOISE_TAG_PATTERN =
+  /(?:^|\s)<\s*(?:noise|music|silence|inaudible|laugh|laughter|cough|sigh|applause|background[_ ]?noise|static|unintelligible|unclear|crosstalk)\s*>(?=\s|$)/gi;
+const BROKEN_CONTRACTION_PATTERN =
+  /\b([A-Za-z]+)\s+(['’])\s+(m|re|ve|ll|d|s|t)\b/gi;
 
 function isAsciiWord(token: string): boolean {
   return /^[A-Za-z]+$/.test(token);
@@ -109,6 +118,18 @@ function normalizeInlinePunctuationSpacing(text: string): string {
     .replace(INLINE_PUNCTUATION_SPACING_PATTERN, "$1 ");
 }
 
+function stripInlineTranscriptNoise(text: string): string {
+  return text.replace(INLINE_NOISE_TAG_PATTERN, " ");
+}
+
+function repairBrokenContractions(text: string): string {
+  return text.replace(
+    BROKEN_CONTRACTION_PATTERN,
+    (_, left: string, apostrophe: string, right: string) =>
+      `${left}${apostrophe}${right}`,
+  );
+}
+
 function joinDisplayTokens(tokens: string[]): string {
   let result = "";
 
@@ -130,12 +151,18 @@ function joinDisplayTokens(tokens: string[]): string {
 
 function shouldJoinTranscriptWordPair(left: string, right: string): boolean {
   if (!isAsciiWord(left) || !isAsciiWord(right)) return false;
-  if (left.length <= 1 || right.length <= 1) return false;
+  if (left.length <= 1) return false;
   if (isAllCapsWord(left) || isAllCapsWord(right)) return false;
   if (isTitleCaseWord(left) && isTitleCaseWord(right)) return false;
 
   const normalizedLeft = left.toLowerCase();
   const normalizedRight = right.toLowerCase();
+  if (
+    right.length <= 1 &&
+    !TRANSCRIPT_JOIN_SUFFIXES.has(normalizedRight)
+  ) {
+    return false;
+  }
   if (TRANSCRIPT_JOIN_RIGHT_BLOCKLIST.has(normalizedRight)) return false;
 
   const suffixJoin = TRANSCRIPT_JOIN_SUFFIXES.has(normalizedRight);
@@ -219,7 +246,9 @@ export function sanitizeSplitTokenArtifacts(text: string): string {
 }
 
 export function formatVoiceTranscriptDisplayText(text: string): string {
-  const cleaned = sanitizeSplitTokenArtifacts(text)
+  const cleaned = repairBrokenContractions(
+    stripInlineTranscriptNoise(sanitizeSplitTokenArtifacts(text)),
+  )
     .replace(/[ \t]{2,}/g, " ")
     .trim();
 

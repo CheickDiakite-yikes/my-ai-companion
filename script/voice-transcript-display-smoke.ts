@@ -17,6 +17,16 @@ async function run(): Promise<void> {
   assert.equal(formatVoiceTranscriptDisplayText("pi zza"), "pizza");
   assert.equal(formatVoiceTranscriptDisplayText("go ing"), "going");
   assert.equal(formatVoiceTranscriptDisplayText("rea lly"), "really");
+  assert.equal(formatVoiceTranscriptDisplayText("Sor ry"), "Sorry");
+  assert.equal(formatVoiceTranscriptDisplayText("caugh t"), "caught");
+  assert.equal(formatVoiceTranscriptDisplayText("ear lier"), "earlier");
+  assert.equal(formatVoiceTranscriptDisplayText("tel ling"), "telling");
+  assert.equal(formatVoiceTranscriptDisplayText("star ted"), "started");
+  assert.equal(formatVoiceTranscriptDisplayText("I ' m"), "I'm");
+  assert.equal(
+    formatVoiceTranscriptDisplayText("list. < noise >"),
+    "list.",
+  );
   assert.equal(
     formatVoiceTranscriptDisplayText("bar becue chicken."),
     "barbecue chicken.",
@@ -79,6 +89,7 @@ async function run(): Promise<void> {
   });
 
   const appSource = await readFile(path.resolve("client/src/App.tsx"), "utf8");
+  const liveSource = await readFile(path.resolve("client/src/lib/gemini-live.ts"), "utf8");
   const routesSource = await readFile(path.resolve("server/routes.ts"), "utf8");
   const storageSource = await readFile(path.resolve("server/storage.ts"), "utf8");
 
@@ -105,6 +116,11 @@ async function run(): Promise<void> {
   assert.ok(
     storageSource.includes("messageSource: resolveMessageSource(data.messageSource),"),
     "storage.createMessage must normalize messageSource defaults",
+  );
+
+  assert.ok(
+    liveSource.includes('live.transcript.user_flush_scheduled_on_assistant_output'),
+    "gemini-live should schedule user transcript flush when assistant output begins",
   );
 
   console.log("voice transcript display checks passed");

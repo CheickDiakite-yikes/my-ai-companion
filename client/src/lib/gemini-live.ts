@@ -4976,6 +4976,15 @@ export class GeminiLiveVoiceSession {
           hasOutputTranscription: Boolean(serverContent.outputTranscription?.text),
         },
       );
+
+      if (!this.manualActivityActive && this.pendingTranscriptBySender.user) {
+        this.debug("live.transcript.user_flush_scheduled_on_assistant_output", {
+          pendingTextLength: this.pendingTranscriptBySender.user.length,
+          audioPartCount,
+          hasOutputTranscription: Boolean(serverContent.outputTranscription?.text),
+        });
+        this.scheduleTranscriptFlush("user");
+      }
     }
 
     if (
