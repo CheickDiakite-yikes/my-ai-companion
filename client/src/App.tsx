@@ -108,6 +108,11 @@ import {
   normalizeLanguageHint,
   normalizeLanguageHintList,
 } from "@shared/live-language";
+import {
+  formatConversationMessageTextForDisplay,
+  sanitizeSplitTokenArtifacts,
+} from "@shared/message-text";
+import type { MessageSource } from "@shared/schema";
 
 import {
   DropdownMenu,
@@ -164,30 +169,6 @@ function getPersonaAvatar(
     return getZeeAvatarPresetSrc(profile?.zeeAvatarPreset);
   }
   return PERSONA_AVATARS[persona as Persona] || zeeAvatar;
-}
-
-function normalizeWordSpacing(text: string): string {
-  let result = text;
-  result = result.replace(/([a-z])([.!?])([A-Z])/g, "$1$2 $3");
-  result = result.replace(/([a-z])([.!?])(["'"])([A-Z])/g, "$1$2$3 $4");
-  result = result.replace(/([a-z])([a-z])([A-Z][a-z])/g, "$1$2 $3");
-  result = result.replace(/([,;:])([A-Z][a-z])/g, "$1 $2");
-  result = result.replace(/([a-z])(["'"])([A-Z])/g, "$1$2 $3");
-  return result;
-}
-
-function sanitizeSplitTokenArtifacts(text: string): string {
-  const cleaned = text
-    .replace(/\[\[ZEE_SPLIT\]\]/gi, " ")
-    .replace(/\[\[ZEE_SPLIT\]?/gi, " ")
-    .replace(/\[\[[^\]]{0,10}SPLIT[^\]]*\]\]/gi, " ")
-    .replace(/ZEE[_\s]*SPLIT/gi, " ")
-    .replace(/\[\[ZEE[_\s]*SPLIT/gi, " ")
-    .replace(/ZEE_SPLIT\]?\]?/gi, " ")
-    .replace(/(^|[\s.!?,;:])\]\](?=\s|$)/g, "$1")
-    .replace(/(^|\s)\[\[(?=\s|$)/g, "$1")
-    .replace(/[ \t]{2,}/g, " ");
-  return normalizeWordSpacing(cleaned);
 }
 
 function isTransientLiveReconnectError(error: string | null | undefined): boolean {
@@ -457,6 +438,7 @@ interface MessageData {
   turnId?: string | null;
   partIndex?: number | null;
   text: string;
+  messageSource: MessageSource;
   createdAt: string | null;
   attachments?: MessageAttachmentData[];
   uiPayload?: AgentMessageUiPayload | null;
@@ -12053,6 +12035,11 @@ const TextView = ({
           {renderItems.map((item, idx) => {
             const msg = item.message;
             const isUnifiedTaskCard = item.kind === "agent_unified_task";
+            const bubbleText = formatConversationMessageTextForDisplay({
+              sender: msg.sender,
+              text: msg.text,
+              messageSource: msg.messageSource,
+            });
             return (
             <motion.div
               key={
@@ -12458,7 +12445,9 @@ const TextView = ({
                         </button>
                       </div>
                     ) : (
-                      msg.sender === "assistant" ? renderSimpleMarkdown(sanitizeSplitTokenArtifacts(msg.text)) : msg.text
+                      msg.sender === "assistant"
+                        ? renderSimpleMarkdown(bubbleText)
+                        : bubbleText
                     )}
                   </div>
                 </div>
@@ -15062,6 +15051,7 @@ function App() {
             turnId: params.optimisticAssistantTurnId,
             partIndex,
             text: deltaText,
+            messageSource: "chat",
             createdAt: new Date().toISOString(),
             isTyping: false,
             localOnly: true,
@@ -15747,6 +15737,7 @@ function App() {
           conversationId: resolvedConversationId,
           sender: "user",
           text: trimmed,
+          messageSource: "chat",
           createdAt: new Date().toISOString(),
           attachments: readyAttachments
             .map((item) => item.attachment)
@@ -15760,6 +15751,7 @@ function App() {
           turnId: optimisticAssistantTurnId,
           partIndex: 0,
           text: "",
+          messageSource: "chat",
           createdAt: new Date().toISOString(),
           isTyping: true,
           localOnly: true,

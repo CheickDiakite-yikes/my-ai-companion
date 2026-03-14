@@ -46,6 +46,11 @@ export const messagePurposeEnum = pgEnum("message_purpose", [
   "system",
 ]);
 
+export const messageSourceEnum = pgEnum("message_source", [
+  "chat",
+  "voice_transcript",
+]);
+
 export const messages = pgTable(
   "messages",
   {
@@ -59,6 +64,9 @@ export const messages = pgTable(
     messagePurpose: messagePurposeEnum("message_purpose")
       .notNull()
       .default("conversation"),
+    messageSource: messageSourceEnum("message_source")
+      .notNull()
+      .default("chat"),
     createdAt: timestamp("created_at").defaultNow(),
   },
   (table) => [
@@ -778,5 +786,6 @@ export type MemoryMode = typeof memoryModeEnum.enumValues[number];
 export type MemoryItemKind = typeof memoryItemKindEnum.enumValues[number];
 export type MemorySensitivity = typeof memorySensitivityEnum.enumValues[number];
 export type MessagePurpose = typeof messagePurposeEnum.enumValues[number];
+export type MessageSource = typeof messageSourceEnum.enumValues[number];
 export type GoogleIntegrationStatus =
   typeof googleIntegrationStatusEnum.enumValues[number];

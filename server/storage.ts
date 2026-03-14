@@ -62,6 +62,7 @@ import {
   type MemoryItemKind,
   type MemorySensitivity,
 } from "@shared/schema";
+import { resolveMessageSource } from "@shared/message-text";
 import { db, pool } from "./db";
 import {
   and,
@@ -646,6 +647,7 @@ export class DatabaseStorage implements IStorage {
         text: messages.text,
         uiPayload: messages.uiPayload,
         messagePurpose: messages.messagePurpose,
+        messageSource: messages.messageSource,
         createdAt: messages.createdAt,
         userId: conversations.userId,
       })
@@ -680,6 +682,7 @@ export class DatabaseStorage implements IStorage {
         text: messages.text,
         uiPayload: messages.uiPayload,
         messagePurpose: messages.messagePurpose,
+        messageSource: messages.messageSource,
         createdAt: messages.createdAt,
         userId: conversations.userId,
       })
@@ -725,6 +728,7 @@ export class DatabaseStorage implements IStorage {
       .values({
         ...data,
         messagePurpose: purpose,
+        messageSource: resolveMessageSource(data.messageSource),
       })
       .returning();
     const [conversation] = await db
