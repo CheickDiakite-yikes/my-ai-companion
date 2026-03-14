@@ -1324,22 +1324,14 @@ function downsampleFloat32Buffer(
   const outputLength = Math.round(input.length / sampleRateRatio);
   const output = new Float32Array(outputLength);
 
-  let outputIndex = 0;
-  let inputOffset = 0;
+  for (let outputIndex = 0; outputIndex < outputLength; outputIndex += 1) {
+    const srcPosition = outputIndex * sampleRateRatio;
+    const srcIndex = Math.floor(srcPosition);
+    const fraction = srcPosition - srcIndex;
 
-  while (outputIndex < outputLength) {
-    const nextInputOffset = Math.round((outputIndex + 1) * sampleRateRatio);
-    let accumulator = 0;
-    let count = 0;
-
-    for (let i = inputOffset; i < nextInputOffset && i < input.length; i += 1) {
-      accumulator += input[i];
-      count += 1;
-    }
-
-    output[outputIndex] = count > 0 ? accumulator / count : 0;
-    outputIndex += 1;
-    inputOffset = nextInputOffset;
+    const s0 = srcIndex < input.length ? input[srcIndex] : 0;
+    const s1 = srcIndex + 1 < input.length ? input[srcIndex + 1] : s0;
+    output[outputIndex] = s0 + fraction * (s1 - s0);
   }
 
   return output;
@@ -1553,7 +1545,7 @@ export async function getMicrophoneStreamWithFallback(): Promise<MediaStream> {
             audio: {
               channelCount: 1,
               echoCancellation: true,
-              noiseSuppression: false,
+              noiseSuppression: true,
               autoGainControl: true,
               voiceIsolation: true,
             } as MediaTrackConstraints,
@@ -1568,7 +1560,6 @@ export async function getMicrophoneStreamWithFallback(): Promise<MediaStream> {
               echoCancellation: true,
               noiseSuppression: true,
               autoGainControl: true,
-              voiceIsolation: true,
             } as MediaTrackConstraints,
             video: false,
           },
@@ -1597,9 +1588,9 @@ export async function getMicrophoneStreamWithFallback(): Promise<MediaStream> {
             audio: {
               channelCount: 1,
               echoCancellation: true,
-              noiseSuppression: false,
+              noiseSuppression: true,
               autoGainControl: true,
-              voiceIsolation: false,
+              voiceIsolation: true,
             } as MediaTrackConstraints,
             video: false,
           },
@@ -1612,7 +1603,6 @@ export async function getMicrophoneStreamWithFallback(): Promise<MediaStream> {
               echoCancellation: true,
               noiseSuppression: true,
               autoGainControl: true,
-              voiceIsolation: true,
             } as MediaTrackConstraints,
             video: false,
           },
