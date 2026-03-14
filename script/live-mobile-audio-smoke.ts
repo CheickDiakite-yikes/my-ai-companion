@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
 import {
+  buildLiveMicrophoneAttemptProfiles,
+  getAdaptiveSpeechThresholdFloor,
+  getCandidateSpeechThresholdFloor,
+} from "@shared/live-audio-capture";
+import {
   isPreferredGrantedDesktopAudioTrackSettings,
   resolveLiveAudioCompatibilityProfile,
   resolveLiveSpeechDetectionProfile,
@@ -71,6 +76,53 @@ function main(): void {
   assert.equal(desktopProfile.mode, "desktop_default");
   assert.equal(desktopProfile.thresholdScale, 1);
   assert.equal(desktopProfile.idleMaxRmsCap, null);
+
+  const mobileCaptureProfiles = buildLiveMicrophoneAttemptProfiles(iphone);
+  assert.equal(mobileCaptureProfiles[0]?.label, "mobile_echo_cancel_agc");
+  assert.equal(mobileCaptureProfiles[0]?.audio !== true, true);
+  if (mobileCaptureProfiles[0]?.audio !== true) {
+    assert.equal(mobileCaptureProfiles[0].audio.voiceIsolation, false);
+    assert.equal(mobileCaptureProfiles[0].audio.noiseSuppression, false);
+  }
+  assert.equal(
+    mobileCaptureProfiles.some((profile) => profile.label === "mobile_processed_mono"),
+    true,
+  );
+  assert.equal(
+    mobileCaptureProfiles.findIndex((profile) => profile.label === "mobile_processed_mono") >
+      mobileCaptureProfiles.findIndex((profile) => profile.label === "mono_only"),
+    true,
+  );
+
+  const desktopCaptureProfiles = buildLiveMicrophoneAttemptProfiles(desktop);
+  assert.equal(desktopCaptureProfiles[0]?.label, "desktop_echo_cancel_only");
+
+  assert.equal(
+    getAdaptiveSpeechThresholdFloor({
+      adaptiveThresholdFloor: 0.0017,
+      speechProfileMode: "desktop_default",
+      desktopMinimumThreshold: 0.0032,
+    }),
+    0.0032,
+  );
+  assert.equal(
+    getCandidateSpeechThresholdFloor({
+      adaptiveThresholdFloor: 0.0032,
+      userSpeechCandidateMinThreshold: 0.0055,
+      adaptiveAbsoluteFloor: 0.001,
+      speechProfileMode: "desktop_default",
+      desktopCandidateMinThreshold: 0.0024,
+    }) >= 0.0024,
+    true,
+  );
+  assert.equal(
+    getAdaptiveSpeechThresholdFloor({
+      adaptiveThresholdFloor: 0.0017,
+      speechProfileMode: "mobile_relaxed",
+      desktopMinimumThreshold: 0.0032,
+    }),
+    0.0017,
+  );
 
   const safeDesktopTrack = {
     channelCount: 1,

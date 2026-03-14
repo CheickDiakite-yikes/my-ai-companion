@@ -11,9 +11,11 @@ import { users } from "../shared/models/auth";
 import { googleIntegrations } from "../shared/schema";
 import {
   clearLiveTraceBuffer,
+  installLiveVoiceAppTestBypass,
   installLiveVoiceFixtureMic,
   playLiveFixture,
   readLiveTraceBuffer,
+  waitForLiveVoiceInputReady,
   type LiveVoiceFixtureManifest,
 } from "./live-voice-fixture-lib";
 
@@ -80,6 +82,7 @@ async function main(): Promise<void> {
       origin: contextOrigin,
     });
     const page = await context.newPage();
+    await installLiveVoiceAppTestBypass(page);
     const consoleTraceBuffer: LiveTraceEntry[] = [];
     page.on("console", (message) => {
       const trace = parseLiveTraceConsoleMessage(message.text());
@@ -102,6 +105,7 @@ async function main(): Promise<void> {
 
     await installLiveVoiceFixtureMic(page, manifest);
     await login(page, args);
+    await installLiveVoiceFixtureMic(page, manifest);
     await dismissOnboardingIfPresent(page);
     await startVoiceSession(page, readTraceBuffer, clearTraceBuffer);
     await assertVoiceStageClosedByDefault(page);
@@ -1118,6 +1122,17 @@ async function dismissOnboardingIfPresent(page: Page): Promise<void> {
       })
       .catch(() => undefined);
   }
+
+  const snoozeWalkthrough = page.getByTestId("button-soft-walkthrough-snooze");
+  if (await snoozeWalkthrough.isVisible({ timeout: 2_000 }).catch(() => false)) {
+    await snoozeWalkthrough.click();
+    await page
+      .waitForSelector('[data-testid="soft-walkthrough-overlay"]', {
+        state: "hidden",
+        timeout: 10_000,
+      })
+      .catch(() => undefined);
+  }
 }
 
 async function startVoiceSession(
@@ -1148,6 +1163,8 @@ async function startVoiceSession(
       `Voice session failed to start: ${JSON.stringify(started.slice(-12), null, 2)}`,
     );
   }
+
+  await waitForLiveVoiceInputReady(page);
 }
 
 function parseLiveTraceConsoleMessage(text: string): LiveTraceEntry | null {

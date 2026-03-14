@@ -845,6 +845,17 @@ interface LiveTraceEntry {
   metadata: Record<string, unknown>;
 }
 
+declare global {
+  interface Window {
+    __zeemeLiveDebug?: {
+      clearTraces: () => void;
+      getSpeechState: () => LiveVoiceDebugState | null;
+      getTokenConfigSummary: () => LiveTokenConfigSummary | null;
+      getTraces: () => LiveTraceEntry[];
+    };
+  }
+}
+
 interface GoogleIntegrationStatusResponse extends TraceAwareResponse {
   connected: boolean;
   status: "connected" | "disconnected" | "error";
@@ -13695,6 +13706,8 @@ function App() {
   const cameraAccumulatedSecondsRef = useRef(0);
   const cameraActiveStartedAtRef = useRef<number | null>(null);
   const liveTraceEntriesRef = useRef<LiveTraceEntry[]>([]);
+  const liveDebugStateRef = useRef<LiveVoiceDebugState | null>(null);
+  const liveTokenConfigSummaryRef = useRef<LiveTokenConfigSummary | null>(null);
   const forceOnboardingRef = useRef<boolean>(
     typeof window !== "undefined" &&
       new URLSearchParams(window.location.search).get("onboarding") === "1",
@@ -13711,6 +13724,14 @@ function App() {
   const textSearchStartedAtRef = useRef<number | null>(null);
   const voiceSearchMinTimerRef = useRef<number | null>(null);
   const textSearchMinTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    liveDebugStateRef.current = liveDebugState;
+  }, [liveDebugState]);
+
+  useEffect(() => {
+    liveTokenConfigSummaryRef.current = liveTokenConfigSummary;
+  }, [liveTokenConfigSummary]);
 
   useEffect(() => {
     if (!liveError) return;
@@ -13778,6 +13799,29 @@ function App() {
     anchor.remove();
     window.setTimeout(() => URL.revokeObjectURL(href), 0);
   }, [liveDebugState, liveTokenConfigSummary]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !liveDebugEnabled) {
+      if (typeof window !== "undefined") {
+        delete window.__zeemeLiveDebug;
+      }
+      return;
+    }
+
+    window.__zeemeLiveDebug = {
+      clearTraces: () => {
+        liveTraceEntriesRef.current = [];
+        setLiveTraceEntries([]);
+      },
+      getSpeechState: () => liveDebugStateRef.current,
+      getTokenConfigSummary: () => liveTokenConfigSummaryRef.current,
+      getTraces: () => liveTraceEntriesRef.current.slice(),
+    };
+
+    return () => {
+      delete window.__zeemeLiveDebug;
+    };
+  }, [liveDebugEnabled]);
 
   const clearWebLookupStatus = useCallback((mode: WebLookupMode) => {
     if (mode === "text") {

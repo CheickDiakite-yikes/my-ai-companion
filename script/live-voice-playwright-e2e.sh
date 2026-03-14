@@ -14,11 +14,22 @@ WAIT_SECONDS="${WAIT_SECONDS:-25}"
 START_SERVER="${START_SERVER:-1}"
 APPLY_SCHEMA="${APPLY_SCHEMA:-1}"
 PLAYWRIGHT_OUTPUT_DIR="${PLAYWRIGHT_OUTPUT_DIR:-output/playwright/live-voice}"
+BASE_URL="http://${TEST_HOST}:${TEST_PORT}"
 
 if [[ -f .env ]]; then
   set -a
   source .env
   set +a
+fi
+
+if [[ -f .env.local ]]; then
+  set -a
+  source .env.local
+  set +a
+fi
+
+if [[ "$START_SERVER" == "0" && "$APPLY_SCHEMA" == "0" && -n "${DATABASE_URL:-}" ]]; then
+  TEST_DB_URL="$DATABASE_URL"
 fi
 
 export GOOGLE_INTEGRATION_ENCRYPTION_KEY="${GOOGLE_INTEGRATION_ENCRYPTION_KEY:-codex-google-context-playwright-local-key-2026}"
@@ -94,24 +105,47 @@ const escapedDbName = dbName.replace(/"/g, '""');
 NODE
 }
 
+ensure_vector_extension() {
+  log "Ensuring pgvector extension exists (${TEST_DB_NAME})"
+  TEST_DB_URL="$TEST_DB_URL" node <<'NODE'
+const { Client } = require("pg");
+
+const dbUrl = process.env.TEST_DB_URL;
+if (!dbUrl) {
+  console.error("missing TEST_DB_URL");
+  process.exit(1);
+}
+
+(async () => {
+  const client = new Client({ connectionString: dbUrl });
+  await client.connect();
+  await client.query("create extension if not exists vector");
+  await client.end();
+})().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});
+NODE
+}
+
 wait_for_server() {
-  local base_url="http://${TEST_HOST}:${TEST_PORT}"
   local i
   for ((i = 1; i <= WAIT_SECONDS; i += 1)); do
     local status
-    status="$(curl -s -o /dev/null -w "%{http_code}" "${base_url}/api/auth/user" || true)"
+    status="$(curl -s --connect-timeout 2 -o /dev/null -w "%{http_code}" "${BASE_URL}/api/auth/user" || true)"
     if [[ "$status" == "200" || "$status" == "401" ]]; then
-      log "Server ready on ${base_url}"
+      log "Server ready on ${BASE_URL}"
       return 0
     fi
     sleep 1
   done
-  log "Server did not become ready within ${WAIT_SECONDS}s"
+  log "Server did not become ready on ${BASE_URL} within ${WAIT_SECONDS}s"
   return 1
 }
 
 if [[ "$APPLY_SCHEMA" == "1" ]]; then
   create_db_if_missing
+  ensure_vector_extension
   log "Applying schema"
   DATABASE_URL="$TEST_DB_URL" npm run db:push >/dev/null
 fi
@@ -130,10 +164,11 @@ if [[ "$START_SERVER" == "1" ]]; then
     GOOGLE_INTEGRATION_ENCRYPTION_KEY="${GOOGLE_INTEGRATION_ENCRYPTION_KEY:-codex-google-context-playwright-local-key-2026}" \
     npm run dev >"$TEST_SERVER_LOG" 2>&1 &
   SERVER_PID=$!
-  wait_for_server
+else
+  log "Using existing app server on ${BASE_URL}"
 fi
 
-BASE_URL="http://${TEST_HOST}:${TEST_PORT}"
+wait_for_server
 COOKIE_FILE="$(new_tmp)"
 HEADERS_FILE="$(new_tmp)"
 EMAIL="live.voice.$(date +%s)@example.com"
@@ -165,7 +200,7 @@ if [[ "$PREF_STATUS" != "200" ]]; then
 fi
 
 log "3/3 run Playwright checks"
-DATABASE_URL="$TEST_DB_URL" npx tsx script/live-voice-playwright-check.ts \
+DATABASE_URL="$TEST_DB_URL" node --import tsx script/live-voice-playwright-check.ts \
   --base-url "$BASE_URL" \
   --email "$EMAIL" \
   --password "$PASSWORD" \

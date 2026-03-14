@@ -16,6 +16,12 @@ import {
   type TranscriptScriptFamily,
 } from "@shared/live-language";
 import {
+  buildLiveMicrophoneAttemptProfiles,
+  clampDesktopSpeechThreshold,
+  getAdaptiveSpeechThresholdFloor,
+  getCandidateSpeechThresholdFloor,
+} from "@shared/live-audio-capture";
+import {
   isPreferredGrantedDesktopAudioTrackSettings,
   resolveLiveAudioCompatibilityProfile as resolveSharedLiveAudioCompatibilityProfile,
   resolveLiveSpeechDetectionProfile,
@@ -405,6 +411,18 @@ const ADAPTIVE_THRESHOLD_AMBIENT_MULTIPLIER = parseClientBoundedNumber(
   6,
   3,
   20,
+);
+const DESKTOP_ADAPTIVE_THRESHOLD_MIN_RMS = parseClientBoundedNumber(
+  liveClientEnv.VITE_LIVE_AUDIO_DESKTOP_ADAPTIVE_THRESHOLD_MIN_RMS,
+  0.0032,
+  0.001,
+  USER_SPEECH_START_RMS_THRESHOLD,
+);
+const DESKTOP_CANDIDATE_MIN_RMS = parseClientBoundedNumber(
+  liveClientEnv.VITE_LIVE_AUDIO_DESKTOP_CANDIDATE_MIN_RMS,
+  0.0024,
+  0.0008,
+  0.02,
 );
 const ADAPTIVE_CALIBRATION_FRAMES = parseClientPositiveInt(
   liveClientEnv.VITE_LIVE_AUDIO_ADAPTIVE_CALIBRATION_FRAMES,
@@ -1678,109 +1696,18 @@ export async function collectMediaCaptureDebugContext(): Promise<Record<string, 
 
 export async function getMicrophoneStreamWithFallback(): Promise<MediaStream> {
   const compatibility = resolveLiveAudioCompatibilityProfile();
-  const attemptConstraints: Array<{
-    label: string;
-    constraints: MediaStreamConstraints;
-  }> = compatibility.isMobile
-    ? [
-        {
-          label: "mobile_voice_safe",
-          constraints: {
-            audio: {
-              channelCount: 1,
-              echoCancellation: true,
-              noiseSuppression: false,
-              autoGainControl: true,
-              voiceIsolation: true,
-            } as MediaTrackConstraints,
-            video: false,
-          },
-        },
-        {
-          label: "mobile_processed_mono",
-          constraints: {
-            audio: {
-              channelCount: 1,
-              echoCancellation: true,
-              noiseSuppression: true,
-              autoGainControl: true,
-            } as MediaTrackConstraints,
-            video: false,
-          },
-        },
-        {
-          label: "mono_only",
-          constraints: {
-            audio: {
-              channelCount: 1,
-            },
-            video: false,
-          },
-        },
-        {
-          label: "basic_audio",
-          constraints: {
-            audio: true,
-            video: false,
-          },
-        },
-      ]
-    : [
-        {
-          label: "desktop_echo_cancel_only",
-          constraints: {
-            audio: {
-              channelCount: 1,
-              echoCancellation: true,
-              noiseSuppression: false,
-              autoGainControl: false,
-              voiceIsolation: false,
-            } as MediaTrackConstraints,
-            video: false,
-          },
-        },
-        {
-          label: "desktop_voice_safe",
-          constraints: {
-            audio: {
-              channelCount: 1,
-              echoCancellation: true,
-              noiseSuppression: false,
-              autoGainControl: true,
-              voiceIsolation: false,
-            } as MediaTrackConstraints,
-            video: false,
-          },
-        },
-        {
-          label: "mono_only",
-          constraints: {
-            audio: {
-              channelCount: 1,
-            },
-            video: false,
-          },
-        },
-        {
-          label: "basic_audio",
-          constraints: {
-            audio: true,
-            video: false,
-          },
-        },
-        {
-          label: "processed_mono",
-          constraints: {
-            audio: {
-              channelCount: 1,
-              echoCancellation: true,
-              noiseSuppression: true,
-              autoGainControl: true,
-            } as MediaTrackConstraints,
-            video: false,
-          },
-        },
-      ];
+  const attemptConstraints = buildLiveMicrophoneAttemptProfiles(compatibility).map(
+    (attempt) => ({
+      label: attempt.label,
+      constraints: {
+        audio:
+          attempt.audio === true
+            ? true
+            : ({ ...attempt.audio } as MediaTrackConstraints),
+        video: false,
+      } as MediaStreamConstraints,
+    }),
+  );
 
   let lastError: unknown = null;
   const attemptFailures: MicCaptureAttemptFailure[] = [];
@@ -1876,6 +1803,7 @@ export class GeminiLiveVoiceSession {
   private inputContext: AudioContext | null = null;
   private mediaStream: MediaStream | null = null;
   private mediaSourceNode: MediaStreamAudioSourceNode | null = null;
+  private captureWorkletNode: AudioWorkletNode | null = null;
   private processorNode: ScriptProcessorNode | null = null;
   private analyzerNode: AudioWorkletNode | null = null;
   private mutedGainNode: GainNode | null = null;
@@ -1944,6 +1872,7 @@ export class GeminiLiveVoiceSession {
   private candidateClearBurstLastAtMs = 0;
   private lastMobileBargeInRejectedAtMs = 0;
   private interruptPending = false;
+  private endingUserSpeech = false;
   private interruptTrigger: LiveInterruptTrigger = "none";
   private lastInterruptReason: string | null = null;
   private lastInterruptRequestedAt: number | null = null;
@@ -1954,6 +1883,8 @@ export class GeminiLiveVoiceSession {
   private bufferedPrefixAudioFrames: BufferedAudioFrame[] = [];
   private audioSendBuffer: Float32Array | null = null;
   private audioSendBufferOffset = 0;
+  private captureWorkletFlushPromise: Promise<void> | null = null;
+  private captureWorkletFlushResolver: (() => void) | null = null;
   private analyzerKind: "audio_worklet" | "script_processor" = "script_processor";
   private userSpeechWindowSequence = 0;
   private activeUserSpeechWindow: UserSpeechWindowDiagnostics | null = null;
@@ -2569,6 +2500,7 @@ export class GeminiLiveVoiceSession {
     this.activeUserSpeechWindow = null;
     this.clearPendingUserSpeechWindowTimeouts();
     this.interruptPending = false;
+    this.endingUserSpeech = false;
     this.analyzerKind = "script_processor";
     this.debugStateTrackSettings = null;
     this.debugStateTrackCapabilities = null;
@@ -2620,6 +2552,17 @@ export class GeminiLiveVoiceSession {
     window.removeEventListener("focus", this.handleWindowFocus);
     await this.stopVideo();
 
+    if (this.captureWorkletFlushResolver) {
+      const resolver = this.captureWorkletFlushResolver;
+      this.captureWorkletFlushResolver = null;
+      this.captureWorkletFlushPromise = null;
+      resolver();
+    }
+    if (this.captureWorkletNode) {
+      this.captureWorkletNode.port.onmessage = null;
+      this.captureWorkletNode.disconnect();
+      this.captureWorkletNode = null;
+    }
     if (this.processorNode) {
       this.processorNode.onaudioprocess = null;
       this.processorNode.disconnect();
@@ -4284,10 +4227,28 @@ export class GeminiLiveVoiceSession {
       this.syncSpeechStateFromActivity(reason);
       return;
     }
+
+    if (this.endingUserSpeech) {
+      return;
+    }
+
+    if (this.captureWorkletNode) {
+      this.endingUserSpeech = true;
+      void this.flushCaptureWorkletAudio().finally(() => {
+        this.endingUserSpeech = false;
+        this.finalizeEndedUserSpeech(reason);
+      });
+      return;
+    }
+
     const tailPcm = this.flushPartialAudioSendBuffer();
     if (tailPcm) {
       this.sendAudioFrame(tailPcm);
     }
+    this.finalizeEndedUserSpeech(reason);
+  }
+
+  private finalizeEndedUserSpeech(reason: string): void {
     const activityEnded = this.sendRealtimeInputSafely(
       { activityEnd: {} },
       "live.audio.activity_end_failed",
@@ -4328,13 +4289,31 @@ export class GeminiLiveVoiceSession {
     this.enterSpeechCooldown(reason);
   }
 
+  private getEffectiveAdaptiveThresholdFloor(): number {
+    return getAdaptiveSpeechThresholdFloor({
+      adaptiveThresholdFloor: this.adaptiveThresholdFloor,
+      speechProfileMode: this.speechDetectionProfile.mode,
+      desktopMinimumThreshold: DESKTOP_ADAPTIVE_THRESHOLD_MIN_RMS,
+    });
+  }
+
+  private getEffectiveCandidateMinRmsThreshold(): number {
+    return getCandidateSpeechThresholdFloor({
+      adaptiveThresholdFloor: this.getEffectiveAdaptiveThresholdFloor(),
+      userSpeechCandidateMinThreshold: USER_SPEECH_CANDIDATE_MIN_RMS_THRESHOLD,
+      adaptiveAbsoluteFloor: ADAPTIVE_THRESHOLD_ABSOLUTE_FLOOR,
+      speechProfileMode: this.speechDetectionProfile.mode,
+      desktopCandidateMinThreshold: DESKTOP_CANDIDATE_MIN_RMS,
+    });
+  }
+
   private computeSpeechThreshold(assistantWindowActive: boolean): {
     threshold: number;
     minSpeechDurationMs: number;
   } {
     const speechProfile = this.speechDetectionProfile;
     const micSignalCompensation = this.getMicSignalCompensation();
-    const adaptedIdleFloor = this.adaptiveThresholdFloor;
+    const adaptedIdleFloor = this.getEffectiveAdaptiveThresholdFloor();
     const adaptedAssistantFloor = Math.max(
       adaptedIdleFloor,
       this.adaptiveBaselineRms > 0
@@ -4363,10 +4342,7 @@ export class GeminiLiveVoiceSession {
       ? speechProfile.assistantThresholdScale *
         micSignalCompensation.assistantThresholdScale
       : speechProfile.thresholdScale * micSignalCompensation.thresholdScale;
-    const adaptedCandidateMin = Math.min(
-      USER_SPEECH_CANDIDATE_MIN_RMS_THRESHOLD,
-      Math.max(ADAPTIVE_THRESHOLD_ABSOLUTE_FLOOR, adaptedIdleFloor * 0.7),
-    );
+    const adaptedCandidateMin = this.getEffectiveCandidateMinRmsThreshold();
     const rawThreshold = Math.min(
       maxThreshold,
       Math.max(
@@ -4374,15 +4350,17 @@ export class GeminiLiveVoiceSession {
         this.inputAmbientRms > 0 ? this.inputAmbientRms * ambientMultiplier : 0,
       ),
     );
-    const threshold = Math.min(
-      maxThreshold,
-      Math.max(
-        assistantWindowActive
-          ? baseThreshold
-          : adaptedCandidateMin,
-        rawThreshold * thresholdScale,
+    const threshold = clampDesktopSpeechThreshold({
+      threshold: Math.min(
+        maxThreshold,
+        Math.max(
+          assistantWindowActive ? baseThreshold : adaptedCandidateMin,
+          rawThreshold * thresholdScale,
+        ),
       ),
-    );
+      speechProfileMode: speechProfile.mode,
+      desktopMinimumThreshold: DESKTOP_ADAPTIVE_THRESHOLD_MIN_RMS,
+    });
     const baseMinSpeechDurationMs = assistantWindowActive
       ? this.speechAssistantMinDurationMs
       : this.speechStartMinDurationMs;
@@ -4424,10 +4402,7 @@ export class GeminiLiveVoiceSession {
       isMobileAssistantWindow && MOBILE_ASSISTANT_BARGE_IN_DISABLE_HYSTERESIS
         ? 1
         : USER_SPEECH_CANDIDATE_HYSTERESIS_MULTIPLIER;
-    const adaptedCandidateMinRms = Math.min(
-      USER_SPEECH_CANDIDATE_MIN_RMS_THRESHOLD,
-      Math.max(ADAPTIVE_THRESHOLD_ABSOLUTE_FLOOR, this.adaptiveThresholdFloor * 0.7),
-    );
+    const adaptedCandidateMinRms = this.getEffectiveCandidateMinRmsThreshold();
     const candidateThreshold =
       this.speechState === "candidate_user_speech"
         ? Math.max(
@@ -4650,6 +4625,132 @@ export class GeminiLiveVoiceSession {
     }
   }
 
+  private handleInputCaptureWorkletMessage(event: MessageEvent<unknown>): void {
+    const payload =
+      event.data && typeof event.data === "object"
+        ? (event.data as {
+            type?: unknown;
+            rms?: unknown;
+            sampleCount?: unknown;
+            pcm16?: unknown;
+          })
+        : null;
+    const type = typeof payload?.type === "string" ? payload.type : null;
+
+    if (type === "rms") {
+      const rms =
+        typeof payload?.rms === "number" && Number.isFinite(payload.rms)
+          ? payload.rms
+          : null;
+      const sampleCount =
+        typeof payload?.sampleCount === "number" &&
+        Number.isFinite(payload.sampleCount) &&
+        payload.sampleCount > 0
+          ? payload.sampleCount
+          : null;
+      if (rms === null) {
+        return;
+      }
+      const analyzerSampleRate = this.inputContext?.sampleRate ?? INPUT_SAMPLE_RATE;
+      const frameDurationMs =
+        sampleCount !== null && analyzerSampleRate > 0
+          ? (sampleCount / analyzerSampleRate) * 1000
+          : undefined;
+      this.processSpeechInput(rms, frameDurationMs);
+      return;
+    }
+
+    if (type === "audio") {
+      const pcmBuffer = payload?.pcm16;
+      if (!(pcmBuffer instanceof ArrayBuffer) || pcmBuffer.byteLength === 0) {
+        return;
+      }
+      const pcmBase64 = bytesToBase64(new Uint8Array(pcmBuffer));
+      this.bufferPrefixAudioFrame(pcmBase64);
+      if (this.manualActivityActive) {
+        this.sendAudioFrame(pcmBase64);
+      }
+      return;
+    }
+
+    if (type === "flush_complete") {
+      const resolver = this.captureWorkletFlushResolver;
+      this.captureWorkletFlushResolver = null;
+      this.captureWorkletFlushPromise = null;
+      resolver?.();
+    }
+  }
+
+  private flushCaptureWorkletAudio(): Promise<void> {
+    if (!this.captureWorkletNode) {
+      return Promise.resolve();
+    }
+    if (this.captureWorkletFlushPromise) {
+      return this.captureWorkletFlushPromise;
+    }
+    this.captureWorkletFlushPromise = new Promise<void>((resolve) => {
+      this.captureWorkletFlushResolver = resolve;
+    });
+    try {
+      this.captureWorkletNode.port.postMessage({ type: "flush" });
+    } catch {
+      const resolver = this.captureWorkletFlushResolver;
+      this.captureWorkletFlushResolver = null;
+      this.captureWorkletFlushPromise = null;
+      resolver?.();
+      return Promise.resolve();
+    }
+    return this.captureWorkletFlushPromise ?? Promise.resolve();
+  }
+
+  private async attachInputCaptureWorklet(): Promise<boolean> {
+    if (!this.inputContext || !this.mediaSourceNode || !this.mutedGainNode) {
+      return false;
+    }
+    if (!("audioWorklet" in this.inputContext)) {
+      return false;
+    }
+
+    try {
+      await this.inputContext.audioWorklet.addModule(
+        new URL("./live-input-capture.worklet.js", import.meta.url),
+      );
+      this.captureWorkletNode = new AudioWorkletNode(
+        this.inputContext,
+        "live-input-capture",
+        {
+          processorOptions: {
+            targetSampleRate: INPUT_SAMPLE_RATE,
+            outputChunkSamples: PROCESSOR_BUFFER_SIZE,
+          },
+        },
+      );
+      this.captureWorkletNode.port.onmessage = (event) => {
+        this.handleInputCaptureWorkletMessage(event);
+      };
+      this.mediaSourceNode.connect(this.captureWorkletNode);
+      this.captureWorkletNode.connect(this.mutedGainNode);
+      this.analyzerKind = "audio_worklet";
+      this.debug("live.audio.capture_path", {
+        analyzerKind: this.analyzerKind,
+        targetSampleRate: INPUT_SAMPLE_RATE,
+        chunkSamples: PROCESSOR_BUFFER_SIZE,
+      });
+      this.emitDebugState(true);
+      return true;
+    } catch (error) {
+      if (this.captureWorkletNode) {
+        this.captureWorkletNode.port.onmessage = null;
+        this.captureWorkletNode.disconnect();
+        this.captureWorkletNode = null;
+      }
+      this.debug("live.audio.capture_worklet_unavailable", {
+        message: error instanceof Error ? error.message : String(error),
+      });
+      return false;
+    }
+  }
+
   private async attachAudioAnalyzer(): Promise<boolean> {
     if (!this.inputContext || !this.mediaSourceNode || !this.mutedGainNode) {
       return false;
@@ -4704,6 +4805,39 @@ export class GeminiLiveVoiceSession {
       this.emitDebugState(true);
       return false;
     }
+  }
+
+  private async startScriptProcessorCapture(): Promise<void> {
+    if (!this.inputContext || !this.mediaSourceNode || !this.mutedGainNode) {
+      throw new Error("Script processor capture requires an initialized input graph");
+    }
+
+    this.processorNode = this.inputContext.createScriptProcessor(
+      PROCESSOR_BUFFER_SIZE,
+      1,
+      1,
+    );
+    this.mediaSourceNode.connect(this.processorNode);
+    this.processorNode.connect(this.mutedGainNode);
+    await this.attachAudioAnalyzer();
+
+    this.processorNode.onaudioprocess = (event) => {
+      if (!this.session || !this.inputContext) return;
+      if (this.inputContext.state === "suspended") {
+        this.inputContext.resume().catch(() => {});
+        return;
+      }
+      const inputSamples = event.inputBuffer.getChannelData(0);
+      if (this.analyzerKind === "script_processor") {
+        this.processSpeechInput(
+          calculateRms(inputSamples),
+          this.inputContext.sampleRate > 0
+            ? (inputSamples.length / this.inputContext.sampleRate) * 1000
+            : undefined,
+        );
+      }
+      this.appendToAudioSendBuffer(inputSamples);
+    };
   }
 
   private startVideoCaptureLoop(): void {
@@ -4932,10 +5066,14 @@ export class GeminiLiveVoiceSession {
           ADAPTIVE_THRESHOLD_ABSOLUTE_FLOOR,
           this.adaptiveBaselineRms * ADAPTIVE_THRESHOLD_AMBIENT_MULTIPLIER,
         );
-        this.adaptiveThresholdFloor = Math.min(
-          USER_SPEECH_START_RMS_THRESHOLD,
-          adaptiveFloor,
-        );
+        this.adaptiveThresholdFloor = getAdaptiveSpeechThresholdFloor({
+          adaptiveThresholdFloor: Math.min(
+            USER_SPEECH_START_RMS_THRESHOLD,
+            adaptiveFloor,
+          ),
+          speechProfileMode: this.speechDetectionProfile.mode,
+          desktopMinimumThreshold: DESKTOP_ADAPTIVE_THRESHOLD_MIN_RMS,
+        });
         const gainLevel = classifyMicGainLevel(this.adaptiveBaselineRms);
         const micSignalCompensation = this.getMicSignalCompensation();
         this.debug("live.audio.adaptive_calibration_complete", {
@@ -4947,18 +5085,12 @@ export class GeminiLiveVoiceSession {
           micSignalCompensation,
           effectiveIdleThreshold: this.computeSpeechThreshold(false).threshold,
           effectiveAssistantThreshold: this.computeSpeechThreshold(true).threshold,
-          adaptiveCandidateMinRms: Math.min(
-            USER_SPEECH_CANDIDATE_MIN_RMS_THRESHOLD,
-            Math.max(ADAPTIVE_THRESHOLD_ABSOLUTE_FLOOR, this.adaptiveThresholdFloor * 0.7),
-          ),
+          adaptiveCandidateMinRms: this.getEffectiveCandidateMinRmsThreshold(),
         });
       }
     }
 
-    const adaptedCandidateFloor = Math.min(
-      USER_SPEECH_CANDIDATE_MIN_RMS_THRESHOLD,
-      Math.max(ADAPTIVE_THRESHOLD_ABSOLUTE_FLOOR, this.adaptiveThresholdFloor * 0.7),
-    );
+    const adaptedCandidateFloor = this.getEffectiveCandidateMinRmsThreshold();
     const boundedBaseline = Math.max(
       adaptedCandidateFloor,
       speechThreshold,
@@ -5095,7 +5227,7 @@ export class GeminiLiveVoiceSession {
     });
     this.emitDebugState(true);
 
-    this.inputContext = createAudioContext();
+    this.inputContext = createAudioContext({ sampleRate: INPUT_SAMPLE_RATE });
     await this.inputContext.resume();
     this.inputFrameDurationMs =
       this.inputContext.sampleRate > 0
@@ -5122,36 +5254,13 @@ export class GeminiLiveVoiceSession {
     });
 
     this.mediaSourceNode = this.inputContext.createMediaStreamSource(this.mediaStream);
-    this.processorNode = this.inputContext.createScriptProcessor(
-      PROCESSOR_BUFFER_SIZE,
-      1,
-      1,
-    );
     this.mutedGainNode = this.inputContext.createGain();
     this.mutedGainNode.gain.value = 0;
-
-    this.mediaSourceNode.connect(this.processorNode);
-    this.processorNode.connect(this.mutedGainNode);
     this.mutedGainNode.connect(this.inputContext.destination);
-    await this.attachAudioAnalyzer();
-
-    this.processorNode.onaudioprocess = (event) => {
-      if (!this.session || !this.inputContext) return;
-      if (this.inputContext.state === "suspended") {
-        this.inputContext.resume().catch(() => {});
-        return;
-      }
-      const inputSamples = event.inputBuffer.getChannelData(0);
-      if (this.analyzerKind === "script_processor") {
-        this.processSpeechInput(
-          calculateRms(inputSamples),
-          this.inputContext.sampleRate > 0
-            ? (inputSamples.length / this.inputContext.sampleRate) * 1000
-            : undefined,
-        );
-      }
-      this.appendToAudioSendBuffer(inputSamples);
-    };
+    const usingCaptureWorklet = await this.attachInputCaptureWorklet();
+    if (!usingCaptureWorklet) {
+      await this.startScriptProcessorCapture();
+    }
     this.syncSpeechStateFromActivity("microphone_started");
   }
 
