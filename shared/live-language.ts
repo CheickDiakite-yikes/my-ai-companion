@@ -23,6 +23,7 @@ export type UserTranscriptDiscardReason =
   | "punctuation_only"
   | "too_few_letters"
   | "cross_script_short_fragment"
+  | "cross_script_mismatch_when_latin_expected"
   | "unknown_script_when_latin_expected"
   | "non_english_latin_short_fragment";
 
@@ -528,6 +529,23 @@ export function evaluateUserTranscriptPersistence(params: {
 
   const effectiveLang = normalizeLanguageHint(params.expectedLanguageHint);
   const isEnglishExpected = effectiveLang === "en" || (!effectiveLang && params.expectedScriptFamily === "latin");
+
+  if (
+    isEnglishExpected &&
+    params.expectedScriptFamily === "latin" &&
+    mismatch &&
+    scriptStats.scriptFamily !== "latin" &&
+    scriptStats.scriptFamily !== "mixed" &&
+    scriptStats.scriptFamily !== "unknown"
+  ) {
+    return {
+      discard: true,
+      reason: "cross_script_mismatch_when_latin_expected",
+      mismatch,
+      wordCount,
+      scriptStats,
+    };
+  }
 
   if (
     isEnglishExpected &&

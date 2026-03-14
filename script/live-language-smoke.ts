@@ -92,6 +92,17 @@ function main(): void {
   });
   assert.equal(crossScriptShortArabicDecision3.discard, true);
 
+  const crossScriptLongArabicDecision = evaluateUserTranscriptPersistence({
+    text: "اه ي ن ي ن ي ن ي ن ي ؟",
+    expectedScriptFamily: "latin",
+    expectedLanguageHint: "en",
+  });
+  assert.equal(crossScriptLongArabicDecision.discard, true);
+  assert.equal(
+    crossScriptLongArabicDecision.reason,
+    "cross_script_mismatch_when_latin_expected",
+  );
+
   const sinhalaDecision = evaluateUserTranscriptPersistence({
     text: "වෙන්නේ",
     expectedScriptFamily: "latin",
@@ -117,7 +128,7 @@ function main(): void {
   assert.equal(vietnameseDecision.discard, true);
 
   const turkishDecision = evaluateUserTranscriptPersistence({
-    text: "geldi",
+    text: "değil",
     expectedScriptFamily: "latin",
   });
   assert.equal(turkishDecision.discard, true);
@@ -251,6 +262,17 @@ function main(): void {
     expectedScriptFamily: "latin",
   });
   assert.equal(greekWhenLatinExpected.discard, true, "Greek short fragment should be discarded when Latin expected");
+
+  const greekLongWhenLatinExpected = evaluateUserTranscriptPersistence({
+    text: "Γεια σας φίλε μου τι κάνεις σήμερα",
+    expectedScriptFamily: "latin",
+    expectedLanguageHint: "en",
+  });
+  assert.equal(greekLongWhenLatinExpected.discard, true);
+  assert.equal(
+    greekLongWhenLatinExpected.reason,
+    "cross_script_mismatch_when_latin_expected",
+  );
 
   console.log(
     JSON.stringify(
