@@ -1320,18 +1320,23 @@ function downsampleFloat32Buffer(
 ): Float32Array {
   if (targetSampleRate >= inputSampleRate) return input;
 
-  const sampleRateRatio = inputSampleRate / targetSampleRate;
-  const outputLength = Math.round(input.length / sampleRateRatio);
+  const ratio = inputSampleRate / targetSampleRate;
+  const outputLength = Math.round(input.length / ratio);
   const output = new Float32Array(outputLength);
+  const halfKernel = Math.ceil(ratio);
 
-  for (let outputIndex = 0; outputIndex < outputLength; outputIndex += 1) {
-    const srcPosition = outputIndex * sampleRateRatio;
-    const srcIndex = Math.floor(srcPosition);
-    const fraction = srcPosition - srcIndex;
-
-    const s0 = srcIndex < input.length ? input[srcIndex] : 0;
-    const s1 = srcIndex + 1 < input.length ? input[srcIndex + 1] : s0;
-    output[outputIndex] = s0 + fraction * (s1 - s0);
+  for (let i = 0; i < outputLength; i += 1) {
+    const center = i * ratio;
+    const lo = Math.max(0, Math.ceil(center - halfKernel));
+    const hi = Math.min(input.length - 1, Math.floor(center + halfKernel));
+    let sum = 0;
+    let wSum = 0;
+    for (let j = lo; j <= hi; j += 1) {
+      const w = 1 - Math.abs(j - center) / halfKernel;
+      sum += input[j] * w;
+      wSum += w;
+    }
+    output[i] = wSum > 0 ? sum / wSum : 0;
   }
 
   return output;
