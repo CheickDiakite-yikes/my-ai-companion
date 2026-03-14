@@ -86,6 +86,7 @@ import {
   resolveExpectedScriptFamilyForLanguage,
   stripAssistantThoughtContent,
 } from "@shared/live-language";
+import { createVoiceTranscriptMessageInput } from "@shared/message-text";
 import {
   classifyTurnIntentWithModel,
   createLiveToken,
@@ -10430,6 +10431,7 @@ export async function registerRoutes(
             parsedMessage.messagePurpose === "system"
               ? parsedMessage.messagePurpose
               : undefined,
+          messageSource: "chat" as const,
         };
         const msg = await storage.createMessage(data);
         res.status(201).json(msg);
@@ -17979,11 +17981,13 @@ export async function registerRoutes(
           textToSave = cleaned;
         }
 
-        const saved = await storage.createMessage({
-          conversationId: conversation.id,
-          sender: parsed.sender,
-          text: textToSave,
-        });
+        const saved = await storage.createMessage(
+          createVoiceTranscriptMessageInput({
+            conversationId: conversation.id,
+            sender: parsed.sender,
+            text: textToSave,
+          }),
+        );
 
         trace(req, "voice.transcript.persisted", {
           conversationId: conversation.id,
