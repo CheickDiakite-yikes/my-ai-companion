@@ -1,0 +1,45 @@
+The traces make that pretty clear:
+
+In both exports, the first user window starts as normal user speech, not barge-in:
+live-debug-1773458560628.json: startReason=detected_user_speech, durationMs=1291, peakRms=0.2073, averageRms=0.0317, usableTranscriptReceived=false, transcriptCharCount=7
+live-debug-1773458870146.json: startReason=detected_user_speech, durationMs=1348, peakRms=0.1369, averageRms=0.0277, usableTranscriptReceived=false, transcriptCharCount=7
+Those 7 chars are the literal tag "<noise>".
+So this is not “we didn’t hear anything.” It is “Gemini heard audio and labeled it noise.”
+What that rules out:
+
+Not DB
+Not message rendering
+Not transcript cleanup
+Not no-input VAD failure
+Not assistant overlap alone, because the first clean non-assistant windows also fail
+Not the client noise gate, because noiseGateEnabled=false in the trace config
+What the traces strongly point to instead:
+
+The speech detector is healthy.
+The transmitted mic audio is bad by the time Gemini sees it.
+The strongest clue is the granted track settings in live-debug-1773458560628.json:
+
+noiseSuppression: true
+voiceIsolation: true
+echoCancellation: true
+autoGainControl: true
+That matters because your code is trying to prefer a safer desktop profile in gemini-live.ts (line 1594), but the browser still granted a heavily processed track. That is exactly the kind of path that can leave RMS looking “strong” while the actual speech content gets mangled into static/phasey garbage. Gemini then returns "<noise>", and the app marks that window unusable in gemini-live.ts (line 2797). When assistant output follows one of those unusable windows, the app drops it and emits the user-facing error in gemini-live.ts (line 5151).
+
+The key distinction is:
+
+RMS/activity detection is computed from the live mic stream and says “yes, there is speech-like energy.”
+Gemini transcription is evaluating the actual transmitted PCM and says “this sounds like noise.”
+So “every speech window returns <noise>” because the browser/OS mic processing path is producing audio that is energetic enough to trip speech detection, but degraded enough that Gemini classifies it as static/noise instead of words.
+
+One more detail from your traces:
+
+In the second export, micGainLevel: low
+In the first export, micGainLevel: normal
+That low gain can make things worse, but it’s not the root cause by itself. The bigger pattern is the processed track profile.
+
+So the most defensible answer is:
+
+Your speech windows are opening correctly.
+The app is sending audio correctly enough for Gemini to return a transcription object.
+That transcription object is repeatedly "<noise>".
+The likely reason is the browser-granted mic capture path is over-processed or otherwise corrupted before transcription.

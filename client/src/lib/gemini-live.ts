@@ -167,6 +167,7 @@ type PendingGoogleReadVoiceSummary = {
 
 const INPUT_SAMPLE_RATE = 16000;
 const OUTPUT_SAMPLE_RATE = 24000;
+const AUDIO_SEND_CHUNK_FRAMES = 4;
 const VIDEO_FRAME_INTERVAL_MS = 1000;
 const VIDEO_MAX_EDGE = 640;
 const VIDEO_PERMISSION_TIMEOUT_MS = 12000;
@@ -467,7 +468,7 @@ const USER_SPEECH_END_SILENCE_FRAMES = parseClientPositiveInt(
 );
 const USER_SPEECH_PREFIX_FRAMES = parseClientPositiveInt(
   liveClientEnv.VITE_LIVE_AUDIO_USER_SPEECH_PREFIX_FRAMES,
-  14,
+  4,
 );
 const USER_SPEECH_COOLDOWN_MS = parseClientPositiveInt(
   liveClientEnv.VITE_LIVE_AUDIO_USER_SPEECH_COOLDOWN_MS,
@@ -1751,6 +1752,8 @@ export class GeminiLiveVoiceSession {
   private manualInterruptWatchdogTimeout: number | null = null;
   private manualInterruptWatchdogExpiresAt: number | null = null;
   private bufferedPrefixAudioFrames: BufferedAudioFrame[] = [];
+  private audioSendBuffer: Float32Array | null = null;
+  private audioSendBufferOffset = 0;
   private analyzerKind: "audio_worklet" | "script_processor" = "script_processor";
   private userSpeechWindowSequence = 0;
   private activeUserSpeechWindow: UserSpeechWindowDiagnostics | null = null;
@@ -1895,6 +1898,8 @@ export class GeminiLiveVoiceSession {
     this.candidateClearBurstLastAtMs = 0;
     this.lastMobileBargeInRejectedAtMs = 0;
     this.bufferedPrefixAudioFrames = [];
+    this.audioSendBuffer = null;
+    this.audioSendBufferOffset = 0;
     this.activeUserSpeechWindow = null;
     this.clearPendingUserSpeechWindowTimeouts();
     this.analyzerKind = "script_processor";
@@ -2233,6 +2238,7 @@ export class GeminiLiveVoiceSession {
       userSpeechEndSilenceMinDurationMs:
         USER_SPEECH_END_SILENCE_MIN_DURATION_MS,
       userSpeechEndSilenceTargetMs: this.speechEndSilenceTargetMs,
+      audioSendChunkFrames: AUDIO_SEND_CHUNK_FRAMES,
       userSpeechPrefixFrames: USER_SPEECH_PREFIX_FRAMES,
       adaptiveThresholdAbsoluteFloor: ADAPTIVE_THRESHOLD_ABSOLUTE_FLOOR,
       adaptiveThresholdAmbientMultiplier: ADAPTIVE_THRESHOLD_AMBIENT_MULTIPLIER,
@@ -2358,6 +2364,8 @@ export class GeminiLiveVoiceSession {
     this.candidateClearBurstLastAtMs = 0;
     this.lastMobileBargeInRejectedAtMs = 0;
     this.bufferedPrefixAudioFrames = [];
+    this.audioSendBuffer = null;
+    this.audioSendBufferOffset = 0;
     this.activeUserSpeechWindow = null;
     this.clearPendingUserSpeechWindowTimeouts();
     this.interruptPending = false;
@@ -3896,7 +3904,49 @@ export class GeminiLiveVoiceSession {
     );
   }
 
+  private encodeAudioSendBuffer(samples: Float32Array): string {
+    if (!this.inputContext) return "";
+    return pcm16ToBase64(
+      samples,
+      this.inputContext.sampleRate,
+      this.getMicSignalCompensation().inputGain,
+    );
+  }
+
+  private appendToAudioSendBuffer(inputSamples: Float32Array): void {
+    const chunkSize = PROCESSOR_BUFFER_SIZE * AUDIO_SEND_CHUNK_FRAMES;
+    if (!this.audioSendBuffer || this.audioSendBuffer.length !== chunkSize) {
+      this.audioSendBuffer = new Float32Array(chunkSize);
+      this.audioSendBufferOffset = 0;
+    }
+    const toCopy = Math.min(inputSamples.length, chunkSize - this.audioSendBufferOffset);
+    this.audioSendBuffer.set(inputSamples.subarray(0, toCopy), this.audioSendBufferOffset);
+    this.audioSendBufferOffset += toCopy;
+    if (this.audioSendBufferOffset >= chunkSize) {
+      const pcmBase64 = this.encodeAudioSendBuffer(this.audioSendBuffer);
+      this.bufferPrefixAudioFrame(pcmBase64);
+      if (this.manualActivityActive) {
+        this.sendAudioFrame(pcmBase64);
+      }
+      this.audioSendBufferOffset = 0;
+    }
+  }
+
+  private flushPartialAudioSendBuffer(): string | null {
+    if (this.audioSendBufferOffset > 0 && this.audioSendBuffer) {
+      const partial = this.audioSendBuffer.subarray(0, this.audioSendBufferOffset);
+      const pcmBase64 = this.encodeAudioSendBuffer(partial);
+      this.audioSendBufferOffset = 0;
+      return pcmBase64;
+    }
+    return null;
+  }
+
   private flushBufferedPrefixAudioFrames(): void {
+    const partialPcm = this.flushPartialAudioSendBuffer();
+    if (partialPcm) {
+      this.bufferPrefixAudioFrame(partialPcm);
+    }
     const frames = this.bufferedPrefixAudioFrames.splice(
       0,
       this.bufferedPrefixAudioFrames.length,
@@ -4033,6 +4083,10 @@ export class GeminiLiveVoiceSession {
     if (!this.manualActivityActive) {
       this.syncSpeechStateFromActivity(reason);
       return;
+    }
+    const tailPcm = this.flushPartialAudioSendBuffer();
+    if (tailPcm) {
+      this.sendAudioFrame(tailPcm);
     }
     const activityEnded = this.sendRealtimeInputSafely(
       { activityEnd: {} },
@@ -4888,15 +4942,7 @@ export class GeminiLiveVoiceSession {
             : undefined,
         );
       }
-      const pcmBase64 = pcm16ToBase64(
-        inputSamples,
-        this.inputContext.sampleRate,
-        this.getMicSignalCompensation().inputGain,
-      );
-      this.bufferPrefixAudioFrame(pcmBase64);
-      if (this.manualActivityActive) {
-        this.sendAudioFrame(pcmBase64);
-      }
+      this.appendToAudioSendBuffer(inputSamples);
     };
     this.syncSpeechStateFromActivity("microphone_started");
   }
