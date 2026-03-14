@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import {
+  isPreferredGrantedDesktopAudioTrackSettings,
   resolveLiveAudioCompatibilityProfile,
   resolveLiveSpeechDetectionProfile,
+  scoreGrantedDesktopAudioTrackSettings,
 } from "@shared/live-audio-compatibility";
 
 function main(): void {
@@ -69,6 +71,34 @@ function main(): void {
   assert.equal(desktopProfile.mode, "desktop_default");
   assert.equal(desktopProfile.thresholdScale, 1);
   assert.equal(desktopProfile.idleMaxRmsCap, null);
+
+  const safeDesktopTrack = {
+    channelCount: 1,
+    echoCancellation: true,
+    noiseSuppression: false,
+    autoGainControl: true,
+    voiceIsolation: false,
+  };
+  const processedDesktopTrack = {
+    channelCount: 1,
+    echoCancellation: true,
+    noiseSuppression: true,
+    autoGainControl: true,
+    voiceIsolation: true,
+  };
+  assert.equal(
+    isPreferredGrantedDesktopAudioTrackSettings(safeDesktopTrack),
+    true,
+  );
+  assert.equal(
+    isPreferredGrantedDesktopAudioTrackSettings(processedDesktopTrack),
+    false,
+  );
+  assert.equal(
+    scoreGrantedDesktopAudioTrackSettings(processedDesktopTrack) >
+      scoreGrantedDesktopAudioTrackSettings(safeDesktopTrack),
+    true,
+  );
 
   console.log(
     JSON.stringify(

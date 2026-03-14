@@ -29,6 +29,55 @@ export interface LiveSpeechDetectionProfile {
   minimumEndSilenceMs: number;
 }
 
+export interface LiveGrantedAudioTrackSettings {
+  autoGainControl?: boolean | null;
+  echoCancellation?: boolean | string | null;
+  noiseSuppression?: boolean | null;
+  voiceIsolation?: boolean | null;
+  channelCount?: number | null;
+}
+
+function isEnabledGrantedAudioTrackSetting(value: unknown): boolean {
+  return value === true || value === "remote-only" || value === "all";
+}
+
+function isDisabledGrantedAudioTrackSetting(value: unknown): boolean {
+  return value === false;
+}
+
+export function scoreGrantedDesktopAudioTrackSettings(
+  settings: LiveGrantedAudioTrackSettings | Record<string, unknown> | null | undefined,
+): number {
+  if (!settings) return Number.POSITIVE_INFINITY;
+
+  let score = 0;
+  if (isEnabledGrantedAudioTrackSetting(settings.voiceIsolation)) score += 16;
+  if (isEnabledGrantedAudioTrackSetting(settings.noiseSuppression)) score += 10;
+  if (isDisabledGrantedAudioTrackSetting(settings.echoCancellation)) score += 6;
+  if (isEnabledGrantedAudioTrackSetting(settings.autoGainControl)) score += 2;
+
+  const channelCount =
+    typeof settings.channelCount === "number" && Number.isFinite(settings.channelCount)
+      ? settings.channelCount
+      : null;
+  if (channelCount !== null && channelCount > 0 && channelCount !== 1) {
+    score += 2;
+  }
+
+  return score;
+}
+
+export function isPreferredGrantedDesktopAudioTrackSettings(
+  settings: LiveGrantedAudioTrackSettings | Record<string, unknown> | null | undefined,
+): boolean {
+  if (!settings) return false;
+  return (
+    isEnabledGrantedAudioTrackSetting(settings.echoCancellation) &&
+    !isEnabledGrantedAudioTrackSetting(settings.voiceIsolation) &&
+    !isEnabledGrantedAudioTrackSetting(settings.noiseSuppression)
+  );
+}
+
 export interface ResolveLiveAudioCompatibilityProfileInput {
   userAgent?: string | null;
   maxTouchPoints?: number | null;

@@ -16,9 +16,12 @@ import {
   type TranscriptScriptFamily,
 } from "@shared/live-language";
 import {
+  isPreferredGrantedDesktopAudioTrackSettings,
   resolveLiveAudioCompatibilityProfile as resolveSharedLiveAudioCompatibilityProfile,
   resolveLiveSpeechDetectionProfile,
+  scoreGrantedDesktopAudioTrackSettings,
   type LiveAudioCompatibilityProfile,
+  type LiveGrantedAudioTrackSettings,
   type LiveSpeechDetectionProfile,
 } from "@shared/live-audio-compatibility";
 
@@ -217,6 +220,26 @@ type MicCaptureAttemptFailure = {
   label: string;
   errorName: string | null;
   errorMessage: string;
+};
+
+type MicCaptureAttemptSuccess = {
+  attempt: number;
+  label: string;
+  grantedSettings: Record<string, unknown> | null;
+  processingScore: number | null;
+  preferred: boolean | null;
+};
+
+type MicCaptureDebugMetadata = {
+  selectedAttemptLabel: string;
+  usedFallbackSelection: boolean;
+  grantedProcessingScore: number | null;
+  grantedProcessingPreferred: boolean | null;
+  attemptSuccesses: MicCaptureAttemptSuccess[];
+};
+
+type InstrumentedMediaStream = MediaStream & {
+  __zeemeMicCaptureDebug?: MicCaptureDebugMetadata;
 };
 
 const liveClientEnv = (import.meta.env as Record<string, unknown>) ?? {};
@@ -1483,6 +1506,121 @@ async function getUserMediaWithTimeout(
   }
 }
 
+function stopMediaStreamTracks(stream: MediaStream | null | undefined): void {
+  if (!stream) return;
+  stream.getTracks().forEach((track) => {
+    try {
+      track.stop();
+    } catch {
+      // Ignore cleanup failures for rejected fallback attempts.
+    }
+  });
+}
+
+function getMicCaptureDebugMetadata(
+  stream: MediaStream | null | undefined,
+): MicCaptureDebugMetadata | null {
+  const instrumented = stream as InstrumentedMediaStream | null | undefined;
+  return instrumented?.__zeemeMicCaptureDebug ?? null;
+}
+
+async function refineDesktopAudioTrackSettings(
+  stream: MediaStream,
+): Promise<Record<string, unknown> | null> {
+  const audioTrack = stream.getAudioTracks().at(0) ?? null;
+  if (!audioTrack) {
+    return null;
+  }
+
+  let grantedSettings = sanitizeMediaTrackInfo(audioTrack.getSettings());
+  if (
+    isPreferredGrantedDesktopAudioTrackSettings(
+      grantedSettings as LiveGrantedAudioTrackSettings | Record<string, unknown> | null,
+    )
+  ) {
+    return grantedSettings;
+  }
+
+  if (typeof audioTrack.applyConstraints !== "function") {
+    return grantedSettings;
+  }
+
+  const postGrantAttempts: MediaTrackConstraints[] = [
+    {
+      channelCount: 1,
+      echoCancellation: true,
+      noiseSuppression: false,
+      autoGainControl: false,
+      voiceIsolation: false,
+    } as MediaTrackConstraints,
+    {
+      channelCount: 1,
+      echoCancellation: true,
+      noiseSuppression: false,
+      autoGainControl: true,
+      voiceIsolation: false,
+    } as MediaTrackConstraints,
+    {
+      advanced: [
+        { voiceIsolation: false } as MediaTrackConstraintSet,
+        { noiseSuppression: false } as MediaTrackConstraintSet,
+        { echoCancellation: true } as MediaTrackConstraintSet,
+      ],
+    } as MediaTrackConstraints,
+  ];
+
+  for (const constraints of postGrantAttempts) {
+    try {
+      await audioTrack.applyConstraints(constraints);
+      grantedSettings = sanitizeMediaTrackInfo(audioTrack.getSettings());
+      if (
+        isPreferredGrantedDesktopAudioTrackSettings(
+          grantedSettings as LiveGrantedAudioTrackSettings | Record<string, unknown> | null,
+        )
+      ) {
+        break;
+      }
+    } catch {
+      // Ignore failed post-grant tuning attempts and keep the best granted settings we have.
+    }
+  }
+
+  return grantedSettings;
+}
+
+async function buildMicCaptureSuccess(
+  stream: MediaStream,
+  compatibility: LiveAudioCompatibilityProfile,
+  attempt: number,
+  label: string,
+): Promise<MicCaptureAttemptSuccess> {
+  const audioTrack = stream.getAudioTracks().at(0) ?? null;
+  const grantedSettings = compatibility.isMobile
+    ? (audioTrack ? sanitizeMediaTrackInfo(audioTrack.getSettings()) : null)
+    : await refineDesktopAudioTrackSettings(stream);
+  if (compatibility.isMobile) {
+    return {
+      attempt,
+      label,
+      grantedSettings,
+      processingScore: null,
+      preferred: null,
+    };
+  }
+  const processingScore = scoreGrantedDesktopAudioTrackSettings(
+    grantedSettings as LiveGrantedAudioTrackSettings | Record<string, unknown> | null,
+  );
+  return {
+    attempt,
+    label,
+    grantedSettings,
+    processingScore: Number.isFinite(processingScore) ? processingScore : null,
+    preferred: isPreferredGrantedDesktopAudioTrackSettings(
+      grantedSettings as LiveGrantedAudioTrackSettings | Record<string, unknown> | null,
+    ),
+  };
+}
+
 async function getMicrophonePermissionState():
   Promise<"granted" | "denied" | "prompt" | "unsupported" | "error"> {
   try {
@@ -1551,7 +1689,7 @@ export async function getMicrophoneStreamWithFallback(): Promise<MediaStream> {
             audio: {
               channelCount: 1,
               echoCancellation: true,
-              noiseSuppression: true,
+              noiseSuppression: false,
               autoGainControl: true,
               voiceIsolation: true,
             } as MediaTrackConstraints,
@@ -1589,26 +1727,27 @@ export async function getMicrophoneStreamWithFallback(): Promise<MediaStream> {
       ]
     : [
         {
-          label: "desktop_voice_safe",
+          label: "desktop_echo_cancel_only",
           constraints: {
             audio: {
               channelCount: 1,
               echoCancellation: true,
-              noiseSuppression: true,
-              autoGainControl: true,
-              voiceIsolation: true,
+              noiseSuppression: false,
+              autoGainControl: false,
+              voiceIsolation: false,
             } as MediaTrackConstraints,
             video: false,
           },
         },
         {
-          label: "processed_mono",
+          label: "desktop_voice_safe",
           constraints: {
             audio: {
               channelCount: 1,
               echoCancellation: true,
-              noiseSuppression: true,
+              noiseSuppression: false,
               autoGainControl: true,
+              voiceIsolation: false,
             } as MediaTrackConstraints,
             video: false,
           },
@@ -1629,16 +1768,66 @@ export async function getMicrophoneStreamWithFallback(): Promise<MediaStream> {
             video: false,
           },
         },
+        {
+          label: "processed_mono",
+          constraints: {
+            audio: {
+              channelCount: 1,
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: true,
+            } as MediaTrackConstraints,
+            video: false,
+          },
+        },
       ];
 
   let lastError: unknown = null;
   const attemptFailures: MicCaptureAttemptFailure[] = [];
+  const attemptSuccesses: MicCaptureAttemptSuccess[] = [];
+  let bestSuccessfulStream: InstrumentedMediaStream | null = null;
+  let bestSuccessfulAttempt: MicCaptureAttemptSuccess | null = null;
   for (let index = 0; index < attemptConstraints.length; index += 1) {
     try {
-      return await getUserMediaWithTimeout(
+      const stream = await getUserMediaWithTimeout(
         attemptConstraints[index].constraints,
         compatibility.microphonePermissionTimeoutMs,
       );
+      const success = await buildMicCaptureSuccess(
+        stream,
+        compatibility,
+        index + 1,
+        attemptConstraints[index].label,
+      );
+      attemptSuccesses.push(success);
+
+      if (compatibility.isMobile || success.preferred !== false) {
+        const instrumentedStream = stream as InstrumentedMediaStream;
+        instrumentedStream.__zeemeMicCaptureDebug = {
+          selectedAttemptLabel: success.label,
+          usedFallbackSelection: false,
+          grantedProcessingScore: success.processingScore,
+          grantedProcessingPreferred: success.preferred,
+          attemptSuccesses,
+        };
+        if (bestSuccessfulStream) {
+          stopMediaStreamTracks(bestSuccessfulStream);
+        }
+        return instrumentedStream;
+      }
+
+      const currentScore = success.processingScore ?? Number.POSITIVE_INFINITY;
+      const bestScore =
+        bestSuccessfulAttempt?.processingScore ?? Number.POSITIVE_INFINITY;
+      if (bestSuccessfulStream && currentScore >= bestScore) {
+        stopMediaStreamTracks(stream);
+        continue;
+      }
+      if (bestSuccessfulStream) {
+        stopMediaStreamTracks(bestSuccessfulStream);
+      }
+      bestSuccessfulStream = stream as InstrumentedMediaStream;
+      bestSuccessfulAttempt = success;
     } catch (error) {
       lastError = error;
       attemptFailures.push({
@@ -1652,6 +1841,17 @@ export async function getMicrophoneStreamWithFallback(): Promise<MediaStream> {
           error instanceof Error ? error.message : String(error ?? "unknown"),
       });
     }
+  }
+
+  if (bestSuccessfulStream && bestSuccessfulAttempt) {
+    bestSuccessfulStream.__zeemeMicCaptureDebug = {
+      selectedAttemptLabel: bestSuccessfulAttempt.label,
+      usedFallbackSelection: true,
+      grantedProcessingScore: bestSuccessfulAttempt.processingScore,
+      grantedProcessingPreferred: bestSuccessfulAttempt.preferred,
+      attemptSuccesses,
+    };
+    return bestSuccessfulStream;
   }
 
   const message =
@@ -4881,7 +5081,15 @@ export class GeminiLiveVoiceSession {
       audioTrack && typeof audioTrack.getCapabilities === "function"
         ? sanitizeMediaTrackInfo(audioTrack.getCapabilities())
         : null;
+    const micCaptureDebug = getMicCaptureDebugMetadata(this.mediaStream);
     this.debug("live.audio.track_config_granted", {
+      captureAttemptLabel: micCaptureDebug?.selectedAttemptLabel ?? null,
+      captureAttemptUsedFallbackSelection:
+        micCaptureDebug?.usedFallbackSelection ?? null,
+      grantedProcessingScore: micCaptureDebug?.grantedProcessingScore ?? null,
+      grantedProcessingPreferred:
+        micCaptureDebug?.grantedProcessingPreferred ?? null,
+      captureAttemptSuccesses: micCaptureDebug?.attemptSuccesses ?? null,
       settings: this.debugStateTrackSettings,
       capabilities: this.debugStateTrackCapabilities,
     });

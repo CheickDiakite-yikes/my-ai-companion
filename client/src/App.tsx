@@ -176,6 +176,11 @@ function isTransientLiveReconnectError(error: string | null | undefined): boolea
   return /live (voice|camera) session ended\./i.test(error) && /reconnect to continue/i.test(error);
 }
 
+function isRecoverableLiveCaptureNotice(error: string | null | undefined): boolean {
+  if (!error) return false;
+  return /I couldn't catch that clearly\. Please try again\./i.test(error);
+}
+
 const SOFT_WALKTHROUGH_STORAGE_KEY = "zeeme-soft-walkthrough-v3";
 type SoftWalkthroughStepId =
   | "voice-selector"
@@ -13709,6 +13714,12 @@ function App() {
 
   useEffect(() => {
     if (!liveError) return;
+    if (isRecoverableLiveCaptureNotice(liveError)) {
+      const timeout = window.setTimeout(() => {
+        setLiveError((current) => (current === liveError ? null : current));
+      }, 2400);
+      return () => window.clearTimeout(timeout);
+    }
     if (mode === "text" && isTransientLiveReconnectError(liveError)) {
       setLiveError(null);
       return;
@@ -16962,13 +16973,13 @@ function App() {
           </AnimatePresence>
 
           {mode === "voice" && liveError && (
-            <div className="absolute bottom-24 left-1/2 -translate-x-1/2 z-[90] max-w-[85%] rounded-xl border border-red-400/30 bg-red-500/15 px-3 py-2 text-xs text-red-100 backdrop-blur-sm">
+            <div className="pointer-events-none absolute bottom-32 left-1/2 -translate-x-1/2 z-[90] max-w-[85%] rounded-xl border border-red-400/30 bg-red-500/15 px-3 py-2 text-xs text-red-100 backdrop-blur-sm">
               {liveError}
             </div>
           )}
           {mode === "voice" && !liveError && isLiveConnecting && (
             <div
-              className="absolute bottom-24 left-1/2 -translate-x-1/2 z-[90] max-w-[85%] rounded-xl border px-3 py-2 text-xs backdrop-blur-sm"
+              className="pointer-events-none absolute bottom-32 left-1/2 -translate-x-1/2 z-[90] max-w-[85%] rounded-xl border px-3 py-2 text-xs backdrop-blur-sm"
               style={{
                 borderColor: "var(--app-soft-card-border)",
                 backgroundColor: "var(--app-soft-card-bg)",
