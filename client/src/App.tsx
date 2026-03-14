@@ -1758,6 +1758,19 @@ function formatGoogleEmailParticipantLabel(
   return raw || null;
 }
 
+function resolveLiveGreetingName(
+  displayName: string | null | undefined,
+  firstName: string | null | undefined,
+): string | null {
+  const normalizedDisplayName = displayName?.trim();
+  if (normalizedDisplayName) {
+    const firstToken = normalizedDisplayName.split(/\s+/).find(Boolean) ?? "";
+    if (firstToken) return firstToken.slice(0, 40);
+  }
+  const normalizedFirstName = firstName?.trim();
+  return normalizedFirstName ? normalizedFirstName.slice(0, 40) : null;
+}
+
 function resolveGoogleEmailReplyTargetLabel(preview: GoogleActionPreview): string {
   const recipients = preview.proposedEmail?.to ?? [];
   const participants = preview.emailThread?.participants ?? [];
@@ -15967,6 +15980,11 @@ function App() {
     });
   };
 
+  const liveGreetingName = resolveLiveGreetingName(
+    userProfile?.displayName,
+    user?.firstName,
+  );
+
   const startLiveSession = async (options?: {
     autoResumed?: boolean;
     restoreVideo?: boolean;
@@ -16343,6 +16361,11 @@ function App() {
         runId,
         conversationId,
       });
+      if (!options?.autoResumed) {
+        liveSessionRef.current.requestOpeningGreeting({
+          userName: liveGreetingName,
+        });
+      }
     } catch (error: any) {
       if (preAcquiredMicStream) {
         preAcquiredMicStream.getTracks().forEach(t => t.stop());

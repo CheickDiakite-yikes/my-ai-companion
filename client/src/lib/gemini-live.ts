@@ -524,6 +524,10 @@ const USER_SPEECH_TRANSCRIPT_EXPECTATION_TIMEOUT_MS = parseClientPositiveInt(
   liveClientEnv.VITE_LIVE_AUDIO_TRANSCRIPT_EXPECTATION_TIMEOUT_MS,
   2200,
 );
+const UNUSABLE_USER_SPEECH_ASSISTANT_SUPPRESSION_WINDOW_MS = Math.max(
+  2600,
+  USER_SPEECH_TRANSCRIPT_EXPECTATION_TIMEOUT_MS + 400,
+);
 const MOBILE_USER_SPEECH_THRESHOLD_SCALE = parseClientBoundedNumber(
   liveClientEnv.VITE_LIVE_AUDIO_MOBILE_THRESHOLD_SCALE,
   0.84,
@@ -777,6 +781,29 @@ const LIVE_GOOGLE_PERSONAL_CONTEXT_FUNCTION_DECLARATIONS = [
 
 function normalizeText(input: string | undefined): string {
   return (input ?? "").replace(/\s+/g, " ").trim();
+}
+
+function normalizeLiveGreetingName(input: string | null | undefined): string | null {
+  const normalized = normalizeText(input ?? undefined);
+  if (!normalized) return null;
+  const firstToken = normalized.split(/\s+/).find(Boolean) ?? "";
+  return firstToken.slice(0, 40) || null;
+}
+
+function buildLiveOpeningGreetingPrompt(userName: string | null | undefined): string {
+  const normalizedName = normalizeLiveGreetingName(userName);
+  const nameClause = normalizedName
+    ? ` Use the user's name, "${normalizedName}", naturally if it fits.`
+    : " If no name feels natural, a warm casual hello is enough.";
+  return [
+    "Open this live voice conversation right now with one short warm greeting.",
+    "Vary the greeting naturally from call to call.",
+    nameClause,
+    "Sound like Zee: casual, warm, and conversational.",
+    "Ask one simple follow-up like what's up or how they're doing.",
+    "Keep it to exactly one short sentence.",
+    "Do not mention technical state, being ready, or context loading.",
+  ].join(" ");
 }
 
 function normalizeFunctionCallArgs(args: unknown): Record<string, unknown> {
@@ -1237,8 +1264,10 @@ type UserSpeechWindowDiagnostics = {
   sumRms: number;
   peakRms: number;
   transcriptReceived: boolean;
+  usableTranscriptReceived: boolean;
   transcriptCharCount: number;
   transcriptReceivedAtMs: number | null;
+  assistantOutputSuppressed: boolean;
 };
 
 function sanitizeMediaTrackInfo(input: unknown): Record<string, unknown> | null {
@@ -1563,6 +1592,19 @@ export async function getMicrophoneStreamWithFallback(): Promise<MediaStream> {
       ]
     : [
         {
+          label: "desktop_voice_safe",
+          constraints: {
+            audio: {
+              channelCount: 1,
+              echoCancellation: true,
+              noiseSuppression: false,
+              autoGainControl: true,
+              voiceIsolation: false,
+            } as MediaTrackConstraints,
+            video: false,
+          },
+        },
+        {
           label: "processed_mono",
           constraints: {
             audio: {
@@ -1709,6 +1751,7 @@ export class GeminiLiveVoiceSession {
   private interruptTrigger: LiveInterruptTrigger = "none";
   private lastInterruptReason: string | null = null;
   private lastInterruptRequestedAt: number | null = null;
+  private lastSuppressedUnusableUserSpeechWindowId: number | null = null;
   private manualInterruptSpeechObserved = false;
   private manualInterruptWatchdogTimeout: number | null = null;
   private manualInterruptWatchdogExpiresAt: number | null = null;
@@ -2227,6 +2270,30 @@ export class GeminiLiveVoiceSession {
     await this.startMicrophoneStream(params.preAcquiredMicStream);
   }
 
+  requestOpeningGreeting(params: { userName?: string | null } = {}): boolean {
+    const normalizedName = normalizeLiveGreetingName(params.userName);
+    const sent = this.sendClientContentSafely(
+      {
+        turns: buildLiveOpeningGreetingPrompt(normalizedName),
+        turnComplete: true,
+      },
+      "live.opening_greeting_failed",
+      {
+        userNamePresent: Boolean(normalizedName),
+      },
+    );
+    this.debug(
+      sent
+        ? "live.opening_greeting_requested"
+        : "live.opening_greeting_request_failed",
+      {
+        userName: normalizedName,
+        userNamePresent: Boolean(normalizedName),
+      },
+    );
+    return sent;
+  }
+
   async stop(): Promise<void> {
     this.flushPendingTranscript("user", "turn_complete");
     this.flushPendingTranscript("assistant", "turn_complete");
@@ -2679,8 +2746,10 @@ export class GeminiLiveVoiceSession {
       sumRms: 0,
       peakRms: 0,
       transcriptReceived: false,
+      usableTranscriptReceived: false,
       transcriptCharCount: 0,
       transcriptReceivedAtMs: null,
+      assistantOutputSuppressed: false,
     };
   }
 
@@ -2712,6 +2781,7 @@ export class GeminiLiveVoiceSession {
           peakRms: windowDiag.peakRms,
           averageRms,
           transcriptReceived: windowDiag.transcriptReceived,
+          usableTranscriptReceived: windowDiag.usableTranscriptReceived,
           transcriptCharCount: windowDiag.transcriptCharCount,
           transcriptLatencyMs,
         },
@@ -2724,9 +2794,14 @@ export class GeminiLiveVoiceSession {
     this.pendingUserSpeechWindowTimeouts.set(windowDiag.id, timeout);
   }
 
-  private markUserSpeechWindowTranscriptReceived(textLength: number): void {
+  private markUserSpeechWindowTranscriptReceived(
+    textLength: number,
+    usable: boolean,
+  ): void {
     if (this.activeUserSpeechWindow) {
       this.activeUserSpeechWindow.transcriptReceived = true;
+      this.activeUserSpeechWindow.usableTranscriptReceived =
+        this.activeUserSpeechWindow.usableTranscriptReceived || usable;
       this.activeUserSpeechWindow.transcriptCharCount += textLength;
       this.activeUserSpeechWindow.transcriptReceivedAtMs = Date.now();
       return;
@@ -2738,8 +2813,37 @@ export class GeminiLiveVoiceSession {
       return;
     }
     pendingWindow.transcriptReceived = true;
+    pendingWindow.usableTranscriptReceived =
+      pendingWindow.usableTranscriptReceived || usable;
     pendingWindow.transcriptCharCount += textLength;
     pendingWindow.transcriptReceivedAtMs = Date.now();
+  }
+
+  private findPendingUnusableUserSpeechWindow(): UserSpeechWindowDiagnostics | null {
+    const now = Date.now();
+    for (
+      let index = this.pendingUserSpeechWindows.length - 1;
+      index >= 0;
+      index -= 1
+    ) {
+      const windowDiag = this.pendingUserSpeechWindows[index];
+      if (
+        !windowDiag.transcriptReceived ||
+        windowDiag.usableTranscriptReceived ||
+        windowDiag.assistantOutputSuppressed
+      ) {
+        continue;
+      }
+      if (
+        typeof windowDiag.endedAtMs === "number" &&
+        now - windowDiag.endedAtMs >
+          UNUSABLE_USER_SPEECH_ASSISTANT_SUPPRESSION_WINDOW_MS
+      ) {
+        continue;
+      }
+      return windowDiag;
+    }
+    return null;
   }
 
   private syncSpeechStateFromActivity(reason: string): void {
@@ -3733,7 +3837,10 @@ export class GeminiLiveVoiceSession {
       turns: string;
       turnComplete: boolean;
     },
-    failureEvent: "live.web_search.nudge_failed" | "live.google_context.nudge_failed",
+    failureEvent:
+      | "live.web_search.nudge_failed"
+      | "live.google_context.nudge_failed"
+      | "live.opening_greeting_failed",
     failureMetadata: Record<string, unknown> = {},
   ): boolean {
     if (!this.isSessionSocketReadyForSend({ source: "client_content", ...failureMetadata })) {
@@ -4956,7 +5063,15 @@ export class GeminiLiveVoiceSession {
       });
     }
 
-    if (audioPartCount > 0 || Boolean(serverContent.outputTranscription?.text)) {
+    const unusableUserSpeechWindow = this.findPendingUnusableUserSpeechWindow();
+    const shouldDropForUnusableUserSpeech =
+      Boolean(unusableUserSpeechWindow) &&
+      (audioPartCount > 0 || Boolean(serverContent.outputTranscription?.text));
+
+    if (
+      !shouldDropForUnusableUserSpeech &&
+      (audioPartCount > 0 || Boolean(serverContent.outputTranscription?.text))
+    ) {
       this.clearAssistantTurnIdleReleaseTimeout();
       this.lastAssistantActivityAtMs = Date.now();
       this.assistantTurnActive = true;
@@ -5034,7 +5149,33 @@ export class GeminiLiveVoiceSession {
     }
 
     const shouldDropAssistantOutput =
-      this.interruptPending || interruptedByClientRequest;
+      this.interruptPending ||
+      interruptedByClientRequest ||
+      shouldDropForUnusableUserSpeech;
+    if (shouldDropForUnusableUserSpeech && unusableUserSpeechWindow) {
+      unusableUserSpeechWindow.assistantOutputSuppressed = true;
+      this.clearAssistantTurnIdleReleaseTimeout();
+      this.assistantTurnActive = false;
+      this.assistantTurnReleaseAtMs = 0;
+      this.clearPlaybackQueue();
+      this.debug("live.assistant.output_dropped_unusable_user_transcript", {
+        windowId: unusableUserSpeechWindow.id,
+        transcriptCharCount: unusableUserSpeechWindow.transcriptCharCount,
+        audioPartCount,
+        hasOutputTranscription: Boolean(serverContent.outputTranscription?.text),
+      });
+      if (
+        this.lastSuppressedUnusableUserSpeechWindowId !==
+        unusableUserSpeechWindow.id
+      ) {
+        this.lastSuppressedUnusableUserSpeechWindowId =
+          unusableUserSpeechWindow.id;
+        this.emitError(
+          new Error("I couldn't catch that clearly. Please try again."),
+        );
+      }
+      this.syncSpeechStateFromActivity("unusable_user_transcript");
+    }
     if (shouldDropAssistantOutput && (audioPartCount > 0 || Boolean(serverContent.outputTranscription?.text))) {
       this.debug("live.assistant.output_dropped_after_interrupt", {
         audioPartCount,
@@ -5186,8 +5327,18 @@ export class GeminiLiveVoiceSession {
 
     const text = normalizeText(transcript.text);
     if (!text) return;
+    const userNonSpeechTag =
+      sender === "user" && isNonSpeechTranscriptTag(text);
     if (sender === "user") {
-      this.markUserSpeechWindowTranscriptReceived(text.length);
+      this.markUserSpeechWindowTranscriptReceived(text.length, !userNonSpeechTag);
+      if (userNonSpeechTag) {
+        this.debug("live.transcript.user_non_speech_tag_observed", {
+          textLength: text.length,
+          tag: text,
+          finished: Boolean(transcript.finished),
+        });
+        return;
+      }
     }
     const activeGoogleActionContext = this.callbacks.getGoogleActionContext?.() ?? null;
     const personalContextIntent = classifyLivePersonalContextIntent(
