@@ -14,6 +14,7 @@ WAIT_SECONDS="${WAIT_SECONDS:-25}"
 START_SERVER="${START_SERVER:-1}"
 APPLY_SCHEMA="${APPLY_SCHEMA:-1}"
 PLAYWRIGHT_OUTPUT_DIR="${PLAYWRIGHT_OUTPUT_DIR:-output/playwright/google-personal-context}"
+PLAYWRIGHT_SCENARIO="${PLAYWRIGHT_SCENARIO:-all}"
 
 if [[ -f .env ]]; then
   set -a
@@ -173,6 +174,7 @@ npx tsx script/google-personal-context-playwright-check.ts \
   --base-url "$BASE_URL" \
   --email "$EMAIL" \
   --password "$PASSWORD" \
-  --output-dir "$PLAYWRIGHT_OUTPUT_DIR"
+  --output-dir "$PLAYWRIGHT_OUTPUT_DIR" \
+  --scenario "$PLAYWRIGHT_SCENARIO"
 
 log "PASS"

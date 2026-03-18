@@ -421,24 +421,49 @@ if [[ "$PATCHED_CROSS_CHAT" != "false" ]]; then
   exit 35
 fi
 
-MEMORY_SEED_BODY="$(new_tmp)"
-MEMORY_SEED_STATUS="$(curl -sS -w "%{http_code}" -D "$HEADERS_FILE" -o "$MEMORY_SEED_BODY" -b "$COOKIE_FILE" -c "$COOKIE_FILE" \
-  -H "Content-Type: application/json" \
-  -X POST "${BASE_URL}/api/conversations/${CONV_ID}/messages" \
-  --data '{"sender":"user","text":"I love co-op puzzle games and my goal is to ship a prototype next week."}')"
-if [[ "$MEMORY_SEED_STATUS" != "201" ]]; then
-  echo "[local-e2e] memory_seed_message_failed status=${MEMORY_SEED_STATUS} body=$(cat "$MEMORY_SEED_BODY")"
-  exit 36
-fi
+MEMORY_SEED_MESSAGES=(
+  "I love co-op puzzle games and my goal is to ship a prototype next week."
+  "I usually build prototypes late at night when it is quiet."
+  "I prefer concise check-ins instead of long status updates."
+  "Playful encouragement helps me stay motivated when I am stressed."
+  "I am collaborating with Maya on this prototype."
+  "We are focusing on a co-op puzzle mechanic."
+  "I keep Wednesday nights open for deep work."
+  "I want Zee to remember that this prototype matters a lot to me."
+  "I get stressed when the scope keeps changing."
+  "My focus this month is finishing a co-op puzzle game prototype."
+)
 
-MEMORY_ITEMS_BODY="$(new_tmp)"
-MEMORY_ITEMS_STATUS="$(curl -sS -w "%{http_code}" -D "$HEADERS_FILE" -o "$MEMORY_ITEMS_BODY" -b "$COOKIE_FILE" -c "$COOKIE_FILE" \
-  "${BASE_URL}/api/memory/items?limit=20")"
-if [[ "$MEMORY_ITEMS_STATUS" != "200" ]]; then
-  echo "[local-e2e] memory_items_list_failed status=${MEMORY_ITEMS_STATUS} body=$(cat "$MEMORY_ITEMS_BODY")"
-  exit 37
-fi
-MEMORY_ITEM_ID="$(parse_json "$MEMORY_ITEMS_BODY" "items.0.id")"
+for MEMORY_SEED_TEXT in "${MEMORY_SEED_MESSAGES[@]}"; do
+  MEMORY_SEED_BODY="$(new_tmp)"
+  MEMORY_SEED_PAYLOAD="$(printf '{"sender":"user","text":"%s"}' "$MEMORY_SEED_TEXT")"
+  MEMORY_SEED_STATUS="$(curl -sS -w "%{http_code}" -D "$HEADERS_FILE" -o "$MEMORY_SEED_BODY" -b "$COOKIE_FILE" -c "$COOKIE_FILE" \
+    -H "Content-Type: application/json" \
+    -X POST "${BASE_URL}/api/conversations/${CONV_ID}/messages" \
+    --data "$MEMORY_SEED_PAYLOAD")"
+  if [[ "$MEMORY_SEED_STATUS" != "201" ]]; then
+    echo "[local-e2e] memory_seed_message_failed status=${MEMORY_SEED_STATUS} body=$(cat "$MEMORY_SEED_BODY")"
+    exit 36
+  fi
+done
+
+MEMORY_ITEMS_BODY=""
+MEMORY_ITEMS_STATUS=""
+MEMORY_ITEM_ID=""
+for attempt in {1..20}; do
+  MEMORY_ITEMS_BODY="$(new_tmp)"
+  MEMORY_ITEMS_STATUS="$(curl -sS -w "%{http_code}" -D "$HEADERS_FILE" -o "$MEMORY_ITEMS_BODY" -b "$COOKIE_FILE" -c "$COOKIE_FILE" \
+    "${BASE_URL}/api/memory/items?limit=20")"
+  if [[ "$MEMORY_ITEMS_STATUS" != "200" ]]; then
+    echo "[local-e2e] memory_items_list_failed status=${MEMORY_ITEMS_STATUS} body=$(cat "$MEMORY_ITEMS_BODY")"
+    exit 37
+  fi
+  MEMORY_ITEM_ID="$(parse_json "$MEMORY_ITEMS_BODY" "items.0.id" 2>/dev/null || true)"
+  if [[ -n "$MEMORY_ITEM_ID" && "$MEMORY_ITEM_ID" != "null" ]]; then
+    break
+  fi
+  sleep 1
+done
 if [[ -z "$MEMORY_ITEM_ID" || "$MEMORY_ITEM_ID" == "null" ]]; then
   echo "[local-e2e] memory_items_empty body=$(cat "$MEMORY_ITEMS_BODY")"
   exit 38

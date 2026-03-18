@@ -14,11 +14,16 @@ import {
   type QuotaSummary,
 } from "./storage";
 import {
-  generateEmbedding,
-  searchMemoryByEmbedding,
   getRecentConversationMessages,
   backfillEmbeddings,
+  generateEmbedding,
+  searchMemoryByEmbedding,
 } from "./memory";
+import {
+  retrieveFusedMemoryContext,
+} from "./memory-retrieval-v2";
+import type { StructuredGoogleActionMemoryHints } from "./memory-query-planner";
+import { shouldPersistDurableMemorySummary } from "./memory-contracts";
 import { setupAuth, registerAuthRoutes, isAuthenticated } from "./auth";
 import { db } from "./db";
 import { users } from "@shared/models/auth";
@@ -981,6 +986,10 @@ const ENABLE_BETA_QUOTAS = parseBooleanFlag(
 );
 const ENABLE_LIVE_MEMORY_CONTEXT = parseBooleanFlag(
   process.env.ENABLE_LIVE_MEMORY_CONTEXT,
+  true,
+);
+const ENABLE_MEMORY_CONTEXT_QUERY_FUSION_V2 = parseBooleanFlag(
+  process.env.ENABLE_MEMORY_CONTEXT_QUERY_FUSION_V2,
   true,
 );
 const ENABLE_AGENT_PROACTIVE_OFFERS = parseBooleanFlag(
@@ -3085,6 +3094,143 @@ function buildProfileMemoryLines(
   return sanitizeMemoryText(raw, memoryPolicy);
 }
 
+async function buildLegacyCrossChatMemoryLines(params: {
+  userId: string;
+  activeHistory: MemorySourceMessage[];
+  crossChatMaxMessages: number;
+  memoryPolicy: LiveMemoryPolicy;
+}): Promise<{
+  semanticRecallLines: string[];
+  durableMemoryLines: string[];
+  redactionCount: number;
+}> {
+  const semanticRecallLines: string[] = [];
+  const durableMemoryLines: string[] = [];
+  let redactionCount = 0;
+
+  const recentText = params.activeHistory
+    .slice(-8)
+    .map((message) => message.text)
+    .join(" ")
+    .slice(0, 1500);
+
+  let queryEmbedding: number[] | null = null;
+  try {
+    queryEmbedding =
+      recentText.length > 10 ? await generateEmbedding(recentText) : null;
+  } catch {
+    queryEmbedding = null;
+  }
+
+  if (queryEmbedding) {
+    try {
+      const semanticResults = await searchMemoryByEmbedding({
+        userId: params.userId,
+        queryEmbedding,
+        limit: 8,
+        onlyKinds: ["summary"],
+      });
+
+      for (const entry of semanticResults) {
+        if (!shouldPersistDurableMemorySummary(entry.summary)) continue;
+        const sanitized = sanitizeMemoryText(entry.summary, params.memoryPolicy);
+        redactionCount += sanitized.redactionCount;
+        if (!sanitized.text) continue;
+        semanticRecallLines.push(
+          `- [recalled memory, relevance ${Math.round(entry.similarity * 100)}%] ${truncateMemoryText(sanitized.text, 200)}`,
+        );
+      }
+    } catch {
+      // semantic search is best-effort
+    }
+
+    try {
+      const semanticDurable = await searchMemoryByEmbedding({
+        userId: params.userId,
+        queryEmbedding,
+        limit: 10,
+        excludeKinds: ["summary"],
+      });
+
+      const kindCounts = new Map<string, number>();
+      for (const entry of semanticDurable) {
+        if (durableMemoryLines.length >= 12) break;
+        const kindCount = kindCounts.get(entry.kind) ?? 0;
+        if (kindCount >= 3) continue;
+        if (!shouldPersistDurableMemorySummary(entry.summary)) continue;
+
+        const sanitized = sanitizeMemoryText(entry.summary, params.memoryPolicy);
+        redactionCount += sanitized.redactionCount;
+        if (!sanitized.text) continue;
+
+        durableMemoryLines.push(
+          `- [${entry.kind}] ${truncateMemoryText(sanitized.text, 170)}`,
+        );
+        kindCounts.set(entry.kind, kindCount + 1);
+      }
+    } catch {
+      // durable memory search is best-effort
+    }
+  }
+
+  if (durableMemoryLines.length < 4) {
+    const fallbackItems = await storage.getUserMemoryItems({
+      userId: params.userId,
+      limit: Math.min(120, Math.max(params.crossChatMaxMessages * 2, 24)),
+      includeArchived: false,
+    });
+
+    const activeKeywords = new Set(
+      params.activeHistory.flatMap((message) => extractKeywords(message.text)),
+    );
+
+    const rankedDurable = fallbackItems
+      .filter((item) => item.kind !== "summary")
+      .filter((item) => shouldPersistDurableMemorySummary(item.summary))
+      .map((item) => {
+        const relevance = scoreRelevance(item.summary, activeKeywords);
+        const lastTouchedAt = item.lastReinforcedAt ?? item.updatedAt ?? item.createdAt;
+        const ageDays = Math.max(
+          0,
+          (Date.now() - (lastTouchedAt?.getTime() ?? Date.now())) /
+            (24 * 60 * 60 * 1000),
+        );
+        const recencyBonus = Math.max(0, 2.5 - ageDays / 14);
+        const confidenceBonus = Math.min(3, Math.max(0, item.confidence / 40));
+        const score = relevance * 4 + recencyBonus + confidenceBonus;
+        return { item, score, relevance };
+      })
+      .sort((a, b) => b.score - a.score);
+
+    const existingSummaries = new Set(
+      durableMemoryLines.map((line) => line.toLowerCase()),
+    );
+    const kindCounts = new Map<string, number>();
+    for (const entry of rankedDurable) {
+      if (durableMemoryLines.length >= 12) break;
+      if (entry.relevance <= 0 && durableMemoryLines.length >= 4) continue;
+      const kindCount = kindCounts.get(entry.item.kind) ?? 0;
+      if (kindCount >= 3) continue;
+
+      const sanitized = sanitizeMemoryText(entry.item.summary, params.memoryPolicy);
+      redactionCount += sanitized.redactionCount;
+      if (!sanitized.text) continue;
+
+      const line = `- [${entry.item.kind}] ${truncateMemoryText(sanitized.text, 170)}`;
+      if (existingSummaries.has(line.toLowerCase())) continue;
+
+      durableMemoryLines.push(line);
+      kindCounts.set(entry.item.kind, kindCount + 1);
+    }
+  }
+
+  return {
+    semanticRecallLines,
+    durableMemoryLines,
+    redactionCount,
+  };
+}
+
 async function withTimeout<T>(
   work: Promise<T>,
   timeoutMs: number,
@@ -3179,122 +3325,77 @@ async function buildLiveMemoryContext(params: {
     })
     .filter((line): line is string => Boolean(line));
 
+  let googleConversationState: GoogleConversationState | null = null;
+  try {
+    googleConversationState = resolveLatestGoogleConversationState(
+      await storage.getMessages(params.conversationId),
+    );
+  } catch {
+    googleConversationState = resolveLatestGoogleConversationState(recentMessages);
+  }
+
   const semanticRecallLines: string[] = [];
   const durableMemoryLines: string[] = [];
+  const structuredTaskStateLines: string[] = [];
+
+  for (const rawLine of buildStructuredGoogleActionStateLines(googleConversationState)) {
+    const sanitized = sanitizeMemoryText(rawLine, params.memoryPolicy);
+    redactionCount += sanitized.redactionCount;
+    if (!sanitized.text) continue;
+    structuredTaskStateLines.push(sanitized.text);
+  }
 
   if (params.includeCrossChat && params.crossChatMaxMessages > 0) {
-    const recentText = activeHistory
-      .slice(-8)
-      .map((m) => m.text)
-      .join(" ")
-      .slice(0, 1500);
-
-    let queryEmbedding: number[] | null = null;
-    try {
-      queryEmbedding = recentText.length > 10 ? await generateEmbedding(recentText) : null;
-    } catch {
-      queryEmbedding = null;
-    }
-
-    if (queryEmbedding) {
+    let shouldUseLegacyFallback = !ENABLE_MEMORY_CONTEXT_QUERY_FUSION_V2;
+    if (ENABLE_MEMORY_CONTEXT_QUERY_FUSION_V2) {
       try {
-        const semanticResults = await searchMemoryByEmbedding({
+        const fusedContext = await retrieveFusedMemoryContext({
           userId: params.userId,
-          queryEmbedding,
-          limit: 8,
-          onlyKinds: ["summary"],
+          activeHistory,
+          crossChatMaxMessages: params.crossChatMaxMessages,
+          googleHints: buildStructuredGoogleActionMemoryHints(googleConversationState),
         });
 
-        for (const entry of semanticResults) {
+        for (const entry of fusedContext.summaryCandidates) {
           const sanitized = sanitizeMemoryText(entry.summary, params.memoryPolicy);
           redactionCount += sanitized.redactionCount;
           if (!sanitized.text) continue;
+          const promptRelevance = Math.max(
+            1,
+            Math.min(99, Math.round(entry.fusedScore * 100)),
+          );
           semanticRecallLines.push(
-            `- [recalled memory, relevance ${Math.round(entry.similarity * 100)}%] ${truncateMemoryText(sanitized.text, 200)}`,
+            `- [recalled memory, ${entry.matchedQueryKinds.join(", ")}, relevance ${promptRelevance}%] ${truncateMemoryText(sanitized.text, 200)}`,
           );
         }
-      } catch {
-        // semantic search is best-effort
-      }
 
-      try {
-        const semanticDurable = await searchMemoryByEmbedding({
-          userId: params.userId,
-          queryEmbedding,
-          limit: 10,
-          excludeKinds: ["summary"],
-        });
-
-        const kindCounts = new Map<string, number>();
-        for (const entry of semanticDurable) {
-          if (durableMemoryLines.length >= 12) break;
-          const kindCount = kindCounts.get(entry.kind) ?? 0;
-          if (kindCount >= 3) continue;
-
+        for (const entry of fusedContext.durableCandidates) {
           const sanitized = sanitizeMemoryText(entry.summary, params.memoryPolicy);
           redactionCount += sanitized.redactionCount;
           if (!sanitized.text) continue;
-
           durableMemoryLines.push(
             `- [${entry.kind}] ${truncateMemoryText(sanitized.text, 170)}`,
           );
-          kindCounts.set(entry.kind, kindCount + 1);
         }
+
+        shouldUseLegacyFallback =
+          semanticRecallLines.length === 0 && durableMemoryLines.length === 0;
       } catch {
-        // durable memory search is best-effort
+        shouldUseLegacyFallback = true;
       }
     }
 
-    if (durableMemoryLines.length < 4) {
-      const fallbackItems = await storage.getUserMemoryItems({
+    if (shouldUseLegacyFallback) {
+      const legacyLines = await buildLegacyCrossChatMemoryLines({
         userId: params.userId,
-        limit: Math.min(120, Math.max(params.crossChatMaxMessages * 2, 24)),
-        includeArchived: false,
+        activeHistory,
+        crossChatMaxMessages: params.crossChatMaxMessages,
+        memoryPolicy: params.memoryPolicy,
       });
-
-      const activeKeywords = new Set(
-        activeHistory.flatMap((message) => extractKeywords(message.text)),
-      );
-
-      const rankedDurable = fallbackItems
-        .filter((item) => item.kind !== "summary")
-        .map((item) => {
-          const relevance = scoreRelevance(item.summary, activeKeywords);
-          const lastTouchedAt = item.lastReinforcedAt ?? item.updatedAt ?? item.createdAt;
-          const ageDays = Math.max(
-            0,
-            (Date.now() - (lastTouchedAt?.getTime() ?? Date.now())) /
-              (24 * 60 * 60 * 1000),
-          );
-          const recencyBonus = Math.max(0, 2.5 - ageDays / 14);
-          const confidenceBonus = Math.min(3, Math.max(0, item.confidence / 40));
-          const score = relevance * 4 + recencyBonus + confidenceBonus;
-          return { item, score, relevance };
-        })
-        .sort((a, b) => b.score - a.score);
-
-      const existingSummaries = new Set(
-        durableMemoryLines.map((l) => l.toLowerCase()),
-      );
-      const kindCounts = new Map<string, number>();
-      for (const entry of rankedDurable) {
-        if (durableMemoryLines.length >= 12) break;
-        if (entry.relevance <= 0 && durableMemoryLines.length >= 4) continue;
-        const kindCount = kindCounts.get(entry.item.kind) ?? 0;
-        if (kindCount >= 3) continue;
-
-        const sanitized = sanitizeMemoryText(entry.item.summary, params.memoryPolicy);
-        redactionCount += sanitized.redactionCount;
-        if (!sanitized.text) continue;
-
-        const line = `- [${entry.item.kind}] ${truncateMemoryText(sanitized.text, 170)}`;
-        if (existingSummaries.has(line.toLowerCase())) continue;
-
-        durableMemoryLines.push(line);
-        kindCounts.set(entry.item.kind, kindCount + 1);
-      }
+      semanticRecallLines.push(...legacyLines.semanticRecallLines);
+      durableMemoryLines.push(...legacyLines.durableMemoryLines);
+      redactionCount += legacyLines.redactionCount;
     }
-
   }
 
   const profileFacts = buildProfileMemoryLines(
@@ -3309,6 +3410,13 @@ async function buildLiveMemoryContext(params: {
   sections.push(
     `[LIVE TIME ANCHOR — current time is ${liveSnap.weekday}, ${liveSnap.date} at ${liveSnap.time} ${liveSnap.timeZone}. Any earlier timestamps in the conversation below are historical — always use THIS time for "now".]`,
   );
+  if (structuredTaskStateLines.length > 0) {
+    sections.push(
+      ["Structured Task State (authoritative, not memory):", ...structuredTaskStateLines].join(
+        "\n",
+      ),
+    );
+  }
   if (profileFacts.text.length > 0) {
     sections.push(["User Profile Facts:", profileFacts.text].join("\n"));
   }
@@ -7618,6 +7726,171 @@ function resolveLatestGoogleConversationState(messages: Message[]): GoogleConver
   }
 
   return state;
+}
+
+function pushUniqueGoogleMemoryHint(target: string[], value: string | null | undefined) {
+  const normalized = normalizeMemoryText(value ?? "");
+  if (!normalized) return;
+  if (target.includes(normalized)) return;
+  target.push(normalized);
+}
+
+function buildStructuredGoogleActionMemoryHints(
+  state: GoogleConversationState | null,
+): StructuredGoogleActionMemoryHints | null {
+  if (!state) return null;
+
+  const entityHints: string[] = [];
+
+  if (state.composeSession?.session.recipientEmail) {
+    pushUniqueGoogleMemoryHint(entityHints, state.composeSession.session.recipientEmail);
+  }
+  if (state.composeSession?.session.subject) {
+    pushUniqueGoogleMemoryHint(entityHints, state.composeSession.session.subject);
+  }
+  if (state.calendarSession?.session.title) {
+    pushUniqueGoogleMemoryHint(entityHints, state.calendarSession.session.title);
+  }
+  if (state.pendingTask?.preview?.proposedEmail?.to?.length) {
+    for (const recipient of state.pendingTask.preview.proposedEmail.to) {
+      pushUniqueGoogleMemoryHint(entityHints, recipient);
+    }
+  }
+  if (state.pendingTask?.preview?.proposedEmail?.subject) {
+    pushUniqueGoogleMemoryHint(entityHints, state.pendingTask.preview.proposedEmail.subject);
+  }
+  if (state.pendingTask?.preview?.proposedCalendar?.title) {
+    pushUniqueGoogleMemoryHint(entityHints, state.pendingTask.preview.proposedCalendar.title);
+  }
+  if (state.recentEmailTask?.preview?.proposedEmail?.to?.length) {
+    for (const recipient of state.recentEmailTask.preview.proposedEmail.to) {
+      pushUniqueGoogleMemoryHint(entityHints, recipient);
+    }
+  }
+  if (state.recentEmailTask?.preview?.proposedEmail?.subject) {
+    pushUniqueGoogleMemoryHint(entityHints, state.recentEmailTask.preview.proposedEmail.subject);
+  }
+  if (state.recentCalendarTask?.preview?.proposedCalendar?.title) {
+    pushUniqueGoogleMemoryHint(entityHints, state.recentCalendarTask.preview.proposedCalendar.title);
+  }
+  for (const candidate of state.emailDraftCandidates.slice(0, 2)) {
+    if (candidate.preview.proposedEmail?.to?.length) {
+      for (const recipient of candidate.preview.proposedEmail.to) {
+        pushUniqueGoogleMemoryHint(entityHints, recipient);
+      }
+    }
+    if (candidate.preview.proposedEmail?.subject) {
+      pushUniqueGoogleMemoryHint(entityHints, candidate.preview.proposedEmail.subject);
+    }
+  }
+  for (const candidate of state.calendarEventCandidates.slice(0, 2)) {
+    if (candidate.preview.proposedCalendar?.title) {
+      pushUniqueGoogleMemoryHint(entityHints, candidate.preview.proposedCalendar.title);
+    }
+  }
+
+  return {
+    activeConnector:
+      state.pendingTask?.preview?.connector ??
+      (state.composeSession
+        ? "gmail"
+        : state.calendarSession
+          ? "calendar"
+          : state.recentEmailTask
+            ? "gmail"
+            : state.recentCalendarTask
+              ? "calendar"
+              : null),
+    hasPendingApproval: Boolean(state.pendingTask),
+    hasComposeSession: Boolean(state.composeSession),
+    hasCalendarSession: Boolean(state.calendarSession),
+    hasActionAmbiguity: Boolean(state.actionAmbiguity),
+    entityHints: entityHints.slice(0, 6),
+  };
+}
+
+function buildStructuredGoogleActionStateLines(
+  state: GoogleConversationState | null,
+): string[] {
+  if (!state) return [];
+
+  if (state.actionAmbiguity) {
+    return [
+      `- ${state.actionAmbiguity.prompt.connector === "gmail" ? "Gmail" : "Calendar"} action is waiting on the user to choose one of ${state.actionAmbiguity.prompt.candidates.length} recent candidates before continuing.`,
+    ];
+  }
+
+  if (state.pendingTask?.preview?.connector === "gmail") {
+    const recipients =
+      state.pendingTask.preview.proposedEmail?.to
+        ?.filter((value) => value.trim().length > 0)
+        .slice(0, 2)
+        .join(", ") ?? "the selected recipient";
+    const subject = state.pendingTask.preview.proposedEmail?.subject?.trim();
+    return [
+      subject
+        ? `- Gmail action awaiting approval for a draft to ${recipients} with subject ${JSON.stringify(subject)}.`
+        : `- Gmail action awaiting approval for a draft to ${recipients}.`,
+    ];
+  }
+
+  if (state.pendingTask?.preview?.connector === "calendar") {
+    const title =
+      state.pendingTask.preview.proposedCalendar?.title ??
+      state.pendingTask.preview.calendarEvent?.title ??
+      "the current event";
+    const start =
+      state.pendingTask.preview.proposedCalendar?.startTime ??
+      state.pendingTask.preview.calendarEvent?.startTime ??
+      null;
+    const end =
+      state.pendingTask.preview.proposedCalendar?.endTime ??
+      state.pendingTask.preview.calendarEvent?.endTime ??
+      null;
+    const when = formatGoogleCalendarCandidateDateRange(start, end);
+    return [
+      when
+        ? `- Calendar action awaiting approval for ${title} at ${when}.`
+        : `- Calendar action awaiting approval for ${title}.`,
+    ];
+  }
+
+  if (state.composeSession) {
+    const recipient = state.composeSession.session.recipientEmail?.trim() ?? null;
+    const subject = state.composeSession.session.subject?.trim() ?? null;
+    if (state.composeSession.session.status === "awaiting_recipient") {
+      return [
+        subject
+          ? `- Gmail compose session is active. A subject is set to ${JSON.stringify(subject)}, and Zee is still waiting for the recipient.`
+          : "- Gmail compose session is active and Zee is still waiting for the recipient.",
+      ];
+    }
+    return [
+      recipient && subject
+        ? `- Gmail compose session is active for ${recipient} with subject ${JSON.stringify(subject)}. Zee is waiting for the body.`
+        : recipient
+          ? `- Gmail compose session is active for ${recipient}. Zee is waiting for the subject and body.`
+          : "- Gmail compose session is active and Zee is waiting for the remaining draft details.",
+    ];
+  }
+
+  if (state.calendarSession) {
+    const title = state.calendarSession.session.title?.trim() ?? null;
+    if (state.calendarSession.session.status === "awaiting_datetime") {
+      return [
+        title
+          ? `- Calendar create session is active for ${JSON.stringify(title)} and Zee is still waiting for the date and time.`
+          : "- Calendar create session is active and Zee is still waiting for the date and time.",
+      ];
+    }
+    return [
+      state.calendarSession.session.startTime && state.calendarSession.session.endTime
+        ? `- Calendar create session is active with timing set. Zee is still waiting for the title.`
+        : "- Calendar create session is active and Zee is still waiting for the remaining event details.",
+    ];
+  }
+
+  return [];
 }
 
 function normalizeGoogleActionControlText(text: string): string {
@@ -15164,9 +15437,16 @@ export async function registerRoutes(
             userText: parsed.text,
           })
         : null;
+      const shouldReserveTurnForGoogleAction =
+        ENABLE_GOOGLE_PERSONAL_CONTEXT_WRITES &&
+        shouldBypassGenericAgentTaskForGoogleAction({
+          text: parsed.text,
+          conversationMessages: existingConversationMessages,
+        });
       const shouldForceOfferFlow =
         ENABLE_AGENTIC_CREATIONS &&
         Boolean(explicitOfferOpportunity) &&
+        !shouldReserveTurnForGoogleAction &&
         !activeIntentSession &&
         !offerAcceptedByText &&
         !offerDeclinedByText;
@@ -15484,13 +15764,7 @@ export async function registerRoutes(
 
       if (
         effectiveTurnIntent === "agent_task" &&
-        !(
-          ENABLE_GOOGLE_PERSONAL_CONTEXT_WRITES &&
-          shouldBypassGenericAgentTaskForGoogleAction({
-            text: parsed.text,
-            conversationMessages: existingConversationMessages,
-          })
-        )
+        !shouldReserveTurnForGoogleAction
       ) {
         const taskKind = activeIntentSession
           ? coerceTaskKind(activeIntentSession.taskKind)
@@ -16722,9 +16996,16 @@ export async function registerRoutes(
       const offerDeclinedByText = Boolean(
         pendingOfferResolved && isOfferDeclineMessage(parsed.text),
       );
+      const shouldReserveTurnForGoogleAction =
+        ENABLE_GOOGLE_PERSONAL_CONTEXT_WRITES &&
+        shouldBypassGenericAgentTaskForGoogleAction({
+          text: parsed.text,
+          conversationMessages: existingConversationMessages,
+        });
       const shouldForceOfferFlow =
         ENABLE_AGENTIC_CREATIONS &&
         Boolean(explicitOfferOpportunity) &&
+        !shouldReserveTurnForGoogleAction &&
         !activeIntentSession &&
         !offerAcceptedByText &&
         !offerDeclinedByText;
@@ -17007,13 +17288,7 @@ export async function registerRoutes(
 
       if (
         effectiveTurnIntent === "agent_task" &&
-        !(
-          ENABLE_GOOGLE_PERSONAL_CONTEXT_WRITES &&
-          shouldBypassGenericAgentTaskForGoogleAction({
-            text: parsed.text,
-            conversationMessages: existingConversationMessages,
-          })
-        )
+        !shouldReserveTurnForGoogleAction
       ) {
         trace(req, "chat.stream.agent_task.started", {
           conversationId: conversation.id,

@@ -89,6 +89,11 @@ Ship a production-grade multimodal AI companion where voice and text share one m
   - `message_purpose` filter prevents agent UI rows from polluting model memory
   - optional backfill script added for legacy rows
   - timezone-aware calendar context injection added for text + live prompts
+  - additive memory retrieval v2.3 landed:
+    - explicit query planning over existing stores
+    - fused ranking across semantic summary, semantic durable, and lexical fallback lanes
+    - Google Action Memory Contract keeps active Gmail/Calendar task truth authoritative
+    - transient Google workflow states like `needs approval`, `draft saved`, and `event created` are filtered out of durable memory
 - Live voice reliability baseline remained in place:
   - `START_OF_ACTIVITY_INTERRUPTS` activity handling with manual client activity signaling
   - conservative proactivity defaults

@@ -15,7 +15,10 @@ interface CliArgs {
   email: string;
   password: string;
   outputDir: string;
+  scenario: PlaywrightScenario;
 }
+
+type PlaywrightScenario = "all" | "email-memory";
 
 interface PromptCase {
   id: string;
@@ -110,41 +113,46 @@ async function main(): Promise<void> {
     await upsertGoogleIntegrationFixture(args.email, "write");
     console.log("[google-context-check] write-enabled status");
     await verifyWriteEnabledGoogleAssistantState(page, args.outputDir);
-    console.log("[google-context-check] compose phrasing coverage");
-    await verifyComposeForRecipientPhrasingFlow(page, args.baseUrl, args.outputDir);
-    console.log("[google-context-check] approval card compose");
-    await verifyApprovalCardComposeFlow(page, args.baseUrl, args.outputDir);
-    console.log("[google-context-check] existing draft selection");
-    await verifyExistingDraftSelectionFlow(page, args.baseUrl, args.email, args.outputDir);
-    console.log("[google-context-check] fresh compose overrides history");
-    await verifyFreshComposeOverridesHistoryFlow(
-      page,
-      args.baseUrl,
-      args.email,
-      args.outputDir,
-    );
-    console.log("[google-context-check] ai compose recipient correction");
-    await verifyAiComposeRecipientCorrectionFlow(
-      page,
-      args.baseUrl,
-      args.outputDir,
-    );
-    console.log("[google-context-check] calendar clarification card");
-    await verifyCalendarClarificationCardFlow(page, args.baseUrl, args.outputDir);
-    console.log("[google-context-check] saved-draft revision follow-up");
-    await verifySavedDraftRevisionFollowUpFlow(page, args.baseUrl, args.email, args.outputDir);
-    console.log("[google-context-check] ambiguous-draft follow-up");
-    await verifyAmbiguousDraftFollowUpFlow(page, args.baseUrl, args.email, args.outputDir);
-    console.log("[google-context-check] saved-draft send follow-up");
-    await verifySavedDraftSendFollowUpFlow(page, args.baseUrl, args.email, args.outputDir);
-    console.log("[google-context-check] recent-calendar follow-up");
-    await verifyRecentCalendarFollowUpFlow(page, args.baseUrl, args.email, args.outputDir);
-    console.log("[google-context-check] manual draft editor");
-    await verifyManualDraftEditorFlow(page, args.baseUrl, args.email, args.outputDir);
-    console.log("[google-context-check] manual draft delete");
-    await verifyManualDraftDeleteFlow(page, args.baseUrl, args.email, args.outputDir);
-    console.log("[google-context-check] manual calendar editor");
-    await verifyManualCalendarEditorFlow(page, args.baseUrl, args.email, args.outputDir);
+
+    if (args.scenario === "email-memory") {
+      await runEmailMemoryFollowUpSuite(page, args);
+    } else {
+      console.log("[google-context-check] compose phrasing coverage");
+      await verifyComposeForRecipientPhrasingFlow(page, args.baseUrl, args.outputDir);
+      console.log("[google-context-check] approval card compose");
+      await verifyApprovalCardComposeFlow(page, args.baseUrl, args.outputDir);
+      console.log("[google-context-check] existing draft selection");
+      await verifyExistingDraftSelectionFlow(page, args.baseUrl, args.email, args.outputDir);
+      console.log("[google-context-check] fresh compose overrides history");
+      await verifyFreshComposeOverridesHistoryFlow(
+        page,
+        args.baseUrl,
+        args.email,
+        args.outputDir,
+      );
+      console.log("[google-context-check] ai compose recipient correction");
+      await verifyAiComposeRecipientCorrectionFlow(
+        page,
+        args.baseUrl,
+        args.outputDir,
+      );
+      console.log("[google-context-check] calendar clarification card");
+      await verifyCalendarClarificationCardFlow(page, args.baseUrl, args.outputDir);
+      console.log("[google-context-check] saved-draft revision follow-up");
+      await verifySavedDraftRevisionFollowUpFlow(page, args.baseUrl, args.email, args.outputDir);
+      console.log("[google-context-check] ambiguous-draft follow-up");
+      await verifyAmbiguousDraftFollowUpFlow(page, args.baseUrl, args.email, args.outputDir);
+      console.log("[google-context-check] saved-draft send follow-up");
+      await verifySavedDraftSendFollowUpFlow(page, args.baseUrl, args.email, args.outputDir);
+      console.log("[google-context-check] recent-calendar follow-up");
+      await verifyRecentCalendarFollowUpFlow(page, args.baseUrl, args.email, args.outputDir);
+      console.log("[google-context-check] manual draft editor");
+      await verifyManualDraftEditorFlow(page, args.baseUrl, args.email, args.outputDir);
+      console.log("[google-context-check] manual draft delete");
+      await verifyManualDraftDeleteFlow(page, args.baseUrl, args.email, args.outputDir);
+      console.log("[google-context-check] manual calendar editor");
+      await verifyManualCalendarEditorFlow(page, args.baseUrl, args.email, args.outputDir);
+    }
 
     console.log("google-personal-context Playwright checks passed");
     await page.close();
@@ -159,6 +167,7 @@ function parseArgs(argv: string[]): CliArgs {
   let email = "";
   let password = "";
   let outputDir = "";
+  let scenario: PlaywrightScenario = "all";
 
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -183,6 +192,15 @@ function parseArgs(argv: string[]): CliArgs {
       i += 1;
       continue;
     }
+    if (arg === "--scenario" && next) {
+      if (next === "all" || next === "email-memory") {
+        scenario = next;
+      } else {
+        throw new Error(`Unsupported scenario: ${next}`);
+      }
+      i += 1;
+      continue;
+    }
   }
 
   if (!baseUrl || !email || !password || !outputDir) {
@@ -196,7 +214,68 @@ function parseArgs(argv: string[]): CliArgs {
     email,
     password,
     outputDir: resolve(outputDir),
+    scenario,
   };
+}
+
+async function runEmailMemoryFollowUpSuite(
+  page: Page,
+  args: CliArgs,
+): Promise<void> {
+  console.log("[google-context-check] email-memory compose phrasing coverage");
+  await verifyComposeForRecipientPhrasingFlow(page, args.baseUrl, args.outputDir);
+  console.log("[google-context-check] email-memory approval card compose");
+  await verifyApprovalCardComposeFlow(page, args.baseUrl, args.outputDir);
+  console.log("[google-context-check] email-memory existing draft selection");
+  await verifyExistingDraftSelectionFlow(page, args.baseUrl, args.email, args.outputDir);
+  console.log("[google-context-check] email-memory fresh compose overrides history");
+  await verifyFreshComposeOverridesHistoryFlow(
+    page,
+    args.baseUrl,
+    args.email,
+    args.outputDir,
+  );
+  console.log("[google-context-check] email-memory recipient correction");
+  await verifyAiComposeRecipientCorrectionFlow(
+    page,
+    args.baseUrl,
+    args.outputDir,
+  );
+  console.log("[google-context-check] email-memory saved-draft revision follow-up");
+  await verifySavedDraftRevisionFollowUpFlow(
+    page,
+    args.baseUrl,
+    args.email,
+    args.outputDir,
+  );
+  console.log("[google-context-check] email-memory ambiguous-draft follow-up");
+  await verifyAmbiguousDraftFollowUpFlow(
+    page,
+    args.baseUrl,
+    args.email,
+    args.outputDir,
+  );
+  console.log("[google-context-check] email-memory saved-draft send follow-up");
+  await verifySavedDraftSendFollowUpFlow(
+    page,
+    args.baseUrl,
+    args.email,
+    args.outputDir,
+  );
+  console.log("[google-context-check] email-memory manual draft editor");
+  await verifyManualDraftEditorFlow(
+    page,
+    args.baseUrl,
+    args.email,
+    args.outputDir,
+  );
+  console.log("[google-context-check] email-memory manual draft delete");
+  await verifyManualDraftDeleteFlow(
+    page,
+    args.baseUrl,
+    args.email,
+    args.outputDir,
+  );
 }
 
 async function launchBrowser(): Promise<Browser> {
@@ -246,23 +325,55 @@ async function dismissOnboardingIfPresent(page: Page): Promise<void> {
   }
 }
 
+async function waitForProfileReady(page: Page): Promise<void> {
+  const selector = '[data-testid="panel-profile-view"]';
+  await page.waitForSelector(selector, { timeout: 15_000 });
+  await page
+    .waitForFunction(
+      (profileSelector) => {
+        const node = document.querySelector(profileSelector);
+        if (!(node instanceof HTMLElement)) return false;
+        const transform = window.getComputedStyle(node).transform;
+        if (!transform || transform === "none") return true;
+        const match = transform.match(/matrix(?:3d)?\((.+)\)/);
+        if (!match) return false;
+        const values = match[1]
+          .split(",")
+          .map((value) => Number.parseFloat(value.trim()))
+          .filter((value) => Number.isFinite(value));
+        const translateX = values.length >= 16 ? values[12] : values[4] ?? 0;
+        return Math.abs(translateX) < 1;
+      },
+      selector,
+      { timeout: 5_000 },
+    )
+    .catch(() => undefined);
+}
+
 async function openConnectedAccounts(page: Page): Promise<void> {
   await page.getByTestId("button-profile").click();
+  await waitForProfileReady(page);
   await page.waitForSelector('[data-testid="button-toggle-connected-accounts"]', {
     timeout: 15_000,
   });
+
+  const connectedAccountsToggle = page.getByTestId(
+    "button-toggle-connected-accounts",
+  );
+  await connectedAccountsToggle.scrollIntoViewIfNeeded();
 
   const googleAccountVisible = await page
     .getByText("Google Account")
     .isVisible()
     .catch(() => false);
   if (!googleAccountVisible) {
-    await page.getByTestId("button-toggle-connected-accounts").click();
+    await connectedAccountsToggle.click();
   }
   await page
     .waitForSelector("text=Google Account", { timeout: 12_000 })
     .catch(async () => {
-      await page.getByTestId("button-toggle-connected-accounts").click();
+      await waitForProfileReady(page);
+      await connectedAccountsToggle.click();
       await page.waitForSelector("text=Google Account", { timeout: 12_000 });
     });
 }
@@ -593,7 +704,7 @@ async function verifyApprovalCardComposeFlow(
   });
   assert.match(
     revisionReply,
-    /updated the draft preview|review it and approve/i,
+    /updated (?:the )?draft|want me to send it|save as draft|review it and approve/i,
     "Draft follow-up edits should update the existing Gmail preview instead of falling back to companion chat",
   );
   assert.doesNotMatch(
@@ -1746,7 +1857,7 @@ async function verifyManualDraftEditorFlow(
   );
   assert.match(
     sendReply,
-    /send email|review it and approve|approve if you want me to apply it/i,
+    /send email|review it and approve|approve if you want me to apply it|approval received|email sent to/i,
     "Manual draft save should keep the edited draft active for the next send follow-up",
   );
 

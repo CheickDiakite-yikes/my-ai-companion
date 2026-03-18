@@ -931,36 +931,76 @@ ZeeMe implements a unified memory architecture where text and voice modes share 
 
 ### Memory context builder
 
-The memory context (used for both text model context and live voice system instructions) assembles these layers:
+The memory context (used for both text model context and live voice system instructions) now assembles these layers:
 
 ```
 Layer 1: Live Time Anchor
   -> Current day, date, time, timezone
   -> Overrides any historical timestamps in conversation history
 
-Layer 2: Active Thread Turns
+Layer 2: Structured Task State (authoritative, not memory)
+  -> Active Gmail/Calendar draft/session state
+  -> Approval / ambiguity / active Zee Stage target state
+  -> Never inferred from semantic memory
+
+Layer 3: Active Thread Turns
   -> Recent raw conversation turns (configurable window)
   -> Both user and assistant messages
 
-Layer 3: Thread Summary
+Layer 4: Thread Summary
   -> Compressed representation of older turns beyond the active window
 
-Layer 4: Cross-Chat Context
+Layer 5: Cross-Chat Context
   -> Relevant turns from other conversations by the same user
   -> Enabled via user preference (cross_chat_memory_enabled)
+  -> Retrieved through multi-query planning + fused ranking over existing stores
 
-Layer 5: Durable Memory Items
+Layer 6: Durable Memory Items
   -> Extracted long-term facts: preferences, goals, profile details, relationships
   -> Categorized by kind: preference, goal, profile, project, fact, schedule, relationship
   -> Sensitivity levels: low, medium, high
+  -> Temporary Gmail/Calendar workflow state such as "needs approval", "draft saved", and "event created" is explicitly excluded from durable memory
 
-Layer 6: Profile Facts
+Layer 7: Profile Facts
   -> User-provided profile fields (name, bio, profession, etc.)
   -> Response style preferences
 
-Layer 7: Safe Selective Redaction
+Layer 8: Safe Selective Redaction
   -> High-sensitivity items can be excluded based on memory mode setting
 ```
+
+### Memory retrieval v2.3
+
+The current retrieval upgrade remains additive and safe:
+
+- ZeeMe keeps the existing semantic memory store (`user_memory_items`) as the baseline.
+- Retrieval now uses lightweight query planning to synthesize 2-4 intent lanes such as:
+  - plans / schedule
+  - people / relationships
+  - preferences / style
+  - open loops / commitments
+- Results are fused across semantic summary search, semantic durable-memory search, and lexical fallback using reciprocal-rank style scoring with freshness, confidence, sensitivity, and active-thread bias.
+- The legacy memory retrieval path still exists as a fallback if the new fused path is disabled or returns nothing useful.
+
+### Google Action Memory Contract
+
+Gmail and Calendar memory handling is intentionally split into three layers:
+
+- **Structured action truth**
+  - active drafts, approval state, ambiguity state, and active Zee Stage targets
+  - this always outranks memory
+- **Conversation continuity**
+  - recent Gmail/Calendar discussion can help Zee clarify follow-up questions and tone
+- **Durable memory**
+  - only stable user patterns such as preferred email tone, recurring contacts, or recurring calendar habits
+  - transient workflow state is filtered out before durable storage and before fallback retrieval is rendered
+
+### Memory testing
+
+- `npm run test:memory:smoke`
+  - validates the Google action memory contract
+  - guards against transient Gmail/Calendar workflow summaries leaking into durable memory
+  - checks the new query planner emits the expected retrieval lanes
 
 ### Memory modes
 

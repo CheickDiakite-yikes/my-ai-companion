@@ -38,6 +38,8 @@
     "test:agent:ui": "bash script/agent-ui-theme-playwright-e2e.sh",
     "test:google-context:smoke": "tsx script/google-personal-context-smoke.ts",
     "test:google-context:ui": "bash script/google-personal-context-playwright-e2e.sh",
+    "test:google-context:email-memory": "PLAYWRIGHT_SCENARIO=email-memory bash script/google-personal-context-playwright-e2e.sh",
+    "test:memory:smoke": "tsx script/memory-v2-smoke.ts",
     "test:voice:capture": "node --import tsx script/live-audio-capture-smoke.ts",
     "test:voice:language": "node --import tsx script/live-language-smoke.ts",
     "test:voice:trace": "node --import tsx script/live-trace-regression-smoke.ts",

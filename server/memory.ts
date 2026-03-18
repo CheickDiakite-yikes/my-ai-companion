@@ -1,6 +1,7 @@
 import { GoogleGenAI } from "@google/genai";
 import { db } from "./db";
 import { pool } from "./db";
+import { shouldPersistDurableMemorySummary } from "./memory-contracts";
 import {
   userMemoryItems,
   messages,
@@ -10,7 +11,7 @@ import {
   type Message,
   type MessageAttachment,
 } from "@shared/schema";
-import { eq, and, asc, sql, desc } from "drizzle-orm";
+import { eq, and, asc, sql, desc, inArray } from "drizzle-orm";
 
 const EMBEDDING_MODEL = "gemini-embedding-001";
 const EMBEDDING_DIMENSIONS = 256;
@@ -51,6 +52,39 @@ export async function generateEmbedding(text: string): Promise<number[] | null> 
   } catch (err) {
     console.error("[memory] embedding generation failed:", err);
     return null;
+  }
+}
+
+export async function generateEmbeddings(
+  texts: string[],
+): Promise<Array<number[] | null>> {
+  if (texts.length === 0) return [];
+
+  const truncatedTexts = texts.map((text) => text.slice(0, MAX_EMBEDDING_TEXT_LENGTH));
+  const validIndexes = truncatedTexts
+    .map((text, index) => ({ text, index }))
+    .filter(({ text }) => text.trim().length >= 5);
+
+  if (validIndexes.length === 0) {
+    return texts.map(() => null);
+  }
+
+  try {
+    const ai = getAI();
+    const result = await ai.models.embedContent({
+      model: EMBEDDING_MODEL,
+      contents: validIndexes.map(({ text }) => text),
+      config: { outputDimensionality: EMBEDDING_DIMENSIONS },
+    });
+    const embeddings = result.embeddings ?? [];
+    const resolved = texts.map(() => null) as Array<number[] | null>;
+    for (let index = 0; index < validIndexes.length; index += 1) {
+      resolved[validIndexes[index].index] = embeddings[index]?.values ?? null;
+    }
+    return resolved;
+  } catch (err) {
+    console.error("[memory] embedding batch generation failed:", err);
+    return texts.map(() => null);
   }
 }
 
@@ -135,7 +169,7 @@ export async function getRecentConversationMessages(params: {
     .where(
       and(
         eq(messageAttachments.conversationId, params.conversationId),
-        sql`${messageAttachments.messageId} = ANY(${msgIds})`,
+        inArray(messageAttachments.messageId, msgIds),
       ),
     );
 
@@ -410,6 +444,8 @@ Only extract genuine observations. Skip:
 - Greetings, filler, and chit-chat
 - Things Zee said (unless quoting something the user told Zee earlier)
 - Garbled or unclear transcription artifacts
+- Temporary workflow state like pending approvals, draft-ready states, "email sent", "draft saved", or "event created/updated" status messages
+- Google task execution progress unless it reveals a stable user preference, recurring habit, relationship, or long-term schedule pattern
 
 If no memorable items, return an empty array [].
 
@@ -456,6 +492,7 @@ Return ONLY a valid JSON array, no markdown fences:`;
         confidence: Math.min(95, Math.max(50, Math.round(item.confidence))),
         sensitivity: (validSensitivities.has(item.sensitivity ?? "") ? item.sensitivity : "low") as ExtractedMemoryItem["sensitivity"],
       }))
+      .filter((item) => shouldPersistDurableMemorySummary(item.summary))
       .slice(0, 8);
   } catch (err) {
     console.error("[memory] Gemini extraction failed:", err);
