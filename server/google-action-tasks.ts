@@ -407,6 +407,15 @@ function inferLiteralEmailBodyText(input: string): string | null {
 function normalizeGoogleEmailComposeRequestText(input: string): string {
   return normalizeText(input)
     .replace(
+      /^\s*(?:haha(?:ha+)?|lol|lmao|um|uh|well|actually)\b[\s,!.:-]*/i,
+      "",
+    )
+    .replace(
+      /^\s*(?:ignore|forget|scratch)\s+(?:that|this|it)\b[\s,!.:-]*/i,
+      "",
+    )
+    .replace(/^\s*(?:and|then)\s+/i, "")
+    .replace(
       /^\s*(?:okay|ok|alright|all right|sure|yeah|yep|yup)\s+(?:(?:lets|let's)\s+)?/i,
       "",
     )
@@ -424,8 +433,32 @@ export function looksLikeGoogleEmailComposeRequest(input: string): boolean {
   );
 }
 
+export function looksLikeExplicitFreshGoogleEmailComposeRequest(
+  input: string,
+): boolean {
+  const normalized = normalizeGoogleEmailComposeRequestText(input);
+  if (!normalized) return false;
+  return (
+    /\b(?:new|fresh|another|different)\s+(?:email|message|draft)\b/i.test(
+      normalized,
+    ) ||
+    /^(?:create|make|start|draft|write|send)\s+(?:an?\s+)?(?:new|fresh|another|different)\s+(?:email|message|draft)\b/i.test(
+      normalized,
+    )
+  );
+}
+
 function normalizeGoogleCalendarCreateRequestText(input: string): string {
   return normalizeText(input)
+    .replace(
+      /^\s*(?:haha(?:ha+)?|lol|lmao|um|uh|well|actually)\b[\s,!.:-]*/i,
+      "",
+    )
+    .replace(
+      /^\s*(?:ignore|forget|scratch)\s+(?:that|this|it)\b[\s,!.:-]*/i,
+      "",
+    )
+    .replace(/^\s*(?:and|then)\s+/i, "")
     .replace(
       /^\s*(?:okay|ok|alright|all right|sure|yeah|yep|yup)\s+(?:(?:lets|let's)\s+)?/i,
       "",
@@ -466,6 +499,11 @@ function stripComposeLeadIn(input: string): string {
     )
     .replace(/^\s*(?:new|fresh|another|different)\s+(?:email|message|draft)\b/i, "")
     .trim();
+}
+
+export function forceFreshGoogleEmailComposePrompt(input: string): string {
+  const stripped = stripComposeLeadIn(input);
+  return stripped ? `create a new email ${stripped}` : "create a new email";
 }
 
 function inferDraftInstructionText(input: string): string | null {

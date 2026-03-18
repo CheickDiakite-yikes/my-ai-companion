@@ -392,6 +392,7 @@ export interface GoogleActionResult {
 }
 
 export type GoogleComposeSessionStatus =
+  | "awaiting_mode"
   | "awaiting_body"
   | "awaiting_recipient"
   | "resolved"

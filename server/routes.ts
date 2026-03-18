@@ -128,6 +128,7 @@ import {
   type GoogleRecentActionContext,
   type RecentGoogleActionTask,
   looksLikeGoogleCalendarCreateRequest,
+  looksLikeExplicitFreshGoogleEmailComposeRequest,
   looksLikeGoogleEmailComposeRequest,
   looksLikeGoogleEmailDraftRevisionInstruction,
   looksLikeGoogleEmailCancelRequest,
@@ -6770,6 +6771,7 @@ function isGoogleComposeSessionPayload(value: unknown): value is GoogleComposeSe
   const session = value as Record<string, unknown>;
   if (session.mode !== "email_compose") return false;
   if (
+    session.status !== "awaiting_mode" &&
     session.status !== "awaiting_body" &&
     session.status !== "awaiting_recipient" &&
     session.status !== "resolved" &&
@@ -7492,6 +7494,46 @@ function looksLikeGoogleEmailDraftSelectionText(text: string): boolean {
   return looksLikeGoogleEmailAmbiguitySelectionText(text);
 }
 
+function filterGoogleEmailCandidatesByRecipient(params: {
+  recipientEmail: string | null;
+  candidates: GoogleEmailConversationTaskTarget[];
+}): GoogleEmailConversationTaskTarget[] {
+  const recipientEmail = params.recipientEmail?.trim().toLowerCase() ?? null;
+  if (!recipientEmail) {
+    return [];
+  }
+  return params.candidates.filter((candidate) =>
+    (candidate.preview.proposedEmail?.to ?? []).some(
+      (recipient) =>
+        extractGoogleEmailAddressForMatching(recipient) === recipientEmail,
+    ),
+  );
+}
+
+function looksLikeGoogleEmailExistingDraftModeChoice(text: string): boolean {
+  const compact = normalizeGoogleActionControlText(text);
+  if (!compact) return false;
+  return (
+    /\b(?:existing|current|older|previous|saved)\s+(?:draft|email|one)\b/.test(
+      compact,
+    ) ||
+    /\b(?:edit|update|revise|continue|use|pick|choose|open|show)\b.*\b(?:draft|email|one)\b/.test(
+      compact,
+    ) ||
+    compact === "draft" ||
+    compact === "existing draft"
+  );
+}
+
+function buildGoogleEmailComposeModeClarificationMessage(params: {
+  recipientEmail: string;
+  matchingDraftCount: number;
+}): string {
+  return params.matchingDraftCount === 1
+    ? `I found a recent draft to ${params.recipientEmail}. Do you want to start a new email, or update that existing draft?`
+    : `I found a couple of recent drafts to ${params.recipientEmail}. Do you want to start a new email, or update an existing draft?`;
+}
+
 function resolveLatestGoogleEmailTaskTarget(
   state: GoogleConversationState,
 ): GoogleEmailConversationTaskTarget | null {
@@ -7694,7 +7736,8 @@ function resolveLatestGoogleConversationState(messages: Message[]): GoogleConver
         !state.recentCalendarTask &&
         !hasNewerGoogleActionState &&
         isGoogleComposeSessionPayload(payload.session) &&
-        (payload.session.status === "awaiting_body" ||
+        (payload.session.status === "awaiting_mode" ||
+          payload.session.status === "awaiting_body" ||
           payload.session.status === "awaiting_recipient")
       ) {
         state.composeSession = {
@@ -7858,6 +7901,13 @@ function buildStructuredGoogleActionStateLines(
   if (state.composeSession) {
     const recipient = state.composeSession.session.recipientEmail?.trim() ?? null;
     const subject = state.composeSession.session.subject?.trim() ?? null;
+    if (state.composeSession.session.status === "awaiting_mode") {
+      return [
+        recipient
+          ? `- Gmail compose session is active for ${recipient}, and Zee is waiting for the user to choose whether to start a new email or update an existing draft.`
+          : "- Gmail compose session is active, and Zee is waiting for the user to choose whether to start a new email or update an existing draft.",
+      ];
+    }
     if (state.composeSession.session.status === "awaiting_recipient") {
       return [
         subject
@@ -7992,6 +8042,12 @@ function shouldBypassGenericAgentTaskForGoogleAction(params: {
 }
 
 function buildComposeSessionReminder(session: GoogleComposeSession): string {
+  if (session.status === "awaiting_mode") {
+    const recipientLabel = session.recipientEmail
+      ? session.recipientEmail.replace(/@/g, " at ").replace(/\./g, " dot ")
+      : "that recipient";
+    return `I can do either. Should I start a new email to ${recipientLabel}, or update an existing draft?`;
+  }
   if (session.status === "awaiting_recipient") {
     return "I still need the recipient's email address. Who should I send this to?";
   }
@@ -8930,6 +8986,25 @@ async function maybeHandleGoogleActionTask(params: {
     Boolean(latestEmailTaskTarget) && isGoogleActionSaveAsDraftMessage(params.text);
   const actionableEmailCandidates =
     rankedEmailCandidates as GoogleEmailConversationTaskTarget[];
+  const composeRequestedRecipientEmail = startsFreshEmailRequest
+    ? extractGoogleEmailAddressForMatching(params.text)
+    : null;
+  const composeRecipientDraftCandidates = filterGoogleEmailCandidatesByRecipient({
+    recipientEmail: composeRequestedRecipientEmail,
+    candidates: actionableEmailCandidates,
+  });
+  const explicitFreshEmailRequest = startsFreshEmailRequest
+    ? looksLikeExplicitFreshGoogleEmailComposeRequest(params.text)
+    : false;
+  const explicitExistingDraftChoice = startsFreshEmailRequest
+    ? looksLikeGoogleEmailExistingDraftModeChoice(params.text)
+    : false;
+  const shouldClarifyEmailComposeMode =
+    startsFreshEmailRequest &&
+    Boolean(composeRequestedRecipientEmail) &&
+    composeRecipientDraftCandidates.length > 0 &&
+    !explicitFreshEmailRequest &&
+    !explicitExistingDraftChoice;
   const wantsEmailRevisionFollowUp =
     Boolean(latestEmailTaskTarget) &&
     !wantsEmailSendFollowUp &&
@@ -8979,6 +9054,7 @@ async function maybeHandleGoogleActionTask(params: {
     ? contextSelectedCalendarTarget
     : null;
   const hasActiveComposeSession =
+    googleConversationState.composeSession?.session.status === "awaiting_mode" ||
     googleConversationState.composeSession?.session.status === "awaiting_body" ||
     googleConversationState.composeSession?.session.status === "awaiting_recipient";
   const hasActiveCalendarSession =
@@ -8997,6 +9073,10 @@ async function maybeHandleGoogleActionTask(params: {
     activeSurfaceKey: params.clientGoogleActionContext?.surfaceKey ?? null,
     connectorHint: params.clientGoogleActionContext?.connector ?? null,
     startsFreshEmailRequest,
+    explicitFreshEmailRequest,
+    shouldClarifyEmailComposeMode,
+    composeRequestedRecipientEmail,
+    composeRecipientDraftCandidateCount: composeRecipientDraftCandidates.length,
     startsFreshCalendarCreateRequest,
     emailCandidateCount: actionableEmailCandidates.length,
     calendarCandidateCount: rankedCalendarCandidates.length,
@@ -9013,7 +9093,235 @@ async function maybeHandleGoogleActionTask(params: {
       : null,
   });
 
+  if (googleConversationState.composeSession?.session.status === "awaiting_mode") {
+    const composeModeSession = googleConversationState.composeSession.session;
+    const composeModeCandidates =
+      filterGoogleEmailCandidatesByRecipient({
+        recipientEmail: composeModeSession.recipientEmail,
+        candidates: actionableEmailCandidates,
+      }).length > 0
+        ? filterGoogleEmailCandidatesByRecipient({
+            recipientEmail: composeModeSession.recipientEmail,
+            candidates: actionableEmailCandidates,
+          })
+        : actionableEmailCandidates;
+    const composeModeCandidateResolution = resolveGoogleEmailDraftCandidateFromText({
+      text: params.text,
+      candidates: composeModeCandidates,
+    });
+    const looksLikeComposeModeDraftSelection =
+      looksLikeGoogleEmailAmbiguitySelectionText(params.text);
+    const choseFreshComposeMode =
+      looksLikeExplicitFreshGoogleEmailComposeRequest(params.text);
+    const choseExistingDraftMode =
+      looksLikeGoogleEmailExistingDraftModeChoice(params.text) ||
+      (looksLikeComposeModeDraftSelection &&
+        composeModeCandidateResolution.kind !== "none");
+    const shouldPreemptComposeModeWithFreshRequest =
+      startsFreshGoogleActionRequest &&
+      !choseFreshComposeMode &&
+      !choseExistingDraftMode;
+
+    if (shouldPreemptComposeModeWithFreshRequest) {
+      params.onTrace?.("google.compose_mode_preempted_by_fresh_request", {
+        text: params.text,
+        recipientEmail: composeModeSession.recipientEmail ?? null,
+      });
+    } else {
+
+      if (choseFreshComposeMode) {
+        params.onTrace?.("google.compose_mode_resolved", {
+          mode: "new_email",
+          recipientEmail: composeModeSession.recipientEmail ?? null,
+          promptSeed: composeModeSession.promptSeed,
+        });
+        const freshComposePrompt = composeModeSession.recipientEmail
+          ? `create an email to ${composeModeSession.recipientEmail}`
+          : "create an email";
+        const freshPreparation = await prepareGoogleActionTask({
+          storage: params.storage,
+          userId: params.userId,
+          text: freshComposePrompt,
+          clientTimeZone: params.clientTimeZone ?? null,
+          recentContext: null,
+        });
+        const freshGoogleContext =
+          freshPreparation.kind === "ready"
+            ? buildGoogleTargetContextMetadata({
+                connector: "gmail",
+                action: freshPreparation.preview.proposedEmail?.sendAfterApproval
+                  ? "send"
+                  : "create",
+                sourceTurnId: params.userMessage.id,
+                selectionReason: "clarification_session",
+              })
+            : freshPreparation.kind === "clarify" && freshPreparation.composeSession
+              ? buildGoogleTargetContextMetadata({
+                  connector: "gmail",
+                  action: "create",
+                  sourceTurnId: params.userMessage.id,
+                  selectionReason: "clarification_session",
+                })
+              : null;
+        return finalizePreparedGoogleActionTask({
+          storage: params.storage,
+          userId: params.userId,
+          conversationId: params.conversationId,
+          userMessage: params.userMessage,
+          text: params.text,
+          preparation: freshPreparation,
+          onEvent: params.onEvent,
+          googleContext: freshGoogleContext,
+        });
+      }
+
+      if (choseExistingDraftMode) {
+        params.onTrace?.("google.compose_mode_resolved", {
+          mode: "existing_draft",
+          recipientEmail: composeModeSession.recipientEmail ?? null,
+          candidateTaskIds: composeModeCandidates.map((candidate) => candidate.taskId),
+          resolutionKind: composeModeCandidateResolution.kind,
+        });
+        const resolvedTarget =
+          composeModeCandidateResolution.kind === "resolved"
+            ? composeModeCandidateResolution.candidate
+            : composeModeCandidates.length === 1
+              ? composeModeCandidates[0]
+              : null;
+        if (resolvedTarget) {
+          return surfaceResolvedGoogleEmailTarget({
+            storage: params.storage,
+            userId: params.userId,
+            conversationId: params.conversationId,
+            target: resolvedTarget,
+            googleContext: buildGoogleTargetContextMetadata({
+              connector: "gmail",
+          action: "revise",
+              actionableTargetId: resolvedTarget.taskId,
+              candidateTargetIds: composeModeCandidates.map(
+                (candidate) => candidate.taskId,
+              ),
+              sourceTurnId: params.userMessage.id,
+              selectionReason:
+                composeModeCandidateResolution.kind === "resolved"
+                  ? "manual_selection"
+                  : "clarification_session",
+            }),
+          });
+        }
+
+        const ambiguity: GoogleActionAmbiguityPrompt = {
+          connector: "gmail",
+          action: "revise",
+          instructionText: composeModeSession.promptSeed,
+          candidates: composeModeCandidates.slice(0, 3).map((candidate, index) =>
+            buildGoogleEmailAmbiguityCandidateFromTarget(candidate, index),
+          ),
+        };
+        const assistantMessage = await createGoogleActionAmbiguityAssistantMessage({
+          storage: params.storage,
+          conversationId: params.conversationId,
+          ambiguity,
+          text:
+            composeModeSession.recipientEmail && composeModeCandidates.length > 1
+              ? `I found a couple of drafts to ${composeModeSession.recipientEmail}. Which one should I update?`
+              : "I found a couple of recent drafts. Which email should I update?",
+          googleContext: buildGoogleTargetContextMetadata({
+            connector: "gmail",
+            action: "revise",
+            candidateTargetIds: ambiguity.candidates.map((candidate) => candidate.taskId),
+            selectionReason: "ambiguity_required",
+          }),
+        });
+        const assistantMessages = [assistantMessage];
+        return {
+          handled: true as const,
+          kind: "clarify" as const,
+          assistantMessages,
+          legacyAssistantMessage: makeLegacyAssistantMessage(assistantMessages),
+          model: "google_action_email_ambiguity_v1",
+          decisionPath: "companion_reply" as const,
+          decisionPathReason: "companion" as const,
+          awaitingApproval: false,
+          task: null,
+        };
+      }
+
+      const reminder = buildComposeSessionReminder(composeModeSession);
+      const assistantMessage = await createGoogleComposeSessionAssistantMessage({
+        storage: params.storage,
+        conversationId: params.conversationId,
+        text: reminder,
+        session: composeModeSession,
+        googleContext: buildGoogleTargetContextMetadata({
+          connector: "gmail",
+          action: "create",
+          sourceTurnId: params.userMessage.id,
+          selectionReason: "clarification_session",
+        }),
+      });
+      const assistantMessages = [assistantMessage];
+      return {
+        handled: true as const,
+        kind: "clarify" as const,
+        assistantMessages,
+        legacyAssistantMessage: makeLegacyAssistantMessage(assistantMessages),
+        model: "google_action_clarification_v2",
+        decisionPath: "companion_reply" as const,
+        decisionPathReason: "companion" as const,
+        awaitingApproval: false,
+        task: null,
+      };
+    }
+  }
+
   if (startsFreshGoogleActionRequest) {
+    if (shouldClarifyEmailComposeMode && composeRequestedRecipientEmail) {
+      params.onTrace?.("google.compose_mode_clarification_requested", {
+        recipientEmail: composeRequestedRecipientEmail,
+        candidateTaskIds: composeRecipientDraftCandidates.map(
+          (candidate) => candidate.taskId,
+        ),
+      });
+      const session = {
+        mode: "email_compose" as const,
+        status: "awaiting_mode" as const,
+        recipientEmail: composeRequestedRecipientEmail,
+        subject: null,
+        bodyPreview: null,
+        promptSeed: params.text,
+        followUpPrompt:
+          "Reply with new email to start fresh, or existing draft if you want to update something you've already started.",
+      };
+      const assistantMessage = await createGoogleComposeSessionAssistantMessage({
+        storage: params.storage,
+        conversationId: params.conversationId,
+        text: buildGoogleEmailComposeModeClarificationMessage({
+          recipientEmail: composeRequestedRecipientEmail,
+          matchingDraftCount: composeRecipientDraftCandidates.length,
+        }),
+        session,
+        googleContext: buildGoogleTargetContextMetadata({
+          connector: "gmail",
+          action: "create",
+          sourceTurnId: params.userMessage.id,
+          selectionReason: "clarification_session",
+        }),
+      });
+      const assistantMessages = [assistantMessage];
+      return {
+        handled: true as const,
+        kind: "clarify" as const,
+        assistantMessages,
+        legacyAssistantMessage: makeLegacyAssistantMessage(assistantMessages),
+        model: "google_action_email_mode_clarification_v1",
+        decisionPath: "companion_reply" as const,
+        decisionPathReason: "companion" as const,
+        awaitingApproval: false,
+        task: null,
+      };
+    }
+
     params.onTrace?.("google.fresh_request_preempts_existing_state", {
       connector: startsFreshEmailRequest ? "gmail" : "calendar",
       hasPendingTask: Boolean(googleConversationState.pendingTask),

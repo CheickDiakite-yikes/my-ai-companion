@@ -130,6 +130,20 @@ async function main(): Promise<void> {
         args.email,
         args.outputDir,
       );
+      console.log("[google-context-check] compose mode clarification");
+      await verifyRecipientComposeModeClarificationFlow(
+        page,
+        args.baseUrl,
+        args.email,
+        args.outputDir,
+      );
+      console.log("[google-context-check] existing draft mode choice");
+      await verifyRecipientComposeModeExistingDraftFlow(
+        page,
+        args.baseUrl,
+        args.email,
+        args.outputDir,
+      );
       console.log("[google-context-check] ai compose recipient correction");
       await verifyAiComposeRecipientCorrectionFlow(
         page,
@@ -230,6 +244,20 @@ async function runEmailMemoryFollowUpSuite(
   await verifyExistingDraftSelectionFlow(page, args.baseUrl, args.email, args.outputDir);
   console.log("[google-context-check] email-memory fresh compose overrides history");
   await verifyFreshComposeOverridesHistoryFlow(
+    page,
+    args.baseUrl,
+    args.email,
+    args.outputDir,
+  );
+  console.log("[google-context-check] email-memory compose mode clarification");
+  await verifyRecipientComposeModeClarificationFlow(
+    page,
+    args.baseUrl,
+    args.email,
+    args.outputDir,
+  );
+  console.log("[google-context-check] email-memory existing draft mode choice");
+  await verifyRecipientComposeModeExistingDraftFlow(
     page,
     args.baseUrl,
     args.email,
@@ -1335,7 +1363,34 @@ async function verifyFreshComposeOverridesHistoryFlow(
     .fill("okay lets create an email for zorovt18@gmail.com");
   await page.getByTestId("input-message").press("Enter");
 
-  const recipientComposeReply = await waitForLatestAssistantReply({
+  let recipientComposeReply = await waitForLatestAssistantReply({
+    page,
+    baseUrl,
+    conversationId,
+    previousAssistantCount,
+    timeoutMs: 45_000,
+  });
+  assert.match(
+    recipientComposeReply,
+    /start a new email|update an existing draft/i,
+    "Recipient-targeted fresh compose should clarify new-vs-existing when matching draft history exists",
+  );
+
+  composeSessionCard = page.locator('[data-testid="google-compose-session-card"]').last();
+  await composeSessionCard.waitFor({ state: "visible", timeout: 20_000 });
+  assert.equal(
+    await composeSessionCard.getAttribute("data-compose-status"),
+    "awaiting_mode",
+    "Expected recipient-aware fresh compose to clarify mode before picking a matching draft",
+  );
+
+  messages = await fetchConversationMessages(page, baseUrl, conversationId);
+  previousAssistantCount = messages.filter((message) => message.sender === "assistant").length;
+
+  await page.getByTestId("input-message").fill("new email");
+  await page.getByTestId("input-message").press("Enter");
+
+  recipientComposeReply = await waitForLatestAssistantReply({
     page,
     baseUrl,
     conversationId,
@@ -1345,12 +1400,12 @@ async function verifyFreshComposeOverridesHistoryFlow(
   assert.match(
     recipientComposeReply,
     /what should the email say|i can draft that to zorovt18@gmail\.com/i,
-    "Fresh compose with a recipient should move into the structured awaiting_body state",
+    "Choosing `new email` should move the fresh compose flow into the structured awaiting_body state",
   );
   assert.doesNotMatch(
     recipientComposeReply,
     /keep that same wording|approval button|catch up on the 15th/i,
-    "Fresh compose with a recipient should not revive the prior draft copy",
+    "Choosing `new email` should not revive the prior draft copy",
   );
 
   composeSessionCard = page.locator('[data-testid="google-compose-session-card"]').last();
@@ -1358,7 +1413,7 @@ async function verifyFreshComposeOverridesHistoryFlow(
   assert.equal(
     await composeSessionCard.getAttribute("data-compose-status"),
     "awaiting_body",
-    "Expected recipient-aware fresh compose to ask for the body next",
+    "Expected recipient-aware fresh compose to ask for the body after choosing `new email`",
   );
   assert.match(
     await composeSessionCard.innerText(),
@@ -1425,6 +1480,194 @@ async function verifyFreshComposeOverridesHistoryFlow(
   });
 }
 
+async function verifyRecipientComposeModeClarificationFlow(
+  page: Page,
+  baseUrl: string,
+  email: string,
+  outputDir: string,
+): Promise<void> {
+  const conversationId = await resolveActiveConversationId(page, baseUrl);
+  await seedCustomSavedDraftTaskFixture({
+    email,
+    conversationId,
+    recipient: "mode-new@cheickdiakite.com",
+    subject: "Weekend plans?",
+    bodyText: "Hey! Are you free this weekend?",
+  });
+  await page.reload({ waitUntil: "networkidle" });
+
+  let messages = await fetchConversationMessages(page, baseUrl, conversationId);
+  let previousAssistantCount = messages.filter(
+    (message) => message.sender === "assistant",
+  ).length;
+
+  await page
+    .getByTestId("input-message")
+    .fill("hahaha ignore that, can you draft an email to mode-new@cheickdiakite.com please");
+  await page.getByTestId("input-message").press("Enter");
+
+  const clarificationReply = await waitForLatestAssistantReply({
+    page,
+    baseUrl,
+    conversationId,
+    previousAssistantCount,
+    timeoutMs: 45_000,
+  });
+  assert.match(
+    clarificationReply,
+    /start a new email|update (?:that|an) existing draft/i,
+    "Recipient-targeted compose requests with matching draft history should clarify new-vs-existing first",
+  );
+
+  let composeSessionCard = page.locator('[data-testid="google-compose-session-card"]').last();
+  await composeSessionCard.waitFor({ state: "visible", timeout: 20_000 });
+  assert.equal(
+    await composeSessionCard.getAttribute("data-compose-status"),
+    "awaiting_mode",
+    "Expected the compose flow to pause for mode clarification before picking a draft",
+  );
+  assert.match(
+    await composeSessionCard.innerText(),
+    /mode-new@cheickdiakite\.com/i,
+    "Expected the mode clarification card to preserve the intended recipient",
+  );
+
+  messages = await fetchConversationMessages(page, baseUrl, conversationId);
+  previousAssistantCount = messages.filter((message) => message.sender === "assistant").length;
+
+  await page.getByTestId("input-message").fill("new email");
+  await page.getByTestId("input-message").press("Enter");
+
+  const freshComposeReply = await waitForLatestAssistantReply({
+    page,
+    baseUrl,
+    conversationId,
+    previousAssistantCount,
+    timeoutMs: 45_000,
+  });
+  assert.match(
+    freshComposeReply,
+    /what subject should i use|what should the email say|i can draft that to mode-new@cheickdiakite\.com/i,
+    "Choosing `new email` should continue the fresh compose flow with the original recipient",
+  );
+  assert.doesNotMatch(
+    freshComposeReply,
+    /which email did you mean|which one should i update/i,
+    "Choosing `new email` should not fall back into draft ambiguity",
+  );
+
+  composeSessionCard = page.locator('[data-testid="google-compose-session-card"]').last();
+  await composeSessionCard.waitFor({ state: "visible", timeout: 20_000 });
+  assert.equal(
+    await composeSessionCard.getAttribute("data-compose-status"),
+    "awaiting_body",
+    "Expected `new email` to open a fresh compose session for the same recipient",
+  );
+  assert.match(
+    await composeSessionCard.innerText(),
+    /mode-new@cheickdiakite\.com/i,
+    "Expected the fresh compose session to keep the intended recipient",
+  );
+
+  await page.screenshot({
+    path: resolve(outputDir, "google-personal-context-compose-mode-clarification.png"),
+    fullPage: true,
+  });
+}
+
+async function verifyRecipientComposeModeExistingDraftFlow(
+  page: Page,
+  baseUrl: string,
+  email: string,
+  outputDir: string,
+): Promise<void> {
+  const conversationId = await resolveActiveConversationId(page, baseUrl);
+  await seedCustomSavedDraftTaskFixture({
+    email,
+    conversationId,
+    recipient: "mode-edit@cheickdiakite.com",
+    subject: "Weekend plans?",
+    bodyText: "Hey! Are you free this weekend?",
+  });
+  await seedCustomSavedDraftTaskFixture({
+    email,
+    conversationId,
+    recipient: "mode-edit@cheickdiakite.com",
+    subject: "AI projects?",
+    bodyText: "Have you been building anything new in AI lately?",
+  });
+  await page.reload({ waitUntil: "networkidle" });
+
+  let messages = await fetchConversationMessages(page, baseUrl, conversationId);
+  let previousAssistantCount = messages.filter(
+    (message) => message.sender === "assistant",
+  ).length;
+
+  await page
+    .getByTestId("input-message")
+    .fill("ignore that and draft an email to mode-edit@cheickdiakite.com please");
+  await page.getByTestId("input-message").press("Enter");
+
+  const clarificationReply = await waitForLatestAssistantReply({
+    page,
+    baseUrl,
+    conversationId,
+    previousAssistantCount,
+    timeoutMs: 45_000,
+  });
+  assert.match(
+    clarificationReply,
+    /start a new email|update (?:that|an) existing draft/i,
+    "Expected a mode clarification step before choosing between matching drafts",
+  );
+
+  const composeSessionCard = page.locator('[data-testid="google-compose-session-card"]').last();
+  await composeSessionCard.waitFor({ state: "visible", timeout: 20_000 });
+  assert.equal(
+    await composeSessionCard.getAttribute("data-compose-status"),
+    "awaiting_mode",
+    "Expected the compose mode card before the user chooses an existing draft",
+  );
+
+  messages = await fetchConversationMessages(page, baseUrl, conversationId);
+  previousAssistantCount = messages.filter((message) => message.sender === "assistant").length;
+
+  await page.getByTestId("input-message").fill("existing draft");
+  await page.getByTestId("input-message").press("Enter");
+
+  const existingDraftReply = await waitForLatestAssistantReply({
+    page,
+    baseUrl,
+    conversationId,
+    previousAssistantCount,
+    timeoutMs: 45_000,
+  });
+  assert.match(
+    existingDraftReply,
+    /which one should i update|which email should i update/i,
+    "Choosing `existing draft` should open the filtered draft picker instead of a fresh compose flow",
+  );
+
+  const ambiguityCard = page.locator('[data-testid="google-email-ambiguity-card"]').last();
+  await ambiguityCard.waitFor({ state: "visible", timeout: 20_000 });
+  const ambiguityText = await ambiguityCard.innerText();
+  assert.match(
+    ambiguityText,
+    /mode-edit@cheickdiakite\.com/i,
+    "Expected the filtered draft picker to stay scoped to the requested recipient",
+  );
+  assert.doesNotMatch(
+    ambiguityText,
+    /stale@example\.com|team@soulnests\.com/i,
+    "Choosing `existing draft` should not reopen unrelated draft history",
+  );
+
+  await page.screenshot({
+    path: resolve(outputDir, "google-personal-context-compose-mode-existing-draft.png"),
+    fullPage: true,
+  });
+}
+
 async function verifyAiComposeRecipientCorrectionFlow(
   page: Page,
   baseUrl: string,
@@ -1450,19 +1693,62 @@ async function verifyAiComposeRecipientCorrectionFlow(
     previousAssistantCount,
     timeoutMs: 45_000,
   });
-  assert.match(
-    composeReply,
-    /what should the email say|i can draft that to zorovt18@gmail\.com/i,
-    "Expected the draft request to open an awaiting-body compose session",
-  );
-
   let composeSessionCard = page.locator('[data-testid="google-compose-session-card"]').last();
   await composeSessionCard.waitFor({ state: "visible", timeout: 20_000 });
-  assert.match(
-    await composeSessionCard.innerText(),
-    /zorovt18@gmail\.com/i,
-    "Expected the compose session to start with the original recipient",
-  );
+  const initialComposeStatus =
+    await composeSessionCard.getAttribute("data-compose-status");
+  if (initialComposeStatus === "awaiting_mode") {
+    assert.match(
+      composeReply,
+      /start a new email|update (?:that|an) existing draft/i,
+      "Expected recipient-targeted compose to clarify new-vs-existing when draft history already exists",
+    );
+    assert.match(
+      await composeSessionCard.innerText(),
+      /zorovt18@gmail\.com/i,
+      "Expected the compose mode prompt to preserve the original recipient",
+    );
+
+    messages = await fetchConversationMessages(page, baseUrl, conversationId);
+    previousAssistantCount = messages.filter(
+      (message) => message.sender === "assistant",
+    ).length;
+
+    await page.getByTestId("input-message").fill("new email");
+    await page.getByTestId("input-message").press("Enter");
+
+    const resumedComposeReply = await waitForLatestAssistantReply({
+      page,
+      baseUrl,
+      conversationId,
+      previousAssistantCount,
+      timeoutMs: 45_000,
+    });
+    assert.match(
+      resumedComposeReply,
+      /what should the email say|i can draft that to zorovt18@gmail\.com/i,
+      "Expected choosing `new email` to resume the compose session for the requested recipient",
+    );
+
+    composeSessionCard = page.locator('[data-testid="google-compose-session-card"]').last();
+    await composeSessionCard.waitFor({ state: "visible", timeout: 20_000 });
+    assert.equal(
+      await composeSessionCard.getAttribute("data-compose-status"),
+      "awaiting_body",
+      "Expected `new email` to move the compose flow into awaiting_body before recipient correction",
+    );
+  } else {
+    assert.match(
+      composeReply,
+      /what should the email say|i can draft that to zorovt18@gmail\.com/i,
+      "Expected the draft request to open an awaiting-body compose session",
+    );
+    assert.match(
+      await composeSessionCard.innerText(),
+      /zorovt18@gmail\.com/i,
+      "Expected the compose session to start with the original recipient",
+    );
+  }
 
   messages = await fetchConversationMessages(page, baseUrl, conversationId);
   previousAssistantCount = messages.filter((message) => message.sender === "assistant").length;
