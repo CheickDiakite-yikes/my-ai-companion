@@ -1759,16 +1759,24 @@ function getGoogleComposeStatusMeta(session: GoogleComposeSession): {
   helperText: string;
   tone: "pending" | "ready" | "cancelled";
 } {
+  if (session.status === "awaiting_mode") {
+    return {
+      label: "Choose a path",
+      helperText:
+        "Reply with `new email` to start fresh, or `existing draft` if you want Zee to update something you already started.",
+      tone: "pending",
+    };
+  }
   if (session.status === "awaiting_recipient") {
     return {
-      label: "Waiting...",
+      label: "Waiting for recipient",
       helperText: "Reply with an email address so Zee knows who this is for.",
       tone: "pending",
     };
   }
   if (session.status === "awaiting_body") {
     return {
-      label: "Waiting...",
+      label: "Waiting for details",
       helperText: "Tell Zee what you want to say and she will turn it into a send-ready draft.",
       tone: "pending",
     };
@@ -2941,8 +2949,15 @@ function GoogleComposeSessionCard(props: {
   const toneStyles = getGoogleEmailToneStyles(statusMeta.tone);
   const recipient = props.session.recipientEmail?.trim() || "Waiting for recipient";
   const subject = props.session.subject?.trim() || null;
-  const bodyPreview = props.session.bodyPreview?.trim() || null;
+  const bodyPreview =
+    props.session.status === "awaiting_mode"
+      ? null
+      : props.session.bodyPreview?.trim() || null;
   const isVoiceStage = props.displayMode === "voice_stage";
+  const composeCardTitle =
+    props.session.status === "awaiting_mode"
+      ? "Draft choice needed"
+      : "Draft in progress";
 
   return (
     <div
@@ -2958,7 +2973,7 @@ function GoogleComposeSessionCard(props: {
           <div className="min-w-0">
             <div className="flex items-center gap-2">
               <Pencil className="h-4 w-4" />
-              <p className="text-sm font-semibold">Draft in progress</p>
+              <p className="text-sm font-semibold">{composeCardTitle}</p>
             </div>
             <p className="mt-2 text-xs leading-5 opacity-80">{props.text}</p>
           </div>
@@ -7145,6 +7160,7 @@ const ProfileView = ({
         backgroundColor: "var(--app-panel-bg)",
         color: "var(--app-on-dark)",
       }}
+      data-testid="panel-profile-view"
     >
       <div className="relative h-48 shrink-0 overflow-hidden">
         <img src={leafBg} alt="Cover" className="w-full h-full object-cover" />
