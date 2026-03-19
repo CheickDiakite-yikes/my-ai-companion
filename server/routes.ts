@@ -4664,6 +4664,12 @@ function buildProactiveOfferPrompt(input: {
   ].join(" ");
 }
 
+function isReservedGoogleActionOfferRequest(text: string): boolean {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (!normalized) return false;
+  return detectGoogleActionTaskIntent(normalized, null);
+}
+
 function inferProactiveOfferOpportunity(input: {
   conversationId: string;
   sourceMessageId: string;
@@ -4672,6 +4678,7 @@ function inferProactiveOfferOpportunity(input: {
   if (!ENABLE_AGENT_PROACTIVE_OFFERS) return null;
   const normalized = input.userText.replace(/\s+/g, " ").trim();
   if (normalized.length < 16) return null;
+  if (isReservedGoogleActionOfferRequest(normalized)) return null;
 
   const hasNeedSignal = PROACTIVE_OFFER_NEED_PATTERNS.some((pattern) =>
     pattern.test(normalized),
@@ -4739,6 +4746,7 @@ function inferExplicitOfferOpportunity(input: {
   const normalized = input.userText.replace(/\s+/g, " ").trim();
   if (!normalized) return null;
   if (!isExplicitBuildCommand(normalized)) return null;
+  if (isReservedGoogleActionOfferRequest(normalized)) return null;
 
   const taskKind = inferAgentTaskKind(normalized, input.hasImage, input.turnIntentContext);
   const riskLevel = inferTaskRiskLevel(normalized);
@@ -7999,6 +8007,14 @@ function isGoogleActionDeclineMessage(text: string): boolean {
   );
 }
 
+function looksLikeGoogleClarificationConfusionText(text: string): boolean {
+  const compact = normalizeGoogleActionControlText(text);
+  if (!compact) return false;
+  return /^(?:what|what\?|wait|wait\?|huh|huh\?|hm|hmm|which|which\?|wdym|what do you mean|come again|say that again|can you repeat that|sorry|sorry\?)$/.test(
+    compact,
+  );
+}
+
 function shouldBypassGenericAgentTaskForGoogleAction(params: {
   text: string;
   conversationMessages: Message[];
@@ -8944,14 +8960,42 @@ async function maybeHandleGoogleActionTask(params: {
   onEvent?: (event: AgentTaskEvent) => void;
   onTrace?: (event: string, metadata: Record<string, unknown>) => void;
 }) {
-  if (!ENABLE_GOOGLE_PERSONAL_CONTEXT_WRITES) {
-    return { handled: false as const };
-  }
-
   const googleConversationState = resolveLatestGoogleConversationState(
     params.conversationMessages,
   );
   const recentContext = toGoogleRecentActionContext(googleConversationState);
+  const googleActionIntentDetected = detectGoogleActionTaskIntent(
+    params.text,
+    recentContext,
+  );
+  if (!ENABLE_GOOGLE_PERSONAL_CONTEXT_WRITES) {
+    if (
+      googleActionIntentDetected ||
+      googleConversationState.composeSession ||
+      googleConversationState.calendarSession ||
+      googleConversationState.pendingTask
+    ) {
+      const assistantMessages = await storage.createAssistantTurnParts({
+        conversationId: params.conversationId,
+        textParts: [
+          "Google email and calendar actions are not enabled in this environment right now.",
+        ],
+      });
+      return {
+        handled: true as const,
+        kind: "clarify" as const,
+        assistantMessages,
+        legacyAssistantMessage: makeLegacyAssistantMessage(assistantMessages),
+        model: "google_action_unavailable_v1",
+        decisionPath: "companion_reply" as const,
+        decisionPathReason: "companion" as const,
+        awaitingApproval: false,
+        task: null,
+      };
+    }
+    return { handled: false as const };
+  }
+
   const rankedEmailCandidates = rankGoogleConversationTaskTargets({
     candidates: googleConversationState.emailDraftCandidates.map((candidate) => ({
       ...candidate,
@@ -8970,10 +9014,7 @@ async function maybeHandleGoogleActionTask(params: {
     connector: "calendar",
     action: "update",
   });
-  const hasOtherGoogleFollowUpIntent = detectGoogleActionTaskIntent(
-    params.text,
-    recentContext,
-  );
+  const hasOtherGoogleFollowUpIntent = googleActionIntentDetected;
   const startsFreshEmailRequest = looksLikeGoogleEmailComposeRequest(params.text);
   const startsFreshCalendarCreateRequest = looksLikeGoogleCalendarCreateRequest(
     params.text,
@@ -9614,6 +9655,30 @@ async function maybeHandleGoogleActionTask(params: {
   }
 
   if (googleConversationState.composeSession) {
+    if (looksLikeGoogleClarificationConfusionText(params.text)) {
+      const reminder = buildComposeSessionReminder(
+        googleConversationState.composeSession.session,
+      );
+      const assistantMessage = await createGoogleComposeSessionAssistantMessage({
+        storage: params.storage,
+        conversationId: params.conversationId,
+        text: reminder,
+        session: googleConversationState.composeSession.session,
+      });
+      const assistantMessages = [assistantMessage];
+      return {
+        handled: true as const,
+        kind: "clarify" as const,
+        assistantMessages,
+        legacyAssistantMessage: makeLegacyAssistantMessage(assistantMessages),
+        model: "google_action_clarification_v2",
+        decisionPath: "companion_reply" as const,
+        decisionPathReason: "companion" as const,
+        awaitingApproval: false,
+        task: null,
+      };
+    }
+
     if (isGoogleActionDeclineMessage(params.text)) {
       const cancelledSession = googleConversationState.composeSession.session;
       const cancelRecipient = cancelledSession.recipientEmail
@@ -9730,6 +9795,30 @@ async function maybeHandleGoogleActionTask(params: {
   }
 
   if (googleConversationState.calendarSession) {
+    if (looksLikeGoogleClarificationConfusionText(params.text)) {
+      const reminder = buildCalendarSessionReminder(
+        googleConversationState.calendarSession.session,
+      );
+      const assistantMessage = await createGoogleCalendarSessionAssistantMessage({
+        storage: params.storage,
+        conversationId: params.conversationId,
+        text: reminder,
+        session: googleConversationState.calendarSession.session,
+      });
+      const assistantMessages = [assistantMessage];
+      return {
+        handled: true as const,
+        kind: "clarify" as const,
+        assistantMessages,
+        legacyAssistantMessage: makeLegacyAssistantMessage(assistantMessages),
+        model: "google_action_calendar_clarification_v2",
+        decisionPath: "companion_reply" as const,
+        decisionPathReason: "companion" as const,
+        awaitingApproval: false,
+        task: null,
+      };
+    }
+
     if (isGoogleActionDeclineMessage(params.text)) {
       const assistantMessage = await createGoogleCalendarSessionAssistantMessage({
         storage: params.storage,
@@ -15746,7 +15835,6 @@ export async function registerRoutes(
           })
         : null;
       const shouldReserveTurnForGoogleAction =
-        ENABLE_GOOGLE_PERSONAL_CONTEXT_WRITES &&
         shouldBypassGenericAgentTaskForGoogleAction({
           text: parsed.text,
           conversationMessages: existingConversationMessages,
@@ -15762,6 +15850,7 @@ export async function registerRoutes(
         ENABLE_AGENTIC_CREATIONS &&
         intentResolution.intent === "agent_task" &&
         Boolean(proactiveOpportunity) &&
+        !shouldReserveTurnForGoogleAction &&
         !hasPendingOffer &&
         !activeIntentSession &&
         !shouldForceOfferFlow;
@@ -17305,7 +17394,6 @@ export async function registerRoutes(
         pendingOfferResolved && isOfferDeclineMessage(parsed.text),
       );
       const shouldReserveTurnForGoogleAction =
-        ENABLE_GOOGLE_PERSONAL_CONTEXT_WRITES &&
         shouldBypassGenericAgentTaskForGoogleAction({
           text: parsed.text,
           conversationMessages: existingConversationMessages,
@@ -17321,6 +17409,7 @@ export async function registerRoutes(
         ENABLE_AGENTIC_CREATIONS &&
         intentResolution.intent === "agent_task" &&
         Boolean(proactiveOpportunity) &&
+        !shouldReserveTurnForGoogleAction &&
         !hasPendingOffer &&
         !activeIntentSession &&
         !shouldForceOfferFlow;

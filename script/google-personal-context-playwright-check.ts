@@ -99,24 +99,26 @@ async function main(): Promise<void> {
     await login(page, args);
     console.log("[google-context-check] onboarding");
     await dismissOnboardingIfPresent(page);
-    console.log("[google-context-check] disconnected status");
-    await verifyDisconnectedConnectedAccountsUi(page, args.outputDir);
-    console.log("[google-context-check] baseline prompts");
-    await verifyPromptFlows(page, args.baseUrl, args.outputDir);
-    console.log("[google-context-check] seed read scopes");
-    await upsertGoogleIntegrationFixture(args.email, "read");
-    console.log("[google-context-check] read-only status");
-    await verifyReadOnlyGoogleAssistantState(page, args.outputDir);
-    console.log("[google-context-check] upgrade-required compose");
-    await verifyUpgradeRequiredComposeFlow(page, args.baseUrl);
-    console.log("[google-context-check] seed write scopes");
-    await upsertGoogleIntegrationFixture(args.email, "write");
-    console.log("[google-context-check] write-enabled status");
-    await verifyWriteEnabledGoogleAssistantState(page, args.outputDir);
-
     if (args.scenario === "email-memory") {
+      console.log("[google-context-check] seed write scopes");
+      await upsertGoogleIntegrationFixture(args.email, "write");
+      await page.reload({ waitUntil: "networkidle" });
       await runEmailMemoryFollowUpSuite(page, args);
     } else {
+      console.log("[google-context-check] disconnected status");
+      await verifyDisconnectedConnectedAccountsUi(page, args.outputDir);
+      console.log("[google-context-check] baseline prompts");
+      await verifyPromptFlows(page, args.baseUrl, args.outputDir);
+      console.log("[google-context-check] seed read scopes");
+      await upsertGoogleIntegrationFixture(args.email, "read");
+      console.log("[google-context-check] read-only status");
+      await verifyReadOnlyGoogleAssistantState(page, args.outputDir);
+      console.log("[google-context-check] upgrade-required compose");
+      await verifyUpgradeRequiredComposeFlow(page, args.baseUrl);
+      console.log("[google-context-check] seed write scopes");
+      await upsertGoogleIntegrationFixture(args.email, "write");
+      console.log("[google-context-check] write-enabled status");
+      await verifyWriteEnabledGoogleAssistantState(page, args.outputDir);
       console.log("[google-context-check] compose phrasing coverage");
       await verifyComposeForRecipientPhrasingFlow(page, args.baseUrl, args.outputDir);
       console.log("[google-context-check] approval card compose");
@@ -381,34 +383,61 @@ async function waitForProfileReady(page: Page): Promise<void> {
 async function openConnectedAccounts(page: Page): Promise<void> {
   await page.getByTestId("button-profile").click();
   await waitForProfileReady(page);
-  await page.waitForSelector('[data-testid="button-toggle-connected-accounts"]', {
-    timeout: 15_000,
-  });
+  const connectionsPanelSelector = '[data-testid="panel-google-connections"]';
+  const toggleSelector = '[data-testid="button-toggle-connected-accounts"]';
 
-  const connectedAccountsToggle = page.getByTestId(
-    "button-toggle-connected-accounts",
-  );
-  await connectedAccountsToggle.scrollIntoViewIfNeeded();
-
-  const googleAccountVisible = await page
-    .getByText("Google Account")
-    .isVisible()
-    .catch(() => false);
-  if (!googleAccountVisible) {
-    await connectedAccountsToggle.click();
+  if (await page.locator(connectionsPanelSelector).first().isVisible().catch(() => false)) {
+    return;
   }
-  await page
-    .waitForSelector("text=Google Account", { timeout: 12_000 })
-    .catch(async () => {
-      await waitForProfileReady(page);
-      await connectedAccountsToggle.click();
-      await page.waitForSelector("text=Google Account", { timeout: 12_000 });
-    });
+
+  await page.waitForSelector(toggleSelector, { timeout: 15_000 });
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const connectedAccountsToggle = page.locator(toggleSelector).first();
+    await connectedAccountsToggle.waitFor({ state: "visible", timeout: 10_000 });
+    await connectedAccountsToggle.scrollIntoViewIfNeeded().catch(() => undefined);
+    await connectedAccountsToggle.click({ force: true });
+
+    const opened = await page
+      .waitForSelector(connectionsPanelSelector, {
+        state: "visible",
+        timeout: 4_000,
+      })
+      .then(() => true)
+      .catch(() => false);
+    if (opened) {
+      break;
+    }
+    await waitForProfileReady(page);
+  }
+
+  await page.waitForSelector(connectionsPanelSelector, {
+    state: "visible",
+    timeout: 12_000,
+  });
 }
 
 async function closeProfile(page: Page): Promise<void> {
-  if ((await page.locator('[data-testid="button-close-profile"]').count()) > 0) {
-    await page.getByTestId("button-close-profile").click();
+  const closeSelector = '[data-testid="button-close-profile"]';
+  if ((await page.locator(closeSelector).count()) > 0) {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const closeButton = page.locator(closeSelector).first();
+      const isVisible = await closeButton.isVisible().catch(() => false);
+      if (!isVisible) {
+        break;
+      }
+      await closeButton.click({ force: true }).catch(() => undefined);
+      const closed = await page
+        .waitForSelector(closeSelector, { state: "hidden", timeout: 2_000 })
+        .then(() => true)
+        .catch(() => false);
+      if (closed) {
+        break;
+      }
+    }
+    if ((await page.locator(closeSelector).count()) > 0) {
+      await page.keyboard.press("Escape").catch(() => undefined);
+    }
   }
   await page.waitForSelector('[data-testid="input-message"]', { timeout: 15_000 });
 }
@@ -603,6 +632,41 @@ async function verifyComposeForRecipientPhrasingFlow(
     await composeSessionCard.innerText(),
     /contact@cheickdiakite\.com/i,
     "Expected the compose session card to carry the provided recipient",
+  );
+  assert.equal(
+    await page.locator('[data-testid="agent-offer-card"]').count(),
+    0,
+    "Direct Gmail compose prompts must not surface the generic suggested-build offer UI",
+  );
+
+  const afterClarificationMessages = await fetchConversationMessages(
+    page,
+    baseUrl,
+    conversationId,
+  );
+  const afterClarificationAssistantCount = afterClarificationMessages.filter(
+    (message) => message.sender === "assistant",
+  ).length;
+
+  await page.getByTestId("input-message").fill("what?");
+  await page.getByTestId("input-message").press("Enter");
+
+  const reminderReply = await waitForLatestAssistantReply({
+    page,
+    baseUrl,
+    conversationId,
+    previousAssistantCount: afterClarificationAssistantCount,
+    timeoutMs: 45_000,
+  });
+  assert.match(
+    reminderReply,
+    /what subject should i use|what should the email say|what subject should i use, and what should the email say/i,
+    "Confused follow-ups inside a compose session should stay in the Gmail compose flow",
+  );
+  assert.doesNotMatch(
+    reminderReply,
+    /lunch with alex|for today, you had|suggested build|want me to start/i,
+    "Compose clarification recovery must not drift into unrelated context or generic build offers",
   );
 
   await page.screenshot({
