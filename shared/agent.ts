@@ -433,6 +433,8 @@ export type GoogleActionTargetSelectionReason =
   | "single_candidate"
   | "ambiguity_required"
   | "active_surface"
+  | "foreground_task"
+  | "paused_task"
   | "recent_context"
   | "manual_selection"
   | "latest_actionable"

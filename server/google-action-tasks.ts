@@ -539,6 +539,170 @@ function inferSubjectRevision(input: string): string | null {
   return match?.[1]?.trim() ?? null;
 }
 
+function stripWrappingQuotes(value: string): string {
+  return value
+    .trim()
+    .replace(/^(["'`“”‘’])+/, "")
+    .replace(/(["'`“”‘’])+$/, "")
+    .trim();
+}
+
+function normalizeEmailSentence(value: string): string {
+  const normalized = stripWrappingQuotes(normalizeText(value));
+  if (!normalized) return "";
+  const withCapital = normalized.charAt(0).toUpperCase() + normalized.slice(1);
+  return /[.!?]$/.test(withCapital) ? withCapital : `${withCapital}.`;
+}
+
+function inferLocalEmailBodyEdit(
+  input: string,
+): { mode: "replace" | "append"; content: string } | null {
+  const normalized = normalizeText(input);
+  if (!normalized) return null;
+  if (inferComposeRecipientChange(normalized)) return null;
+  if (/\bsubject(?: line)?\b/i.test(normalized)) return null;
+  if (
+    /\b(?:rewrite|reword|redraft|from scratch|tone|warmer|friendlier|formal|casual|professional|shorter|longer)\b/i.test(
+      normalized,
+    )
+  ) {
+    return null;
+  }
+
+  const replaceMatch =
+    normalized.match(
+      /^(?:just\s+)?(?:say|tell(?:\s+(?:him|her|them))?|ask|write|use)\s+(.+)$/i,
+    ) ??
+    normalized.match(
+      /^(?:body|message)(?:\s+(?:should|can))?\s+(?:say|be)\s+(.+)$/i,
+    );
+  if (replaceMatch?.[1]) {
+    const content = stripWrappingQuotes(replaceMatch[1]);
+    return content ? { mode: "replace", content } : null;
+  }
+
+  const appendMatch = normalized.match(
+    /^(?:just\s+)?(?:add|mention)\s+(?:that\s+)?(.+)$/i,
+  );
+  if (appendMatch?.[1]) {
+    const content = stripWrappingQuotes(appendMatch[1]);
+    return content ? { mode: "append", content } : null;
+  }
+
+  return null;
+}
+
+function inferSubjectOnlyRevisionRequest(input: string): boolean {
+  const normalized = normalizeText(input).toLowerCase();
+  if (!normalized) return false;
+  if (!/\bsubject(?: line)?\b/.test(normalized)) return false;
+  if (
+    /\b(?:body|message|say|tell|ask|recipient|to\s+\S+@\S+|draft it|send it)\b/.test(
+      normalized,
+    )
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function appendSentenceToEmailBody(params: {
+  currentBodyText: string;
+  sentence: string;
+  signatureName: string | null;
+}): string {
+  const sentence = normalizeEmailSentence(params.sentence);
+  if (!sentence) {
+    return applyEmailBodySignature(params.currentBodyText, params.signatureName);
+  }
+  const current = normalizeText(params.currentBodyText);
+  if (!current) {
+    return applyEmailBodySignature(`Hi,\n\n${sentence}`, params.signatureName);
+  }
+
+  const closingMatch = current.match(
+    /\n\n((?:Best|Thanks|Thank you|Cheers|Warmly|Sincerely|Take care|Talk soon|Regards)[\s\S]*)$/i,
+  );
+  if (closingMatch && typeof closingMatch.index === "number") {
+    const bodyWithoutClosing = current.slice(0, closingMatch.index).trimEnd();
+    return `${bodyWithoutClosing}\n\n${sentence}\n\n${closingMatch[1]}`.trim();
+  }
+
+  return applyEmailBodySignature(`${current}\n\n${sentence}`, params.signatureName);
+}
+
+function buildLocalBodyOnlyRevisedEmailDraft(params: {
+  edit: { mode: "replace" | "append"; content: string };
+  currentSubject: string;
+  currentBodyText: string;
+  authorContext?: EmailAuthorContext | null;
+}): { subject: string; bodyText: string } {
+  if (params.edit.mode === "append") {
+    return {
+      subject: params.currentSubject,
+      bodyText: appendSentenceToEmailBody({
+        currentBodyText: params.currentBodyText,
+        sentence: params.edit.content,
+        signatureName: params.authorContext?.signatureName ?? null,
+      }),
+    };
+  }
+
+  const bodyOnlyFallback = buildFallbackEmailDraft({
+    instructionText: params.edit.content,
+    subjectHint: params.currentSubject,
+    authorContext: params.authorContext,
+  });
+  return {
+    subject: params.currentSubject,
+    bodyText: bodyOnlyFallback.bodyText,
+  };
+}
+
+export async function buildRevisedEmailSubjectOnly(params: {
+  instructionText: string;
+  currentSubject: string;
+  currentBodyText: string;
+  authorContext?: EmailAuthorContext | null;
+}): Promise<string> {
+  const normalizedInstruction = normalizeText(params.instructionText);
+  const explicitSubject = inferSubjectRevision(normalizedInstruction);
+  const fallbackSubject =
+    explicitSubject && !/^(?:something|anything)\s+\w+/i.test(explicitSubject)
+      ? explicitSubject
+      : params.currentSubject || "Quick note";
+
+  try {
+    const structured = await generateStructuredJson({
+      systemInstruction: [
+        "You revise only the subject line for an existing personal email.",
+        'Return strict JSON only with key "subject".',
+        "Do not rewrite the body.",
+        "Keep the subject concise, natural, and specific.",
+        "Do not invent new email body details that are not already present.",
+        ...buildEmailAuthorPrompt(params.authorContext),
+      ].join("\n"),
+      userPrompt: [
+        `Current subject: ${params.currentSubject || "none"}`,
+        "Current body:",
+        params.currentBodyText || "(empty)",
+        "",
+        `Subject revision request: ${normalizedInstruction}`,
+      ].join("\n"),
+      enableGoogleSearchGrounding: false,
+    });
+    const raw = stripJsonFence(structured.text);
+    const parsed = JSON.parse(raw) as { subject?: unknown };
+    const subject =
+      typeof parsed.subject === "string" && parsed.subject.trim().length > 0
+        ? parsed.subject.trim()
+        : fallbackSubject;
+    return subject;
+  } catch {
+    return fallbackSubject;
+  }
+}
+
 function buildComposeSession(input: {
   status: GoogleComposeSession["status"];
   recipientEmail: string | null;
@@ -571,6 +735,9 @@ function buildComposeContinuationPrompt(params: {
   ) {
     return null;
   }
+  if (looksLikeGoogleActionCasualPauseTurn(followUpText)) {
+    return null;
+  }
   if (detectGoogleActionTaskIntent(followUpText, null)) {
     return null;
   }
@@ -578,6 +745,11 @@ function buildComposeContinuationPrompt(params: {
   if (params.session.status === "awaiting_body") {
     if (!params.session.recipientEmail) {
       return null;
+    }
+    if (inferSubjectOnlyRevisionRequest(followUpText)) {
+      const nextSubject =
+        inferSubjectRevision(followUpText) ?? params.session.subject ?? "Quick note";
+      return `draft an email to ${params.session.recipientEmail} about ${nextSubject}`;
     }
     const recipientChange = inferComposeRecipientChange(followUpText);
     if (recipientChange) {
@@ -732,6 +904,9 @@ function shouldAttemptGoogleActionAiRouting(params: {
   if (!ENABLE_GOOGLE_ACTION_AI_ROUTER) return false;
   const normalized = normalizeText(params.text);
   if (!normalized) return false;
+  if (looksLikeGoogleActionCasualPauseTurn(normalized)) {
+    return false;
+  }
   if (
     /^(?:yes|yeah|yep|sure|ok|okay|approve|send|cancel|stop|never mind|nevermind|nope|nah)\b/i.test(
       normalized,
@@ -1160,6 +1335,32 @@ async function buildRevisedEmailDraftContent(params: {
   threadSubject?: string | null;
   authorContext?: EmailAuthorContext | null;
 }): Promise<{ subject: string; bodyText: string }> {
+  if (inferSubjectOnlyRevisionRequest(params.instructionText)) {
+    const subject = await buildRevisedEmailSubjectOnly({
+      instructionText: params.instructionText,
+      currentSubject: params.currentSubject,
+      currentBodyText: params.currentBodyText,
+      authorContext: params.authorContext,
+    });
+    return {
+      subject,
+      bodyText: applyEmailBodySignature(
+        params.currentBodyText,
+        params.authorContext?.signatureName ?? null,
+      ),
+    };
+  }
+
+  const localBodyEdit = inferLocalEmailBodyEdit(params.instructionText);
+  if (localBodyEdit) {
+    return buildLocalBodyOnlyRevisedEmailDraft({
+      edit: localBodyEdit,
+      currentSubject: params.currentSubject,
+      currentBodyText: params.currentBodyText,
+      authorContext: params.authorContext,
+    });
+  }
+
   const fallback = buildFallbackRevisedEmailDraft(params);
 
   try {
@@ -1259,9 +1460,27 @@ function buildVoiceFriendlyDraftSummary(
       : "Want me to send it, save it as a draft, or make any changes?";
     return `I've drafted an email to ${recipientLabel}${subjectPart}.${contentPart} ${sendOrSave}`;
   }
-  const changeDescription = revisionInstruction
-    ? ` I ${revisionInstruction.toLowerCase().replace(/^\s*(?:please\s+)?/i, "").replace(/\s*[.!?]*$/, "")}.`
-    : "";
+  let changeDescription = "";
+  if (revisionInstruction) {
+    if (inferSubjectOnlyRevisionRequest(revisionInstruction)) {
+      changeDescription = " I updated the subject.";
+    } else if (inferComposeRecipientChange(revisionInstruction)) {
+      changeDescription = " I updated the recipient.";
+    } else {
+      const localBodyEdit = inferLocalEmailBodyEdit(revisionInstruction);
+      if (localBodyEdit) {
+        changeDescription =
+          localBodyEdit.mode === "append"
+            ? " I added that to the draft."
+            : " I updated the body text.";
+      } else {
+        changeDescription = ` I ${revisionInstruction
+          .toLowerCase()
+          .replace(/^\s*(?:please\s+)?/i, "")
+          .replace(/\s*[.!?]*$/, "")}.`;
+      }
+    }
+  }
   const revisedAction = plan.execution.sendAfterApproval
     ? "Want me to send it or make more changes?"
     : "Want me to send it, save as draft, or make more changes?";
@@ -1413,10 +1632,10 @@ export function looksLikeGoogleEmailDraftRevisionInstruction(text: string): bool
     return false;
   }
   return (
-    /^(?:ask|say|tell|mention|add|remove|make|rewrite|revise|edit|update|change|shorten|lengthen|reword|replace|use|keep|drop|swap|instead|tone|warmer|friendlier|shorter|longer|more formal|less formal|more casual)\b/i.test(
+    /^(?:(?:just|only)\s+)?(?:ask|say|tell|mention|add|remove|make|rewrite|revise|edit|update|change|shorten|lengthen|reword|replace|use|keep|drop|swap|instead|tone|warmer|friendlier|shorter|longer|more formal|less formal|more casual)\b/i.test(
       normalized,
     ) ||
-    /^(?:can|could|would|will)\s+you\s+(?:ask|say|tell|mention|add|remove|make|rewrite|revise|edit|update|change|shorten|lengthen|reword|replace|use|keep|drop|swap)\b/i.test(
+    /^(?:can|could|would|will)\s+you\s+(?:(?:just|only)\s+)?(?:ask|say|tell|mention|add|remove|make|rewrite|revise|edit|update|change|shorten|lengthen|reword|replace|use|keep|drop|swap)\b/i.test(
       normalized,
     ) ||
     /\b(?:subject)\b.*\b(?:to|should be)\b/i.test(normalized) ||
@@ -1461,6 +1680,39 @@ export function looksLikeGoogleEmailSaveAsDraftRequest(text: string): boolean {
 function isLikelyGoogleActionRequest(text: string): boolean {
   return /\b(reply|respond|draft|write|send|schedule|create|start|add|put|book|block(?:\s+off)?|hold|mark|move|reschedule|change|update)\b/i.test(
     text,
+  );
+}
+
+export function looksLikeGoogleActionCasualPauseTurn(text: string): boolean {
+  const normalized = normalizeText(text).toLowerCase();
+  if (!normalized) return false;
+  if (
+    /^(?:just\s+)?(?:say|tell|ask|write|use|add|mention|make|change|update|set|rewrite|revise|edit|replace|swap|drop|keep)\b/.test(
+      normalized,
+    )
+  ) {
+    return false;
+  }
+  if (
+    /\b(?:email|draft|reply|respond|calendar|meeting|event|appointment|subject|recipient|send|save|approve|cancel|revise|rewrite|update|change|move|reschedule)\b/.test(
+      normalized,
+    )
+  ) {
+    return false;
+  }
+  const tokenCount = normalized.split(/\s+/).filter(Boolean).length;
+  if (tokenCount > 18) return false;
+  return (
+    /^(?:hey+|heyy+|hello+|hi+|yo+|sup+|what'?s up|whats up|how are you|how'?s it going|hows it going)\b/.test(
+      normalized,
+    ) ||
+    /\b(?:lol|lmao|haha+|hmm+|ugh+|yikes)\b/.test(normalized) ||
+    /\bi(?:'m| am|m)\s+(?:in\s+)?(?:an?\s+)?(?:okay|ok|good|great|fine|solid|bad|weird)\s+mood\b/.test(
+      normalized,
+    ) ||
+    /\bi(?:'m| am|m)\s+(?:good|okay|ok|fine|great|happy|sad|stressed|tired|overwhelmed)\b/.test(
+      normalized,
+    )
   );
 }
 
@@ -1937,6 +2189,12 @@ export async function prepareGoogleActionTask(params: {
 }): Promise<GoogleActionTaskPreparation> {
   let rawText = normalizeText(params.text);
   const originalText = rawText;
+  if (
+    looksLikeGoogleActionCasualPauseTurn(rawText) &&
+    (params.composeSession || params.calendarSession)
+  ) {
+    return { kind: "none" };
+  }
   const deterministicIntentDetected = detectGoogleActionTaskIntent(
     rawText,
     params.recentContext ?? null,

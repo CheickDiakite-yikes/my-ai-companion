@@ -271,6 +271,44 @@ async function runEmailMemoryFollowUpSuite(
     args.baseUrl,
     args.outputDir,
   );
+  console.log("[google-context-check] email-memory recent email social reset");
+  await verifyRecentCompletedEmailDoesNotHijackSocialTurn(
+    page,
+    args.baseUrl,
+    args.email,
+    args.outputDir,
+  );
+  console.log("[google-context-check] email-memory casual pause resumes compose");
+  await verifyCasualPauseResumesComposeFlow(
+    page,
+    args.baseUrl,
+    args.outputDir,
+  );
+  console.log(
+    "[google-context-check] email-memory recipient-history compose pause keeps foreground draft",
+  );
+  await verifyRecipientHistoryComposePauseKeepsForegroundDraft(
+    page,
+    args.baseUrl,
+    args.email,
+    args.outputDir,
+  );
+  console.log("[google-context-check] email-memory foreground draft local body edit");
+  await verifyForegroundDraftLocalBodyEditFlow(
+    page,
+    args.baseUrl,
+    args.email,
+    args.outputDir,
+  );
+  console.log(
+    "[google-context-check] email-memory selected latest draft keeps local follow-up edits",
+  );
+  await verifySelectedLatestDraftKeepsForegroundFollowUps(
+    page,
+    args.baseUrl,
+    args.email,
+    args.outputDir,
+  );
   console.log("[google-context-check] email-memory saved-draft revision follow-up");
   await verifySavedDraftRevisionFollowUpFlow(
     page,
@@ -1006,70 +1044,23 @@ async function verifySavedDraftSendFollowUpFlow(
     /who should i send it to/i,
     "Saved draft follow-up should not fall back into a fresh recipient prompt",
   );
-  assert.match(
+  assert.doesNotMatch(
     sendFollowUpReply,
     /which email|which one/i,
-    "Multiple draft candidates should require an explicit send ambiguity choice instead of guessing",
-  );
-
-  const ambiguityCard = page.locator('[data-testid="google-email-ambiguity-card"]').last();
-  await ambiguityCard.waitFor({ state: "visible", timeout: 20_000 });
-  assert.equal(
-    await ambiguityCard.getAttribute("data-ambiguity-action"),
-    "send",
-    "Expected the send follow-up ambiguity card to stay in send mode",
+    "A strong foreground pending draft should bind directly for send follow-ups instead of reopening ambiguity",
   );
   assert.match(
-    await ambiguityCard.innerText(),
-    /team@soulnests\.com/i,
-    "Expected send ambiguity card to include the latest saved draft recipient",
-  );
-
-  const ambiguityChoice = ambiguityCard
-    .locator('[data-testid^="button-google-email-ambiguity-"]')
-    .filter({ hasText: "team@soulnests.com" })
-    .first();
-  await ambiguityChoice.waitFor({ state: "visible", timeout: 20_000 });
-  await ambiguityChoice.evaluate((button) => {
-    (button as HTMLButtonElement).click();
-  });
-  const ambiguitySelectionStatus = ambiguityCard.getByTestId(
-    "google-email-ambiguity-selection-status",
-  );
-  await ambiguitySelectionStatus.waitFor({ state: "visible", timeout: 20_000 });
-  assert.match(
-    await ambiguitySelectionStatus.innerText(),
-    /pulling up|selected/i,
-    "Choosing an ambiguity option should immediately show a locked selection state",
-  );
-  assert.equal(
-    await ambiguityChoice.isDisabled(),
-    true,
-    "Chosen ambiguity options should be disabled after selection to prevent repeated clicks",
-  );
-  await page.waitForTimeout(600);
-
-  const resolvedSendReply = await waitForLatestAssistantReply({
-    page,
-    baseUrl,
-    conversationId,
-    previousAssistantCount: beforeSendPromptAssistantCount + 1,
-    timeoutMs: 45_000,
-  });
-  assert.match(
-    resolvedSendReply,
-    /send email|review it and approve|approve if you want me to apply it/i,
-    "Choosing a draft from the send ambiguity card should continue the send approval flow",
+    sendFollowUpReply,
+    /approval received|applying it now|email sent|sending/i,
+    "A foreground pending draft send follow-up should continue the active send flow immediately",
   );
 
   const sendUnifiedCard = page.locator('[data-testid="agent-unified-task-card"]').last();
   await sendUnifiedCard.waitFor({ state: "visible", timeout: 20_000 });
-  const sendButton = page.getByTestId("button-google-email-primary-action").last();
-  await sendButton.waitFor({ state: "visible", timeout: 20_000 });
-  assert.match(
-    (await sendButton.innerText()).trim(),
-    /send email/i,
-    "Expected follow-up send intent to surface a send approval action",
+  assert.doesNotMatch(
+    await sendUnifiedCard.innerText(),
+    /which email|which one/i,
+    "Foreground send follow-ups should not leave an ambiguity picker active on the latest card",
   );
   assert.equal(
     await page.locator('[data-testid="google-compose-session-card"]').count(),
@@ -1139,7 +1130,7 @@ async function verifySavedDraftRevisionFollowUpFlow(
   } else {
     assert.match(
       revisionReply,
-      /updated the saved draft preview|updated the draft preview|review it and approve|create an email draft to/i,
+      /updated the saved draft preview|updated the draft preview|updated the draft to|review it and approve|create an email draft to/i,
       "Saved draft follow-up edits should create a revised approval flow",
     );
   }
@@ -1153,7 +1144,7 @@ async function verifySavedDraftRevisionFollowUpFlow(
   });
   assert.match(
     latestRevisionReply,
-    /updated the saved draft preview|updated the draft preview|review it and approve|create an email draft to/i,
+    /updated the saved draft preview|updated the draft preview|updated the draft to|review it and approve|create an email draft to/i,
     "Saved draft follow-up edits should create a revised approval flow",
   );
   assert.doesNotMatch(
@@ -1339,14 +1330,16 @@ async function verifyFreshComposeOverridesHistoryFlow(
     previousAssistantCount,
     timeoutMs: 45_000,
   });
-  assert.match(
-    staleAmbiguityReply,
-    /which email did you mean|which email could i send/i,
-    "Multiple older draft candidates should trigger ambiguity before we start a fresh compose flow",
-  );
-
-  const staleAmbiguityCard = page.locator('[data-testid="google-email-ambiguity-card"]').last();
-  await staleAmbiguityCard.waitFor({ state: "visible", timeout: 20_000 });
+  if (/which email did you mean|which email could i send/i.test(staleAmbiguityReply)) {
+    const staleAmbiguityCard = page.locator('[data-testid="google-email-ambiguity-card"]').last();
+    await staleAmbiguityCard.waitFor({ state: "visible", timeout: 20_000 });
+  } else {
+    assert.match(
+      staleAmbiguityReply,
+      /approve if you want me to apply it|want me to send it|preview ready|approval received|email sent/i,
+      "A strong foreground draft anchor may resolve `send it` directly instead of reopening ambiguity",
+    );
+  }
 
   messages = await fetchConversationMessages(page, baseUrl, conversationId);
   previousAssistantCount = messages.filter((message) => message.sender === "assistant").length;
@@ -1879,6 +1872,569 @@ async function verifyAiComposeRecipientCorrectionFlow(
   });
 }
 
+async function verifyRecentCompletedEmailDoesNotHijackSocialTurn(
+  page: Page,
+  baseUrl: string,
+  email: string,
+  outputDir: string,
+): Promise<void> {
+  const conversationId = await resolveActiveConversationId(page, baseUrl);
+  await seedSentEmailTaskFixture(email, conversationId);
+  await page.reload({ waitUntil: "networkidle" });
+
+  let messages = await fetchConversationMessages(page, baseUrl, conversationId);
+  let previousAssistantCount = messages.filter(
+    (message) => message.sender === "assistant",
+  ).length;
+
+  await page.getByTestId("input-message").fill("heyy");
+  await page.getByTestId("input-message").press("Enter");
+
+  const socialReply = await waitForLatestAssistantReply({
+    page,
+    baseUrl,
+    conversationId,
+    previousAssistantCount,
+    timeoutMs: 45_000,
+  });
+  assert.match(
+    socialReply,
+    /(hey|heyy|hello|hi)/i,
+    "A casual turn after a completed email should get a normal social reply",
+  );
+  assert.doesNotMatch(
+    socialReply,
+    /contact@cheickdiakite\.com|weekend plans|draft|email sent|i just sent/i,
+    "Completed email context should not hijack a social reply once the task is over",
+  );
+
+  messages = await fetchConversationMessages(page, baseUrl, conversationId);
+  previousAssistantCount = messages.filter(
+    (message) => message.sender === "assistant",
+  ).length;
+
+  await page
+    .getByTestId("input-message")
+    .fill("can you draft an email to contact@cheickdiakite.com");
+  await page.getByTestId("input-message").press("Enter");
+
+  const composeReply = await waitForLatestAssistantReply({
+    page,
+    baseUrl,
+    conversationId,
+    previousAssistantCount,
+    timeoutMs: 45_000,
+  });
+  assert.match(
+    composeReply,
+    /what subject should i use|what should the email say|i can draft that to contact@cheickdiakite\.com/i,
+    "A fresh email request after a casual aside should start a new compose flow",
+  );
+  assert.doesNotMatch(
+    composeReply,
+    /which email did you mean|which one|want me to send it|weekend plans/i,
+    "A fresh compose request should not be hijacked by the previously completed email task",
+  );
+
+  const composeSessionCard = page.locator('[data-testid="google-compose-session-card"]').last();
+  await composeSessionCard.waitFor({ state: "visible", timeout: 20_000 });
+  assert.equal(
+    await composeSessionCard.getAttribute("data-compose-status"),
+    "awaiting_body",
+    "Expected the new email request after a casual aside to create a fresh compose session",
+  );
+  assert.match(
+    await composeSessionCard.innerText(),
+    /contact@cheickdiakite\.com/i,
+    "Expected the new compose session to keep the newly requested recipient",
+  );
+
+  await page.screenshot({
+    path: resolve(outputDir, "google-personal-context-recent-email-social-reset.png"),
+    fullPage: true,
+  });
+}
+
+async function verifyCasualPauseResumesComposeFlow(
+  page: Page,
+  baseUrl: string,
+  outputDir: string,
+): Promise<void> {
+  const conversationId = await resolveActiveConversationId(page, baseUrl);
+  await page.reload({ waitUntil: "networkidle" });
+
+  let messages = await fetchConversationMessages(page, baseUrl, conversationId);
+  let previousAssistantCount = messages.filter(
+    (message) => message.sender === "assistant",
+  ).length;
+
+  await page
+    .getByTestId("input-message")
+    .fill("draft an email to pause-flow@cheickdiakite.com");
+  await page.getByTestId("input-message").press("Enter");
+
+  await waitForLatestAssistantReply({
+    page,
+    baseUrl,
+    conversationId,
+    previousAssistantCount,
+    timeoutMs: 45_000,
+  });
+
+  let composeSessionCard = page.locator('[data-testid="google-compose-session-card"]').last();
+  await composeSessionCard.waitFor({ state: "visible", timeout: 20_000 });
+  assert.equal(
+    await composeSessionCard.getAttribute("data-compose-status"),
+    "awaiting_body",
+    "Expected a fresh Gmail compose flow before testing casual-turn continuity",
+  );
+  assert.match(
+    await composeSessionCard.innerText(),
+    /pause-flow@cheickdiakite\.com/i,
+    "Expected the active compose session to preserve the intended recipient",
+  );
+
+  messages = await fetchConversationMessages(page, baseUrl, conversationId);
+  previousAssistantCount = messages.filter(
+    (message) => message.sender === "assistant",
+  ).length;
+
+  await page.getByTestId("input-message").fill("im in an okay mood :)");
+  await page.getByTestId("input-message").press("Enter");
+
+  const casualReply = await waitForLatestAssistantReply({
+    page,
+    baseUrl,
+    conversationId,
+    previousAssistantCount,
+    timeoutMs: 45_000,
+  });
+  assert.doesNotMatch(
+    casualReply,
+    /which email|which one|what subject should i use|what should the email say/i,
+    "Casual turns should get a normal social reply without losing the active compose task",
+  );
+  assert.doesNotMatch(
+    casualReply,
+    /pause-flow@cheickdiakite\.com|draft|recipient|subject|email address|what should the email say/i,
+    "Casual turns should not drag the paused Gmail compose details into the social reply",
+  );
+
+  messages = await fetchConversationMessages(page, baseUrl, conversationId);
+  previousAssistantCount = messages.filter(
+    (message) => message.sender === "assistant",
+  ).length;
+
+  await page
+    .getByTestId("input-message")
+    .fill("make the subject something fun");
+  await page.getByTestId("input-message").press("Enter");
+
+  const subjectReply = await waitForLatestAssistantReply({
+    page,
+    baseUrl,
+    conversationId,
+    previousAssistantCount,
+    timeoutMs: 45_000,
+  });
+  assert.match(
+    subjectReply,
+    /what should the email say|i(?:'| wi)ll use .*subject/i,
+    "After a casual aside, Zee should resume the active compose flow and update the subject locally",
+  );
+  assert.doesNotMatch(
+    subjectReply,
+    /which email|which one|start a new email|update an existing draft/i,
+    "A strong foreground compose draft should not reopen ambiguity after a casual pause",
+  );
+
+  composeSessionCard = page.locator('[data-testid="google-compose-session-card"]').last();
+  await composeSessionCard.waitFor({ state: "visible", timeout: 20_000 });
+  assert.equal(
+    await composeSessionCard.getAttribute("data-compose-status"),
+    "awaiting_body",
+    "Expected subject-only edits to keep the same compose session active",
+  );
+  const composeSessionText = await composeSessionCard.innerText();
+  assert.match(
+    composeSessionText,
+    /pause-flow@cheickdiakite\.com/i,
+    "Expected the active compose session to keep the original recipient after a casual pause",
+  );
+  assert.match(
+    composeSessionText,
+    /subject/i,
+    "Expected the active compose session card to keep a visible subject field after the local edit",
+  );
+  assert.doesNotMatch(
+    composeSessionText,
+    /which email|which one|start a new email|update an existing draft/i,
+    "Expected the active compose session card to stay bound to the same compose flow after the local subject edit",
+  );
+
+  await page.screenshot({
+    path: resolve(outputDir, "google-personal-context-casual-pause-compose.png"),
+    fullPage: true,
+  });
+}
+
+async function verifyRecipientHistoryComposePauseKeepsForegroundDraft(
+  page: Page,
+  baseUrl: string,
+  email: string,
+  outputDir: string,
+): Promise<void> {
+  const conversationId = await resolveActiveConversationId(page, baseUrl);
+  const recipient = "continuity@cheickdiakite.com";
+  await seedCustomSavedDraftTaskFixture({
+    email,
+    conversationId,
+    recipient,
+    subject: "Weekend plans?",
+    bodyText: "hey are you free this weekend",
+  });
+  await seedCustomSavedDraftTaskFixture({
+    email,
+    conversationId,
+    recipient,
+    subject: "Quick note",
+    bodyText: "just wanted to send a quick update",
+  });
+  await page.reload({ waitUntil: "networkidle" });
+
+  let messages = await fetchConversationMessages(page, baseUrl, conversationId);
+  let previousAssistantCount = messages.filter(
+    (message) => message.sender === "assistant",
+  ).length;
+
+  await page
+    .getByTestId("input-message")
+    .fill(`can you draft an email to ${recipient}`);
+  await page.getByTestId("input-message").press("Enter");
+
+  const modeReply = await waitForLatestAssistantReply({
+    page,
+    baseUrl,
+    conversationId,
+    previousAssistantCount,
+    timeoutMs: 45_000,
+  });
+  assert.match(
+    modeReply,
+    /start a new email|update an existing draft/i,
+    "Expected recipient-targeted draft requests with same-recipient history to ask new-vs-existing mode first",
+  );
+
+  messages = await fetchConversationMessages(page, baseUrl, conversationId);
+  previousAssistantCount = messages.filter(
+    (message) => message.sender === "assistant",
+  ).length;
+
+  await page.getByTestId("input-message").fill("new email");
+  await page.getByTestId("input-message").press("Enter");
+
+  const freshComposeReply = await waitForLatestAssistantReply({
+    page,
+    baseUrl,
+    conversationId,
+    previousAssistantCount,
+    timeoutMs: 45_000,
+  });
+  assert.match(
+    freshComposeReply,
+    /what subject should i use|what should the email say|i have the recipient/i,
+    "Expected choosing new email to keep the flow in compose clarification",
+  );
+
+  let composeSessionCard = page.locator('[data-testid="google-compose-session-card"]').last();
+  await composeSessionCard.waitFor({ state: "visible", timeout: 20_000 });
+  assert.equal(
+    await composeSessionCard.getAttribute("data-compose-status"),
+    "awaiting_body",
+    "Expected a fresh compose session after choosing new email",
+  );
+  assert.match(
+    await composeSessionCard.innerText(),
+    /continuity@cheickdiakite\.com/i,
+    "Expected the fresh compose session to keep the requested recipient",
+  );
+
+  messages = await fetchConversationMessages(page, baseUrl, conversationId);
+  previousAssistantCount = messages.filter(
+    (message) => message.sender === "assistant",
+  ).length;
+
+  await page.getByTestId("input-message").fill("im in an okay mood :)");
+  await page.getByTestId("input-message").press("Enter");
+
+  const casualReply = await waitForLatestAssistantReply({
+    page,
+    baseUrl,
+    conversationId,
+    previousAssistantCount,
+    timeoutMs: 45_000,
+  });
+  assert.doesNotMatch(
+    casualReply,
+    /which email|which one|what subject should i use|what should the email say|continuity@cheickdiakite\.com/i,
+    "Casual replies during a compose pause should not reopen draft ambiguity or drag compose details into the social reply",
+  );
+
+  messages = await fetchConversationMessages(page, baseUrl, conversationId);
+  previousAssistantCount = messages.filter(
+    (message) => message.sender === "assistant",
+  ).length;
+
+  await page
+    .getByTestId("input-message")
+    .fill("make the subject something fun");
+  await page.getByTestId("input-message").press("Enter");
+
+  const subjectReply = await waitForLatestAssistantReply({
+    page,
+    baseUrl,
+    conversationId,
+    previousAssistantCount,
+    timeoutMs: 45_000,
+  });
+  assert.doesNotMatch(
+    subjectReply,
+    /which email|which one|existing draft|start a new email/i,
+    "A foreground compose session should not reopen ambiguity after a casual aside even when same-recipient draft history exists",
+  );
+  assert.match(
+    subjectReply,
+    /subject|what should the email say/i,
+    "Expected the compose session to stay active and accept a local subject edit after the casual aside",
+  );
+
+  composeSessionCard = page.locator('[data-testid="google-compose-session-card"]').last();
+  await composeSessionCard.waitFor({ state: "visible", timeout: 20_000 });
+  assert.equal(
+    await composeSessionCard.getAttribute("data-compose-status"),
+    "awaiting_body",
+    "Expected the same compose session to stay foreground after a local subject edit",
+  );
+  const composeText = await composeSessionCard.innerText();
+  assert.match(
+    composeText,
+    /continuity@cheickdiakite\.com/i,
+    "Expected the active compose session to remain bound to the requested recipient",
+  );
+  assert.match(
+    composeText,
+    /subject/i,
+    "Expected the compose session card to show a subject after the local edit",
+  );
+  assert.doesNotMatch(
+    composeText,
+    /which email|which one|existing draft|start a new email/i,
+    "Expected ambiguity UI to stay retired once the user chose new email",
+  );
+
+  await page.screenshot({
+    path: resolve(
+      outputDir,
+      "google-personal-context-recipient-history-compose-pause.png",
+    ),
+    fullPage: true,
+  });
+}
+
+async function verifyForegroundDraftLocalBodyEditFlow(
+  page: Page,
+  baseUrl: string,
+  email: string,
+  outputDir: string,
+): Promise<void> {
+  const conversationId = await resolveActiveConversationId(page, baseUrl);
+  await seedSavedDraftTaskFixture(email, conversationId);
+  await seedPendingDraftApprovalFixture(email, conversationId);
+  await page.reload({ waitUntil: "networkidle" });
+
+  const seededCard = page.locator('[data-testid="agent-unified-task-card"]').last();
+  await seededCard.waitFor({ state: "visible", timeout: 20_000 });
+  assert.match(
+    await seededCard.innerText(),
+    /stale@example\.com/i,
+    "Expected the newest foreground Gmail draft preview to be the pending draft before a local body edit",
+  );
+
+  const beforeMessages = await fetchConversationMessages(page, baseUrl, conversationId);
+  const previousAssistantCount = beforeMessages.filter(
+    (message) => message.sender === "assistant",
+  ).length;
+
+  await page
+    .getByTestId("input-message")
+    .fill('just say "im in a good mood today"');
+  await page.getByTestId("input-message").press("Enter");
+
+  const revisionReply = await waitForLatestAssistantReply({
+    page,
+    baseUrl,
+    conversationId,
+    previousAssistantCount,
+    timeoutMs: 45_000,
+  });
+  assert.doesNotMatch(
+    revisionReply,
+    /which email|which one/i,
+    "Foreground draft-local edits should not reopen ambiguity when the active draft is already in focus",
+  );
+  assert.doesNotMatch(
+    revisionReply,
+    /transmission from the simulation|boston|mysterious|good win at work|peaceful afternoon/i,
+    "Local body edits should not drift into unrelated companion embellishment",
+  );
+
+  const revisedUnifiedCard = page.locator('[data-testid="agent-unified-task-card"]').last();
+  await revisedUnifiedCard.waitFor({ state: "visible", timeout: 20_000 });
+  const revisedCardText = await revisedUnifiedCard.innerText();
+  assert.match(
+    revisedCardText,
+    /stale@example\.com/i,
+    "Expected the active pending draft to stay selected after a local body edit",
+  );
+  assert.match(
+    revisedCardText,
+    /quick hello/i,
+    "Expected local body edits to preserve the existing subject by default",
+  );
+  assert.match(
+    revisedCardText,
+    /good mood today/i,
+    "Expected local body edits to update the Gmail draft body with the requested wording",
+  );
+  assert.doesNotMatch(
+    revisedCardText,
+    /transmission from the simulation/i,
+    "Expected local body edits to avoid broad subject rewrites unless the user explicitly asks for one",
+  );
+
+  await page.screenshot({
+    path: resolve(outputDir, "google-personal-context-foreground-draft-local-body-edit.png"),
+    fullPage: true,
+  });
+}
+
+async function verifySelectedLatestDraftKeepsForegroundFollowUps(
+  page: Page,
+  baseUrl: string,
+  email: string,
+  outputDir: string,
+): Promise<void> {
+  const conversationId = await resolveActiveConversationId(page, baseUrl);
+  const recipient = "contact@cheickdiakite.com";
+  await seedCustomSavedDraftTaskFixture({
+    email,
+    conversationId,
+    recipient,
+    subject: "Weekend plans?",
+    bodyText: "Hey! Hope you're having a good week. Are you free at all this weekend?",
+  });
+  await seedCustomSavedDraftTaskFixture({
+    email,
+    conversationId,
+    recipient,
+    subject: "Quick note",
+    bodyText: "Hey! Just wanted to send a quick update.",
+  });
+  await page.reload({ waitUntil: "networkidle" });
+
+  let messages = await fetchConversationMessages(page, baseUrl, conversationId);
+  let previousAssistantCount = messages.filter(
+    (message) => message.sender === "assistant",
+  ).length;
+
+  await page
+    .getByTestId("input-message")
+    .fill("Use the latest draft to contact@cheickdiakite.com with subject Quick note.");
+  await page.getByTestId("input-message").press("Enter");
+
+  const selectionReply = await waitForLatestAssistantReply({
+    page,
+    baseUrl,
+    conversationId,
+    previousAssistantCount,
+    timeoutMs: 45_000,
+  });
+  assert.doesNotMatch(
+    selectionReply,
+    /which email|which one|start a new email|update an existing draft/i,
+    "Explicit latest-draft selection should bind directly without reopening ambiguity",
+  );
+
+  const foregroundCard = page.locator('[data-testid="agent-unified-task-card"]').last();
+  await foregroundCard.waitFor({ state: "visible", timeout: 20_000 });
+  const foregroundText = await foregroundCard.innerText();
+  assert.match(
+    foregroundText,
+    /contact@cheickdiakite\.com/i,
+    "Expected the selected draft preview to stay bound to the requested recipient",
+  );
+  assert.match(
+    foregroundText,
+    /quick note/i,
+    "Expected the selected latest draft to stay in the foreground",
+  );
+
+  messages = await fetchConversationMessages(page, baseUrl, conversationId);
+  previousAssistantCount = messages.filter(
+    (message) => message.sender === "assistant",
+  ).length;
+
+  await page
+    .getByTestId("input-message")
+    .fill('just say "im in a good mood today"');
+  await page.getByTestId("input-message").press("Enter");
+
+  const editReply = await waitForLatestAssistantReply({
+    page,
+    baseUrl,
+    conversationId,
+    previousAssistantCount,
+    timeoutMs: 45_000,
+  });
+  assert.doesNotMatch(
+    editReply,
+    /which email|which one|start a new email|update an existing draft/i,
+    "Local follow-up edits should stay attached to the selected latest draft",
+  );
+  assert.doesNotMatch(
+    editReply,
+    /transmission from the simulation|mysterious|boston|good win at work|peaceful afternoon/i,
+    "Selected latest-draft edits should not drift into unrelated companion copy",
+  );
+
+  const revisedCard = page.locator('[data-testid="agent-unified-task-card"]').last();
+  await revisedCard.waitFor({ state: "visible", timeout: 20_000 });
+  const revisedText = await revisedCard.innerText();
+  assert.match(
+    revisedText,
+    /contact@cheickdiakite\.com/i,
+    "Expected the revised latest draft to remain bound to the same recipient",
+  );
+  assert.match(
+    revisedText,
+    /quick note/i,
+    "Expected local body edits to preserve the selected draft subject by default",
+  );
+  assert.match(
+    revisedText,
+    /good mood today/i,
+    "Expected the selected latest draft to reflect the requested local body edit",
+  );
+
+  await page.screenshot({
+    path: resolve(
+      outputDir,
+      "google-personal-context-selected-latest-draft-local-edit.png",
+    ),
+    fullPage: true,
+  });
+}
+
 async function verifyAmbiguousDraftFollowUpFlow(
   page: Page,
   baseUrl: string,
@@ -1907,54 +2463,11 @@ async function verifyAmbiguousDraftFollowUpFlow(
     previousAssistantCount,
     timeoutMs: 45_000,
   });
-  assert.match(
+  assert.doesNotMatch(
     ambiguityReply,
     /which email|which one/i,
-    "Multiple draft candidates should trigger an ambiguity question instead of guessing",
+    "A strong foreground pending draft should win over historical ambiguity",
   );
-
-  const ambiguityCard = page.locator('[data-testid="google-email-ambiguity-card"]').last();
-  await ambiguityCard.waitFor({ state: "visible", timeout: 20_000 });
-  assert.equal(
-    await ambiguityCard.getAttribute("data-ambiguity-action"),
-    "revise",
-    "Expected the draft-follow-up ambiguity card to stay in revise mode",
-  );
-  const ambiguityText = await ambiguityCard.innerText();
-  assert.match(
-    ambiguityText,
-    /team@soulnests\.com/i,
-    "Expected the ambiguity card to list the latest saved draft",
-  );
-  assert.match(
-    ambiguityText,
-    /stale@example\.com/i,
-    "Expected the ambiguity card to list the older pending draft",
-  );
-
-  const ambiguityChoice = ambiguityCard
-    .locator('[data-testid^="button-google-email-ambiguity-"]')
-    .filter({ hasText: "team@soulnests.com" })
-    .first();
-  await ambiguityChoice.waitFor({ state: "visible", timeout: 20_000 });
-  await ambiguityChoice.evaluate((element) => {
-    (element as HTMLButtonElement).click();
-  });
-  const ambiguitySelectionStatus = ambiguityCard.getByTestId(
-    "google-email-ambiguity-selection-status",
-  );
-  await ambiguitySelectionStatus.waitFor({ state: "visible", timeout: 20_000 });
-  assert.match(
-    await ambiguitySelectionStatus.innerText(),
-    /pulling up|selected/i,
-    "Choosing a draft to revise should immediately lock the ambiguity card",
-  );
-  assert.equal(
-    await ambiguityChoice.isDisabled(),
-    true,
-    "Ambiguity options should be disabled after the user picks one draft",
-  );
-  await page.waitForTimeout(600);
 
   const revisedUnifiedCard = page.locator('[data-testid="agent-unified-task-card"]').last();
   await revisedUnifiedCard.waitFor({ state: "visible", timeout: 20_000 });
@@ -1964,18 +2477,18 @@ async function verifyAmbiguousDraftFollowUpFlow(
     );
     const latestCard = cards[cards.length - 1];
     const text = latestCard?.textContent ?? "";
-    return /team@soulnests\.com/i.test(text) && /march 12|hang out/i.test(text);
+    return /stale@example\.com/i.test(text) && /march 12|hang out/i.test(text);
   });
   const revisedCardText = await revisedUnifiedCard.innerText();
   assert.match(
     revisedCardText,
-    /team@soulnests\.com/i,
-    "Expected the ambiguity choice to target the selected saved draft",
+    /stale@example\.com/i,
+    "Expected the active pending draft to stay selected when it is still the foreground target",
   );
   assert.match(
     revisedCardText,
     /march 12|hang out/i,
-    "Expected the selected draft to reflect the requested follow-up edit",
+    "Expected the foreground draft to reflect the requested follow-up edit",
   );
 
   const assistantMessages = await fetchConversationMessages(page, baseUrl, conversationId);
@@ -1987,14 +2500,14 @@ async function verifyAmbiguousDraftFollowUpFlow(
           message.sender === "assistant" &&
           typeof message.text === "string" &&
           message.text.trim().length > 0 &&
-          /updated the (saved )?draft preview|review it and approve/i.test(
+          /updated the (saved )?draft preview|updated the draft to|review it and approve/i.test(
             message.text,
           ),
       )?.text ?? "";
   assert.match(
     latestRelevantAssistantText,
-    /updated the (saved )?draft preview|review it and approve/i,
-    "Choosing a draft from the ambiguity card should continue the Gmail revision flow",
+    /updated the (saved )?draft preview|updated the draft to|review it and approve/i,
+    "Foreground draft resolution should continue the Gmail revision flow without reopening ambiguity",
   );
 
   await page.screenshot({
@@ -2502,6 +3015,103 @@ async function seedCustomSavedDraftTaskFixture(params: {
       googleContext: {
         connector: "gmail",
         action: "revise",
+        actionableTargetId: task.id,
+        candidateTargetIds: [task.id],
+        sourceTurnId: null,
+        selectionReason: "latest_actionable",
+        surfaceKey: null,
+        selectionMode: null,
+      },
+    },
+  });
+}
+
+async function seedSentEmailTaskFixture(
+  email: string,
+  conversationId: string,
+): Promise<void> {
+  const [user] = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(eq(users.email, email))
+    .limit(1);
+  assert.ok(user?.id, `Expected to find user for ${email}`);
+
+  const recipient = "contact@cheickdiakite.com";
+  const prompt = `send an email to ${recipient} about weekend plans`;
+  const preview = {
+    kind: "email_compose" as const,
+    title: "Send email",
+    summary: `Send an email to ${recipient}.`,
+    connector: "gmail" as const,
+    requiresWriteAccess: true,
+    proposedEmail: {
+      to: [recipient],
+      cc: [],
+      subject: "Weekend plans",
+      bodyPreview: "Hey! Hope you're having a great week. Are you free at all this weekend?",
+      sendAfterApproval: true,
+    },
+  };
+  const plan = {
+    version: "google_action_v1" as const,
+    preview,
+    execution: {
+      kind: "email_compose" as const,
+      sendAfterApproval: true,
+      to: [recipient],
+      cc: [],
+      subject: "Weekend plans",
+      bodyText:
+        "Hey! Hope you're having a great week. Are you free at all this weekend? I'd love to catch up. Best, Cheick",
+    },
+  };
+  const completedAt = new Date();
+
+  const task = await storage.createAgentTask({
+    userId: user.id,
+    conversationId,
+    status: "completed",
+    riskLevel: "high",
+    taskKind: "google_action",
+    prompt,
+    requestedByMessageId: randomUUID(),
+    plan,
+    completedAt,
+  });
+
+  await storage.createMessage({
+    conversationId,
+    sender: "assistant",
+    text: `Sent that email to ${recipient}.`,
+    partIndex: 0,
+    uiPayload: {
+      kind: "agent_task_status",
+      task: {
+        id: task.id,
+        conversationId: task.conversationId,
+        status: task.status,
+        riskLevel: task.riskLevel,
+        taskKind: task.taskKind,
+        prompt: task.prompt,
+        errorMessage: task.errorMessage ?? null,
+        createdAt: task.createdAt,
+        updatedAt: task.updatedAt,
+        completedAt: task.completedAt,
+      },
+      text: "Completed",
+      googleActionPreview: preview,
+      googleActionResult: {
+        kind: "email_compose",
+        connector: "gmail",
+        status: "email_sent",
+        summary: `Sent an email to ${recipient}.`,
+        messageId: `fixture-sent-message-${task.id}`,
+        threadId: `fixture-sent-thread-${task.id}`,
+      },
+      googleContext: {
+        connector: "gmail",
+        action: "send",
         actionableTargetId: task.id,
         candidateTargetIds: [task.id],
         sourceTurnId: null,

@@ -89,6 +89,7 @@ import type {
   GoogleActionAmbiguityPrompt,
   GoogleActionPreview,
   GoogleActionResult,
+  GoogleActionTargetConnector,
   GoogleActionTargetContextMetadata,
   GoogleCalendarSession,
   GoogleComposeSession,
@@ -2340,20 +2341,83 @@ function sanitizeGoogleActionContext(
 function resolveLatestAssistantGoogleActionContext(
   messages: MessageData[],
 ): SendMessageOptions["googleActionContext"] | undefined {
+  let allowedCasualUserTurns = 2;
+  let skippedCasualUserTurns = 0;
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
     if (message.sender === "user") {
+      if (
+        allowedCasualUserTurns > 0 &&
+        looksLikeGoogleCasualPauseTurnText(message.text ?? "")
+      ) {
+        allowedCasualUserTurns -= 1;
+        skippedCasualUserTurns += 1;
+        continue;
+      }
       break;
     }
     if (message.sender !== "assistant") continue;
+    const payload = message.uiPayload;
     const context = sanitizeGoogleActionContext(
-      getGoogleActionContextFromPayload(message.uiPayload),
+      getGoogleActionContextFromPayload(payload),
     );
-    if (context?.actionableTargetId || (context?.candidateTargetIds?.length ?? 0) > 0) {
+    const isSessionContext =
+      isGoogleComposeSessionPayload(payload) || isGoogleCalendarSessionPayload(payload);
+    if (
+      context &&
+      (context.actionableTargetId ||
+        (context.candidateTargetIds?.length ?? 0) > 0 ||
+        isSessionContext)
+    ) {
+      if (skippedCasualUserTurns > 0 && context?.actionableTargetId) {
+        return {
+          ...context,
+          selectionReason: "paused_task",
+        };
+      }
+      if (skippedCasualUserTurns > 0) {
+        return {
+          ...context,
+          selectionReason: "paused_task",
+        };
+      }
       return context;
     }
   }
   return undefined;
+}
+
+function looksLikeGoogleCasualPauseTurnText(text: string): boolean {
+  const normalized = text.trim().toLowerCase();
+  if (!normalized) return false;
+  if (
+    /^(?:just\s+)?(?:say|tell|ask|write|use|add|mention|make|change|update|set|rewrite|revise|edit|replace|swap|drop|keep)\b/.test(
+      normalized,
+    )
+  ) {
+    return false;
+  }
+  if (
+    /\b(?:email|draft|reply|respond|calendar|meeting|event|appointment|subject|recipient|send|save|approve|cancel|revise|rewrite|update|change|move|reschedule)\b/.test(
+      normalized,
+    )
+  ) {
+    return false;
+  }
+  const tokenCount = normalized.split(/\s+/).filter(Boolean).length;
+  if (tokenCount > 18) return false;
+  return (
+    /^(?:hey+|heyy+|hello+|hi+|yo+|sup+|what'?s up|whats up|how are you|how'?s it going|hows it going)\b/.test(
+      normalized,
+    ) ||
+    /\b(?:lol|lmao|haha+|hmm+|ugh+|yikes)\b/.test(normalized) ||
+    /\bi(?:'m| am|m)\s+(?:in\s+)?(?:an?\s+)?(?:okay|ok|good|great|fine|solid|bad|weird)\s+mood\b/.test(
+      normalized,
+    ) ||
+    /\bi(?:'m| am|m)\s+(?:good|okay|ok|fine|great|happy|sad|stressed|tired|overwhelmed)\b/.test(
+      normalized,
+    )
+  );
 }
 
 function looksLikeFreshGoogleActionRequestText(text: string): boolean {
@@ -2395,8 +2459,28 @@ function looksLikeGoogleTargetedFollowUpText(
   }
 
   if (
-    /\b(?:this|that|latest)\b/.test(normalized) &&
+    context.connector === "gmail" &&
+    (/^(?:just\s+)?(?:say|tell|ask|write|use|add|mention)\b/.test(normalized) ||
+      /^(?:make|change|update|set)\s+(?:the\s+)?subject\b/.test(normalized) ||
+      /\b(?:body|message)\b.*\b(?:say|be)\b/.test(normalized))
+  ) {
+    return true;
+  }
+
+  if (
+    /\b(?:this|that|latest|last|newest|most recent|current|second|third)\b/.test(
+      normalized,
+    ) &&
     /\b(?:draft|email|reply|event|meeting|calendar)\b/.test(normalized)
+  ) {
+    return true;
+  }
+
+  if (
+    context.connector === "gmail" &&
+    /\b(?:latest|last|newest|most recent|current|second|third|that one|this one)\b/.test(
+      normalized,
+    )
   ) {
     return true;
   }
@@ -5466,6 +5550,102 @@ function buildUnifiedAgentTaskCards(
     };
 
     return [{ kind: "agent_unified_task", message: aggregate.latestMessage, card }];
+  });
+}
+
+function getGoogleConnectorFromRenderItem(
+  item: TextRenderItem,
+): GoogleActionTargetConnector | null {
+  if (item.kind === "agent_unified_task") {
+    return (
+      item.card.googleContext?.connector ??
+      item.card.googleActionPreview?.connector ??
+      item.card.googleActionResult?.connector ??
+      null
+    );
+  }
+  if (isGoogleComposeSessionPayload(item.message.uiPayload)) {
+    return "gmail";
+  }
+  if (isGoogleCalendarSessionPayload(item.message.uiPayload)) {
+    return "calendar";
+  }
+  if (isGoogleActionAmbiguityPayload(item.message.uiPayload)) {
+    return item.message.uiPayload.ambiguity.connector;
+  }
+  return null;
+}
+
+function pruneSupersededGoogleRenderItems(items: TextRenderItem[]): TextRenderItem[] {
+  return items.filter((item, index) => {
+    if (item.kind === "agent_unified_task") {
+      const connector = getGoogleConnectorFromRenderItem(item);
+      if (!connector) {
+        return true;
+      }
+      const hasNewerSameConnectorSurface = items.slice(index + 1).some((other) => {
+        const otherConnector = getGoogleConnectorFromRenderItem(other);
+        return otherConnector === connector;
+      });
+      if (hasNewerSameConnectorSurface) {
+        return false;
+      }
+      if (!isTerminalTaskCardStatus(item.card.status)) {
+        return true;
+      }
+      return true;
+    }
+    const payload = item.message.uiPayload;
+    if (
+      !payload ||
+      (!isGoogleComposeSessionPayload(payload) &&
+        !isGoogleCalendarSessionPayload(payload) &&
+        !isGoogleActionAmbiguityPayload(payload))
+    ) {
+      return true;
+    }
+
+    const connector = getGoogleConnectorFromRenderItem(item);
+    if (!connector) {
+      return true;
+    }
+
+    const hasNewerSameConnectorSurface = items.slice(index + 1).some((other) => {
+      const otherConnector = getGoogleConnectorFromRenderItem(other);
+      if (otherConnector !== connector) {
+        return false;
+      }
+      if (other.kind === "agent_unified_task") {
+        return true;
+      }
+      const otherPayload = other.message.uiPayload;
+      if (!otherPayload) {
+        return false;
+      }
+      if (
+        isGoogleActionAmbiguityPayload(payload) &&
+        (isGoogleComposeSessionPayload(otherPayload) ||
+          isGoogleCalendarSessionPayload(otherPayload) ||
+          isGoogleActionAmbiguityPayload(otherPayload))
+      ) {
+        return true;
+      }
+      if (
+        isGoogleComposeSessionPayload(payload) &&
+        isGoogleComposeSessionPayload(otherPayload)
+      ) {
+        return true;
+      }
+      if (
+        isGoogleCalendarSessionPayload(payload) &&
+        isGoogleCalendarSessionPayload(otherPayload)
+      ) {
+        return true;
+      }
+      return false;
+    });
+
+    return !hasNewerSameConnectorSurface;
   });
 }
 
@@ -12107,16 +12287,16 @@ const TextView = ({
       ?.text ?? "";
 
   const renderItems = useMemo(() => {
-    if (
+    const baseItems =
       (!ENABLE_AGENTIC_CREATIONS && !ENABLE_GOOGLE_ASSISTANT_TASKS) ||
       !ENABLE_UNIFIED_AGENT_TASK_CARD
-    ) {
-      return visibleMessages.map((message) => ({
-        kind: "message",
-        message,
-      })) as TextRenderItem[];
-    }
-    return buildUnifiedAgentTaskCards(visibleMessages, liveTaskSnapshots);
+        ? (visibleMessages.map((message) => ({
+            kind: "message",
+            message,
+          })) as TextRenderItem[])
+        : buildUnifiedAgentTaskCards(visibleMessages, liveTaskSnapshots);
+
+    return pruneSupersededGoogleRenderItems(baseItems);
   }, [visibleMessages, liveTaskSnapshots]);
 
   return (
