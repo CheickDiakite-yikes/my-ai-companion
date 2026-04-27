@@ -64,6 +64,28 @@ const PRIVACY_SHARE: BlogShareEntry = {
 };
 
 const BLOG_POST_SHARE: Record<string, BlogShareEntry> = {
+  "gemini-31-voice-update-2026": {
+    title: "Zee Voice Just Got Quicker, Warmer, and More Present",
+    description:
+      "Zee's Gemini 3.1 Flash Live voice update is about faster, warmer, more natural conversation for everyday companion moments.",
+    imagePath: "/blog/voice-real-life-cover.jpg",
+    imageAlt:
+      "Editorial commuting image of a woman using Zee voice in a real-world setting.",
+    imageType: "image/jpeg",
+    imageWidth: 1536,
+    imageHeight: 1024,
+  },
+  "gemini-31-live-technical-notes-2026": {
+    title: "Technical Notes: Moving Zee Voice to Gemini 3.1 Flash Live",
+    description:
+      "A builder-facing look at the Gemini 3.1 Flash Live migration, latency assumptions, turn boundaries, audio chunking, and synchronous tool calls.",
+    imagePath: "/blog/zeeme-voice-lab-cover.svg",
+    imageAlt:
+      "ZeeMe voice lab cover illustration for technical notes on the Gemini 3.1 Live migration.",
+    imageType: "image/svg+xml",
+    imageWidth: 1200,
+    imageHeight: 800,
+  },
   "a-day-with-zee-2026": {
     title: "A Day With Zee",
     description:

@@ -428,7 +428,7 @@ const INFO_PAGE_CONTENT: Record<InfoPageId, InfoPageContent> = {
     title: "ZeeMe Journal",
     subtitle:
       "Long-form product stories, field reports, research papers, and technical essays on building a companion that actually works in real life.",
-    updatedAt: "March 2026",
+    updatedAt: "April 2026",
     heroIcon: "📝",
     accentWord: "Journal",
     sections: [
@@ -477,6 +477,382 @@ const INFO_PAGE_CONTENT: Record<InfoPageId, InfoPageContent> = {
 };
 
 const BLOG_POSTS: BlogPost[] = [
+  {
+    id: "gemini-31-voice-update-2026",
+    title: "Zee Voice Just Got Quicker, Warmer, and More Present",
+    subtitle:
+      "Our Gemini 3.1 Flash Live update brings Zee closer to the feeling voice should have had all along: fast enough to stay with you, calm enough to trust, and natural enough for everyday life.",
+    excerpt:
+      "Zee's newest voice update is about the small spaces that make conversation feel alive: the pause after you finish speaking, the quick return, the way a companion stays with you while your day keeps moving.",
+    publishedAt: "April 27, 2026",
+    readTime: "9 min read",
+    tags: ["Launch", "Gemini 3.1", "Voice", "Real-Time Companion"],
+    categories: ["marketing", "product", "launches"],
+    blocks: [
+      {
+        type: "image",
+        src: "/blog/voice-real-life-cover.jpg",
+        alt: "Editorial commuting image of a woman using Zee voice in a real-world setting.",
+        caption: "Voice should not feel like waiting for software. It should feel like someone is still there with you.",
+      },
+      {
+        type: "paragraph",
+        text: "The most important part of a voice companion is not a feature list. It is the feeling in the gap after you stop talking. Does the room go cold? Does the assistant make you wait long enough that you reach for the keyboard? Or does it come back quickly, with enough warmth and context that the conversation still feels alive?",
+      },
+      {
+        type: "paragraph",
+        text: "That gap is where we have been focusing Zee. With the move to Gemini 3.1 Flash Live Preview, Zee's voice layer is now built on Google's newest real-time audio model for fast, voice-first dialogue. The update is technical underneath, but the user-facing promise is simple: Zee should feel more present in the moments where voice usually breaks the spell.",
+      },
+      {
+        type: "quote",
+        text: "A faster response is not just faster. In voice, speed becomes intimacy. It tells the user the companion is still with them.",
+      },
+      { type: "heading", text: "What changed" },
+      {
+        type: "paragraph",
+        text: "Zee now uses Gemini 3.1 Flash Live Preview as the primary live voice model, with the previous Gemini 2.5 Flash native-audio model kept as a safety fallback. That means the core voice path is aligned with the model Google describes for low-latency, audio-to-audio, real-time dialogue. We also kept the rollout careful: no database migration, no risky feature churn, and no extra knobs turned on just because they looked exciting.",
+      },
+      {
+        type: "metrics",
+        items: [
+          {
+            label: "Primary voice model",
+            value: "Gemini 3.1 Flash Live",
+            detail: "The new default for Zee's real-time audio conversation path.",
+          },
+          {
+            label: "User goal",
+            value: "Less dead air",
+            detail: "A voice companion should return quickly enough that conversation keeps its shape.",
+          },
+          {
+            label: "Product boundary",
+            value: "Careful rollout",
+            detail: "The older 2.5 Live model remains available as a fallback while the 3.1 path settles in.",
+          },
+          {
+            label: "Trust rule",
+            value: "Warm, not reckless",
+            detail: "Faster voice still has to respect approvals, tool state, and what Zee can truthfully claim.",
+          },
+        ],
+      },
+      { type: "heading", text: "Why this matters for everyday voice" },
+      {
+        type: "paragraph",
+        text: "Most people do not experience voice latency as a number. They experience it as awkwardness. You ask something in the car. You pause in the kitchen. You whisper a thought before a meeting. If the response lands too late, your attention has already moved on. Zee's job is to stay inside the rhythm of ordinary life, not force ordinary life to slow down for the app.",
+      },
+      {
+        type: "table",
+        caption: "The product difference we are aiming for.",
+        columns: ["Moment", "Old feeling", "Zee's target feeling"],
+        rows: [
+          [
+            "Quick check-in",
+            "The assistant feels like it is loading",
+            "Zee answers like the conversation never dropped",
+          ],
+          [
+            "Commute voice",
+            "Noise, pauses, and interruptions make the assistant brittle",
+            "Zee keeps the exchange usable while the world is moving",
+          ],
+          [
+            "Gmail or Calendar help",
+            "A tool lookup feels detached from the relationship",
+            "The task gets handled without Zee losing its tone or truth boundary",
+          ],
+          [
+            "Back-and-forth planning",
+            "Every turn feels like a new request",
+            "The flow feels like one continuous thread",
+          ],
+        ],
+      },
+      {
+        type: "image",
+        src: "/blog/meet-zee-lifestyle.jpg",
+        alt: "Warm lifestyle image showing people moving between speaking and texting with Zee.",
+        caption: "The real test is not the model demo. It is whether Zee still feels like Zee when your day changes shape.",
+        size: "narrow",
+      },
+      { type: "heading", text: "The upgrade is not just speed" },
+      {
+        type: "paragraph",
+        text: "Speed matters because voice is emotional infrastructure. But a companion also needs restraint. Zee can read context, help with Gmail and Calendar, draft, summarize, and hand work to approval surfaces. Those actions have to remain inspectable. A warmer, faster voice should make the product feel more alive, not less accountable.",
+      },
+      {
+        type: "callout",
+        title: "The line we are keeping",
+        text: "Zee can sound more natural without pretending every action is instant. When a lookup, draft, or approval needs time, the voice should stay honest and the interface should keep the state visible.",
+      },
+      { type: "heading", text: "What users should notice" },
+      {
+        type: "list",
+        items: [
+          "A voice experience tuned for faster, more natural back-and-forth.",
+          "Better alignment with Google's latest Live API model direction.",
+          "The same Zee personality and continuity work, now sitting on a newer real-time audio base.",
+          "No new privacy bargain: the upgrade changes the voice model path, not the trust contract.",
+        ],
+      },
+      {
+        type: "paragraph",
+        text: "The most beautiful version of Zee is not the loudest one. It is the one that is simply there when you need it: quick on the commute, soft at night, useful in the middle of the day, and honest when the work touches something real. Gemini 3.1 Flash Live helps us move closer to that version.",
+      },
+      {
+        type: "references",
+        items: [
+          {
+            title: "Gemini 3.1 Flash Live Preview",
+            href: "https://ai.google.dev/gemini-api/docs/models/gemini-3.1-flash-live-preview",
+            note: "Official model page for the new Live model Zee now uses as the primary voice target.",
+          },
+          {
+            title: "Gemini Live API overview",
+            href: "https://ai.google.dev/gemini-api/docs/live-api",
+            note: "Google's overview of low-latency, real-time voice and vision interactions.",
+          },
+        ],
+      },
+    ],
+  },
+  {
+    id: "gemini-31-live-technical-notes-2026",
+    title: "Technical Notes: Moving Zee Voice to Gemini 3.1 Flash Live",
+    subtitle:
+      "A builder-facing look at the Gemini 3.1 Flash Live migration, the latency assumptions that matter, and the runtime constraints we are keeping explicit.",
+    excerpt:
+      "Gemini 3.1 Flash Live is a better default for real-time voice, but the model string is only one part of latency. The rest lives in turn boundaries, audio chunking, synchronous tools, and the discipline to measure first.",
+    publishedAt: "April 27, 2026",
+    readTime: "16 min read",
+    tags: ["Technical Notes", "Gemini 3.1", "Live API", "Voice Latency"],
+    categories: ["technical", "research", "reports", "launches"],
+    blocks: [
+      {
+        type: "image",
+        src: "/blog/zeeme-voice-lab-cover.svg",
+        alt: "ZeeMe voice lab cover illustration for technical notes on the Gemini 3.1 Live migration.",
+        caption: "The migration is model-aware, but the latency budget is system-wide.",
+        fit: "contain",
+      },
+      {
+        type: "meta",
+        items: [
+          {
+            label: "Primary model",
+            value: "gemini-3.1-flash-live-preview",
+          },
+          {
+            label: "Fallback model",
+            value: "gemini-2.5-flash-native-audio-preview-12-2025",
+          },
+          {
+            label: "Latency posture",
+            value: "Keep thinkingLevel=minimal, preserve interruption behavior, measure before tuning.",
+          },
+          {
+            label: "Rollback posture",
+            value: "Keep the legacy 2.5 native-audio model available while 3.1 traces accumulate.",
+          },
+        ],
+      },
+      {
+        type: "paragraph",
+        text: "The Gemini 3.1 Flash Live migration is easy to describe as a model upgrade and dangerous to treat as only a model upgrade. The new model is designed for low-latency audio-to-audio dialogue, but Zee's perceived responsiveness comes from the whole live path: microphone capture, buffering, activity start, activity end, model response, transcript handling, playback, tool calls, and UI truth.",
+      },
+      {
+        type: "paragraph",
+        text: "The correct engineering stance is therefore conservative: adopt the model, keep the unsupported 3.1 options disabled, retain the 2.5 fallback, and make latency visible before changing thresholds. A voice companion that gets faster by getting less reliable has not improved.",
+      },
+      { type: "heading", text: "Model migration facts" },
+      {
+        type: "table",
+        caption: "The 3.1 Live behaviors that affect Zee directly.",
+        columns: ["Area", "Gemini 3.1 Flash Live behavior", "Zee implementation stance"],
+        rows: [
+          [
+            "Model id",
+            "Use gemini-3.1-flash-live-preview",
+            "Make it the primary live voice model and keep 2.5 as fallback",
+          ],
+          [
+            "Thinking",
+            "Uses thinkingLevel rather than thinkingBudget",
+            "Use thinkingLevel=minimal for the stable low-latency profile",
+          ],
+          [
+            "Server content",
+            "One event can contain multiple content parts",
+            "Process every modelTurn part so audio, text, and transcript are not dropped",
+          ],
+          [
+            "Client content",
+            "Use send_realtime_input for text during the conversation",
+            "Send live nudges through sendRealtimeInput, with client-content only as fallback",
+          ],
+          [
+            "Tool calling",
+            "Function calling is synchronous only",
+            "Treat tool response time as part of first-response latency",
+          ],
+          [
+            "Proactive and affective audio",
+            "Not supported in 3.1 Flash Live",
+            "Keep those settings off for the 3.1 primary path",
+          ],
+        ],
+      },
+      {
+        type: "code",
+        language: "env",
+        caption: "The stable low-latency configuration profile for the current Zee voice path.",
+        code: [
+          "GEMINI_LIVE_MODEL=gemini-3.1-flash-live-preview",
+          "GEMINI_LIVE_MODEL_FALLBACKS=gemini-2.5-flash-native-audio-preview-12-2025",
+          "GEMINI_LIVE_THINKING_LEVEL=minimal",
+          "GEMINI_LIVE_TURN_COVERAGE=TURN_INCLUDES_ONLY_ACTIVITY",
+          "GEMINI_LIVE_ENABLE_AFFECTIVE_DIALOG=false",
+          "GEMINI_LIVE_PROACTIVE_AUDIO=false",
+          "GEMINI_LIVE_FORCE_ALWAYS_RESPOND=true",
+        ].join("\n"),
+      },
+      { type: "heading", text: "Latency is a path, not a property" },
+      {
+        type: "paragraph",
+        text: "The model can be lower latency and the product can still feel slow if the system waits too long to decide the user is done speaking, buffers too much audio, blocks on a slow tool call, or lets stale assistant audio keep playing after interruption. This is why the next performance work should use traces, not vibe checks.",
+      },
+      {
+        type: "metrics",
+        items: [
+          {
+            label: "Start metric",
+            value: "activity_end_sent -> first audio",
+            detail: "The best single measure of perceived response time after the user finishes speaking.",
+          },
+          {
+            label: "Transcript metric",
+            value: "activity_end_sent -> first transcript",
+            detail: "Useful when audio starts late or when transcript appears before playback is audible.",
+          },
+          {
+            label: "Tool metric",
+            value: "tool_call -> tool_response",
+            detail: "Critical for Gmail, Calendar, Morning Brief, and grounded context flows.",
+          },
+          {
+            label: "Interruption metric",
+            value: "barge-in -> buffer cleared",
+            detail: "A natural companion must stop cleanly when the user starts talking.",
+          },
+        ],
+      },
+      { type: "heading", text: "The first tuning target" },
+      {
+        type: "paragraph",
+        text: "Google's Live API best practices recommend sending real-time audio in small chunks, with 20ms to 40ms called out for low latency and 20ms to 100ms as the broader small-chunk range. Zee currently favors stability in the client audio path. That is reasonable for rollout, but the next measured experiment should test smaller send buffers and watch CPU, packet rate, barge-in behavior, transcript quality, and mobile reliability together.",
+      },
+      {
+        type: "barChart",
+        title: "Where latency can hide",
+        unit: "risk",
+        max: 5,
+        items: [
+          {
+            label: "End-of-speech delay",
+            value: 5,
+            note: "Too much silence tolerance makes Zee feel late even when the model is fast.",
+            color: "#F2A07B",
+          },
+          {
+            label: "Audio send buffer",
+            value: 4,
+            note: "Bigger chunks are stable, but they can add input delay.",
+            color: "#E8B37B",
+          },
+          {
+            label: "Synchronous tool calls",
+            value: 5,
+            note: "3.1 will not start responding until a function response is sent.",
+            color: "#F0C26F",
+          },
+          {
+            label: "Output length",
+            value: 3,
+            note: "Long spoken answers can feel slow even when first audio arrives quickly.",
+            color: "#CCB070",
+          },
+          {
+            label: "Video coverage",
+            value: 3,
+            note: "Constant video frames can add cost and pressure if not gated to activity.",
+            color: "#AFCB9C",
+          },
+        ],
+        caption: "Relative engineering risk, not measured production latency. The point is where to instrument first.",
+      },
+      { type: "heading", text: "What we are intentionally not enabling" },
+      {
+        type: "list",
+        items: [
+          "We are not raising thinkingLevel by default; minimal is the correct baseline for live conversation.",
+          "We are not enabling proactive audio or affective dialogue for 3.1 because the model does not support those features.",
+          "We are not relying on async function calling because 3.1 function calling is sequential.",
+          "We are not changing database state for a voice-model migration.",
+          "We are not increasing video cadence without activity gating and cost review.",
+        ],
+      },
+      {
+        type: "callout",
+        title: "The most important constraint",
+        text: "3.1 gives Zee a better voice base, but the product still has to earn responsiveness end to end. The next latency win should come from measured audio chunking and turn-boundary work, not from turning on unsupported features.",
+      },
+      { type: "heading", text: "Recommended next trace" },
+      {
+        type: "paragraph",
+        text: "The next validation pass should run a browser voice session and emit a compact latency rollup: token creation time, first microphone frame, activityStart, activityEnd, first model audio part, first output transcript, generationComplete, any tool call, and any tool response. That gives us enough shape to decide whether to tune client buffering, VAD silence, tool response size, or spoken answer length.",
+      },
+      {
+        type: "ascii",
+        text: [
+          "user speech",
+          "    -> audio chunk send",
+          "    -> activityStart",
+          "    -> activityEnd",
+          "    -> Gemini 3.1 Live",
+          "    -> optional synchronous tool call",
+          "    -> tool response",
+          "    -> first assistant audio",
+          "    -> transcript + UI state",
+        ].join("\n"),
+      },
+      {
+        type: "references",
+        items: [
+          {
+            title: "Gemini 3.1 Flash Live Preview model page",
+            href: "https://ai.google.dev/gemini-api/docs/models/gemini-3.1-flash-live-preview",
+            note: "Model code, supported modalities, migration notes, and unsupported 3.1 features.",
+          },
+          {
+            title: "Live API capabilities guide",
+            href: "https://ai.google.dev/gemini-api/docs/live-api/capabilities",
+            note: "Model comparison table for 3.1 Flash Live and 2.5 Flash Live.",
+          },
+          {
+            title: "Live API best practices",
+            href: "https://ai.google.dev/gemini-api/docs/live-api/best-practices",
+            note: "Audio chunking, interruption handling, context compression, and session guidance.",
+          },
+          {
+            title: "Gemini thinking levels",
+            href: "https://ai.google.dev/gemini-api/docs/thinking",
+            note: "thinkingLevel behavior and latency tradeoffs for Gemini 3 models.",
+          },
+        ],
+      },
+    ],
+  },
   {
     id: "a-day-with-zee-2026",
     title: "A Day With Zee: Morning Brief, Commute Voice, Calendar Help, Inbox Drafts, Evening Continuity",
@@ -2967,8 +3343,10 @@ const BLOG_POSTS: BlogPost[] = [
   },
 ];
 
-const BLOG_FEATURED_ID = "a-day-with-zee-2026" as const;
+const BLOG_FEATURED_ID = "gemini-31-voice-update-2026" as const;
 const BLOG_PIN_ORDER = [
+  "gemini-31-voice-update-2026",
+  "gemini-31-live-technical-notes-2026",
   "a-day-with-zee-2026",
   "zee-stage-missing-interface-2026",
   "truthful-approval-2026",
