@@ -712,7 +712,7 @@ The streaming endpoint emits newline-delimited JSON events:
 | Purpose | Model | Notes |
 |---|---|---|
 | Text chat | `gemini-3-flash-preview` | Configurable via `GEMINI_TEXT_MODEL` |
-| Live voice/video | `gemini-2.5-flash-native-audio-preview-12-2025` | Configurable via `GEMINI_LIVE_MODEL` |
+| Live voice/video | `gemini-3.1-flash-live-preview` | Configurable via `GEMINI_LIVE_MODEL`; 2.5 Live remains a fallback |
 
 ### Persona and prompting
 
@@ -1097,7 +1097,10 @@ Current ZeeMe-relevant price inputs:
 - `gemini-3-flash-preview` text chat and Google-action planner:
   - input `~$0.50 / 1M tokens`
   - output `~$3.00 / 1M tokens`
-- `gemini-2.5-flash-native-audio-preview-12-2025` live voice:
+- `gemini-3.1-flash-live-preview` live voice:
+  - verify current audio/video pricing before broad rollout
+  - uses `thinkingLevel=minimal` in the stable low-latency profile
+- `gemini-2.5-flash-native-audio-preview-12-2025` live fallback:
   - input audio/video `~$3.00 / 1M tokens`
   - output audio `~$12.00 / 1M tokens`
 - `gemini-2.0-flash-lite` summarization/background utility:
@@ -1468,8 +1471,8 @@ Operational note:
 | Variable | Default | Description |
 |---|---|---|
 | `GEMINI_TEXT_MODEL` | `gemini-3-flash-preview` | Text chat model |
-| `GEMINI_LIVE_MODEL` | `gemini-2.5-flash-native-audio-preview-12-2025` | Live voice model |
-| `GEMINI_LIVE_MODEL_FALLBACKS` | — | Comma-separated fallback models |
+| `GEMINI_LIVE_MODEL` | `gemini-3.1-flash-live-preview` | Live voice model |
+| `GEMINI_LIVE_MODEL_FALLBACKS` | `gemini-2.5-flash-native-audio-preview-12-2025` | Comma-separated fallback models |
 
 ### Text generation tuning
 
@@ -1568,17 +1571,18 @@ Precedence notes:
 | `GEMINI_LIVE_MIN_VAD_PREFIX_PADDING_MS` | `50` | Minimum enforced VAD prefix padding in token setup |
 | `GEMINI_LIVE_MIN_VAD_SILENCE_MS` | `180` | Minimum enforced VAD silence in token setup |
 | `GEMINI_LIVE_TURN_COVERAGE` | `TURN_INCLUDES_ONLY_ACTIVITY` | Turn coverage mode for realtime input |
-| `GEMINI_LIVE_ENABLE_AFFECTIVE_DIALOG` | `true` | Enables affective dialog in audio mode |
+| `GEMINI_LIVE_ENABLE_AFFECTIVE_DIALOG` | `false` | Legacy 2.5-only affective dialog knob; ignored for Gemini 3.1 Live |
 | `GEMINI_LIVE_PROACTIVE_AUDIO` | `false` | Proactive audio generation |
 | `GEMINI_LIVE_FORCE_ALWAYS_RESPOND` | `true` | When `true`, prevents proactive silent skips |
-| `GEMINI_LIVE_ALLOW_ZERO_THINKING_BUDGET` | `false` | Allows zero thinking budget only when explicitly enabled |
+| `GEMINI_LIVE_THINKING_LEVEL` | `minimal` | Gemini 3.1 Live thinking level |
+| `GEMINI_LIVE_ALLOW_ZERO_THINKING_BUDGET` | `false` | Legacy 2.5 fallback: allows zero thinking budget only when explicitly enabled |
 | `GEMINI_LIVE_TEMPERATURE` | `0.45` | Live model temperature |
 | `GEMINI_LIVE_TOP_P` | `0.85` | Live nucleus sampling |
 | `GEMINI_LIVE_TOP_K` | `24` | Live top-k sampling |
 | `GEMINI_LIVE_MAX_OUTPUT_TOKENS` | `1000` | Max live output tokens |
-| `GEMINI_LIVE_USE_THINKING_CONFIG` | `true` | Enable thinking tokens |
-| `GEMINI_LIVE_MIN_THINKING_BUDGET` | `128` | Minimum enforced thinking budget when zero is disallowed |
-| `GEMINI_LIVE_THINKING_BUDGET` | `128` (effective floor) | Requested thinking budget (enforced to at least min budget unless zero allowed) |
+| `GEMINI_LIVE_USE_THINKING_CONFIG` | `true` | Enable model-appropriate thinking config |
+| `GEMINI_LIVE_MIN_THINKING_BUDGET` | `128` | Legacy 2.5 fallback: minimum enforced thinking budget when zero is disallowed |
+| `GEMINI_LIVE_THINKING_BUDGET` | `128` (effective floor) | Legacy 2.5 fallback: requested thinking budget |
 | `GEMINI_LIVE_INCLUDE_THOUGHTS` | `false` | Include thought text in responses (usually keep disabled) |
 | `ENABLE_GEMINI_LIVE_GOOGLE_SEARCH_GROUNDING` | `true` | Enables live grounding attempt with fallback to non-grounded token when unsupported |
 

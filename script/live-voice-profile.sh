@@ -26,6 +26,10 @@ process.stdout.write(`${JSON.stringify(merged, null, 2)}\n`);
 case "$PROFILE" in
   stable)
     "$SKILL_SCRIPT" stable | merge_profile_overrides '{
+      "GEMINI_LIVE_MODEL": "gemini-3.1-flash-live-preview",
+      "GEMINI_LIVE_MODEL_FALLBACKS": "gemini-2.5-flash-native-audio-preview-12-2025",
+      "GEMINI_LIVE_THINKING_LEVEL": "minimal",
+      "GEMINI_LIVE_ENABLE_AFFECTIVE_DIALOG": "false",
       "VITE_LIVE_AUDIO_SUPPRESS_INPUT_COOLDOWN_MS": "240",
       "VITE_LIVE_AUDIO_BARGE_IN_RMS_THRESHOLD": "0.02",
       "VITE_LIVE_AUDIO_BARGE_IN_CONSECUTIVE_FRAMES": "5",
@@ -53,6 +57,10 @@ case "$PROFILE" in
     ;;
   lab)
     "$SKILL_SCRIPT" balanced | merge_profile_overrides '{
+      "GEMINI_LIVE_MODEL": "gemini-3.1-flash-live-preview",
+      "GEMINI_LIVE_MODEL_FALLBACKS": "gemini-2.5-flash-native-audio-preview-12-2025",
+      "GEMINI_LIVE_THINKING_LEVEL": "minimal",
+      "GEMINI_LIVE_ENABLE_AFFECTIVE_DIALOG": "false",
       "VITE_LIVE_AUDIO_SUPPRESS_INPUT_COOLDOWN_MS": "240",
       "VITE_LIVE_AUDIO_BARGE_IN_RMS_THRESHOLD": "0.02",
       "VITE_LIVE_AUDIO_BARGE_IN_CONSECUTIVE_FRAMES": "5",

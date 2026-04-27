@@ -5,8 +5,10 @@ import {
   GoogleGenAI,
   Modality,
   StartSensitivity,
+  ThinkingLevel,
   TurnCoverage,
   type GenerateContentResponseUsageMetadata,
+  type ThinkingConfig,
 } from "@google/genai";
 import type { ArtifactIntentContract, ChatTurnIntent } from "@shared/agent";
 import {
@@ -83,7 +85,9 @@ type LiveFunctionDeclarationsTool = {
 };
 
 const DEFAULT_TEXT_MODEL = "gemini-3-flash-preview";
-const DEFAULT_LIVE_MODEL = "gemini-2.5-flash-native-audio-preview-12-2025";
+const DEFAULT_LIVE_MODEL = "gemini-3.1-flash-live-preview";
+const LEGACY_LIVE_MODEL_FALLBACK =
+  "gemini-2.5-flash-native-audio-preview-12-2025";
 const DEFAULT_AGENT_GAME_MODEL = "gemini-3-flash-preview";
 const DEFAULT_AGENT_DOC_MODEL = "gemini-3-flash-preview";
 const DEFAULT_AGENT_PRESENTATION_IMAGE_MODEL = "gemini-3-pro-image-preview";
@@ -237,17 +241,6 @@ const LIVE_GOOGLE_PERSONAL_CONTEXT_ACTION_FUNCTION_DECLARATIONS: LiveFunctionDec
     },
   ];
 
-export function buildLiveGoogleDataFunctionDeclarations(): LiveFunctionDeclaration[] {
-  const declarations = [...LIVE_GOOGLE_PERSONAL_CONTEXT_READ_FUNCTION_DECLARATIONS];
-  if (ENABLE_GOOGLE_PERSONAL_CONTEXT_DETAIL_READS) {
-    declarations.push(...LIVE_GOOGLE_PERSONAL_CONTEXT_DETAIL_FUNCTION_DECLARATIONS);
-  }
-  if (ENABLE_GOOGLE_PERSONAL_CONTEXT_WRITES && ENABLE_VOICE_GOOGLE_WRITE_HANDOFF) {
-    declarations.push(...LIVE_GOOGLE_PERSONAL_CONTEXT_ACTION_FUNCTION_DECLARATIONS);
-  }
-  return declarations;
-}
-
 const LIVE_MORNING_BRIEF_FUNCTION_DECLARATIONS: LiveFunctionDeclaration[] = [
   buildLiveReadOnlyFunctionDeclaration({
     name: "get_morning_brief",
@@ -279,11 +272,44 @@ const LIVE_MORNING_BRIEF_FUNCTION_DECLARATIONS: LiveFunctionDeclaration[] = [
     },
   }),
 ];
-const LIVE_MORNING_BRIEF_FUNCTION_TOOLS: LiveFunctionDeclarationsTool[] = [
-  {
-    functionDeclarations: LIVE_MORNING_BRIEF_FUNCTION_DECLARATIONS,
-  },
-];
+function withLiveFunctionCallingCompatibility(
+  declarations: LiveFunctionDeclaration[],
+  options: { asyncFunctionCalling: boolean },
+): LiveFunctionDeclaration[] {
+  if (options.asyncFunctionCalling) return declarations;
+  return declarations.map((declaration) => {
+    const { behavior: _behavior, ...compatibleDeclaration } = declaration;
+    return compatibleDeclaration;
+  });
+}
+
+export function buildLiveGoogleDataFunctionDeclarations(options: {
+  asyncFunctionCalling?: boolean;
+} = {}): LiveFunctionDeclaration[] {
+  const declarations = [...LIVE_GOOGLE_PERSONAL_CONTEXT_READ_FUNCTION_DECLARATIONS];
+  if (ENABLE_GOOGLE_PERSONAL_CONTEXT_DETAIL_READS) {
+    declarations.push(...LIVE_GOOGLE_PERSONAL_CONTEXT_DETAIL_FUNCTION_DECLARATIONS);
+  }
+  if (ENABLE_GOOGLE_PERSONAL_CONTEXT_WRITES && ENABLE_VOICE_GOOGLE_WRITE_HANDOFF) {
+    declarations.push(...LIVE_GOOGLE_PERSONAL_CONTEXT_ACTION_FUNCTION_DECLARATIONS);
+  }
+  return withLiveFunctionCallingCompatibility(declarations, {
+    asyncFunctionCalling: options.asyncFunctionCalling ?? true,
+  });
+}
+
+function buildLiveMorningBriefFunctionTools(options: {
+  asyncFunctionCalling: boolean;
+}): LiveFunctionDeclarationsTool[] {
+  return [
+    {
+      functionDeclarations: withLiveFunctionCallingCompatibility(
+        LIVE_MORNING_BRIEF_FUNCTION_DECLARATIONS,
+        options,
+      ),
+    },
+  ];
+}
 const TEXT_GOOGLE_SEARCH_SIGNAL_PATTERN =
   /\b(latest|new|current|currently|today|tonight|tomorrow|this\s+(week|month|year)|news|headline(?:s)?|breaking|recent|right now|as of|score|standings?|weather|forecast|stock|price|market|election|president|prime minister|ceo|release date|launched?|announced?)\b/i;
 const TEXT_GOOGLE_SEARCH_EXPLICIT_PATTERN =
@@ -374,12 +400,87 @@ function resolveLiveModelCandidates(): string[] {
 
   const deduped: string[] = [];
   const seen = new Set<string>();
-  for (const candidate of [primary, ...configuredFallbacks]) {
+  for (const candidate of [
+    primary,
+    ...configuredFallbacks,
+    LEGACY_LIVE_MODEL_FALLBACK,
+  ]) {
     if (seen.has(candidate)) continue;
     seen.add(candidate);
     deduped.push(candidate);
   }
   return deduped;
+}
+
+type LiveThinkingLevel = "minimal" | "low" | "medium" | "high";
+type LiveThinkingConfigMode = "thinkingLevel" | "thinkingBudget";
+
+function isGemini31FlashLiveModel(model: string): boolean {
+  return normalizeModelId(model).toLowerCase().startsWith("gemini-3.1-flash-live");
+}
+
+function resolveLiveThinkingLevel(): {
+  summary: LiveThinkingLevel;
+  apiValue: ThinkingLevel;
+} {
+  const raw = (process.env.GEMINI_LIVE_THINKING_LEVEL ?? "minimal")
+    .trim()
+    .toLowerCase();
+  switch (raw) {
+    case "low":
+      return { summary: "low", apiValue: ThinkingLevel.LOW };
+    case "medium":
+      return { summary: "medium", apiValue: ThinkingLevel.MEDIUM };
+    case "high":
+      return { summary: "high", apiValue: ThinkingLevel.HIGH };
+    case "minimal":
+    default:
+      return { summary: "minimal", apiValue: ThinkingLevel.MINIMAL };
+  }
+}
+
+function buildLiveThinkingConfigForModel(params: {
+  model: string;
+  useThinkingConfig: boolean;
+  thinkingBudgetValue: number;
+  thinkingLevel: ReturnType<typeof resolveLiveThinkingLevel>;
+  includeThoughts: boolean;
+}): {
+  thinkingConfig: ThinkingConfig | undefined;
+  thinkingBudget: number | null;
+  thinkingLevel: LiveThinkingLevel | null;
+  thinkingConfigMode: LiveThinkingConfigMode | null;
+} {
+  if (!params.useThinkingConfig) {
+    return {
+      thinkingConfig: undefined,
+      thinkingBudget: null,
+      thinkingLevel: null,
+      thinkingConfigMode: null,
+    };
+  }
+
+  if (isGemini31FlashLiveModel(params.model)) {
+    return {
+      thinkingConfig: {
+        thinkingLevel: params.thinkingLevel.apiValue,
+        includeThoughts: params.includeThoughts,
+      },
+      thinkingBudget: null,
+      thinkingLevel: params.thinkingLevel.summary,
+      thinkingConfigMode: "thinkingLevel",
+    };
+  }
+
+  return {
+    thinkingConfig: {
+      thinkingBudget: params.thinkingBudgetValue,
+      includeThoughts: params.includeThoughts,
+    },
+    thinkingBudget: params.thinkingBudgetValue,
+    thinkingLevel: null,
+    thinkingConfigMode: "thinkingBudget",
+  };
 }
 
 function getGeminiClient(): GoogleGenAI {
@@ -1278,7 +1379,10 @@ export interface LiveTokenConfigSummary {
   contextWindowCompressionEnabled: boolean;
   effectiveInterruptMode: "client_manual_activity";
   thinkingBudget: number | null;
+  thinkingLevel: LiveThinkingLevel | null;
+  thinkingConfigMode: LiveThinkingConfigMode | null;
   includeThoughts: boolean;
+  asyncFunctionCalling: boolean;
   temperature: number;
   topP: number;
   topK: number | null;
@@ -1486,8 +1590,6 @@ export async function createLiveToken(
     !ENABLE_MORNING_BRIEF_TEXT_ONLY;
   const enableGooglePersonalContextFunctionCalling =
     ENABLE_GOOGLE_PERSONAL_CONTEXT && ENABLE_GOOGLE_PERSONAL_CONTEXT_VOICE;
-  const liveGoogleDataFunctionDeclarations =
-    buildLiveGoogleDataFunctionDeclarations();
   const languageHintResolution = resolveEffectiveLanguageHint({
     clientLanguage: input.clientLanguage,
     clientLanguages: input.clientLanguages,
@@ -1584,6 +1686,7 @@ export async function createLiveToken(
     process.env.GEMINI_LIVE_INCLUDE_THOUGHTS,
     false,
   );
+  const thinkingLevelValue = resolveLiveThinkingLevel();
   const liveTemperature = parseBoundedNumber(
     process.env.GEMINI_LIVE_TEMPERATURE,
     lowLatencyMode ? 0.45 : 0.55,
@@ -1617,54 +1720,90 @@ export async function createLiveToken(
     vadPrefixPaddingMs,
   );
   const effectiveVadSilenceMs = Math.max(minVadSilenceMs, vadSilenceMs);
-  const thinkingConfig = useThinkingConfig
-    ? {
-        thinkingBudget: thinkingBudgetValue,
-        includeThoughts,
-      }
-    : undefined;
   const automaticActivityDetectionDisabled = true;
   const sessionResumptionEnabled = true;
   const contextWindowCompressionEnabled = true;
-  const configSummary: LiveTokenConfigSummary = {
-    lowLatencyMode,
-    activityHandling:
-      activityHandling === ActivityHandling.NO_INTERRUPTION
-        ? "NO_INTERRUPTION"
-        : "START_OF_ACTIVITY_INTERRUPTS",
-    automaticActivityDetectionDisabled,
-    vadStartSensitivity:
-      vadStartSensitivity === StartSensitivity.START_SENSITIVITY_LOW
-        ? "LOW"
-        : "HIGH",
-    vadEndSensitivity:
-      vadEndSensitivity === EndSensitivity.END_SENSITIVITY_LOW ? "LOW" : "HIGH",
-    forceAlwaysRespond,
-    vadPrefixPaddingMs: effectiveVadPrefixPaddingMs,
-    vadSilenceMs: effectiveVadSilenceMs,
-    turnCoverage:
-      turnCoverage === TurnCoverage.TURN_INCLUDES_ALL_INPUT
-        ? "TURN_INCLUDES_ALL_INPUT"
-        : "TURN_INCLUDES_ONLY_ACTIVITY",
-    affectiveDialog: responseModality === "AUDIO" ? enableAffectiveDialog : false,
-    proactiveAudio: effectiveProactiveAudio,
-    sessionResumptionEnabled,
-    contextWindowCompressionEnabled,
-    effectiveInterruptMode: "client_manual_activity",
-    thinkingBudget: thinkingConfig ? thinkingBudgetValue : null,
-    includeThoughts: thinkingConfig ? includeThoughts : false,
-    temperature: liveTemperature,
-    topP: liveTopP,
-    topK: liveTopK ?? null,
-    maxOutputTokens: liveMaxOutputTokens,
-    deviceClass,
-    effectiveLanguageHint: languageHintResolution.effectiveLanguageHint,
-    languageHintSource: languageHintResolution.languageHintSource,
-    nativeAudioLanguageMode: "auto_detect",
-    googleSearchGroundingEnabled: false,
-    morningBriefFunctionCallingEnabled: enableMorningBriefFunctionCalling,
-    googlePersonalContextFunctionCallingEnabled:
-      enableGooglePersonalContextFunctionCalling,
+  const buildConfigForModel = (
+    model: string,
+  ): {
+    configSummary: LiveTokenConfigSummary;
+    thinkingConfig: ThinkingConfig | undefined;
+    effectiveAffectiveDialog: boolean;
+    effectiveProactiveAudio: boolean;
+    liveGoogleDataFunctionDeclarations: LiveFunctionDeclaration[];
+    liveMorningBriefFunctionTools: LiveFunctionDeclarationsTool[];
+  } => {
+    const usesGemini31Live = isGemini31FlashLiveModel(model);
+    const thinking = buildLiveThinkingConfigForModel({
+      model,
+      useThinkingConfig,
+      thinkingBudgetValue,
+      thinkingLevel: thinkingLevelValue,
+      includeThoughts,
+    });
+    const effectiveAffectiveDialog =
+      responseModality === "AUDIO" && !usesGemini31Live
+        ? enableAffectiveDialog
+        : false;
+    const modelProactiveAudio =
+      !usesGemini31Live ? effectiveProactiveAudio : false;
+    const asyncFunctionCalling = !usesGemini31Live;
+
+    return {
+      configSummary: {
+        lowLatencyMode,
+        activityHandling:
+          activityHandling === ActivityHandling.NO_INTERRUPTION
+            ? "NO_INTERRUPTION"
+            : "START_OF_ACTIVITY_INTERRUPTS",
+        automaticActivityDetectionDisabled,
+        vadStartSensitivity:
+          vadStartSensitivity === StartSensitivity.START_SENSITIVITY_LOW
+            ? "LOW"
+            : "HIGH",
+        vadEndSensitivity:
+          vadEndSensitivity === EndSensitivity.END_SENSITIVITY_LOW
+            ? "LOW"
+            : "HIGH",
+        forceAlwaysRespond,
+        vadPrefixPaddingMs: effectiveVadPrefixPaddingMs,
+        vadSilenceMs: effectiveVadSilenceMs,
+        turnCoverage:
+          turnCoverage === TurnCoverage.TURN_INCLUDES_ALL_INPUT
+            ? "TURN_INCLUDES_ALL_INPUT"
+            : "TURN_INCLUDES_ONLY_ACTIVITY",
+        affectiveDialog: effectiveAffectiveDialog,
+        proactiveAudio: modelProactiveAudio,
+        sessionResumptionEnabled,
+        contextWindowCompressionEnabled,
+        effectiveInterruptMode: "client_manual_activity",
+        thinkingBudget: thinking.thinkingBudget,
+        thinkingLevel: thinking.thinkingLevel,
+        thinkingConfigMode: thinking.thinkingConfigMode,
+        includeThoughts: thinking.thinkingConfig ? includeThoughts : false,
+        asyncFunctionCalling,
+        temperature: liveTemperature,
+        topP: liveTopP,
+        topK: liveTopK ?? null,
+        maxOutputTokens: liveMaxOutputTokens,
+        deviceClass,
+        effectiveLanguageHint: languageHintResolution.effectiveLanguageHint,
+        languageHintSource: languageHintResolution.languageHintSource,
+        nativeAudioLanguageMode: "auto_detect",
+        googleSearchGroundingEnabled: false,
+        morningBriefFunctionCallingEnabled: enableMorningBriefFunctionCalling,
+        googlePersonalContextFunctionCallingEnabled:
+          enableGooglePersonalContextFunctionCalling,
+      },
+      thinkingConfig: thinking.thinkingConfig,
+      effectiveAffectiveDialog,
+      effectiveProactiveAudio: modelProactiveAudio,
+      liveGoogleDataFunctionDeclarations:
+        buildLiveGoogleDataFunctionDeclarations({ asyncFunctionCalling }),
+      liveMorningBriefFunctionTools: buildLiveMorningBriefFunctionTools({
+        asyncFunctionCalling,
+      }),
+    };
   };
 
   const expireTime = new Date(now + expireInMs).toISOString();
@@ -1682,6 +1821,7 @@ export async function createLiveToken(
   let lastError: unknown = null;
   let resolvedModel = modelCandidates[0];
   let resolvedGoogleSearchGrounding = false;
+  let resolvedConfigSummary = buildConfigForModel(resolvedModel).configSummary;
   let token:
     | Awaited<ReturnType<GoogleGenAI["authTokens"]["create"]>>
     | null = null;
@@ -1689,6 +1829,7 @@ export async function createLiveToken(
   for (let index = 0; index < modelCandidates.length; index += 1) {
     const model = modelCandidates[index];
     resolvedModel = model;
+    const modelConfig = buildConfigForModel(model);
     const groundingAttempts = requestedGoogleSearchGrounding
       ? [true, false]
       : [false];
@@ -1715,8 +1856,8 @@ export async function createLiveToken(
                 topK: liveTopK,
                 maxOutputTokens: liveMaxOutputTokens,
                 enableAffectiveDialog:
-                  responseModality === "AUDIO" ? enableAffectiveDialog : undefined,
-                thinkingConfig,
+                  modelConfig.effectiveAffectiveDialog ? true : undefined,
+                thinkingConfig: modelConfig.thinkingConfig,
                 speechConfig:
                   responseModality === "AUDIO"
                     ? {
@@ -1744,7 +1885,7 @@ export async function createLiveToken(
                     }
                   : undefined,
                 proactivity:
-                  effectiveProactiveAudio
+                  modelConfig.effectiveProactiveAudio
                     ? { proactiveAudio: true }
                     : undefined,
                 inputAudioTranscription: {},
@@ -1757,11 +1898,12 @@ export async function createLiveToken(
                     tools.push(...GOOGLE_SEARCH_TOOLS);
                   }
                   if (enableMorningBriefFunctionCalling) {
-                    tools.push(...LIVE_MORNING_BRIEF_FUNCTION_TOOLS);
+                    tools.push(...modelConfig.liveMorningBriefFunctionTools);
                   }
                   if (enableGooglePersonalContextFunctionCalling) {
                     tools.push({
-                      functionDeclarations: liveGoogleDataFunctionDeclarations,
+                      functionDeclarations:
+                        modelConfig.liveGoogleDataFunctionDeclarations,
                     });
                   }
                   return tools.length > 0 ? tools : undefined;
@@ -1772,6 +1914,7 @@ export async function createLiveToken(
           },
         });
         resolvedGoogleSearchGrounding = useGoogleSearchGrounding;
+        resolvedConfigSummary = modelConfig.configSummary;
         break;
       } catch (error) {
         lastError = error;
@@ -1823,7 +1966,7 @@ export async function createLiveToken(
     generatedAt: new Date(now).toISOString(),
     uses,
     configSummary: {
-      ...configSummary,
+      ...resolvedConfigSummary,
       googleSearchGroundingEnabled: resolvedGoogleSearchGrounding,
       morningBriefFunctionCallingEnabled: enableMorningBriefFunctionCalling,
       googlePersonalContextFunctionCallingEnabled:

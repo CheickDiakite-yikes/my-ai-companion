@@ -12,6 +12,9 @@ interface LiveTokenSummaryPayload {
     forceAlwaysRespond?: boolean;
     proactiveAudio?: boolean;
     thinkingBudget?: number | null;
+    thinkingLevel?: "minimal" | "low" | "medium" | "high" | null;
+    thinkingConfigMode?: "thinkingLevel" | "thinkingBudget" | null;
+    asyncFunctionCalling?: boolean;
     maxOutputTokens?: number;
   };
 }
@@ -130,10 +133,23 @@ function assertLiveTokenSummary(
     false,
     "stable live profile must keep proactiveAudio disabled",
   );
-  assert.ok(
-    (summary.thinkingBudget ?? 0) >= 128,
-    "stable live profile must keep thinkingBudget >= 128",
-  );
+  if (summary.thinkingConfigMode === "thinkingLevel") {
+    assert.equal(
+      summary.thinkingLevel,
+      "minimal",
+      "Gemini 3.1 stable live profile must use minimal thinkingLevel",
+    );
+    assert.equal(
+      summary.asyncFunctionCalling,
+      false,
+      "Gemini 3.1 stable live profile must keep async function calling disabled",
+    );
+  } else {
+    assert.ok(
+      (summary.thinkingBudget ?? 0) >= 128,
+      "legacy stable live profile must keep thinkingBudget >= 128",
+    );
+  }
   assert.ok(
     (summary.maxOutputTokens ?? 0) >= 1000,
     "stable live profile must keep maxOutputTokens >= 1000",

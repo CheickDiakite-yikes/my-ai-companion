@@ -2404,11 +2404,8 @@ export class GeminiLiveVoiceSession {
 
   requestOpeningGreeting(params: { userName?: string | null } = {}): boolean {
     const normalizedName = normalizeLiveGreetingName(params.userName);
-    const sent = this.sendClientContentSafely(
-      {
-        turns: buildLiveOpeningGreetingPrompt(normalizedName),
-        turnComplete: true,
-      },
+    const sent = this.sendTextInputSafely(
+      buildLiveOpeningGreetingPrompt(normalizedName),
       "live.opening_greeting_failed",
       {
         userNamePresent: Boolean(normalizedName),
@@ -3445,11 +3442,8 @@ export class GeminiLiveVoiceSession {
     if (!spokenSummary) {
       return false;
     }
-    const sent = this.sendClientContentSafely(
-      {
-        turns: `Using the verified Google results you just received, respond out loud right now in 1 to 3 short sentences. Start speaking immediately, do not call tools again, and do not ask the user to wait. Verified summary: ${spokenSummary}`,
-        turnComplete: true,
-      },
+    const sent = this.sendTextInputSafely(
+      `Using the verified Google results you just received, respond out loud right now in 1 to 3 short sentences. Start speaking immediately, do not call tools again, and do not ask the user to wait. Verified summary: ${spokenSummary}`,
       "live.google_context.nudge_failed",
       {
         source:
@@ -3493,11 +3487,8 @@ export class GeminiLiveVoiceSession {
     if (!spokenSummary) {
       return false;
     }
-    const sent = this.sendClientContentSafely(
-      {
-        turns: `Respond out loud right now in 1 to 2 short sentences using only this verified Google action outcome. Do not call tools again. Do not claim a task is complete unless the verified outcome says it is complete. Verified Google action outcome: ${spokenSummary}`,
-        turnComplete: true,
-      },
+    const sent = this.sendTextInputSafely(
+      `Respond out loud right now in 1 to 2 short sentences using only this verified Google action outcome. Do not call tools again. Do not claim a task is complete unless the verified outcome says it is complete. Verified Google action outcome: ${spokenSummary}`,
       "live.google_context.nudge_failed",
       {
         source: "google_action_voice_fallback",
@@ -3978,24 +3969,35 @@ export class GeminiLiveVoiceSession {
     }
   }
 
-  private sendClientContentSafely(
-    payload: {
-      turns: string;
-      turnComplete: boolean;
-    },
+  private sendTextInputSafely(
+    text: string,
     failureEvent:
       | "live.web_search.nudge_failed"
       | "live.google_context.nudge_failed"
       | "live.opening_greeting_failed",
     failureMetadata: Record<string, unknown> = {},
   ): boolean {
-    if (!this.isSessionSocketReadyForSend({ source: "client_content", ...failureMetadata })) {
+    if (!this.isSessionSocketReadyForSend({ source: "realtime_text", ...failureMetadata })) {
       return false;
     }
     const activeSession = this.session;
     if (!activeSession) {
       return false;
     }
+    const normalizedText = text.trim();
+    if (!normalizedText) {
+      return false;
+    }
+    try {
+      activeSession.sendRealtimeInput({ text: normalizedText });
+      return true;
+    } catch (error) {
+      this.debug("live.text_realtime_input_failed", {
+        message: error instanceof Error ? error.message : String(error),
+        ...failureMetadata,
+      });
+    }
+
     const sessionWithClientContent = activeSession as Session & {
       sendClientContent?: (params: {
         turns: string;
@@ -4006,7 +4008,13 @@ export class GeminiLiveVoiceSession {
       return false;
     }
     try {
-      sessionWithClientContent.sendClientContent(payload);
+      sessionWithClientContent.sendClientContent({
+        turns: normalizedText,
+        turnComplete: true,
+      });
+      this.debug("live.text_client_content_fallback_sent", {
+        ...failureMetadata,
+      });
       return true;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -5381,11 +5389,17 @@ export class GeminiLiveVoiceSession {
     const audioPartCount = modelParts.reduce((count, part) => {
       return part.inlineData?.data ? count + 1 : count;
     }, 0);
+    const modelText = modelParts
+      .map((part) => (typeof part.text === "string" ? part.text.trim() : ""))
+      .filter((text) => text.length > 0)
+      .join("\n")
+      .trim();
     const shouldLogServerContent =
       Boolean(serverContent.interrupted) ||
       Boolean(serverContent.generationComplete) ||
       Boolean(serverContent.turnComplete) ||
       audioPartCount > 0 ||
+      Boolean(modelText) ||
       Boolean(serverContent.inputTranscription?.text) ||
       Boolean(serverContent.outputTranscription?.text);
     if (shouldLogServerContent) {
@@ -5395,6 +5409,7 @@ export class GeminiLiveVoiceSession {
         turnComplete: Boolean(serverContent.turnComplete),
         waitingForInput: Boolean(serverContent.waitingForInput),
         audioPartCount,
+        textPartCount: modelText ? modelParts.filter((part) => part.text).length : 0,
         hasInputTranscription: Boolean(serverContent.inputTranscription?.text),
         hasOutputTranscription: Boolean(serverContent.outputTranscription?.text),
         hasGroundingMetadata,
@@ -5550,7 +5565,19 @@ export class GeminiLiveVoiceSession {
 
     this.captureTranscript("user", serverContent.inputTranscription);
     if (!shouldDropAssistantOutput) {
-      this.captureTranscript("assistant", serverContent.outputTranscription);
+      this.captureTranscript(
+        "assistant",
+        serverContent.outputTranscription?.text
+          ? serverContent.outputTranscription
+          : modelText
+            ? {
+                text: modelText,
+                finished:
+                  Boolean(serverContent.turnComplete) ||
+                  Boolean(serverContent.generationComplete),
+              }
+            : serverContent.outputTranscription,
+      );
     }
 
     if (serverContent.turnComplete) {
@@ -6063,11 +6090,8 @@ export class GeminiLiveVoiceSession {
   private sendWebSearchNudge(userTranscript: string): void {
     const query = normalizeText(userTranscript);
     if (!query) return;
-    const sent = this.sendClientContentSafely(
-      {
-        turns: `Use Google Search grounding for this latest user request and answer with current verified facts: ${query}`,
-        turnComplete: true,
-      },
+    const sent = this.sendTextInputSafely(
+      `Use Google Search grounding for this latest user request and answer with current verified facts: ${query}`,
       "live.web_search.nudge_failed",
       { textLength: query.length },
     );
@@ -6092,11 +6116,8 @@ export class GeminiLiveVoiceSession {
       activeGoogleActionContext,
     );
 
-    const sent = this.sendClientContentSafely(
-      {
-        turns: `For this latest user request, you MUST use the connected Google personal context function tools before giving any natural-language answer. ${toolInstruction} Do not answer from memory or earlier tool results. Fetch fresh data now. Never invent email or calendar details. User request: ${query}`,
-        turnComplete: true,
-      },
+    const sent = this.sendTextInputSafely(
+      `For this latest user request, you MUST use the connected Google personal context function tools before giving any natural-language answer. ${toolInstruction} Do not answer from memory or earlier tool results. Fetch fresh data now. Never invent email or calendar details. User request: ${query}`,
       "live.google_context.nudge_failed",
       {
         textLength: query.length,

@@ -828,7 +828,10 @@ interface LiveTokenConfigSummary {
   contextWindowCompressionEnabled: boolean;
   effectiveInterruptMode: "client_manual_activity";
   thinkingBudget: number | null;
+  thinkingLevel: "minimal" | "low" | "medium" | "high" | null;
+  thinkingConfigMode: "thinkingLevel" | "thinkingBudget" | null;
   includeThoughts: boolean;
+  asyncFunctionCalling: boolean;
   temperature: number;
   topP: number;
   topK: number | null;
@@ -16989,6 +16992,11 @@ function App() {
         effectiveInterruptMode:
           tokenPayload.configSummary?.effectiveInterruptMode ?? null,
         thinkingBudget: tokenPayload.configSummary?.thinkingBudget ?? null,
+        thinkingLevel: tokenPayload.configSummary?.thinkingLevel ?? null,
+        thinkingConfigMode:
+          tokenPayload.configSummary?.thinkingConfigMode ?? null,
+        asyncFunctionCalling:
+          tokenPayload.configSummary?.asyncFunctionCalling ?? null,
         effectiveLanguageHint:
           tokenPayload.configSummary?.effectiveLanguageHint ?? null,
         languageHintSource: tokenPayload.configSummary?.languageHintSource ?? null,

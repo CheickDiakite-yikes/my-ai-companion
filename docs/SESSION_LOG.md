@@ -247,3 +247,32 @@ Use this file as a chronological handoff record so any new session can resume wo
   - Root cause: rapid live voice stabilization work landed faster than doc updates.
   - Fix: refreshed core docs to match the current code and release process.
   - Guardrail: after any live voice capture or regression-tooling change, update README + Replit runbook in the same session.
+
+## 2026-04-27 15:21 EDT - Migrated Live voice default to Gemini 3.1 Flash Live safely
+- Completed:
+  - Updated Live default model from `gemini-2.5-flash-native-audio-preview-12-2025` to `gemini-3.1-flash-live-preview`.
+  - Kept `gemini-2.5-flash-native-audio-preview-12-2025` as the built-in fallback candidate for Live token creation.
+  - Added model-specific Live thinking config:
+    - Gemini 3.1 Live uses `thinkingLevel=minimal`.
+    - Legacy Gemini 2.5 Live fallback still uses `thinkingBudget`.
+  - Removed unsupported Gemini 3.1 Live config at token creation time:
+    - proactive audio
+    - affective dialog
+    - non-blocking/async function-call behavior on read tools
+  - Changed live text nudges/opening prompts to use `sendRealtimeInput({ text })` first, with `sendClientContent` only as a compatibility fallback.
+  - Updated README, `.env.example`, live profile output, Gemini integration notes, Replit voice checklist, and voice smoke assertions.
+- Current state:
+  - `npm run check` passes.
+  - `npm run test:voice` passes.
+  - Synthetic `script/live-voice-smoke.ts` checks pass for both Gemini 3.1 `thinkingLevel` and legacy 2.5 `thinkingBudget` token-summary shapes.
+  - Provider token creation succeeded locally against `gemini-3.1-flash-live-preview`; the ephemeral token was not printed.
+  - No schema changes were required.
+- Next actions:
+  - Run a real browser voice session with `?liveDebug=1` on desktop and inspect the exported trace.
+  - Repeat on iPhone Safari and Android Chrome before broad rollout.
+  - Re-run Gmail/Calendar voice read/detail/write approval scenarios against Gemini 3.1 to confirm synchronous function-call behavior and Zee Stage parity.
+- Errors and fixes:
+  - Error: Live docs and smoke checks still assumed `thinkingBudget` as the stable token contract.
+  - Root cause: The app was still shaped around Gemini 2.5 Flash Live.
+  - Fix: Added model-specific token config and updated smoke/docs to accept `thinkingLevel` for Gemini 3.1 and `thinkingBudget` for 2.5 fallback.
+  - Guardrail: When changing Live models, validate token creation first, then browser traces; do not jump directly to VAD tuning.

@@ -1,6 +1,6 @@
 # Project State: ZeeMe
 
-Last Updated: 2026-03-14
+Last Updated: 2026-04-27
 
 ## How To Resume Any Session
 1. Run `npm run dev:context`.
@@ -17,6 +17,7 @@ Ship a production-grade multimodal AI companion where voice and text share one m
 - Eliminate chronology drift so short follow-ups like `send it`, `save it`, and `sounds good` target the correct active Gmail/Calendar task.
 - Keep live tool-response handling resilient across local/Replit deploy drift with trace-first parsing and retry behavior.
 - Keep live voice speech detection stable at normal speaking volume across iPhone Safari, Android Chrome, and desktop browsers.
+- Keep Gemini 3.1 Flash Live migration safe: 3.1 primary, 2.5 fallback, model-specific thinking config, and real-device trace validation before broad rollout.
 - Maintain trace-first incident response so transcript/mic failures can be diagnosed from exported live-debug JSON in minutes.
 - Keep Replit deployment profiles and local defaults aligned so production behavior is reproducible locally.
 - Finish Android live voice qualification so publish decisions are based on desktop + iPhone + Android evidence, not just local or Replit spot checks.
@@ -27,6 +28,13 @@ Ship a production-grade multimodal AI companion where voice and text share one m
 - Keep Replit and local schema/runtime behavior strictly synchronized.
 
 ## What Was Just Completed
+- Gemini 3.1 Flash Live migration landed safely:
+  - primary Live model is now `gemini-3.1-flash-live-preview`
+  - `gemini-2.5-flash-native-audio-preview-12-2025` remains a built-in fallback
+  - Gemini 3.1 Live uses `thinkingLevel=minimal`; legacy 2.5 fallback still uses `thinkingBudget`
+  - 3.1 Live omits proactive audio / affective dialog config and non-blocking function-call behavior
+  - live text nudges now use realtime text input first, with `sendClientContent` only as a compatibility fallback
+  - provider token creation was validated locally without printing the ephemeral token
 - Google personal-context write path matured:
   - Gmail draft/reply/save/send flows now run through approval-gated task state
   - Calendar create/update flows now use the same unified task/approval runtime
@@ -103,6 +111,7 @@ Ship a production-grade multimodal AI companion where voice and text share one m
 - Auth, onboarding, conversations, and message persistence.
 - Text replies via Gemini with streaming and legacy compatibility.
 - Live voice sessions with token minting and transcript persistence.
+- Live token creation resolves against Gemini 3.1 Flash Live with safe 2.5 fallback behavior.
 - Live voice capture and regression tooling are now aligned enough for desktop + iPhone qualification and soft-rollout decisions.
 - Gmail and Calendar reads in both text and live voice.
 - Gmail/Calendar detail reads behind explicit feature flags.
@@ -140,9 +149,12 @@ Ship a production-grade multimodal AI companion where voice and text share one m
 - Native packaging path (WebView wrapper vs. full native migration) is not finalized.
 - Mobile voice still needs longer soak/evidence runs across real iPhone + Android browser conditions.
 - Android live voice qualification is still pending before broad publish confidence.
+- Gemini 3.1 Live still needs live browser/device soak traces for ordinary voice, Google read/detail tools, and approval-gated write follow-ups.
 
 ## Next Steps (Priority Order)
 1. Finish live voice qualification:
+   - collect one healthy Gemini 3.1 desktop browser trace with `?liveDebug=1`
+   - collect one healthy Gemini 3.1 iPhone Safari trace with `?liveDebug=1`
    - complete Android Chrome real-device trace validation
    - collect one healthy desktop + iPhone + Android trace set from current deploy
    - use those traces as the publish baseline

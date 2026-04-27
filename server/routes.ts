@@ -15964,6 +15964,9 @@ export async function registerRoutes(
         forceAlwaysRespond: token.configSummary.forceAlwaysRespond,
         vadSilenceMs: token.configSummary.vadSilenceMs,
         thinkingBudget: token.configSummary.thinkingBudget,
+        thinkingLevel: token.configSummary.thinkingLevel,
+        thinkingConfigMode: token.configSummary.thinkingConfigMode,
+        asyncFunctionCalling: token.configSummary.asyncFunctionCalling,
         effectiveLanguageHint: token.configSummary.effectiveLanguageHint,
         languageHintSource: token.configSummary.languageHintSource,
         nativeAudioLanguageMode: token.configSummary.nativeAudioLanguageMode,
@@ -16055,7 +16058,7 @@ export async function registerRoutes(
 
   app.get("/api/live/health", isAuthenticated, async (req: any, res) => {
     const startedAt = Date.now();
-    const model = process.env.GEMINI_LIVE_MODEL || "gemini-2.5-flash-native-audio-preview-12-2025";
+    const model = process.env.GEMINI_LIVE_MODEL || "gemini-3.1-flash-live-preview";
     try {
       const { GoogleGenAI } = await import("@google/genai");
       const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });

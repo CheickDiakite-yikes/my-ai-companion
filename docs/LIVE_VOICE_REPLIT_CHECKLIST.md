@@ -1,6 +1,6 @@
 # Live Voice Replit Operations Checklist
 
-Last Updated: 2026-03-14
+Last Updated: 2026-04-27
 
 This is the production runbook for ZeeMe live voice reliability on Replit.  
 It is designed so any engineer can diagnose and stabilize voice regressions without guessing.
@@ -20,9 +20,11 @@ It is designed so any engineer can diagnose and stabilize voice regressions with
 
 ### Non-negotiable invariants
 - No DB migrations are required for live voice tuning.
-- Native audio model remains `gemini-2.5-flash-native-audio-preview-12-2025` unless explicitly changed.
+- Primary native audio model is `gemini-3.1-flash-live-preview`; `gemini-2.5-flash-native-audio-preview-12-2025` is retained as the safety fallback.
 - `speechConfig.languageCode` remains unset in native audio mode.
 - Transcript persistence path remains enabled for continuity with text mode.
+- Gemini 3.1 Live uses `thinkingLevel`, not `thinkingBudget`; keep `GEMINI_LIVE_THINKING_LEVEL=minimal` for the stable low-latency profile.
+- Gemini 3.1 Live does not support proactive audio, affective dialog, or async/non-blocking function calling; do not re-enable those knobs for the 3.1 primary model.
 - Any `VITE_*` change requires full rebuild/redeploy (restart alone is insufficient).
 - Any Google write-surface validation requires both runtime and build-time flags to be aligned.
 - `replit.env` is local-only operator context. Do not commit it and do not treat it as source of truth over deployed secrets or exported traces.
@@ -38,7 +40,7 @@ bash script/live-voice-profile.sh stable
 ```
 
 This emits production-safe values for:
-- server live settings (latency, VAD, thinking budget, output tokens)
+- server live settings (latency, VAD, thinking level/budget fallback, output tokens)
 - client speech detector thresholds/hysteresis/grace timings
 - client suppression/noise gate behavior
 
@@ -62,7 +64,8 @@ After deploy, `POST /api/live/token` response `configSummary` should show:
 - `sessionResumptionEnabled=true`
 - `contextWindowCompressionEnabled=true`
 - `effectiveInterruptMode=client_manual_activity`
-- `thinkingBudget>=128`
+- primary 3.1 model: `thinkingConfigMode=thinkingLevel`, `thinkingLevel=minimal`, `asyncFunctionCalling=false`
+- legacy 2.5 fallback: `thinkingConfigMode=thinkingBudget`, `thinkingBudget>=128`
 - `maxOutputTokens>=1000`
 - `nativeAudioLanguageMode=auto_detect`
 - non-empty `effectiveLanguageHint` + valid `languageHintSource`

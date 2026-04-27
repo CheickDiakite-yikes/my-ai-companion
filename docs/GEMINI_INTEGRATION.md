@@ -1,6 +1,6 @@
 # Gemini Integration Notes
 
-Last Updated: 2026-03-14
+Last Updated: 2026-04-27
 
 This document is the technical integration reference for ZeeMe's Gemini usage across text chat, live voice, grounding, and Google personal-context tool calls.
 
@@ -11,11 +11,12 @@ This document is the technical integration reference for ZeeMe's Gemini usage ac
 | Purpose | Model | Source of truth |
 |---|---|---|
 | Text chat | `gemini-3-flash-preview` | `GEMINI_TEXT_MODEL` fallback |
-| Live voice | `gemini-2.5-flash-native-audio-preview-12-2025` | `GEMINI_LIVE_MODEL` fallback |
+| Live voice | `gemini-3.1-flash-live-preview` | `GEMINI_LIVE_MODEL` fallback |
 
 Notes:
 - Text mode is server-authoritative and uses Gemini through `generateContent` / streaming equivalents.
 - Live voice uses Gemini Live with native audio and session token minting.
+- `gemini-2.5-flash-native-audio-preview-12-2025` remains the default built-in fallback for Live token creation if the primary Live model is unavailable.
 
 ---
 
@@ -95,6 +96,10 @@ Text mode currently supports:
 ### Stable Live assumptions
 - native audio mode remains active
 - `speechConfig.languageCode` is intentionally not forced for native audio
+- Gemini 3.1 Live uses `thinkingLevel` (`minimal` by default for latency); Gemini 2.5 Live fallbacks still use `thinkingBudget`
+- Gemini 3.1 Live does not use proactive audio or affective dialog config
+- Gemini 3.1 Live function calls are treated as synchronous, so read tools do not request non-blocking behavior for that model
+- live client text nudges use realtime text input first; `sendClientContent` is only a fallback
 - transcript text is treated as fallible and context-dependent
 - desktop adaptive threshold floors are clamped to avoid `0.001x` regressions in exported traces
 
@@ -253,7 +258,8 @@ The current spend profile is not dominated by:
 ### Model-specific implication
 
 - `gemini-3-flash-preview` still makes ordinary text chat and Google-action planning relatively cheap.
-- `gemini-2.5-flash-native-audio-preview-12-2025` makes long live voice sessions materially more expensive than older planning worksheets assumed.
+- `gemini-3.1-flash-live-preview` is the primary live voice model; verify current pricing before changing voice/camera rollout assumptions.
+- `gemini-2.5-flash-native-audio-preview-12-2025` remains a fallback and may still affect spend if the primary model is unavailable.
 - `gemini-2.0-flash-lite` and `gemini-embedding-001` are background-cost factors, but they are usually second-order compared with voice and grounding.
 
 ### Gmail + Calendar implication
